@@ -540,6 +540,49 @@
 </div>
 
 <script>
+/* === 520 活动 iframe 协议 ===
+   parent → iframe: { type: 'like520_init', payload: { mode, charName, presets } }
+   iframe → parent: { type: 'like520_ready' }
+   iframe → parent: { type: 'like520_result', payload: { mode, dataUrl, frameDataUrl, transparentDataUrl, state } }
+   iframe → parent: { type: 'like520_cancel' }
+*/
+const IS_EMBEDDED = window.parent !== window;
+let LIKE520_MODE = 'char';
+let LIKE520_CHAR_NAME = '';
+
+function applyLike520Init(init) {
+  if (!init) return;
+  LIKE520_MODE = init.mode || 'char';
+  LIKE520_CHAR_NAME = init.charName || '';
+  const titleCn = document.querySelector('.title-cn');
+  if (titleCn) {
+    titleCn.textContent = init.mode === 'user'
+      ? '诶？连你也……'
+      : `如果 ${LIKE520_CHAR_NAME || 'ta'} 变得小小的，那ta会是——`;
+  }
+  if (init.presets && typeof init.presets === 'object') {
+    Object.entries(init.presets).forEach(([key, itemId]) => {
+      if (state.selected.hasOwnProperty(key)) {
+        if (Array.isArray(state.selected[key])) {
+          state.selected[key] = Array.isArray(itemId) ? itemId : [itemId];
+        } else {
+          state.selected[key] = itemId;
+        }
+      }
+    });
+    if (typeof renderPanel === 'function') renderPanel();
+    if (typeof renderCharacter === 'function') renderCharacter();
+  }
+}
+
+if (IS_EMBEDDED) {
+  window.addEventListener('message', (e) => {
+    if (e.data && e.data.type === 'like520_init') {
+      applyLike520Init(e.data.payload);
+    }
+  });
+}
+
 /* === 素材配置（由 build_full.py 生成） === */
 const PARTS = [
   {
@@ -1925,14 +1968,32 @@ function setExportMode(mode) {
   /* 透明模式用棋盘格背景预览 */
   img.classList.toggle("transparent-preview", mode === "transparent");
 
-  document.getElementById("btnDownload").onclick = () => {
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = mode === "transparent"
-      ? `大头贴_无背景_${Date.now()}.png`
-      : `大头贴_520_${Date.now()}.png`;
-    a.click();
-  };
+  const btnDownload = document.getElementById("btnDownload");
+  if (IS_EMBEDDED) {
+    btnDownload.textContent = "确认 ✓";
+    btnDownload.onclick = () => {
+      window.parent.postMessage({
+        type: 'like520_result',
+        payload: {
+          mode: LIKE520_MODE,
+          dataUrl: exportData[mode],
+          frameDataUrl: exportData.frame,
+          transparentDataUrl: exportData.transparent,
+          state: JSON.parse(JSON.stringify(state)),
+        }
+      }, '*');
+    };
+  } else {
+    btnDownload.textContent = "下载 PNG";
+    btnDownload.onclick = () => {
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = mode === "transparent"
+        ? `大头贴_无背景_${Date.now()}.png`
+        : `大头贴_520_${Date.now()}.png`;
+      a.click();
+    };
+  }
 }
 
 function closeModal() {
@@ -1947,6 +2008,11 @@ renderCharacter();
 preloadAllAssets().then(() => {
   console.log('所有素材预加载完成');
 });
+
+/* 通知父框架 iframe 已就绪、可以接收 like520_init 消息 */
+if (IS_EMBEDDED) {
+  window.parent.postMessage({ type: 'like520_ready' }, '*');
+}
 </script>
 </body>
 </html>

@@ -608,6 +608,8 @@ export interface SpecialMomentRecord {
     image?: string; // base64 PNG (stored separately so export tools can handle it)
     timestamp: number;
     source?: 'generated' | 'migrated';
+    /** Free-form per-event extra data (e.g. like520 captureface state, anchors, etc.) */
+    customData?: Record<string, any>;
 }
 
 // --- BANK / SHOP GAME TYPES (NEW) ---

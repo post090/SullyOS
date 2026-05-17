@@ -20,6 +20,7 @@ import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import { WhiteDaySession, isWhiteDayEventAvailable, WHITEDAY_RECORD_KEY } from './WhiteDayEvent';
+import { Like520Session, isLike520EventAvailable, isLike520Past, LIKE520_RECORD_KEY } from './Like520Event';
 import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
 
 // ============================================================
@@ -1167,6 +1168,40 @@ export const SpecialMomentsApp: React.FC = () => {
     const [wdDeleteTargetId, setWdDeleteTargetId] = useState<string | null>(null);
     const wdLongPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+    // 520
+    const [show520Session, setShow520Session] = useState(false);
+    const [like520CharId, setLike520CharId] = useState<string>('');
+    const [l520DeleteTargetId, setL520DeleteTargetId] = useState<string | null>(null);
+    const l520LongPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const handleL520LongPressStart = (cId: string) => {
+        l520LongPressTimer.current = setTimeout(() => setL520DeleteTargetId(cId), 600);
+    };
+    const handleL520LongPressEnd = () => {
+        if (l520LongPressTimer.current) { clearTimeout(l520LongPressTimer.current); l520LongPressTimer.current = null; }
+    };
+    const handleL520DeleteRecord = async (cId: string) => {
+        try {
+            const targetChar = characters.find(c => c.id === cId);
+            if (targetChar) {
+                const updated = { ...(targetChar.specialMomentRecords || {}) };
+                delete updated[LIKE520_RECORD_KEY];
+                updateCharacter(cId, { specialMomentRecords: updated });
+            }
+            const msgs = await DB.getMessagesByCharId(cId);
+            const l520Ids = msgs
+                .filter(m => m.metadata?.like520Event)
+                .map(m => m.id)
+                .filter((id): id is number => id !== undefined);
+            if (l520Ids.length > 0) await DB.deleteMessages(l520Ids);
+            addToast(`已删除 ${targetChar?.name || ''} 的 520 记录`, 'success');
+        } catch {
+            addToast('删除失败', 'error');
+        } finally {
+            setL520DeleteTargetId(null);
+        }
+    };
+
     const handleWdLongPressStart = (cId: string) => {
         wdLongPressTimer.current = setTimeout(() => setWdDeleteTargetId(cId), 600);
     };
@@ -1243,6 +1278,15 @@ export const SpecialMomentsApp: React.FC = () => {
         );
     }
 
+    if (show520Session && like520CharId) {
+        return (
+            <Like520Session
+                charId={like520CharId}
+                onClose={() => { setShow520Session(false); setLike520CharId(''); }}
+            />
+        );
+    }
+
     return (
         <div className="h-full w-full bg-gradient-to-b from-pink-50 via-white to-rose-50 flex flex-col font-light">
             {/* Header */}
@@ -1256,6 +1300,73 @@ export const SpecialMomentsApp: React.FC = () => {
 
             {/* Content */}
             <div className="flex-1 overflow-y-auto p-6">
+                {/* 520 卡片（活动期间或往期均显示） */}
+                {(isLike520EventAvailable() || isLike520Past()) && (() => {
+                    const past = isLike520Past();
+                    return (
+                        <div className="mb-6">
+                            <div className={`rounded-3xl p-6 text-white relative overflow-hidden ${past ? 'bg-gradient-to-br from-pink-300/70 via-rose-300/70 to-amber-200/70 shadow-lg' : 'bg-gradient-to-br from-pink-400 via-rose-400 to-amber-300 shadow-xl shadow-rose-200'}`}>
+                                <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-bl-full pointer-events-none" />
+                                <div className="absolute bottom-0 left-0 w-20 h-20 bg-white/5 rounded-tr-full pointer-events-none" />
+                                {past && (
+                                    <div className="absolute top-4 right-4 bg-white/20 backdrop-blur-sm text-white/80 text-[10px] font-bold px-2 py-0.5 rounded-full border border-white/20">
+                                        往期活动
+                                    </div>
+                                )}
+                                <div className="relative">
+                                    <div className="text-3xl mb-2">🌸</div>
+                                    <div className="text-[10px] tracking-[6px] mb-1 opacity-80">5 · 2 · 0</div>
+                                    <h3 className="text-xl font-bold mb-1">如果 ta 变得小小的</h3>
+                                    <p className="text-sm opacity-90 leading-relaxed">和 ta 一起度过一个小小的下午。</p>
+                                    <div className="mt-5 space-y-2">
+                                        {characters.map(c => {
+                                            const hasRecord = !!c.specialMomentRecords?.[LIKE520_RECORD_KEY];
+                                            return (
+                                                <button
+                                                    key={c.id}
+                                                    onClick={() => {
+                                                        if (l520DeleteTargetId === c.id) { setL520DeleteTargetId(null); return; }
+                                                        setLike520CharId(c.id);
+                                                        setShow520Session(true);
+                                                    }}
+                                                    onTouchStart={() => hasRecord && handleL520LongPressStart(c.id)}
+                                                    onTouchEnd={handleL520LongPressEnd}
+                                                    onMouseDown={() => hasRecord && handleL520LongPressStart(c.id)}
+                                                    onMouseUp={handleL520LongPressEnd}
+                                                    onMouseLeave={handleL520LongPressEnd}
+                                                    className="w-full px-4 py-3 bg-white/15 hover:bg-white/25 backdrop-blur-sm rounded-2xl text-white font-bold text-sm transition-all active:scale-95 flex items-center justify-between"
+                                                >
+                                                    <span className="flex items-center gap-2">
+                                                        {c.avatar?.startsWith('http') || c.avatar?.startsWith('data:') ? (
+                                                            <img src={c.avatar} alt={c.name} className="w-7 h-7 rounded-full object-cover" />
+                                                        ) : (
+                                                            <span className="text-xl">{c.avatar || '🌸'}</span>
+                                                        )}
+                                                        {c.name}
+                                                    </span>
+                                                    <span className="text-[11px] opacity-80">{hasRecord ? '已完成 · 查看' : '进入 →'}</span>
+                                                </button>
+                                            );
+                                        })}
+                                        {characters.length === 0 && (
+                                            <div className="text-center text-xs text-white/70 py-3">还没有角色</div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                            {l520DeleteTargetId && (
+                                <div className="mt-3 bg-white border border-pink-200 rounded-2xl p-4 shadow-lg">
+                                    <p className="text-sm text-slate-700 mb-3">删除 {characters.find(c => c.id === l520DeleteTargetId)?.name || ''} 的 520 记录？</p>
+                                    <div className="flex gap-2">
+                                        <button onClick={() => setL520DeleteTargetId(null)} className="flex-1 py-2 bg-slate-100 text-slate-600 rounded-xl text-sm font-bold">取消</button>
+                                        <button onClick={() => handleL520DeleteRecord(l520DeleteTargetId)} className="flex-1 py-2 bg-rose-400 text-white rounded-xl text-sm font-bold">删除</button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    );
+                })()}
+
                 {/* 白色情人节卡片（活动期间或往期均显示） */}
                 {(isWhiteDayEventAvailable() || (() => { const n = new Date(); return n.getFullYear() > 2026 || (n.getFullYear() === 2026 && n.getMonth() > 2); })()) && (() => {
                     const n = new Date();
