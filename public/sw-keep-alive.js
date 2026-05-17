@@ -4,7 +4,12 @@
  * A) Keep-alive: prevent browser from suspending during long AI fetch requests
  * B) Proactive timers: periodically notify the main thread to trigger AI messages
  *    for any number of characters independently.
+ *
+ * SW_VERSION: 改 SW 实质行为时（push handler / message protocol / 通知策略）
+ * 手工 bump。前端 BuildBadge 通过 GET_SW_VERSION postMessage 协议读取并显示，
+ * 用来确认线上跑的是哪一版 SW（PWA 缓存了旧 SW 时一眼能看出来）。
  */
+const SW_VERSION = '1.3.0';
 
 const PING_INTERVAL = 15_000;
 const MAX_MANUAL_ALIVE_MS = 5 * 60_000;
@@ -156,6 +161,12 @@ self.addEventListener('message', (event) => {
     case 'proactive-sync':
       syncProactive(event.data.configs || []);
       break;
+    case 'GET_SW_VERSION':
+      // 前端 BuildBadge 查询，回 MessageChannel
+      if (event.ports && event.ports[0]) {
+        event.ports[0].postMessage({ version: SW_VERSION });
+      }
+      break;
   }
 });
 
@@ -295,21 +306,37 @@ self.addEventListener('push', function (event) {
     return;
   }
 
-  // Branch B: legacy ActiveMsg 2.0 push — server already included the
-  // generated message body; save + notify directly.
+  // Branch B: instant push / ActiveMsg 2.0 — server included the generated
+  // message body; save + notify.
+  //
+  // 有 focused client (用户在前台) 时直接跳过 showNotification —— Push spec
+  // 明确 "if any client is focused" 满足 user-visible 要求, 不算 silent push,
+  // 配额不扣权重不掉。proactive-wake 分支同模式 (line 244-250) 已在线跑数月
+  // 验证。之前用 silent empty + close 模式 iOS 会渲染 "xxx from xxx" 默认
+  // 内容（因为 iOS 不允许真正空通知, 会自动填 site name + origin），所以
+  // 改成"有 client 就完全不调 showNotification"。
+  // 消息由 OSContext 的 in-app toast + unread badge + 聊天页气泡兜底。
+  // 不在前台才弹真实系统通知。
+  //
+  // 例外: payload.metadata.test === true 时永远 showNotification —— 测试
+  // 推送就是要验证系统通知能不能弹, 前台静默会让用户以为"没送达"。
   var title = (payload && payload.contactName) || '新消息';
   var body = String((payload && payload.message) || (payload && payload.body) || '').trim();
-  event.waitUntil(
-    Promise.all([
-      saveIncomingActiveMessage(payload),
-      self.registration.showNotification(title, {
+  var isTest = !!(payload && payload.metadata && payload.metadata.test === true);
+  event.waitUntil((async function () {
+    var clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    var hasFocused = clients.some(function (c) { return c.focused; });
+    await saveIncomingActiveMessage(payload);
+    if (!hasFocused || isTest) {
+      await self.registration.showNotification(title, {
         body: body,
         icon: './icons/icon-192.png',
         badge: './icons/icon-192.png',
         data: { payload: payload },
-      }),
-    ])
-  );
+      });
+    }
+    // 前台且非测试: 跳过通知, 由 in-app UI 兜底
+  })());
 });
 
 self.addEventListener('notificationclick', function (event) {

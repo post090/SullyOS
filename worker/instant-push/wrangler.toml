@@ -1,0 +1,9 @@
+name = "instant-push"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+# amsg-instant 0.3.0+ uses only Web Crypto; no compatibility_flags needed.
+# Secrets — set via Dashboard 或 wrangler secret put NAME
+#   VAPID_PUBLIC_KEY
+#   VAPID_PRIVATE_KEY
+#   VAPID_EMAIL          # 可选；缺则默认 mailto:noreply@example.com
+#   AMSG_CLIENT_TOKEN    # 可选；裸跑也行

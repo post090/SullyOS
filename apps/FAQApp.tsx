@@ -7,6 +7,7 @@ import {
     CHANGELOG_2026_04,
     CHANGELOG_2026_05,
     CHANGELOG_2026_05_10,
+    CHANGELOG_2026_05_17,
 } from '../components/UpdateNotificationEvent';
 
 const FAQ_DATA = [
@@ -92,6 +93,14 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG_ENTRIES: ChangelogEntry[] = [
+    {
+        id: CHANGELOG_2026_05_17,
+        title: '2026 年 5 月 17 日 · 小更新',
+        subtitle: 'Instant Push 上线 · 发完文本就能锁屏走人，AI 回复自己回来',
+        date: '2026-05-17',
+        src: 'changelogs/2026-5-17.html',
+        accent: 'from-teal-100 to-sky-100 border-teal-200',
+    },
     {
         id: CHANGELOG_2026_05_10,
         title: '2026 年 5 月 10 日 · 小更新',

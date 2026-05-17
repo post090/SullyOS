@@ -92,6 +92,8 @@ export interface OSTheme {
   chatHeaderDensity?: 'compact' | 'default' | 'airy';
   chatStatusStyle?: 'subtle' | 'pill' | 'dot';
   chatSendButtonStyle?: 'circle' | 'pill' | 'minimal';
+  /** Instant Push 用户气泡左侧的"准备中"圆点动画。默认开启。 */
+  chatPendingIndicator?: boolean;
 }
 
 export interface AppearancePreset {
@@ -150,6 +152,15 @@ export interface APIConfig {
   stream?: boolean;
   // Per-API temperature for chat / 约会 main calls. Missing → 0.85.
   temperature?: number;
+}
+
+export interface InstantPushConfig {
+  enabled: boolean;
+  workerUrl: string;        // https://your-instant.workers.dev
+  // VAPID 公私钥已迁移到 utils/pushVapid.ts (push_vapid_v1)，与 Proactive Push
+  // 共享同一份，避免两边互相 unsubscribe 抢同一个 pushManager 订阅。
+  clientToken?: string;     // 对应 Worker 的 AMSG_CLIENT_TOKEN
+  updatedAt?: number;
 }
 
 export type ActiveMsg2DbDriver = 'pg' | 'neon';
@@ -1555,7 +1566,6 @@ export interface FullBackupData {
     availableModels?: string[];
     realtimeConfig?: RealtimeConfig;  // 实时感知配置（天气/新闻/Notion）
     customIcons?: Record<string, string>;
-    customIcons?: Record<string, string>;
     appearancePresets?: AppearancePreset[];
     characters?: CharacterProfile[];
     groups?: GroupProfile[]; 
@@ -1890,7 +1900,6 @@ export interface SimAction {
     reactionToUser?: string;  // 角色对玩家操作的评价
     narrative?: CharNarrative; // 角色叙事层（LLM回合使用）
     chainFromId?: string;     // 由哪个事件链引发
-    chainFromId?: string;
     storyKind?: SimStoryKind;
     headline?: string;
     involvedNpcIds?: string[];

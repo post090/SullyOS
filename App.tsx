@@ -3,6 +3,7 @@ import React from 'react';
 import { OSProvider } from './context/OSContext';
 import { MusicProvider } from './context/MusicContext';
 import PhoneShell from './components/PhoneShell';
+import BuildBadge from './components/BuildBadge';
 import { isIOSStandaloneWebApp } from './utils/iosStandalone';
 
 const App: React.FC = () => {
@@ -15,21 +16,24 @@ const App: React.FC = () => {
     : { height: 'var(--app-height, 100lvh)', minHeight: 'var(--app-height, 100lvh)' };
 
   return (
-    <div
-      className={shellClassName}
-      style={shellStyle}
-    >
+    <>
       <div
-        className={`${useAbsoluteShell ? 'absolute' : 'fixed'} inset-0 w-full h-full z-0 bg-transparent`}
-        style={{ transform: 'translateZ(0)' }}
+        className={shellClassName}
+        style={shellStyle}
       >
-        <OSProvider>
-          <MusicProvider>
-            <PhoneShell />
-          </MusicProvider>
-        </OSProvider>
+        <div
+          className={`${useAbsoluteShell ? 'absolute' : 'fixed'} inset-0 w-full h-full z-0 bg-transparent`}
+          style={{ transform: 'translateZ(0)' }}
+        >
+          <OSProvider>
+            <MusicProvider>
+              <PhoneShell />
+            </MusicProvider>
+          </OSProvider>
+        </div>
       </div>
-    </div>
+      <BuildBadge />
+    </>
   );
 };
 

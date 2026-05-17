@@ -192,6 +192,16 @@ A: 就是我也不知道什么意思。系统正在哈我。
 
 所有数据都是 **local-first**，没有后端服务器这个概念（除了那个可选的云端备份）。
 
+### Instant Push 走独立 Worker
+
+Instant Push 是基于 `@rei-standard/amsg-instant 0.2.0` 的 LLM-driven Web Push 通道
+（跟上面 sfworker 里的 push 加速器是两套独立链路）。每个 fork 用户自己部署一个
+Cloudflare Worker，跟仓库作者的 sully-n / 备份 Worker 完全无关。零数据库、零 cron、
+明文协议（HTTPS 已加密传输；攻击者拿到 Worker URL 也榨不出东西）。
+
+部署流程见 `worker/instant-push/README.md`，或打开 SullyOS Settings →
+Instant Push → 配置。
+
 ### ⚠️ 后端有几处接了我的 sfworker，二改请换成自己的
 
 虽然项目是 local-first，但有几个功能绕不开代理/签名/跨域，所以走了一个 Cloudflare Worker（下面简称 **sfworker**，地址是 `sully-n.qegj567.workers.dev`）。你 fork 下来直接跑，请求会打在我账号上——**流量和额度都是我的**，用多了我会被 CF 掐着脖子关进小黑屋，你也会莫名其妙 429。所以二改请务必换成你自己的。

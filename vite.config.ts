@@ -1,6 +1,44 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { execSync } from 'node:child_process';
 import { bakeVoiceMiddleware } from './server/bake-voice-middleware';
+
+// 构建时抓 git 分支 + short commit，注入到 BuildBadge 显示。
+// 非 git 环境（容器、tarball 部署）退化成 'unknown'，不影响构建。
+//
+// 显示规则：
+//   - 默认在 main / master 上隐藏（视为正式发布），其他分支显示
+//   - CI detached HEAD 优先读 GITHUB_REF_NAME / VERCEL_GIT_COMMIT_REF / CF_PAGES_BRANCH
+//   - VITE_HIDE_BUILD_BADGE=1 强制隐藏（覆盖默认）
+//   - VITE_SHOW_BUILD_BADGE=1 强制显示（在 master 本地调试用）
+const RELEASE_BRANCHES = new Set(['main', 'master']);
+
+function readBranch(): string {
+  if (process.env.GITHUB_REF_NAME) return process.env.GITHUB_REF_NAME;
+  if (process.env.VERCEL_GIT_COMMIT_REF) return process.env.VERCEL_GIT_COMMIT_REF;
+  if (process.env.CF_PAGES_BRANCH) return process.env.CF_PAGES_BRANCH;
+  try {
+    return execSync('git rev-parse --abbrev-ref HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+  } catch {
+    return 'unknown';
+  }
+}
+function readCommit(): string {
+  if (process.env.GITHUB_SHA) return process.env.GITHUB_SHA.slice(0, 7);
+  if (process.env.VERCEL_GIT_COMMIT_SHA) return process.env.VERCEL_GIT_COMMIT_SHA.slice(0, 7);
+  if (process.env.CF_PAGES_COMMIT_SHA) return process.env.CF_PAGES_COMMIT_SHA.slice(0, 7);
+  try {
+    return execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+  } catch {
+    return 'unknown';
+  }
+}
+
+const gitInfo = { branch: readBranch(), commit: readCommit() };
+const isReleaseBranch = RELEASE_BRANCHES.has(gitInfo.branch);
+let showBuildBadge = !isReleaseBranch;
+if (process.env.VITE_HIDE_BUILD_BADGE === '1') showBuildBadge = false;
+if (process.env.VITE_SHOW_BUILD_BADGE === '1') showBuildBadge = true;
 
 export default defineConfig({
   plugins: [
@@ -12,6 +50,11 @@ export default defineConfig({
       },
     },
   ],
+  define: {
+    __BUILD_BRANCH__: JSON.stringify(gitInfo.branch),
+    __BUILD_COMMIT__: JSON.stringify(gitInfo.commit),
+    __BUILD_BADGE_VISIBLE__: JSON.stringify(showBuildBadge),
+  },
   // GitHub Pages 发布时使用相对路径，避免仓库子路径导致资源 404
   base: process.env.GITHUB_PAGES ? './' : '/',
   esbuild: {

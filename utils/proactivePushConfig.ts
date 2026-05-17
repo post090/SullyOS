@@ -16,12 +16,16 @@
 
 // ═══════════════════════════════════════════════════════════════════
 //   FILL THESE IN AFTER DEPLOYING THE CLOUDFLARE WORKER
-//   (all three are safe to ship in the client bundle)
+//
+//   VAPID 公私钥已迁移到 utils/pushVapid.ts (push_vapid_v1) — 默认空，由
+//   用户在 Settings → Instant Push 里生成；Proactive 和 Instant 共用同一份
+//   VAPID，避免两边互相 unsubscribe 抢同一个 pushManager 订阅。
 // ═══════════════════════════════════════════════════════════════════
 const WORKER_URL = 'https://noir2.cc.cd';
-const VAPID_PUBLIC_KEY = 'BAKnuYYBsb6LXnpGApVCpMkumFqDLjZOSDmzjVPx32jIA5fbz-OWaRdk0RH8qftpVuNwzNO-l49CBEwieyezh0g';
 const CLIENT_TOKEN = 'weqwqewqeqwdcsccagdgs32132';
 // ═══════════════════════════════════════════════════════════════════
+
+import { loadPushVapid, isPushVapidReady } from './pushVapid';
 
 const ENABLED_STORAGE_KEY = 'proactive_push_enabled_v1';
 const LAST_WAKE_AT_KEY = 'proactive_push_last_wake_at_v1';
@@ -42,7 +46,7 @@ export function loadPushConfig(): ProactivePushConfig {
   return {
     enabled,
     workerUrl: WORKER_URL.trim().replace(/\/+$/, ''),
-    vapidPublicKey: VAPID_PUBLIC_KEY.trim(),
+    vapidPublicKey: loadPushVapid().vapidPublicKey,
     clientToken: CLIENT_TOKEN.trim(),
   };
 }
@@ -58,12 +62,12 @@ export function savePushConfig(enabled: boolean) {
 export function isPushConfigReady(cfg: ProactivePushConfig = loadPushConfig()): boolean {
   return cfg.enabled
     && cfg.workerUrl.startsWith('https://')
-    && cfg.vapidPublicKey.length > 80;
+    && isPushVapidReady();
 }
 
 /** True if the deployment constants have been filled in (regardless of toggle). */
 export function isPushConfigAvailable(): boolean {
-  return WORKER_URL.startsWith('https://') && VAPID_PUBLIC_KEY.length > 80;
+  return WORKER_URL.startsWith('https://') && isPushVapidReady();
 }
 
 // ---------- Web Push subscription helpers ----------
@@ -345,8 +349,11 @@ export interface SubscribeResult {
  */
 export async function ensureSubscribed(): Promise<SubscribeResult> {
   const cfg = loadPushConfig();
-  if (!cfg.workerUrl.startsWith('https://') || cfg.vapidPublicKey.length < 80) {
-    return { ok: false, reason: '推送加速器未配置（前端常量未填写）' };
+  if (!cfg.workerUrl.startsWith('https://')) {
+    return { ok: false, reason: 'Worker URL 未配置' };
+  }
+  if (!isPushVapidReady()) {
+    return { ok: false, reason: 'VAPID 公钥未配置, 请到 Settings → Instant Push 生成' };
   }
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
     return { ok: false, reason: '当前浏览器不支持 Service Worker 或 Push API' };
@@ -431,8 +438,11 @@ export async function sendTestPush(): Promise<{ ok: boolean; status?: number; re
  */
 export async function resetSubscription(): Promise<{ ok: boolean; reason?: string; endpoint?: string }> {
   const cfg = loadPushConfig();
-  if (!cfg.workerUrl.startsWith('https://') || cfg.vapidPublicKey.length < 80) {
-    return { ok: false, reason: '推送加速器未配置' };
+  if (!cfg.workerUrl.startsWith('https://')) {
+    return { ok: false, reason: 'Worker URL 未配置' };
+  }
+  if (!isPushVapidReady()) {
+    return { ok: false, reason: 'VAPID 公钥未配置, 请到 Settings → Instant Push 生成' };
   }
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
     return { ok: false, reason: '当前浏览器不支持 Service Worker 或 Push API' };
@@ -574,7 +584,7 @@ export async function getPushDiagnostics(): Promise<PushDiagnostics> {
     endpoint,
     endpointDead: isDeadSubscriptionEndpoint(endpoint),
     channel: detectChannelFromEndpoint(endpoint),
-    workerConfigured: cfg.workerUrl.startsWith('https://') && cfg.vapidPublicKey.length > 80,
+    workerConfigured: cfg.workerUrl.startsWith('https://') && isPushVapidReady(),
     enabled: cfg.enabled,
     lastWakeAt,
     lastWakeChar,

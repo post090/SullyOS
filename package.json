@@ -5,10 +5,11 @@
   "license": "SEE LICENSE IN LICENSE",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "npm run build:workers && vite build",
     "preview": "vite preview",
     "cap:sync": "cap sync",
-    "cap:android": "cap open android"
+    "cap:android": "cap open android",
+    "build:workers": "node scripts/build-workers.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^6.0.0",
@@ -23,8 +24,9 @@
     "@netlify/blobs": "^10.7.4",
     "@netlify/functions": "^5.1.5",
     "@phosphor-icons/react": "^2.1.10",
-    "@rei-standard/amsg-client": "^2.0.1",
-    "@rei-standard/amsg-server": "^2.0.1",
+    "@rei-standard/amsg-client": "^2.2.1",
+    "@rei-standard/amsg-instant": "^0.5.0",
+    "@rei-standard/amsg-server": "^2.1.0",
     "@rei-standard/amsg-sw": "^2.0.1",
     "jszip": "^3.10.1",
     "pg": "^8.20.0",
@@ -37,6 +39,7 @@
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
     "@vitejs/plugin-react": "^4.2.1",
+    "esbuild": "^0.21.5",
     "typescript": "^5.3.3",
     "vite": "^5.0.10"
   }

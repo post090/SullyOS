@@ -24,6 +24,11 @@ import type { DigestResult } from '../utils/memoryPalace';
 import { MCD_PROPOSE_TOOL, autoFixProposalCodesByName } from '../utils/mcdToolBridge';
 import { extractHtmlBlocks } from '../utils/htmlPrompt';
 import { buildChatRequestPayload } from '../utils/chatRequestPayload';
+import {
+    isInstantConfigReady,
+    sendInstantPushAndAwaitReply,
+    type InstantPushPayload,
+} from '../utils/instantPushClient';
 
 // ─── 情绪评估（副API，fire & forget）───
 
@@ -610,7 +615,11 @@ export const useChatAI = ({
         }
     };
 
-    const triggerAI = async (currentMsgs: Message[], overrideApiConfig?: { baseUrl: string; apiKey: string; model: string }) => {
+    const triggerAI = async (
+        currentMsgs: Message[],
+        overrideApiConfig?: { baseUrl: string; apiKey: string; model: string },
+        onInstantPosted?: () => void,
+    ) => {
         if (isTyping || !char) return;
         const effectiveApi = overrideApiConfig || apiConfig;
         if (!effectiveApi.baseUrl) { alert("请先在设置中配置 API URL"); return; }
@@ -778,6 +787,30 @@ export const useChatAI = ({
                 baseReqBody.tools = [MCD_PROPOSE_TOOL];
                 baseReqBody.tool_choice = 'auto';
             }
+
+            // ─── Instant Push 分支 ───
+            // 与本地 fetch 对称：sendInstantPushAndAwaitReply 内部完成 sub 获取 / push 监听 /
+            // 90s 超时兜底，返回时 push 已落库（或失败）。外层 finally 统一清 isTyping /
+            // KeepAlive / 跑 memory palace 后处理，与本地路径完全对齐。
+            // worker 端跑完 LLM → push → SW → activeMsgRuntime.flushInboxToChat 写 DB 并刷 UI。
+            if (isInstantConfigReady()) {
+                const instantResult = await sendInstantPushAndAwaitReply({
+                    contactName: char.name,
+                    messages: fullMessages as InstantPushPayload['messages'],
+                    apiUrl: effectiveApi.baseUrl,
+                    apiKey: effectiveApi.apiKey,
+                    primaryModel: effectiveApi.model,
+                    maxTokens: 8000,
+                    temperature: userTemp,
+                    avatarUrl: char.avatar,
+                    metadata: { source: 'sullyos-chat', charId: char.id },
+                }, char.id, undefined, onInstantPosted);
+                if (!instantResult.ok) {
+                    addToast(`Instant Push: ${instantResult.error}`, 'error');
+                }
+                return;
+            }
+
             let data = await safeFetchJson(`${baseUrl}/chat/completions`, {
                 method: 'POST', headers,
                 body: JSON.stringify(baseReqBody)

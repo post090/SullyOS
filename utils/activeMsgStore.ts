@@ -117,19 +117,35 @@ export const ActiveMsgStore = {
     });
   },
 
+  // 单事务原子 claim: getAll + delete 同一个 readwrite tx。IndexedDB 跨连接
+  // (跨 tab / 跨 SW / 同 tab 多 caller) 对同一 object store 的 readwrite 事务
+  // 是 serializable 的, 第二个 caller 会等第一个 commit 后才进入, 所以同一条
+  // inbox 消息绝不可能被两个 caller 同时 claim。这是把 race 关在 IDB 层。
+  //
+  // 已知取舍 (TODO): 这是"先 ack 后处理"语义 —— 调用方拿到 messages 后若
+  // saveMessage 抛错, 消息已经从 inbox 删了, 会丢。当前没修是因为:
+  //   1. DB.saveMessage 用 IDB add(), 失败极罕见 (quota / corruption)
+  //   2. 改成"先 save 后 ack" 会需要把 list 和 delete 拆开, 反而把这里的
+  //      原子性优势让出去, 重新打开并发读到同一项的窗口
+  // 真要补防丢, 加一层 dead-letter / try-catch 后 put 回 inbox, 而不是
+  // 拆开这个事务。
   async consumeInboxMessages(): Promise<ActiveMsg2InboxMessage[]> {
-    const messages = await this.listInboxMessages();
-    if (messages.length === 0) return [];
-
     const db = await openDB();
-    await new Promise<void>((resolve, reject) => {
+    return new Promise<ActiveMsg2InboxMessage[]>((resolve, reject) => {
       const tx = db.transaction(STORE_INBOX, 'readwrite');
       const store = tx.objectStore(STORE_INBOX);
-      messages.forEach((message) => store.delete(message.messageId));
-      tx.oncomplete = () => resolve();
+      const request = store.getAll();
+      let messages: ActiveMsg2InboxMessage[] = [];
+      request.onsuccess = () => {
+        messages = (request.result || []) as ActiveMsg2InboxMessage[];
+        messages.sort((a, b) => (a.sentAt || a.receivedAt) - (b.sentAt || b.receivedAt));
+        messages.forEach((m) => store.delete(m.messageId));
+      };
+      request.onerror = () => reject(request.error);
+      tx.oncomplete = () => resolve(messages);
+      tx.onabort = () => reject(tx.error || new Error('inbox consume aborted'));
       tx.onerror = () => reject(tx.error);
     });
-    return messages;
   },
 };
 

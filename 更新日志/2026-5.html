@@ -676,6 +676,30 @@
     </p>
   </section>
 
+  <!-- 11 -->
+  <section class="item" id="i-instant-push">
+    <div class="item-head">
+      <div class="item-num">11</div>
+      <div class="item-title">
+        <h2>新增 · Instant Push <span class="tag-pill">NEW</span></h2>
+        <div class="sub">独立的 LLM-driven Web Push 通道：自部署 Worker，LLM 在云端生成回复后分句推送到手机。</div>
+      </div>
+    </div>
+    <p>
+      引入 <code>@rei-standard/amsg-instant 0.2.0</code>，同步将 <code>amsg-client</code> 升至 2.2.0、<code>amsg-server</code> 升至 2.1.0。
+      每个 fork 用户自己在 Cloudflare 上部署一个独立 Worker——<mark>零数据库、零 cron、跟作者的 sully-n 完全无关</mark>。
+    </p>
+    <ul class="clean">
+      <li>前端在「设置 → Instant Push」里一键生成 VAPID 密钥对、复制 Worker 代码、填 Worker URL，即可完成接入。</li>
+      <li>测试推送会真实调用你的 Chat API，把 LLM 生成的一句话通过 Web Push 发到你的设备。</li>
+      <li>采用明文协议（HTTPS 已加密传输），不引入 masterKey / 加密字段，配置极简。</li>
+    </ul>
+    <div class="note">
+      <div class="label">配置位置</div>
+      <p><span class="path">设置<span class="sep">›</span>Instant Push<span class="sep">›</span>配置</span>，或参考 <code>worker/instant-push/README.md</code>。</p>
+    </div>
+  </section>
+
   <div class="finale">
     <p class="big">这就是 2026 年 5 月的更新</p>
     <p class="small">愿你和角色们点到喜欢的那一份麦麦。</p>

@@ -446,6 +446,10 @@ interface MessageItemProps {
     bubbleVariant?: 'modern' | 'flat' | 'outline' | 'shadow' | 'wechat' | 'ios';
     messageSpacing?: 'compact' | 'default' | 'spacious';
     showTimestamp?: 'always' | 'hover' | 'never';
+    /** Instant Push 准备中：在用户气泡左侧渲染 dot pulse */
+    isPending?: boolean;
+    /** 是否开启 dot pulse 指示。关掉则 pending 期间不显示任何视觉 */
+    pendingIndicator?: boolean;
     /** 麦当劳菜单卡里点了"发送给角色"时调用 */
     onMcdSendCart?: (items: import('./McdCard').McdCartItem[]) => void;
     onMcdCandidate?: (item: import('./McdCard').McdCartItem) => void;
@@ -484,6 +488,8 @@ const MessageItem = React.memo(({
     bubbleVariant = 'modern',
     messageSpacing = 'default',
     showTimestamp = 'hover',
+    isPending = false,
+    pendingIndicator = true,
     onMcdSendCart,
     onMcdCandidate,
     thinkingChainOptions,
@@ -773,6 +779,7 @@ const MessageItem = React.memo(({
         );
     }
 
+    const showPendingDots = isUser && isPending && pendingIndicator;
     const commonLayout = (content: React.ReactNode) => (
             <div className={`flex items-end ${isUser ? 'justify-end' : 'justify-start'} ${marginBottom} px-3 group select-none relative transition-[padding] duration-300 ${selectionMode ? 'pl-12' : ''}`}>
                 {selectionMode && (
@@ -789,9 +796,21 @@ const MessageItem = React.memo(({
                         {renderAvatar(charAvatar)}
                     </div>
                 )}
-                
-                {/* 
-                    UPDATED: Limit bubble max-width to 72% for better spacing. 
+
+                {showPendingDots && (
+                    <span
+                        className="inline-flex items-center gap-[3px] mb-2 mr-1.5 select-none pointer-events-none"
+                        aria-label="发送准备中"
+                        role="status"
+                    >
+                        <span className="w-1 h-1 rounded-full bg-slate-400/70 animate-dot-pulse" />
+                        <span className="w-1 h-1 rounded-full bg-slate-400/70 animate-dot-pulse" style={{ animationDelay: '0.15s' }} />
+                        <span className="w-1 h-1 rounded-full bg-slate-400/70 animate-dot-pulse" style={{ animationDelay: '0.3s' }} />
+                    </span>
+                )}
+
+                {/*
+                    UPDATED: Limit bubble max-width to 72% for better spacing.
                     Added min-w-0 to prevent flexbox overflow issues.
                     Added explicit margins to clear absolute avatars.
                 */}
