@@ -615,7 +615,11 @@ export const useChatAI = ({
         }
     };
 
-    const triggerAI = async (currentMsgs: Message[], overrideApiConfig?: { baseUrl: string; apiKey: string; model: string }) => {
+    const triggerAI = async (
+        currentMsgs: Message[],
+        overrideApiConfig?: { baseUrl: string; apiKey: string; model: string },
+        onInstantPosted?: () => void,
+    ) => {
         if (isTyping || !char) return;
         const effectiveApi = overrideApiConfig || apiConfig;
         if (!effectiveApi.baseUrl) { alert("请先在设置中配置 API URL"); return; }
@@ -800,7 +804,7 @@ export const useChatAI = ({
                     temperature: userTemp,
                     avatarUrl: char.avatar,
                     metadata: { source: 'sullyos-chat', charId: char.id },
-                }, char.id);
+                }, char.id, undefined, onInstantPosted);
                 if (!instantResult.ok) {
                     addToast(`Instant Push: ${instantResult.error}`, 'error');
                 }

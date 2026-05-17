@@ -36,6 +36,9 @@ const Chat: React.FC = () => {
         } catch { return 0; }
     }, []);
     const [messages, setMessages] = useState<Message[]>([]);
+    // Instant Push 路径：消息写入 DB 到 POST `/instant` 真正发出之间，气泡显示半透明。
+    // worker 回 200 即从 set 移除——此后用户杀 PWA 也安全。
+    const [pendingInstantMsgIds, setPendingInstantMsgIds] = useState<Set<number>>(new Set());
     const [totalMsgCount, setTotalMsgCount] = useState(0);
     const [visibleCount, setVisibleCount] = useState(30);
     const [windowedFocusMsgId, setWindowedFocusMsgId] = useState<number | null>(null);
@@ -772,7 +775,7 @@ const Chat: React.FC = () => {
             setReplyTarget(null);
         }
 
-        await DB.saveMessage(msgPayload);
+        const savedUserMsgId = await DB.saveMessage(msgPayload);
 
         // Detect XHS link in user text and create xhs_card via MCP
         if (type === 'text') {
@@ -806,7 +809,21 @@ const Chat: React.FC = () => {
         // 闭包里的 messages 还没包含刚写入的 user msg 也没关系。
         // 仅文本消息触发；image / xhs_card 等卡片消息不触发，与本地手动行为对齐。
         if (type === 'text' && isInstantConfigReady()) {
-            triggerAI(messages);
+            // 标记为"准备中"：从写入 DB 到 POST 真正发出之间气泡半透明，
+            // 提示用户先别杀 PWA。worker 收到（200）后回调清除。
+            setPendingInstantMsgIds(prev => {
+                const next = new Set(prev);
+                next.add(savedUserMsgId);
+                return next;
+            });
+            triggerAI(messages, undefined, () => {
+                setPendingInstantMsgIds(prev => {
+                    if (!prev.has(savedUserMsgId)) return prev;
+                    const next = new Set(prev);
+                    next.delete(savedUserMsgId);
+                    return next;
+                });
+            });
         }
     };
 
@@ -2277,7 +2294,11 @@ const Chat: React.FC = () => {
                         <div
                             key={m.id || i}
                             id={`chat-msg-${m.id}`}
-                            className={flashMsgId === m.id ? 'ring-2 ring-yellow-300 bg-yellow-50/40 rounded-2xl mx-2 transition-all duration-500' : ''}
+                            className={[
+                                flashMsgId === m.id ? 'ring-2 ring-yellow-300 bg-yellow-50/40 rounded-2xl mx-2' : '',
+                                'transition-all duration-300',
+                                pendingInstantMsgIds.has(m.id) ? 'opacity-50' : 'opacity-100',
+                            ].filter(Boolean).join(' ')}
                         >
                         <MessageItem
                             msg={m}

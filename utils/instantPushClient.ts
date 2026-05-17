@@ -1,4 +1,3 @@
-import { ReiClient } from '@rei-standard/amsg-client';
 import { InstantPushConfig, APIConfig } from '../types';
 
 export const INSTANT_PUSH_CONFIG_KEY = 'instant_push_config_v1';
@@ -51,15 +50,10 @@ export function saveInstantConfig(cfg: InstantPushConfig): void {
   try {
     localStorage.setItem(INSTANT_PUSH_CONFIG_KEY, JSON.stringify({ ...cfg, updatedAt: Date.now() }));
   } catch { /* ignore */ }
-  // Invalidate cached ReiClient so next call rebuilds with new config.
-  _cachedClient = null;
-  _cachedClientKey = '';
 }
 
 export function clearInstantConfig(): void {
   try { localStorage.removeItem(INSTANT_PUSH_CONFIG_KEY); } catch { /* ignore */ }
-  _cachedClient = null;
-  _cachedClientKey = '';
 }
 
 export function isInstantConfigReady(cfg?: InstantPushConfig): boolean {
@@ -176,38 +170,39 @@ export async function getOrCreateInstantSubscription(
   };
 }
 
-// ── ReiClient lazy singleton ───────────────────────────────────────────────
-
-let _cachedClient: ReiClient | null = null;
-let _cachedClientKey = '';
-
-function getClient(): ReiClient {
-  const cfg = loadInstantConfig();
-  const key = `${cfg.workerUrl}|${cfg.clientToken ?? ''}`;
-  if (_cachedClient && _cachedClientKey === key) return _cachedClient;
-  _cachedClient = new ReiClient({
-    baseUrl: cfg.workerUrl,
-    instantEncryption: false,
-    instantClientToken: cfg.clientToken,
-  });
-  _cachedClientKey = key;
-  return _cachedClient;
-}
-
 // ── Send helpers ───────────────────────────────────────────────────────────
+//
+// 直接走原生 fetch（曾经走 ReiClient，0.5.0 起 amsg 客户端只是 fetch 薄壳，
+// 我们改裸 fetch 是为了暴露 `keepalive: true` 选项 —— 浏览器进程被杀（iOS PWA
+// swipe-up 是典型场景）时浏览器仍会努力把已 dispatch 的请求送达，避免 worker
+// 收不到导致没推送回来。
+
+// `keepalive: true` 限制 body ≤ 64KB。超过则降级为普通 fetch（杀进程会丢包），
+// 给点 margin 避免边界 case。
+const KEEPALIVE_MAX_BODY = 60 * 1024;
 
 export async function sendInstantPush(
   payload: InstantPushPayload,
+  options: { keepalive?: boolean } = {},
 ): Promise<{ ok: boolean; error?: string; data?: unknown }> {
   const cfg = loadInstantConfig();
   if (!isInstantConfigReady(cfg)) {
     return { ok: false, error: '请先在 Settings → Instant Push 里配置并保存' };
   }
   try {
-    const client = getClient();
-    const result = await client.sendInstant(payload) as { success: boolean; data?: unknown; error?: { message?: string } };
-    if (result.success) return { ok: true, data: result.data };
-    return { ok: false, error: result.error?.message ?? '发送失败' };
+    const url = `${cfg.workerUrl.replace(/\/+$/, '')}/instant`;
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (cfg.clientToken) headers['X-Client-Token'] = cfg.clientToken;
+    const body = JSON.stringify(payload);
+    const useKeepalive = !!options.keepalive && body.length <= KEEPALIVE_MAX_BODY;
+    const res = await fetch(url, { method: 'POST', headers, body, keepalive: useKeepalive });
+    let parsed: { success?: boolean; data?: unknown; error?: { message?: string } } | null = null;
+    try { parsed = await res.json(); } catch { /* non-JSON */ }
+    if (!res.ok) {
+      return { ok: false, error: parsed?.error?.message ?? `HTTP ${res.status}` };
+    }
+    if (parsed?.success) return { ok: true, data: parsed.data };
+    return { ok: false, error: parsed?.error?.message ?? '发送失败' };
   } catch (e) {
     const err = e as { message?: string } | null;
     return { ok: false, error: err?.message ?? String(e) };
@@ -244,6 +239,7 @@ export async function sendInstantPushAndAwaitReply(
   business: InstantBusinessPayload,
   charId: string,
   timeoutMs: number = DEFAULT_INSTANT_TIMEOUT_MS,
+  onPosted?: () => void,
 ): Promise<InstantAwaitResult> {
   const cfg = loadInstantConfig();
   if (!isInstantConfigReady(cfg)) {
@@ -265,10 +261,13 @@ export async function sendInstantPushAndAwaitReply(
   window.addEventListener('active-msg-received', pushHandler);
 
   try {
-    const sendResult = await sendInstantPush({ ...business, pushSubscription: sub });
+    // keepalive: true 让 fetch 在进程被杀后仍能完成（iOS PWA swipe-kill 关键保障）
+    const sendResult = await sendInstantPush({ ...business, pushSubscription: sub }, { keepalive: true });
     if (!sendResult.ok) {
       return { ok: false, outcome: 'send-failed', error: sendResult.error };
     }
+    // worker 已收到（200 + success:true）—— 让 UI 取消"准备中"半透明态
+    onPosted?.();
 
     const timedOut = await Promise.race([
       pushArrived.then(() => false as const),
