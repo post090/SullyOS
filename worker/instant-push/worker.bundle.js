@@ -11,6 +11,48 @@ function isValidUrl(s) {
   }
 }
 var VALID_MESSAGE_ROLES = /* @__PURE__ */ new Set(["system", "user", "assistant", "tool"]);
+var AVATAR_URL_MAX_LENGTH = 2048;
+function validateAvatarUrl(value) {
+  if (value === void 0 || value === null) return null;
+  if (typeof value !== "string") {
+    return "avatarUrl \u5FC5\u987B\u662F\u5B57\u7B26\u4E32";
+  }
+  if (/^data:/i.test(value)) {
+    return "\u5934\u50CF\u4E0D\u652F\u6301\u4F20\u5165 data: URI\uFF0C\u8BF7\u6539\u4E3A\u516C\u7F51\u53EF\u8BBF\u95EE\u7684 https:// \u56FE\u7247 URL";
+  }
+  if (value.length > AVATAR_URL_MAX_LENGTH) {
+    return `\u5934\u50CF URL \u957F\u5EA6 ${value.length} \u5B57\u7B26\u8D85\u8FC7 ${AVATAR_URL_MAX_LENGTH} \u4E0A\u9650\uFF0C\u8BF7\u6539\u4E3A\u66F4\u77ED\u7684\u56FE\u7247 URL`;
+  }
+  if (!isValidUrl(value)) {
+    return "avatarUrl \u4E0D\u662F\u5408\u6CD5 URL";
+  }
+  return null;
+}
+var SPLIT_PATTERN_MAX_LENGTH = 200;
+var SPLIT_PATTERN_MAX_ITEMS = 10;
+function validateSplitPattern(value) {
+  if (value === void 0 || value === null) return null;
+  const isArray = Array.isArray(value);
+  const items = isArray ? value : [value];
+  if (isArray && items.length === 0) return null;
+  if (items.length > SPLIT_PATTERN_MAX_ITEMS) {
+    return `splitPattern \u6570\u7EC4\u6700\u591A ${SPLIT_PATTERN_MAX_ITEMS} \u9879`;
+  }
+  for (let i = 0; i < items.length; i++) {
+    const s = items[i];
+    const label = isArray ? `splitPattern[${i}]` : "splitPattern";
+    if (typeof s !== "string") return `${label} \u5FC5\u987B\u662F\u5B57\u7B26\u4E32`;
+    if (s.length > SPLIT_PATTERN_MAX_LENGTH) {
+      return `${label} \u4E0D\u80FD\u8D85\u8FC7 ${SPLIT_PATTERN_MAX_LENGTH} \u5B57\u7B26`;
+    }
+    try {
+      new RegExp(s);
+    } catch (_) {
+      return `${label} \u4E0D\u662F\u6709\u6548\u6B63\u5219\u8868\u8FBE\u5F0F`;
+    }
+  }
+  return null;
+}
 function validateMessagesArray(messages) {
   if (!Array.isArray(messages) || messages.length === 0) {
     return "messages \u5FC5\u987B\u662F\u957F\u5EA6 \u2265 1 \u7684\u6570\u7EC4";
@@ -163,11 +205,12 @@ function validateInstantPayload(payload) {
       details: { missingFields: ["pushSubscription.endpoint"] }
     };
   }
-  if (payload.avatarUrl !== void 0 && payload.avatarUrl !== null && !isValidUrl(payload.avatarUrl)) {
+  const avatarErr = validateAvatarUrl(payload.avatarUrl);
+  if (avatarErr) {
     return {
       valid: false,
       errorCode: "INVALID_PAYLOAD_FORMAT",
-      errorMessage: "avatarUrl \u683C\u5F0F\u65E0\u6548",
+      errorMessage: avatarErr,
       details: { invalidFields: ["avatarUrl"] }
     };
   }
@@ -177,6 +220,15 @@ function validateInstantPayload(payload) {
       errorCode: "INVALID_PAYLOAD_FORMAT",
       errorMessage: "messageSubtype \u5FC5\u987B\u662F\u5B57\u7B26\u4E32",
       details: { invalidFields: ["messageSubtype"] }
+    };
+  }
+  const splitErr = validateSplitPattern(payload.splitPattern);
+  if (splitErr) {
+    return {
+      valid: false,
+      errorCode: "INVALID_PAYLOAD_FORMAT",
+      errorMessage: splitErr,
+      details: { invalidFields: ["splitPattern"] }
     };
   }
   return { valid: true };
@@ -442,15 +494,25 @@ async function safeReadText(res) {
   }
 }
 var SLEEP_BETWEEN_MESSAGES_MS = 1500;
-function splitMessageIntoSentences(messageContent) {
-  const sentences = messageContent.split(/([。！？!?]+)/).reduce((acc, part, i, arr) => {
+var DEFAULT_SPLIT_REGEX = /([。！？!?]+)/;
+function splitOnceByRegex(chunk, regex) {
+  const out = chunk.split(regex).reduce((acc, part, i, arr) => {
     if (i % 2 === 0 && part.trim()) {
       const punctuation = arr[i + 1] || "";
       acc.push(part.trim() + punctuation);
     }
     return acc;
   }, []).filter((s) => s.length > 0);
-  return sentences.length > 0 ? sentences : [messageContent];
+  return out.length > 0 ? out : [chunk];
+}
+function splitMessageIntoSentences(messageContent, splitPattern = null) {
+  const sources = splitPattern == null ? null : Array.isArray(splitPattern) ? splitPattern : [splitPattern];
+  const regexes = sources && sources.length > 0 ? sources.map((s) => new RegExp(s)) : [DEFAULT_SPLIT_REGEX];
+  let chunks = [messageContent];
+  for (const regex of regexes) {
+    chunks = chunks.flatMap((c) => splitOnceByRegex(c, regex));
+  }
+  return chunks.length > 0 ? chunks : [messageContent];
 }
 function buildInstantPushPayload({
   message,
@@ -566,7 +628,7 @@ async function processInstantMessage(payload, ctx) {
     error.code = "LLM_CALL_FAILED";
     throw error;
   }
-  const messages = splitMessageIntoSentences(messageContent);
+  const messages = splitMessageIntoSentences(messageContent, payload.splitPattern ?? null);
   const pushSubscription = payload.pushSubscription;
   const contactName = payload.contactName;
   const avatarUrl = payload.avatarUrl || null;

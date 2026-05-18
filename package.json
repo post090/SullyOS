@@ -25,7 +25,7 @@
     "@netlify/functions": "^5.1.5",
     "@phosphor-icons/react": "^2.1.10",
     "@rei-standard/amsg-client": "^2.2.1",
-    "@rei-standard/amsg-instant": "^0.5.0",
+    "@rei-standard/amsg-instant": "^0.6.1",
     "@rei-standard/amsg-server": "^2.1.0",
     "@rei-standard/amsg-sw": "^2.0.1",
     "jszip": "^3.10.1",

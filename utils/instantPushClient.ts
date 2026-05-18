@@ -279,7 +279,8 @@ export interface InstantPushPayload {
   apiKey: string;
   primaryModel: string;
   pushSubscription: PushSubscriptionInfo;
-  // completePrompt 与 messages 二选一：worker 端 amsg-instant 0.5.0 同时认这两路。
+  // completePrompt 与 messages 二选一：worker 端 amsg-instant 0.5.0+ 同时认这两路。
+  // avatarUrl: 0.6.0 起 worker 端强制校验, 仅接受 http(s) URL (≤2KB), data: 被拒。
   // - completePrompt：测试推送 / 简单 one-shot 路径继续用
   // - messages：与本地 chat completions 完全等价的 system/user/assistant 数组
   completePrompt?: string;

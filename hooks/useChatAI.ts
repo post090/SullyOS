@@ -806,7 +806,10 @@ export const useChatAI = ({
                     primaryModel: effectiveApi.model,
                     maxTokens: 8000,
                     temperature: userTemp,
-                    avatarUrl: char.avatar,
+                    // amsg-instant 0.6+ 端 validateAvatarUrl 拒 data: / >2KB,
+                    // 这里按 contract 只传 https URL, data URL 本地头像直接不传
+                    // (SW 显示通知时回退到默认 app icon, 不影响推送成功率).
+                    avatarUrl: /^https?:\/\//i.test(char.avatar || '') ? char.avatar : undefined,
                     metadata: { source: 'sullyos-chat', charId: char.id },
                 }, char.id, undefined, onInstantPosted);
                 if (!instantResult.ok) {
