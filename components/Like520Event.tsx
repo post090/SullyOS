@@ -1849,6 +1849,7 @@ const ExitButton: React.FC<{ onClick: () => void }> = ({ onClick }) => (
 
 const LetterView: React.FC<{ text: string; onNext: () => void; onClose: () => void; charName: string; userName: string }> = ({ text, onNext, onClose, charName, userName }) => {
     const letterRef = useRef<HTMLDivElement>(null);
+    const saveAreaRef = useRef<HTMLDivElement>(null);
     const [saving, setSaving] = useState(false);
     const handleSavePng = async () => {
         if (saving) return;
@@ -1863,8 +1864,9 @@ const LetterView: React.FC<{ text: string; onNext: () => void; onClose: () => vo
                 document.head.appendChild(s);
             });
             const html2canvas = await loadH2C;
-            if (!letterRef.current) return;
-            const canvas = await html2canvas(letterRef.current, { backgroundColor: null, scale: 2, useCORS: true });
+            const target = saveAreaRef.current;
+            if (!target) return;
+            const canvas = await html2canvas(target, { backgroundColor: '#f3e2bc', scale: 2, useCORS: true });
             const url = canvas.toDataURL('image/png');
             const a = document.createElement('a');
             a.href = url;
@@ -1883,19 +1885,47 @@ const LetterView: React.FC<{ text: string; onNext: () => void; onClose: () => vo
             <AmbientLayer />
             <ExitButton onClick={onClose} />
             <div className="l520-letter-stage">
-                <div className="l520-letter-paper" ref={letterRef}>
-                    <span className="lp-tl" />
-                    <span className="lp-tr" />
-                    <div className="l520-letter-header">
-                        <div className="l520-letter-eyebrow">致 · 我的</div>
-                        <div className="l520-letter-title">{userName}</div>
-                        <div className="l520-letter-divider">❦ ⸙ ❦</div>
+                <div
+                    ref={saveAreaRef}
+                    style={{
+                        position: 'relative',
+                        padding: '28px 22px',
+                        background: 'radial-gradient(ellipse at top, #f9ecc6 0%, #f3e2bc 60%, #ebd6a5 100%)',
+                        borderRadius: 6,
+                        boxShadow: 'inset 0 0 60px rgba(122,46,58,0.12), inset 0 0 0 1px rgba(184,146,63,0.4)',
+                    }}
+                >
+                    <div className="l520-letter-paper" ref={letterRef}>
+                        <span className="lp-tl" />
+                        <span className="lp-tr" />
+                        <div className="l520-letter-header">
+                            <div className="l520-letter-eyebrow">致 · 我的</div>
+                            <div className="l520-letter-title">{userName}</div>
+                            <div className="l520-letter-divider">❦ ⸙ ❦</div>
+                        </div>
+                        <div className="l520-letter-body">{text}</div>
+                        <div className="l520-letter-foot">
+                            <div className="l520-letter-flourish">~ ❦ ~</div>
+                            <div className="l520-letter-signature">— {charName}</div>
+                            <div className="l520-letter-seal">♡</div>
+                        </div>
                     </div>
-                    <div className="l520-letter-body">{text}</div>
-                    <div className="l520-letter-foot">
-                        <div className="l520-letter-flourish">~ ❦ ~</div>
-                        <div className="l520-letter-signature">— {charName}</div>
-                        <div className="l520-letter-seal">♡</div>
+                    <div style={{
+                        position: 'absolute', top: 8, left: 8, right: 8, bottom: 8,
+                        pointerEvents: 'none',
+                        border: '0.5px solid rgba(184,146,63,0.55)',
+                        borderRadius: 3,
+                    }} />
+                    <div style={{
+                        position: 'absolute', bottom: 6, left: 0, right: 0,
+                        textAlign: 'center',
+                        fontFamily: "'Cormorant Garamond', serif",
+                        fontStyle: 'italic',
+                        fontSize: 9,
+                        letterSpacing: 6,
+                        color: 'rgba(122,46,58,0.55)',
+                    }}>
+                        — 5 · 20 · MMXXVI —
                     </div>
                 </div>
                 <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginTop: 16 }}>
@@ -2020,6 +2050,162 @@ const PuzzleView: React.FC<{
 };
 
 // ============================================================
+// Done 视图 —— 温馨结尾
+// ============================================================
+
+const DoneView: React.FC<{
+    charName: string;
+    charAvatar?: string;
+    userName: string;
+    charChibi?: string;
+    userChibi?: string;
+    onClose: () => void;
+}> = ({ charName, charAvatar, userName, charChibi, userChibi, onClose }) => {
+    const [heartsKey] = useState(() => Date.now());
+    return (
+        <div className="absolute inset-0 overflow-hidden" style={{
+            background: 'radial-gradient(ellipse at 50% 30%, #FFE8EF 0%, #FFD7E1 45%, #F5B8C9 100%)',
+        }}>
+            {/* 漂浮的爱心粒子 */}
+            <style>{`
+                @keyframes l520-done-float {
+                    0% { transform: translateY(20vh) translateX(0) scale(0.6); opacity: 0; }
+                    20% { opacity: 0.8; }
+                    100% { transform: translateY(-110vh) translateX(var(--dx, 0)) scale(1); opacity: 0; }
+                }
+                @keyframes l520-done-pulse {
+                    0%, 100% { transform: scale(1); }
+                    50% { transform: scale(1.06); }
+                }
+                @keyframes l520-done-shimmer {
+                    0%, 100% { opacity: 0.7; }
+                    50% { opacity: 1; }
+                }
+                @keyframes l520-done-fadein {
+                    from { opacity: 0; transform: translateY(8px); }
+                    to { opacity: 1; transform: translateY(0); }
+                }
+                .l520-done-heart {
+                    position: absolute;
+                    bottom: -10vh;
+                    font-size: 14px;
+                    animation: l520-done-float linear infinite;
+                    pointer-events: none;
+                }
+            `}</style>
+            {Array.from({ length: 14 }).map((_, i) => {
+                const left = (i * 7.3 + 5) % 95;
+                const delay = (i * 0.85) % 9;
+                const duration = 11 + (i % 5) * 1.5;
+                const size = 12 + (i % 4) * 6;
+                const dx = ((i % 3) - 1) * 30;
+                const colors = ['#F18AAA', '#FFB6C8', '#FFC8D2', '#E893B0'];
+                return (
+                    <span
+                        key={`${heartsKey}-${i}`}
+                        className="l520-done-heart"
+                        style={{
+                            left: `${left}%`,
+                            animationDelay: `${delay}s`,
+                            animationDuration: `${duration}s`,
+                            fontSize: size,
+                            color: colors[i % colors.length],
+                            ['--dx' as any]: `${dx}px`,
+                        }}
+                    >♥</span>
+                );
+            })}
+
+            <div className="relative flex flex-col items-center justify-center min-h-full px-6 py-12 max-w-md mx-auto" style={{ animation: 'l520-done-fadein 0.8s ease-out' }}>
+                {/* 头像 + chibi 合影 */}
+                <div className="flex items-end justify-center gap-2 mb-5" style={{ animation: 'l520-done-pulse 3.5s ease-in-out infinite' }}>
+                    {charChibi ? (
+                        <img src={charChibi} alt="" style={{ height: 110, objectFit: 'contain', filter: 'drop-shadow(0 6px 12px rgba(199,97,130,0.35))' }} />
+                    ) : charAvatar ? (
+                        <img src={charAvatar} alt="" style={{ width: 80, height: 80, borderRadius: '50%', objectFit: 'cover', boxShadow: '0 6px 14px rgba(199,97,130,0.3)' }} />
+                    ) : null}
+                    {userChibi && (
+                        <img src={userChibi} alt="" style={{ height: 110, objectFit: 'contain', filter: 'drop-shadow(0 6px 12px rgba(199,97,130,0.35))' }} />
+                    )}
+                </div>
+
+                {/* 标题 */}
+                <div style={{
+                    fontFamily: "'Cormorant Garamond', serif",
+                    fontStyle: 'italic',
+                    fontSize: 12,
+                    letterSpacing: 8,
+                    color: '#C76182',
+                    marginBottom: 6,
+                    textTransform: 'uppercase',
+                    animation: 'l520-done-shimmer 2.4s ease-in-out infinite',
+                }}>with love</div>
+                <h2 style={{
+                    fontFamily: "'Noto Serif SC', serif",
+                    fontSize: 22,
+                    fontWeight: 600,
+                    color: '#7A2E3A',
+                    letterSpacing: 4,
+                    textIndent: 4,
+                    marginBottom: 14,
+                }}>谢谢你陪我度过这个下午</h2>
+
+                {/* 寄语 */}
+                <div style={{
+                    background: 'rgba(255,255,255,0.55)',
+                    backdropFilter: 'blur(6px)',
+                    border: '1px solid rgba(255,255,255,0.7)',
+                    borderRadius: 18,
+                    padding: '14px 18px',
+                    marginBottom: 22,
+                    maxWidth: 320,
+                    boxShadow: '0 8px 24px rgba(199,97,130,0.18)',
+                }}>
+                    <p style={{
+                        fontFamily: "'Noto Serif SC', serif",
+                        fontSize: 13.5,
+                        lineHeight: 2,
+                        color: '#5C3A4A',
+                        textAlign: 'center',
+                        margin: 0,
+                        letterSpacing: 0.5,
+                    }}>
+                        今天的{userName}，<br />
+                        被ta看见的样子，<br />
+                        真好看。
+                    </p>
+                </div>
+
+                <div style={{ fontSize: 9, letterSpacing: 10, color: '#C76182', marginBottom: 22, opacity: 0.75 }}>
+                    ❦ &nbsp; TRUE HAPPY END &nbsp; ❦
+                </div>
+
+                <button
+                    onClick={onClose}
+                    style={{
+                        padding: '12px 38px',
+                        borderRadius: 9999,
+                        background: 'linear-gradient(90deg, #FFB6C8, #F18AAA)',
+                        color: '#fff',
+                        fontWeight: 700,
+                        border: 'none',
+                        boxShadow: '0 8px 18px rgba(199,97,130,0.35)',
+                        cursor: 'pointer',
+                        fontSize: 14,
+                        letterSpacing: 4,
+                        textIndent: 4,
+                    }}
+                >回到日常</button>
+
+                <div style={{ marginTop: 10, fontSize: 10, color: '#9D7585', letterSpacing: 1 }}>
+                    ta 一直在的 ♥
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// ============================================================
 // Loading 视图
 // ============================================================
 
@@ -2087,9 +2273,10 @@ const phaseToBGMGroup = (phase: string): BGMGroupKey | null => {
         case 'puzzle':
             return 'jieju';
         case 'letter':
+        case 'done':
             return 'letter';
         default:
-            return null; // intro / done / error
+            return null; // intro / error
     }
 };
 
@@ -2739,17 +2926,14 @@ export const Like520Session: React.FC<SessionProps> = ({ charId, onClose }) => {
             )}
 
             {phase === 'done' && (
-                <div className="flex flex-col items-center justify-center min-h-full px-8 py-12 max-w-md mx-auto">
-                    <div className="text-2xl mb-3">♥</div>
-                    <div className="text-[#5C3A4A] text-base mb-1">这个下午存好了。</div>
-                    <div className="text-[10px] tracking-widest text-[#9D7585] mb-8">TRUE HAPPY END</div>
-                    <button
-                        onClick={onClose}
-                        className="px-10 py-3 rounded-full bg-gradient-to-r from-[#FFB6C8] to-[#F18AAA] text-white font-bold shadow-lg active:scale-95 transition-transform"
-                    >
-                        关闭
-                    </button>
-                </div>
+                <DoneView
+                    charName={char.name}
+                    charAvatar={char.avatar}
+                    userName={userProfile.name || '你'}
+                    charChibi={charChibi?.transparentDataUrl}
+                    userChibi={userChibi?.transparentDataUrl}
+                    onClose={onClose}
+                />
             )}
         </div>
         </BGMContext.Provider>

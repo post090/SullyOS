@@ -1559,6 +1559,11 @@ const MessageItem = React.memo(({
             );
         }
 
+        // === Like 520 Card === (必须放在 if (scoreData) 兜底前)
+        if (scoreData?.type === 'like520_card') {
+            return commonLayout(<Like520ChatCard data={scoreData} />);
+        }
+
         if (scoreData) {
             const coverGradients: Record<string, string> = {
                 sunset: 'from-orange-400 via-pink-500 to-purple-600',
@@ -1600,10 +1605,6 @@ const MessageItem = React.memo(({
             );
         }
 
-        // === Like 520 Card ===
-        if (scoreData?.type === 'like520_card') {
-            return commonLayout(<Like520ChatCard data={scoreData} />);
-        }
     }
 
     if (m.type === 'transfer') {
