@@ -3441,17 +3441,29 @@ export const Like520Session: React.FC<SessionProps> = ({ charId, onClose }) => {
 
 // 520 弹窗内嵌的 API 配置面板 —— 配完直接传送进活动，不再绕去设置 App
 const Like520InlineApiSetup: React.FC<{ onDone: () => void; onBack: () => void }> = ({ onDone, onBack }) => {
-    const { apiConfig, updateApiConfig, addToast, availableModels, setAvailableModels } = useOS();
+    const { apiConfig, updateApiConfig, addToast, availableModels, setAvailableModels, apiPresets } = useOS();
 
     const [localUrl, setLocalUrl] = useState(apiConfig.baseUrl);
     const [localKey, setLocalKey] = useState(apiConfig.apiKey);
     const [localModel, setLocalModel] = useState(apiConfig.model);
+    const [localStream, setLocalStream] = useState(apiConfig.stream === true);
     const [isLoadingModels, setIsLoadingModels] = useState(false);
     const [statusMsg, setStatusMsg] = useState('');
     const [showModelList, setShowModelList] = useState(false);
+    const [testing, setTesting] = useState(false);
+    const [testResult, setTestResult] = useState<string | null>(null);
+
+    const loadPreset = (preset: typeof apiPresets[0]) => {
+        setLocalUrl(preset.config.baseUrl);
+        setLocalKey(preset.config.apiKey);
+        setLocalModel(preset.config.model);
+        setLocalStream(preset.config.stream === true);
+        setTestResult(null);
+        addToast(`已加载预设: ${preset.name}`, 'info');
+    };
 
     const handleSave = () => {
-        updateApiConfig({ baseUrl: localUrl, apiKey: localKey, model: localModel });
+        updateApiConfig({ baseUrl: localUrl, apiKey: localKey, model: localModel, stream: localStream });
         setStatusMsg('配置已保存');
         addToast('API 配置已保存', 'success');
         setTimeout(() => setStatusMsg(''), 2000);
@@ -3484,10 +3496,42 @@ const Like520InlineApiSetup: React.FC<{ onDone: () => void; onBack: () => void }
         }
     };
 
+    const handleTest = async () => {
+        if (!localUrl.trim() || !localKey.trim() || !localModel.trim()) return;
+        setTesting(true);
+        setTestResult(null);
+        try {
+            const res = await fetch(`${localUrl.trim().replace(/\/+$/, '')}/chat/completions`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localKey.trim()}` },
+                body: JSON.stringify({
+                    model: localModel.trim(),
+                    messages: [{ role: 'user', content: 'Hi' }],
+                    max_tokens: 5,
+                    stream: localStream,
+                }),
+            });
+            if (res.ok) {
+                const data = await safeResponseJson(res);
+                const reply = data.choices?.[0]?.message?.content || '';
+                setTestResult(`✅ 连接成功 — 模型回复: "${reply.slice(0, 30)}"`);
+            } else {
+                const text = await res.text().catch(() => '');
+                setTestResult(`❌ HTTP ${res.status}: ${text.slice(0, 100)}`);
+            }
+        } catch (err: any) {
+            setTestResult(`❌ 连接失败: ${err.message}`);
+        } finally {
+            setTesting(false);
+        }
+    };
+
     const handleContinue = () => {
-        updateApiConfig({ baseUrl: localUrl, apiKey: localKey, model: localModel });
+        updateApiConfig({ baseUrl: localUrl, apiKey: localKey, model: localModel, stream: localStream });
         onDone();
     };
+
+    const testDisabled = testing || !localUrl.trim() || !localKey.trim() || !localModel.trim();
 
     return (
         <div className="fixed inset-0 z-[9998] flex items-center justify-center p-5 animate-fade-in">
@@ -3500,6 +3544,23 @@ const Like520InlineApiSetup: React.FC<{ onDone: () => void; onBack: () => void }
                 </div>
 
                 <div className="px-6 py-4 space-y-4 overflow-y-auto no-scrollbar flex-1">
+                    {apiPresets.length > 0 && (
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block pl-1">我的预设</label>
+                            <div className="flex gap-2 flex-wrap">
+                                {apiPresets.map(preset => (
+                                    <button
+                                        key={preset.id}
+                                        onClick={() => loadPreset(preset)}
+                                        className="text-xs font-medium text-slate-600 bg-white border border-slate-200 rounded-lg px-3 py-1.5 shadow-sm hover:text-pink-500 hover:border-pink-200 active:scale-95 transition-all"
+                                    >
+                                        {preset.name}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
                     <div>
                         <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block pl-1">URL</label>
                         <input type="text" value={localUrl} onChange={(e) => setLocalUrl(e.target.value)} placeholder="https://..." className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-4 py-2.5 text-sm font-mono focus:bg-white transition-all" />
@@ -3529,6 +3590,26 @@ const Like520InlineApiSetup: React.FC<{ onDone: () => void; onBack: () => void }
                     <button onClick={handleSave} className="w-full py-3 rounded-2xl font-bold text-white shadow-lg shadow-pink-200 bg-gradient-to-r from-[#FFB6C8] to-[#F18AAA] active:scale-95 transition-all">
                         {statusMsg || '保存配置'}
                     </button>
+
+                    <button
+                        onClick={handleTest}
+                        disabled={testDisabled}
+                        className={`w-full py-2.5 rounded-2xl font-bold text-sm border active:scale-95 transition-all ${
+                            testDisabled
+                                ? 'border-slate-200 text-slate-400 bg-slate-50'
+                                : 'border-pink-300 text-pink-500 bg-pink-50 hover:bg-pink-100'
+                        }`}
+                    >
+                        {testing ? '测试中...' : '🧪 测试连接'}
+                    </button>
+
+                    {testResult && (
+                        <div className={`text-xs px-3 py-2 rounded-xl ${
+                            testResult.startsWith('✅') ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'
+                        }`}>
+                            {testResult}
+                        </div>
+                    )}
                 </div>
 
                 <div className="px-6 pb-6 pt-2 flex gap-3 shrink-0">
