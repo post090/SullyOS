@@ -27,6 +27,7 @@ import { buildChatRequestPayload } from '../utils/chatRequestPayload';
 import {
     isInstantConfigReady,
     sendInstantPushAndAwaitReply,
+    formatDiagnostics,
     type InstantPushPayload,
 } from '../utils/instantPushClient';
 
@@ -812,22 +813,23 @@ export const useChatAI = ({
                     metadata: { source: 'sullyos-chat', charId: char.id },
                 }, char.id, undefined, onInstantPosted);
                 if (!instantResult.ok) {
-                    // 长报错 (worker 400 校验信息可能很长) 走弹窗, 手机用户能看清并复制反馈;
-                    // 没注入 showError 时降级到 toast, 保证调用方不强依赖。
+                    // 长报错 (worker 400 校验信息 + CF 错误页可能很长) 走弹窗, 手机用户能
+                    // 看清并复制反馈; 没注入 showError 时降级到 toast.
+                    // 完整诊断由 instantPushClient 的 formatDiagnostics 输出 —— 涵盖
+                    // http (status/bodyBytes/keepalive/cf-ray/response 截断) / fetchError /
+                    // config / subscription / timeout / context / env 各段, 已主动 mask
+                    // worker / api host, 不含 apiKey / apiUrl / workerUrl / push endpoint.
                     const errMsg = instantResult.error || '未知错误';
-                    const detailsLines = [
-                        `outcome: ${instantResult.outcome}`,
-                        '',
-                        errMsg,
-                        '',
-                        '— context —',
-                        `char: ${char.name}`,
-                        `model: ${effectiveApi.model}`,
-                        `apiUrl: ${effectiveApi.baseUrl}`,
-                        `msgs: ${fullMessages.length}`,
-                    ];
-                    if (showError) {
-                        showError('Instant Push 发送失败', detailsLines.join('\n'));
+                    if (showError && instantResult.diagnostics) {
+                        showError(
+                            'Instant Push 发送失败',
+                            formatDiagnostics(instantResult.diagnostics, {
+                                outcome: instantResult.outcome,
+                                reason: errMsg,
+                            }),
+                        );
+                    } else if (showError) {
+                        showError('Instant Push 发送失败', `outcome: ${instantResult.outcome}\nreason: ${errMsg}`);
                     } else {
                         addToast(`Instant Push: ${errMsg}`, 'error');
                     }

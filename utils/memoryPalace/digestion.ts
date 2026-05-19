@@ -114,26 +114,39 @@ async function gatherDigestMaterial(charId: string): Promise<{
     selfRoomNodes: MemoryNode[];
     recentContext: MemoryNode[];
 }> {
-    // 阁楼：所有未消化的困惑
-    const atticNodes = await MemoryNodeDB.getByRoom(charId, 'attic');
+    const allNodes = await MemoryNodeDB.getByCharId(charId);
+
+    // 已经被消化过一次的源节点集合：若它的 id 是某条 digestion 衍生记忆的 sourceId，
+    // 说明上次消化已为它产出过 internalize/synthesize_user/self_insight/self_confuse —
+    // 不再让它进入下一轮 LLM 候选，否则同一源会被反复 self_insight 出近似条目。
+    const digestedSourceIds = new Set<string>();
+    for (const n of allNodes) {
+        if (n.origin === 'digestion' && n.sourceId) digestedSourceIds.add(n.sourceId);
+    }
+    // digestion 衍生节点自身也不参与下一轮处理：它们是产物，不是原料；
+    // 反刍它们会让 LLM 产出"insight 的 insight"，正是用户截图里那种近似重复条目的来源。
+    const isFreshCandidate = (n: MemoryNode) =>
+        n.origin !== 'digestion' && !digestedSourceIds.has(n.id);
+
+    // 阁楼：所有未消化的困惑（resolve/deepen/fade 修改原节点，不会产生衍生重复，无需过滤）
+    const atticNodes = allNodes.filter(n => n.room === 'attic');
 
     // 窗台期盼：active 和 anchor 的
     const allAnts = await AnticipationDB.getByCharId(charId);
     const anticipations = allAnts.filter(a => a.status === 'active' || a.status === 'anchor');
 
-    // 书房：高访问次数的知识（accessCount >= 3 说明被反复提及）
-    const allStudy = await MemoryNodeDB.getByRoom(charId, 'study');
-    const studyNodes = allStudy.filter(n => n.accessCount >= 3);
+    // 书房：高访问次数的知识（accessCount >= 3 说明被反复提及），且未被内化过
+    const studyNodes = allNodes.filter(n => n.room === 'study' && n.accessCount >= 3 && isFreshCandidate(n));
 
-    // 用户房间：所有关于用户的信息（需要梳理整合成网状结构）
-    const userRoomNodes = await MemoryNodeDB.getByRoom(charId, 'user_room');
+    // 用户房间：所有关于用户的信息（排除已整合过的，以及整合产出本身）
+    const userRoomNodes = allNodes.filter(n => n.room === 'user_room' && isFreshCandidate(n));
 
-    // 自我房间：所有自我认知记忆（反刍可能产生新领悟或困惑）
-    const selfRoomNodes = await MemoryNodeDB.getByRoom(charId, 'self_room');
+    // 自我房间：未反刍过的自我认知（排除已产生过 self_insight/self_confuse 的源，以及衍生产物自身）
+    const selfRoomNodes = allNodes.filter(n => n.room === 'self_room' && isFreshCandidate(n));
 
     // 最近的卧室/客厅记忆作为"最近发生了什么"的上下文
-    const bedroom = await MemoryNodeDB.getByRoom(charId, 'bedroom');
-    const living = await MemoryNodeDB.getByRoom(charId, 'living_room');
+    const bedroom = allNodes.filter(n => n.room === 'bedroom');
+    const living = allNodes.filter(n => n.room === 'living_room');
     const recentContext = [...bedroom, ...living]
         .sort((a, b) => b.createdAt - a.createdAt)
         .slice(0, 10);
@@ -265,7 +278,7 @@ ${material.recentContext.map(n => `- (${n.room}, ${n.mood}): ${n.content}`).join
         const validActions = ['resolve', 'deepen', 'fade', 'fulfill', 'disappoint', 'internalize', 'synthesize_user', 'self_insight', 'self_confuse', 'keep'];
 
         // 将 A0/W0/S0/U0/R0 映射回真实 ID
-        return parsed
+        const mapped = parsed
             .filter(item => validActions.includes(item.action) && item.action !== 'keep')
             .map(item => {
                 let realId = '';
@@ -294,6 +307,15 @@ ${material.recentContext.map(n => `- (${n.room}, ${n.mood}): ${n.content}`).join
             })
             .filter(item => item.id); // 过滤无效映射
 
+        // LLM 偶尔会对同一索引发两条动作（例如 [A0]→fade 出现两次），
+        // 直接放进 result.faded 会让弹窗里同一条目重复出现 —— 按真实节点 ID 取首条。
+        const seenIds = new Set<string>();
+        return mapped.filter(item => {
+            if (seenIds.has(item.id)) return false;
+            seenIds.add(item.id);
+            return true;
+        });
+
     } catch (err: any) {
         console.warn('⚡ [Digest] LLM call failed:', err.message);
         return [];
@@ -304,6 +326,54 @@ ${material.recentContext.map(n => `- (${n.room}, ${n.mood}): ${n.content}`).join
 
 function generateId(): string {
     return `mn_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** 归一化内容用于近似重复比对：去空白、去常见标点、转小写 */
+function normalizeForDedup(s: string): string {
+    return (s || '')
+        .replace(/\s+/g, '')
+        .replace(/[，。！？、,.!?;:""''「」（）()\[\]【】]/g, '')
+        .toLowerCase();
+}
+
+/** 字符二元组 Jaccard 相似度 — 双语对短文本足够稳健 */
+function bigramJaccard(a: string, b: string): number {
+    if (a === b) return 1;
+    if (a.length < 2 || b.length < 2) return 0;
+    const grams = (s: string) => {
+        const set = new Set<string>();
+        for (let i = 0; i < s.length - 1; i++) set.add(s.slice(i, i + 2));
+        return set;
+    };
+    const sa = grams(a);
+    const sb = grams(b);
+    let inter = 0;
+    for (const t of sa) if (sb.has(t)) inter++;
+    const union = sa.size + sb.size - inter;
+    return union === 0 ? 0 : inter / union;
+}
+
+/**
+ * 在指定房间里查找内容近似重复的节点。命中则说明这条 reflection 已经存在过，
+ * 不应再新建第二条 — 用户截图里那种"和之前的总结几乎一样"就是这种情况。
+ *
+ * 阈值 0.75 是凭经验取的：低于这个值通常是新意；高于这个值人眼看上去就是同一条。
+ */
+function findNearDuplicateInRoom(
+    existing: MemoryNode[],
+    room: MemoryNode['room'],
+    candidateContent: string,
+): MemoryNode | null {
+    const target = normalizeForDedup(candidateContent);
+    if (target.length < 4) return null;
+    for (const n of existing) {
+        if (n.room !== room) continue;
+        const norm = normalizeForDedup(n.content);
+        if (!norm) continue;
+        if (norm === target || norm.includes(target) || target.includes(norm)) return n;
+        if (bigramJaccard(norm, target) >= 0.75) return n;
+    }
+    return null;
 }
 
 async function executeActions(
@@ -322,6 +392,10 @@ async function executeActions(
         fulfilled: [], disappointed: [], internalized: [],
         synthesizedUser: [], selfInsights: [], selfConfused: [],
     };
+
+    // 保存新衍生节点前用于查重的全量快照（同房间内容近似的就跳过 save）。
+    // 本轮内新建的也加进来，防止同一轮里 LLM 返回两条 reflection 文案近似的动作。
+    const existingNodes = await MemoryNodeDB.getByCharId(charId);
 
     for (const action of actions) {
         try {
@@ -389,6 +463,11 @@ async function executeActions(
                     // 书房→self_room：知识内化为自我认同
                     const node = material.studyNodes.find(n => n.id === action.id);
                     if (node && action.reflection) {
+                        const dup = findNearDuplicateInRoom(existingNodes, 'self_room', action.reflection);
+                        if (dup) {
+                            console.log(`🪞 [Digest] Skip internalize (dup of ${dup.id}): "${action.reflection.slice(0, 30)}..."`);
+                            break;
+                        }
                         const selfMemory: MemoryNode = {
                             id: generateId(),
                             charId,
@@ -407,6 +486,7 @@ async function executeActions(
                             origin: 'digestion',
                         };
                         await MemoryNodeDB.save(selfMemory);
+                        existingNodes.push(selfMemory);
                         result.internalized.push({ id: selfMemory.id, content: selfMemory.content });
                         console.log(`🪞 [Digest] Internalized → self_room: "${action.reflection.slice(0, 30)}..."`);
                     }
@@ -417,6 +497,11 @@ async function executeActions(
                     // user_room：信息整合，将零散词条合并为分类化的认知
                     const node = material.userRoomNodes.find(n => n.id === action.id);
                     if (node && action.reflection) {
+                        const dup = findNearDuplicateInRoom(existingNodes, 'user_room', action.reflection);
+                        if (dup) {
+                            console.log(`👤 [Digest] Skip synthesize_user (dup of ${dup.id}): "${action.reflection.slice(0, 30)}..."`);
+                            break;
+                        }
                         const category = action.category || '综合';
                         const synthesized: MemoryNode = {
                             id: generateId(),
@@ -436,6 +521,7 @@ async function executeActions(
                             origin: 'digestion',
                         };
                         await MemoryNodeDB.save(synthesized);
+                        existingNodes.push(synthesized);
                         result.synthesizedUser.push({ id: synthesized.id, content: synthesized.content, category });
                         console.log(`👤 [Digest] Synthesized user → user_room [${category}]: "${action.reflection.slice(0, 30)}..."`);
                     }
@@ -446,11 +532,21 @@ async function executeActions(
                     // self_room 反刍 → 产生常驻自我领悟词条
                     const node = material.selfRoomNodes.find(n => n.id === action.id);
                     if (node && action.insight) {
+                        const insightContent = action.reflection || action.insight;
+                        // self_room 同时按 content 和 insight 全文查一次，
+                        // 因为 content 是 50 字内独白，insight 是 200 字全文，两者风格不同。
+                        const dupByContent = findNearDuplicateInRoom(existingNodes, 'self_room', insightContent);
+                        const dupByInsight = findNearDuplicateInRoom(existingNodes, 'self_room', action.insight);
+                        if (dupByContent || dupByInsight) {
+                            const dup = dupByContent || dupByInsight!;
+                            console.log(`💡 [Digest] Skip self_insight (dup of ${dup.id}): "${action.insight.slice(0, 30)}..."`);
+                            break;
+                        }
                         // 将领悟作为特殊标记的 self_room 记忆存储
                         const insightMemory: MemoryNode = {
                             id: generateId(),
                             charId,
-                            content: action.reflection || action.insight,
+                            content: insightContent,
                             room: 'self_room',
                             tags: ['自我领悟', '常驻', ...node.tags.filter(t => t !== '自我领悟' && t !== '常驻')],
                             importance: 9, // 领悟是高重要性的
@@ -465,6 +561,7 @@ async function executeActions(
                             origin: 'digestion',
                         };
                         await MemoryNodeDB.save(insightMemory);
+                        existingNodes.push(insightMemory);
                         // 返回 insight 文本用于注入 contextBuilder
                         result.selfInsights.push(action.insight);
                         console.log(`💡 [Digest] Self insight: "${action.insight}"`);
@@ -476,6 +573,11 @@ async function executeActions(
                     // self_room 反刍 → 产生新的自我困惑 → 阁楼
                     const node = material.selfRoomNodes.find(n => n.id === action.id);
                     if (node && action.reflection) {
+                        const dup = findNearDuplicateInRoom(existingNodes, 'attic', action.reflection);
+                        if (dup) {
+                            console.log(`🌀 [Digest] Skip self_confuse (dup of ${dup.id}): "${action.reflection.slice(0, 30)}..."`);
+                            break;
+                        }
                         const confuseMemory: MemoryNode = {
                             id: generateId(),
                             charId,
@@ -494,6 +596,7 @@ async function executeActions(
                             origin: 'digestion',
                         };
                         await MemoryNodeDB.save(confuseMemory);
+                        existingNodes.push(confuseMemory);
                         result.selfConfused.push({ id: confuseMemory.id, content: confuseMemory.content });
                         console.log(`🌀 [Digest] Self confused → attic: "${action.reflection.slice(0, 30)}..."`);
                     }
