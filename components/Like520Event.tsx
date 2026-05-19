@@ -8,7 +8,7 @@
  *   → loading_b → wake_up → letter → puzzle → done
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
 import { CharacterProfile, SpecialMomentRecord } from '../types';
@@ -1045,7 +1045,7 @@ const OrnateDialog: React.FC<{
 }> = ({ charName, text, children, onAdvance, showArrow, arrowText = '— next —', pageInfo, tall }) => (
     <div
         className={`l520-dialog ${tall ? 'tall' : ''} ${onAdvance ? 'clickable' : ''}`}
-        onClick={onAdvance}
+        onClick={(e) => { if (onAdvance) { e.stopPropagation(); onAdvance(); } }}
     >
         <span className="corner-tl" />
         <span className="corner-tr" />
@@ -1093,6 +1093,190 @@ const OrnateChoice: React.FC<OrnateChoiceProps> = ({ title, sub, options, onPick
         </div>
     </div>
 );
+
+// ============================================================
+// 心愿小纸条 —— 展开来给 user 看 char 偷偷写下的那行字
+// ============================================================
+
+const WishPaperOverlay: React.FC<{
+    sceneText: string;
+    userAction: string;
+    onDismiss: () => void;
+}> = ({ sceneText, userAction, onDismiss }) => {
+    const [phase, setPhase] = useState<0 | 1 | 2>(0); // 0:进入 1:展开 2:可读
+    useEffect(() => {
+        const t1 = setTimeout(() => setPhase(1), 250);
+        const t2 = setTimeout(() => setPhase(2), 1200);
+        return () => { clearTimeout(t1); clearTimeout(t2); };
+    }, []);
+
+    // 把 scene 文本切成"动作旁白 + 那行字"两段——找冒号或破折号后的内容
+    // LLM 输出格式：「user 翻到那张纸——上面写着……，那行字是：（XXX）」
+    const { caption, wishLine } = useMemo(() => {
+        const m = sceneText.match(/[:：][\s]*[「『"""]?([^」』"""]+?)[」』"""]?\s*$/);
+        if (m && m[1] && m[1].length > 4) {
+            const cap = sceneText.slice(0, sceneText.lastIndexOf(m[0])).trim();
+            return { caption: cap, wishLine: m[1].trim() };
+        }
+        const dashM = sceneText.match(/[—\-]{1,2}\s*([^—\-]{6,})$/);
+        if (dashM && dashM[1]) {
+            const cap = sceneText.slice(0, sceneText.lastIndexOf(dashM[0])).trim();
+            return { caption: cap, wishLine: dashM[1].trim() };
+        }
+        return { caption: '', wishLine: sceneText };
+    }, [sceneText]);
+
+    return (
+        <div
+            onClick={onDismiss}
+            style={{
+                position: 'absolute',
+                inset: 0,
+                zIndex: 9998,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: 'radial-gradient(ellipse at center, rgba(40,20,30,0.72) 0%, rgba(20,10,15,0.86) 100%)',
+                backdropFilter: 'blur(2px)',
+                cursor: 'pointer',
+                padding: 20,
+                opacity: phase >= 1 ? 1 : 0,
+                transition: 'opacity 0.4s ease-out',
+            }}
+        >
+            <style>{`
+                @keyframes l520-wish-unfold {
+                    0%   { transform: scale(0.18) rotate(-14deg) translateY(40px); opacity: 0; }
+                    35%  { transform: scale(0.62) rotate(-6deg) translateY(20px); opacity: 1; }
+                    65%  { transform: scale(1.04) rotate(-1deg) translateY(0); }
+                    100% { transform: scale(1) rotate(-1.6deg) translateY(0); opacity: 1; }
+                }
+                @keyframes l520-wish-text-in {
+                    from { opacity: 0; letter-spacing: 8px; filter: blur(4px); }
+                    to   { opacity: 1; letter-spacing: 2.5px; filter: blur(0); }
+                }
+                @keyframes l520-wish-caption-in {
+                    from { opacity: 0; transform: translateY(-6px); }
+                    to   { opacity: 0.85; transform: translateY(0); }
+                }
+                .l520-wish-paper {
+                    position: relative;
+                    width: min(86vw, 380px);
+                    padding: 38px 32px 44px;
+                    background:
+                        linear-gradient(176deg, #fffdf4 0%, #fdf5e0 55%, #f6e9c8 100%);
+                    box-shadow:
+                        0 18px 50px rgba(0,0,0,0.45),
+                        0 4px 12px rgba(122,46,58,0.18),
+                        inset 0 0 0 1px rgba(184,146,63,0.25);
+                    border-radius: 4px;
+                    transform: rotate(-1.6deg);
+                    animation: l520-wish-unfold 0.95s cubic-bezier(0.22, 1.1, 0.36, 1) both;
+                }
+                /* 折痕 */
+                .l520-wish-paper::before, .l520-wish-paper::after {
+                    content: '';
+                    position: absolute;
+                    left: 0; right: 0;
+                    height: 1px;
+                    background: linear-gradient(90deg, transparent, rgba(122,46,58,0.18) 20%, rgba(122,46,58,0.22) 50%, rgba(122,46,58,0.18) 80%, transparent);
+                    pointer-events: none;
+                }
+                .l520-wish-paper::before { top: 33%; box-shadow: 0 -4px 8px -2px rgba(0,0,0,0.05); }
+                .l520-wish-paper::after  { top: 66%; box-shadow: 0 -4px 8px -2px rgba(0,0,0,0.05); }
+                /* 四角小金线装饰 */
+                .l520-wish-paper .corner {
+                    position: absolute;
+                    width: 14px; height: 14px;
+                    border: 0.5px solid rgba(184,146,63,0.6);
+                }
+                .l520-wish-paper .corner.tl { top: 8px; left: 8px; border-right: none; border-bottom: none; }
+                .l520-wish-paper .corner.tr { top: 8px; right: 8px; border-left: none; border-bottom: none; }
+                .l520-wish-paper .corner.bl { bottom: 8px; left: 8px; border-right: none; border-top: none; }
+                .l520-wish-paper .corner.br { bottom: 8px; right: 8px; border-left: none; border-top: none; }
+                .l520-wish-eyebrow {
+                    text-align: center;
+                    font-family: 'Cormorant Garamond', serif;
+                    font-style: italic;
+                    font-size: 10px;
+                    letter-spacing: 8px;
+                    color: rgba(122,46,58,0.65);
+                    margin-bottom: 14px;
+                    text-transform: uppercase;
+                }
+                .l520-wish-caption {
+                    font-family: 'Noto Serif SC', serif;
+                    font-size: 11.5px;
+                    color: rgba(92,58,74,0.78);
+                    line-height: 1.9;
+                    text-align: center;
+                    margin-bottom: 18px;
+                    letter-spacing: 0.5px;
+                    opacity: 0;
+                    animation: l520-wish-caption-in 0.5s ease-out 0.7s forwards;
+                }
+                .l520-wish-divider {
+                    text-align: center;
+                    color: rgba(184,146,63,0.6);
+                    font-size: 10px;
+                    letter-spacing: 10px;
+                    margin: 14px 0 18px;
+                }
+                .l520-wish-line {
+                    font-family: 'Noto Serif SC', serif;
+                    font-weight: 500;
+                    font-size: 17px;
+                    line-height: 2;
+                    color: #5a2230;
+                    text-align: center;
+                    letter-spacing: 2.5px;
+                    text-indent: 2.5px;
+                    opacity: 0;
+                    animation: l520-wish-text-in 1.4s cubic-bezier(0.16, 1, 0.3, 1) 1s forwards;
+                    white-space: pre-wrap;
+                }
+                .l520-wish-action {
+                    position: absolute;
+                    top: -32px;
+                    left: 0; right: 0;
+                    text-align: center;
+                    font-family: 'Cormorant Garamond', serif;
+                    font-style: italic;
+                    font-size: 11px;
+                    letter-spacing: 3px;
+                    color: rgba(255,236,212,0.7);
+                    opacity: 0;
+                    animation: l520-wish-caption-in 0.6s ease-out 0.4s forwards;
+                }
+                .l520-wish-hint {
+                    text-align: center;
+                    margin-top: 22px;
+                    font-family: 'Cormorant Garamond', serif;
+                    font-style: italic;
+                    font-size: 10px;
+                    letter-spacing: 4px;
+                    color: rgba(122,46,58,0.5);
+                    opacity: 0;
+                    animation: l520-wish-caption-in 0.5s ease-out 2.3s forwards;
+                }
+            `}</style>
+            <div className="l520-wish-paper" onClick={(e) => e.stopPropagation()}>
+                <span className="corner tl" />
+                <span className="corner tr" />
+                <span className="corner bl" />
+                <span className="corner br" />
+                <div className="l520-wish-action">— {userAction} —</div>
+                <div className="l520-wish-eyebrow">a small wish</div>
+                {caption && <div className="l520-wish-caption">{caption}</div>}
+                <div className="l520-wish-divider">❦ ⸙ ❦</div>
+                <div className="l520-wish-line">{wishLine}</div>
+                <div className="l520-wish-hint" onClick={onDismiss} style={{ cursor: 'pointer' }}>
+                    — 轻 触 任 意 处 继 续 —
+                </div>
+            </div>
+        </div>
+    );
+};
 
 // ============================================================
 // 慢慢睁开眼 —— 进入梦境
@@ -1215,6 +1399,7 @@ const Y520Scene: React.FC<Y520SceneProps> = ({ callA, charName, charAvatar, char
     const [lineIdx, setLineIdx] = useState(0);
     const [usedAnchors, setUsedAnchors] = useState<Set<number>>(new Set());
     const [activeAnchorIdx, setActiveAnchorIdx] = useState<number | null>(null);
+    const [wishPaperOpen, setWishPaperOpen] = useState(false);
     const [chosenUserAction, setChosenUserAction] = useState<string | null>(null);
     const [touchIdx, setTouchIdx] = useState(0);
     const [showHint, setShowHint] = useState(true);
@@ -1287,6 +1472,8 @@ const Y520Scene: React.FC<Y520SceneProps> = ({ callA, charName, charAvatar, char
     };
 
     const advance = () => {
+        // 心愿小纸条展开中：点哪都是先收起纸条，对白下一次再推
+        if (wishPaperOpen) { setWishPaperOpen(false); return; }
         if (!queue.length) return;
         if (hasMoreLines) {
             setLineIdx(i => i + 1);
@@ -1307,6 +1494,7 @@ const Y520Scene: React.FC<Y520SceneProps> = ({ callA, charName, charAvatar, char
             if (activeAnchorIdx !== null) setUsedAnchors(prev => new Set(prev).add(activeAnchorIdx));
             setActiveAnchorIdx(null);
             setChosenUserAction(null);
+            setWishPaperOpen(false);
             // 数值波动（纯装饰）
             setStats(s => ({
                 mood: Math.min(100, s.mood + 4 + Math.floor(Math.random() * 4)),
@@ -1342,10 +1530,13 @@ const Y520Scene: React.FC<Y520SceneProps> = ({ callA, charName, charAvatar, char
 
     const pickUserAction = (action: string) => {
         if (stage !== 'anchor_action_choose' || activeAnchorIdx === null) return;
+        const anchor = callA.anchors[activeAnchorIdx];
         setChosenUserAction(action);
-        setQueue(callA.anchors[activeAnchorIdx].dialogue);
+        setQueue(anchor.dialogue);
         setLineIdx(0);
         setStage('anchor_playing');
+        // 心愿锚点：先展开小纸条让 user 读完，再放对白
+        if (anchor.is_photo_anchor) setWishPaperOpen(true);
     };
 
     const pickSelfReveal = (_k: string) => {
@@ -1396,8 +1587,22 @@ const Y520Scene: React.FC<Y520SceneProps> = ({ callA, charName, charAvatar, char
         return '……';
     };
 
+    // 点画面任意处都能推进对白（除非在选项阶段、或者点到了 data-stop-advance 的按钮 / 浮层）
+    const handleStageClick = (e: React.MouseEvent) => {
+        if (isChoiceStage) return;
+        if (stage === 'eyes_opening') return;
+        // 检查点击目标是否声明了"不要触发推进"
+        let el = e.target as HTMLElement | null;
+        while (el && el !== e.currentTarget) {
+            if (el.dataset?.stopAdvance) return;
+            el = el.parentElement;
+        }
+        if (queue.length > 0) advance();
+        else if (stage === 'free') petCharacter({ clientX: e.clientX, clientY: e.clientY });
+    };
+
     return (
-        <div className="l520-root">
+        <div className="l520-root" onClick={handleStageClick}>
             <Like520StyleTag />
             <CornerOrnaments />
             <AmbientLayer />
@@ -1407,8 +1612,17 @@ const Y520Scene: React.FC<Y520SceneProps> = ({ callA, charName, charAvatar, char
                 <EyesOpeningOverlay onDone={() => setStage('opening')} />
             )}
 
+            {/* 心愿小纸条 —— 展开来给 user 看 */}
+            {wishPaperOpen && activeAnchor?.is_photo_anchor && (
+                <WishPaperOverlay
+                    sceneText={activeAnchor.scene}
+                    userAction={chosenUserAction || ''}
+                    onDismiss={() => setWishPaperOpen(false)}
+                />
+            )}
+
             {/* Top bar */}
-            <div className="l520-topbar">
+            <div className="l520-topbar" data-stop-advance="1">
                 <div className="l520-header-row">
                     <div className="l520-occasion">
                         <span className="num">520</span>
@@ -1459,12 +1673,7 @@ const Y520Scene: React.FC<Y520SceneProps> = ({ callA, charName, charAvatar, char
                         <span>（{chosenUserAction}）</span>
                     </div>
                 )}
-                <div
-                    className={`l520-char-wrap ${petting ? 'petting' : ''}`}
-                    onClick={(e) => {
-                        if (stage === 'free') petCharacter({ clientX: e.clientX, clientY: e.clientY });
-                    }}
-                >
+                <div className={`l520-char-wrap ${petting ? 'petting' : ''}`}>
                     <div className="l520-nameplate">
                         <span className="deco">❦</span>
                         <span style={{ marginLeft: 4, marginRight: 4 }}>{charName}</span>
@@ -1491,7 +1700,7 @@ const Y520Scene: React.FC<Y520SceneProps> = ({ callA, charName, charAvatar, char
             </div>
 
             {/* Actions */}
-            <div className="l520-actions">
+            <div className="l520-actions" data-stop-advance="1">
                 <button
                     className="l520-act"
                     disabled={isChoiceStage}
@@ -1528,8 +1737,12 @@ const Y520Scene: React.FC<Y520SceneProps> = ({ callA, charName, charAvatar, char
             {/* Drawer (items / 礼匣) */}
             {drawerOpen && (
                 <>
-                    <div className="l520-drawer-mask" onClick={() => setDrawerOpen(false)} />
-                    <div className="l520-drawer">
+                    <div
+                        className="l520-drawer-mask"
+                        data-stop-advance="1"
+                        onClick={(e) => { e.stopPropagation(); setDrawerOpen(false); }}
+                    />
+                    <div className="l520-drawer" data-stop-advance="1">
                         <div className="l520-drawer-handle" />
                         <div className="l520-drawer-head">
                             <h4>礼&nbsp;匣</h4>
