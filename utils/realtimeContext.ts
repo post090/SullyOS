@@ -176,19 +176,25 @@ export const RealtimeContextManager = {
             : RealtimeContextManager.DEFAULT_HOTNEWS_PLATFORMS;
 
         const perPlatformResults = await Promise.all(list.map(async (p): Promise<NewsItem[]> => {
+            const label = RealtimeContextManager.HOTNEWS_PLATFORM_LABELS[p] || p;
             try {
                 const res = await fetch(`https://orz.ai/api/v1/dailynews/?platform=${encodeURIComponent(p)}`, {
                     headers: { 'Accept': 'application/json' },
                 });
-                if (!res.ok) return [];
+                if (!res.ok) {
+                    console.warn(`[hot_news] ${label}(${p}) HTTP ${res.status}`);
+                    return [];
+                }
                 const data = await safeResponseJson(res);
                 const items: any[] = Array.isArray(data?.data) ? data.data : [];
-                const label = RealtimeContextManager.HOTNEWS_PLATFORM_LABELS[p] || p;
-                return items
+                const picked = items
                     .filter(it => it && it.title)
                     .slice(0, perPlatform)
                     .map(it => ({ title: String(it.title), source: label, url: it.url }));
-            } catch {
+                console.log(`[hot_news] ${label}(${p}) ✓ 取 ${picked.length}/${items.length} 条`);
+                return picked;
+            } catch (e: any) {
+                console.warn(`[hot_news] ${label}(${p}) ✗ 拉取失败（多半是 CORS / 网络）:`, e?.message || e);
                 return [];
             }
         }));
@@ -200,7 +206,20 @@ export const RealtimeContextManager = {
                 if (arr[rank]) merged.push(arr[rank]);
             }
         }
-        return merged.slice(0, total);
+        const final = merged.slice(0, total);
+
+        // ── F12 探针：看角色这次到底召回了哪些热点 ──
+        try {
+            console.groupCollapsed(`%c[hot_news] 召回 ${final.length} 条 · 平台[${list.join(', ')}]`, 'color:#2563eb;font-weight:bold');
+            if (final.length > 0 && typeof console.table === 'function') {
+                console.table(final.map((n, i) => ({ '#': i + 1, 平台: n.source, 标题: n.title, 链接: n.url || '' })));
+            } else if (final.length === 0) {
+                console.warn('[hot_news] 一条都没召回 → fetchNews 将回落到 Brave / Hacker News');
+            }
+            console.groupEnd();
+        } catch { /* 探针挂了也不影响主流程 */ }
+
+        return final;
     },
 
     /**
@@ -255,6 +274,7 @@ export const RealtimeContextManager = {
 
         // 检查缓存
         if (newsCache.data.length > 0 && (now - newsCache.timestamp) < cacheMs) {
+            console.log(`[hot_news] 命中缓存，复用上次召回的 ${newsCache.data.length} 条（${Math.round((now - newsCache.timestamp) / 1000)}s 前拉的）`);
             return newsCache.data;
         }
 
@@ -263,6 +283,7 @@ export const RealtimeContextManager = {
         // 1. 默认主源：hot_news 中文多平台热榜（免鉴权，直连）
         news = await RealtimeContextManager.fetchHotNews(config.newsPlatforms);
         if (news.length > 0) {
+            console.log(`%c[hot_news] 本次新闻源 = hot_news（${news.length} 条）`, 'color:#16a34a;font-weight:bold');
             newsCache = { data: news, timestamp: now };
             return news;
         }
@@ -271,6 +292,7 @@ export const RealtimeContextManager = {
         if (config.newsApiKey) {
             news = await RealtimeContextManager.fetchBraveNews(config.newsApiKey);
             if (news.length > 0) {
+                console.log(`%c[hot_news] 本次新闻源 = Brave 回落（${news.length} 条）`, 'color:#d97706;font-weight:bold');
                 newsCache = { data: news, timestamp: now };
                 return news;
             }
@@ -279,6 +301,7 @@ export const RealtimeContextManager = {
         // 3. 兜底：Hacker News（英文但稳定，无CORS限制）
         news = await RealtimeContextManager.fetchBackupNews();
         if (news.length > 0) {
+            console.log(`%c[hot_news] 本次新闻源 = Hacker News 兜底（${news.length} 条，英文）`, 'color:#dc2626;font-weight:bold');
             newsCache = { data: news, timestamp: now };
         }
         return news;
