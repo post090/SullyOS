@@ -222,6 +222,73 @@ export const RealtimeContextManager = {
         return final;
     },
 
+    // 一天分 3 段：0-8 早间 / 8-16 午间 / 16-24 晚间。slot = floor(hour/8)
+    getHotNewsSlot: (d: Date = new Date()): { id: string; date: string; slot: number; label: string } => {
+        const slot = Math.min(2, Math.floor(d.getHours() / 8));
+        const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        const label = ['早间', '午间', '晚间'][slot];
+        return { id: `${date}#${slot}`, date, slot, label };
+    },
+
+    // 同一时段并发只真正发一次请求（群聊 / 多角色同时回复时复用同一 Promise）
+    _hotNewsInFlight: new Map<string, Promise<NewsItem[]>>(),
+
+    /**
+     * 分时段热点：每天每时段最多拉一次，持久化在 IndexedDB，全角色共享。
+     * - 本时段已有快照且平台集一致 → 直接复用，不发请求
+     * - 否则拉一次并存快照；拉失败则退回最近一次快照（且不写本时段，下次会重试）
+     */
+    getSlottedHotNews: async (config: RealtimeConfig): Promise<NewsItem[]> => {
+        const { id, date, slot, label } = RealtimeContextManager.getHotNewsSlot();
+        const platforms = (config.newsPlatforms && config.newsPlatforms.length > 0)
+            ? config.newsPlatforms
+            : RealtimeContextManager.DEFAULT_HOTNEWS_PLATFORMS;
+        const samePlatforms = (a: string[] = [], b: string[] = []) =>
+            a.length === b.length && [...a].sort().join(',') === [...b].sort().join(',');
+
+        // 1. 命中本时段快照（平台一致）→ 复用
+        try {
+            const snap = await DB.getHotNewsSnapshot(id);
+            if (snap && snap.items?.length > 0 && samePlatforms(snap.platforms, platforms)) {
+                const mins = Math.round((Date.now() - snap.fetchedAt) / 60000);
+                console.log(`%c[hot_news] 命中今日${label}快照（${snap.items.length} 条，${mins} 分钟前拉的）`, 'color:#16a34a');
+                return snap.items;
+            }
+        } catch { /* 读快照失败就当没有，继续去拉 */ }
+
+        // 2. in-flight 锁：本时段已有在飞请求就复用
+        const inflight = RealtimeContextManager._hotNewsInFlight.get(id);
+        if (inflight) return inflight;
+
+        const job = (async (): Promise<NewsItem[]> => {
+            console.log(`%c[hot_news] 触发今日${label}拉取…`, 'color:#2563eb;font-weight:bold');
+            const items = await RealtimeContextManager.fetchHotNews(platforms);
+            if (items.length > 0) {
+                try {
+                    await DB.saveHotNewsSnapshot({ id, date, slot, slotLabel: label, items, platforms, fetchedAt: Date.now() });
+                    DB.pruneHotNewsSnapshots(12).catch(() => {});
+                } catch { /* 存快照失败不影响返回 */ }
+                return items;
+            }
+            // 拉取失败 → 退回最近一次快照（不写本时段，下条消息会再试）
+            try {
+                const latest = await DB.getLatestHotNewsSnapshot();
+                if (latest && latest.items?.length > 0) {
+                    console.warn(`[hot_news] ${label}拉取失败，复用最近快照（${latest.date} ${latest.slotLabel}，${latest.items.length} 条）`);
+                    return latest.items;
+                }
+            } catch { /* ignore */ }
+            return [];
+        })();
+
+        RealtimeContextManager._hotNewsInFlight.set(id, job);
+        try {
+            return await job;
+        } finally {
+            RealtimeContextManager._hotNewsInFlight.delete(id);
+        }
+    },
+
     /**
      * 使用 Brave Search API 获取新闻（通过自建 Cloudflare Worker 代理）
      */
@@ -262,31 +329,27 @@ export const RealtimeContextManager = {
 
     /**
      * 获取热点新闻
-     * 优先级: hot_news 中文热榜（默认主源，免鉴权）> Brave Search API > Hacker News
+     * 优先级: hot_news 分时段快照（默认主源，每天每时段最多拉一次）> Brave Search API > Hacker News
      */
     fetchNews: async (config: RealtimeConfig): Promise<NewsItem[]> => {
         if (!config.newsEnabled) {
             return [];
         }
 
+        // 1. 默认主源：hot_news 分时段持久化快照（全角色共享，自带 IndexedDB 缓存与 in-flight 锁）
+        const slotted = await RealtimeContextManager.getSlottedHotNews(config);
+        if (slotted.length > 0) {
+            return slotted;
+        }
+
+        // ── 回落源用内存缓存兜一下，避免降级态下每条消息都打 Brave/HN ──
         const now = Date.now();
         const cacheMs = config.cacheMinutes * 60 * 1000;
-
-        // 检查缓存
         if (newsCache.data.length > 0 && (now - newsCache.timestamp) < cacheMs) {
-            console.log(`[hot_news] 命中缓存，复用上次召回的 ${newsCache.data.length} 条（${Math.round((now - newsCache.timestamp) / 1000)}s 前拉的）`);
             return newsCache.data;
         }
 
         let news: NewsItem[] = [];
-
-        // 1. 默认主源：hot_news 中文多平台热榜（免鉴权，直连）
-        news = await RealtimeContextManager.fetchHotNews(config.newsPlatforms);
-        if (news.length > 0) {
-            console.log(`%c[hot_news] 本次新闻源 = hot_news（${news.length} 条）`, 'color:#16a34a;font-weight:bold');
-            newsCache = { data: news, timestamp: now };
-            return news;
-        }
 
         // 2. 回落：Brave Search API（需 key，走 Worker 代理）
         if (config.newsApiKey) {

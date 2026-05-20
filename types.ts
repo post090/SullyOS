@@ -34,6 +34,7 @@ export enum AppID {
   MemoryPalace = 'memory_palace', // 记忆宫殿 — 七个房间可视化
   Handbook = 'handbook', // 手账 — 跨角色聚合的生活留痕本（LLM 代笔 + 角色生活流陪伴）
   QQBridge = 'qq_bridge', // QQ 桥接 — 通过 NapCat 把 QQ 私聊接入当前角色，共享 IndexedDB 上下文
+  HotNews = 'hot_news', // 热点 — 分时段召回的多平台热榜可视化（决定角色可能聊起的话题）
 }
 
 export interface SystemLog {
@@ -265,6 +266,24 @@ export interface RealtimeConfig {
 
   // 缓存配置
   cacheMinutes: number;
+}
+
+// 热点单条（与 realtimeContext 的 NewsItem 结构一致，单独放在 types 里避免循环依赖）
+export interface HotNewsItem {
+  title: string;
+  source?: string;  // 平台展示名，如「微博」
+  url?: string;
+}
+
+// 分时段热点快照：每天每时段（0-8/8-16/16-24）最多拉一次，全角色共享
+export interface HotNewsSnapshot {
+  id: string;          // `${date}#${slot}`，如 2026-05-20#1
+  date: string;        // YYYY-MM-DD
+  slot: number;        // 0=早间 1=午间 2=晚间
+  slotLabel: string;   // 早间 / 午间 / 晚间
+  items: HotNewsItem[];
+  platforms: string[]; // 本次召回用的平台 key 列表
+  fetchedAt: number;   // 拉取时间戳
 }
 
 export interface MemoryFragment {
