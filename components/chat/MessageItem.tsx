@@ -1355,6 +1355,7 @@ const MessageItem = React.memo(({
         const title: string = md.title || '热点';
         const source: string = md.source || '热点';
         const url: string | undefined = md.url;
+        const desc: string | undefined = (md.desc && md.desc !== title) ? md.desc : undefined;
         const dateStr = new Date(m.timestamp).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' });
         const card = (
             <div
@@ -1387,6 +1388,14 @@ const MessageItem = React.memo(({
                         >
                             {title}
                         </p>
+                        {desc && (
+                            <p
+                                className="text-[11px] leading-snug text-stone-600 mt-1"
+                                style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
+                            >
+                                {desc}
+                            </p>
+                        )}
                     </div>
                     {/* 页脚 */}
                     <div className="px-3 py-1.5 flex items-center justify-between border-t border-stone-400/50">

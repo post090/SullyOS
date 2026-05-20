@@ -172,14 +172,16 @@ export const ChatParser = {
                     source = segs[0];
                     title = segs.slice(1).join('|').trim();
                 }
-                // char 不知道链接，尝试从最近一次热点快照里按标题补 url / 来源
+                // char 不知道链接，尝试从最近一次热点快照里按标题补 url / 来源 / 简介
                 let url: string | undefined;
+                let desc: string | undefined;
                 try {
                     const snap = await DB.getLatestHotNewsSnapshot();
                     const hit = snap?.items?.find(it => it.title === title)
                         || snap?.items?.find(it => !!title && (it.title.includes(title) || title.includes(it.title)));
                     if (hit) {
                         url = hit.url;
+                        desc = hit.desc;
                         if (!source && hit.source) source = hit.source;
                     }
                 } catch { /* 补不到就算了 */ }
@@ -188,8 +190,8 @@ export const ChatParser = {
                         charId,
                         role: 'assistant',
                         type: 'news_card',
-                        content: `[你分享了一个热点：「${title}」${source ? `（来源：${source}）` : ''}]`,
-                        metadata: { source, title, url },
+                        content: `[你分享了一个热点：「${title}」${source ? `（来源：${source}）` : ''}${desc ? `——${desc}` : ''}]`,
+                        metadata: { source, title, url, desc },
                     });
                     addToast(`${charName} 分享了一条热点`, 'info');
                 }

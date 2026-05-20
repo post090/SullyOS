@@ -273,6 +273,7 @@ export interface HotNewsItem {
   title: string;
   source?: string;  // 平台展示名，如「微博」
   url?: string;
+  desc?: string;    // 热点简介（API 的 desc 字段，可能为空）
 }
 
 // 分时段热点快照：每天每时段（0-8/8-16/16-24）最多拉一次，全角色共享

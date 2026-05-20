@@ -19,6 +19,7 @@ export interface NewsItem {
     title: string;
     source?: string;
     url?: string;
+    desc?: string;
 }
 
 export interface SearchResult {
@@ -190,7 +191,10 @@ export const RealtimeContextManager = {
                 const picked = items
                     .filter(it => it && it.title)
                     .slice(0, perPlatform)
-                    .map(it => ({ title: String(it.title), source: label, url: it.url }));
+                    .map(it => {
+                        const desc = typeof it.desc === 'string' ? it.desc.replace(/\s+/g, ' ').trim() : '';
+                        return { title: String(it.title), source: label, url: it.url, desc: desc || undefined };
+                    });
                 console.log(`[hot_news] ${label}(${p}) ✓ 取 ${picked.length}/${items.length} 条`);
                 return picked;
             } catch (e: any) {
@@ -555,7 +559,12 @@ export const RealtimeContextManager = {
                 newsLines.push(`但如果对方正在说一件明确的事 / 在认真聊某个话题 / 带着情绪，就别硬插热点，安静当背景知识就好。）`);
                 picks.forEach((n) => {
                     const source = n.source ? `（${n.source}）` : '';
-                    newsLines.push(`- ${n.title}${source}`);
+                    let line = `- ${n.title}${source}`;
+                    if (n.desc && n.desc !== n.title) {
+                        const d = n.desc.length > 60 ? `${n.desc.slice(0, 60)}…` : n.desc;
+                        line += `：${d}`;
+                    }
+                    newsLines.push(line);
                 });
                 newsLines.push('');
                 newsLines.push(`若你想主动把其中某条当作"新闻卡片"分享给对方，可单独输出一行：[[NEWS_CARD: 来源|标题]]（标题照抄上面的）。它会以卡片形式呈现，然后你再就此展开聊。别滥用，自然就好。`);

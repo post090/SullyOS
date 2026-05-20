@@ -140,23 +140,28 @@ const HotNewsApp: React.FC = () => {
                                 <h3 className="text-sm font-black text-stone-800 mb-2 flex items-center gap-2 before:content-[''] before:w-1 before:h-4 before:bg-red-700 before:rounded">
                                     {source}
                                 </h3>
-                                <ol className="space-y-1.5">
+                                <ol className="space-y-2">
                                     {items.map((it, i) => (
-                                        <li key={i} className="flex gap-2 items-baseline text-[13px] leading-snug">
+                                        <li key={i} className="flex gap-2 text-[13px] leading-snug">
                                             <span className="font-black text-red-700 w-5 shrink-0 text-right">{i + 1}</span>
-                                            {it.url ? (
-                                                <a
-                                                    href={it.url}
-                                                    target="_blank"
-                                                    rel="noreferrer"
-                                                    className="text-stone-800 hover:text-red-700 hover:underline decoration-stone-400 flex-1 inline-flex items-start gap-1"
-                                                >
-                                                    <span>{it.title}</span>
-                                                    <ArrowSquareOut size={11} weight="bold" className="shrink-0 mt-1 text-stone-400" />
-                                                </a>
-                                            ) : (
-                                                <span className="text-stone-800 flex-1">{it.title}</span>
-                                            )}
+                                            <div className="flex-1 min-w-0">
+                                                {it.url ? (
+                                                    <a
+                                                        href={it.url}
+                                                        target="_blank"
+                                                        rel="noreferrer"
+                                                        className="text-stone-800 hover:text-red-700 hover:underline decoration-stone-400 inline-flex items-start gap-1"
+                                                    >
+                                                        <span>{it.title}</span>
+                                                        <ArrowSquareOut size={11} weight="bold" className="shrink-0 mt-1 text-stone-400" />
+                                                    </a>
+                                                ) : (
+                                                    <span className="text-stone-800">{it.title}</span>
+                                                )}
+                                                {it.desc && it.desc !== it.title && (
+                                                    <p className="text-[11px] text-stone-500/90 leading-snug mt-0.5">{it.desc}</p>
+                                                )}
+                                            </div>
                                         </li>
                                     ))}
                                 </ol>
