@@ -2297,9 +2297,15 @@ const LetterView: React.FC<{ text: string; onNext: () => void; onClose: () => vo
                 document.head.appendChild(s);
             });
             const html2canvas = await loadH2C;
+            // 等字体加载完再截图 —— 否则 'Cormorant Garamond' / 'Noto Serif SC'
+            // 还没就绪时会退回系统 serif，header 颜色和字距看起来都不一样
+            try { await (document as any).fonts?.ready; } catch { /* ignore */ }
             const target = saveAreaRef.current;
             if (!target) return;
-            const canvas = await html2canvas(target, { backgroundColor: '#f9f2e1', scale: 2, useCORS: true });
+            // backgroundColor 用 wrapper 顶部的颜色 —— html2canvas 渲染不出
+            // radial-gradient 时会拿这个色填整块 wrapper，挑顶端色能让"上面那一节"
+            // 不再突变
+            const canvas = await html2canvas(target, { backgroundColor: '#fefbf4', scale: 2, useCORS: true });
             const url = canvas.toDataURL('image/png');
             const a = document.createElement('a');
             a.href = url;
@@ -2323,7 +2329,10 @@ const LetterView: React.FC<{ text: string; onNext: () => void; onClose: () => vo
                     style={{
                         position: 'relative',
                         padding: '28px 22px',
-                        background: 'radial-gradient(ellipse at top, #fefbf4 0%, #f9f2e1 60%, #f1e7d0 100%)',
+                        // 用 linear-gradient（html2canvas 1.4.1 对 linear 支持稳定，
+                        // 对 radial-gradient(ellipse at top, ...) 经常退回到 backgroundColor
+                        // 平色，导致存为 PNG 后上半段颜色和屏幕看到的不一致）
+                        background: 'linear-gradient(180deg, #fefbf4 0%, #f9f2e1 60%, #f1e7d0 100%)',
                         borderRadius: 6,
                         boxShadow: 'inset 0 0 50px rgba(157,107,120,0.06), inset 0 0 0 1px rgba(212,177,106,0.32)',
                     }}
