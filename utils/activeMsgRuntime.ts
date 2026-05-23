@@ -314,7 +314,10 @@ const flushInboxToChat = async () => {
 
     // emotion_update: worker 跑完副 API 情绪评估后推回的 buff 结果. 不渲染成聊天消息, 直接落 buff +
     // 广播 innerState (useChatAI 监听 'emotion-innerstate-updated' → setEvolvedNarrative 喂下一轮).
-    if (message.messageType === 'emotion_update') {
+    // 识别条件用 messageType==='emotion_update' 或 metadata.emotionRaw 存在 —— 后者兜底旧 SW
+    // (<1.8.0 不认 emotion_update messageKind, 会把它当 content 存进 inbox, 但 metadata.emotionRaw
+    // 仍被 saveContentToInbox 透传进来). 这样情绪落地不依赖 SW 是否升级.
+    if (message.messageType === 'emotion_update' || (message.metadata as any)?.emotionRaw) {
       const emotionRaw = (message.metadata as any)?.emotionRaw;
       if (emotionRaw) {
         try {
