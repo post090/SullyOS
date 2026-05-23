@@ -799,7 +799,7 @@ const MessageItem = React.memo(({
 
                 {showPendingDots && (
                     <span
-                        className="inline-flex items-center gap-[3px] mb-2 mr-1.5 select-none pointer-events-none"
+                        className="inline-flex items-center gap-[3px] mb-2 mr-0.5 select-none pointer-events-none"
                         aria-label="发送准备中"
                         role="status"
                     >
