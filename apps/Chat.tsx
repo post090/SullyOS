@@ -2331,7 +2331,7 @@ const Chat: React.FC = () => {
                             bubbleVariant={osTheme.chatBubbleStyle}
                             messageSpacing={osTheme.chatMessageSpacing}
                             showTimestamp={osTheme.chatShowTimestamp}
-                            isPending={isTyping && i === displayMessages.length - 1}
+                            isPending={false}
                             pendingIndicator={osTheme.chatPendingIndicator !== false}
                             onMcdSendCart={handleMcdSendCart}
                             onMcdCandidate={handleMcdCandidate}
@@ -2345,6 +2345,19 @@ const Chat: React.FC = () => {
                     );
                 })}
                 
+                {/* 纯前端「发送准备中」三个点: 不走 MessageItem (那条逐条路径实测渲染不出来), 直接挂在
+                    消息列表末尾、靠右(用户侧). 跟 header「发送中」同源 instantSendingActive 一起亮灭:
+                    亮=正在拼接+发送(别杀前端), 灭=已 POST 发出(可安全离开). 用 Tailwind 内置 animate-bounce. */}
+                {instantSendingActive && !selectionMode && (
+                    <div className="flex justify-end px-3 mb-4 animate-fade-in">
+                        <div className="bg-primary/10 px-3.5 py-2.5 rounded-2xl flex gap-1 items-center" role="status" aria-label="发送准备中">
+                            <div className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce"></div>
+                            <div className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce delay-75"></div>
+                            <div className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce delay-150"></div>
+                        </div>
+                    </div>
+                )}
+
                 {(isTyping || recallStatus || searchStatus || diaryStatus || isProactiveComposing) && !selectionMode && (
                     <div className="flex items-end gap-3 px-3 mb-6 animate-fade-in">
                         <img src={char.avatar} className={`${osTheme.chatAvatarSize === 'small' ? 'w-7 h-7' : osTheme.chatAvatarSize === 'large' ? 'w-12 h-12' : 'w-9 h-9'} ${osTheme.chatAvatarShape === 'square' ? 'rounded-sm' : osTheme.chatAvatarShape === 'rounded' ? 'rounded-xl' : 'rounded-[10px]'} object-cover`} />
