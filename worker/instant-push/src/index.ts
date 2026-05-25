@@ -47,6 +47,7 @@ export interface Env {
 
 type D1Database = {
   prepare(query: string): D1PreparedStatement;
+  batch(statements: D1PreparedStatement[]): Promise<unknown[]>;
 };
 
 type D1PreparedStatement = {
@@ -159,8 +160,10 @@ async function ensureD1BlobSchema(env: Env): Promise<boolean> {
 
   if (!d1SchemaReadyPromise) {
     d1SchemaReadyPromise = (async () => {
-      await env.DB!.prepare(D1_CREATE_TABLE_SQL).run();
-      await env.DB!.prepare(D1_CREATE_EXPIRES_INDEX_SQL).run();
+      await env.DB!.batch([
+        env.DB!.prepare(D1_CREATE_TABLE_SQL),
+        env.DB!.prepare(D1_CREATE_EXPIRES_INDEX_SQL)
+      ]);
       return true;
     })().catch((e) => {
       d1SchemaReadyPromise = null;
@@ -206,8 +209,6 @@ function createBlobStore(env: Env) {
 
 async function cleanupExpiredD1Blobs(env: Env): Promise<void> {
   if (!shouldUseD1BlobStore(env) || !env.DB) return;
-  const ready = await ensureD1BlobSchema(env);
-  if (!ready) return;
 
   if (d1CleanupPromise) return d1CleanupPromise;
   d1CleanupPromise = (async () => {
@@ -216,7 +217,9 @@ async function cleanupExpiredD1Blobs(env: Env): Promise<void> {
       .run();
   })()
     .catch((e) => {
-      console.error('[instant-push] blob sweeper failed', e);
+      if (!String(e).includes('no such table')) {
+        console.error('[instant-push] blob sweeper failed', e);
+      }
     })
     .finally(() => {
       d1CleanupPromise = null;
@@ -436,18 +439,18 @@ export default {
       body = null; // 非 JSON / 解析失败: 不影响主路径
     }
     const requestedEnv = withRequestOversizeTransport(env, body);
-    const workerEnv = await prepareBlobStoreEnv(requestedEnv);
-    scheduleD1BlobCleanup(workerEnv, ctx);
+    ctx.waitUntil(ensureD1BlobSchema(requestedEnv));
+    scheduleD1BlobCleanup(requestedEnv, ctx);
 
     // 情绪评估不依赖主回复内容 (用 body.messages = 与主回复同一批消息, 跟本地一样不含新回复),
     // 所以与主回复**并行**跑, 而不是 await cfWorker.fetch (流式输出 + 推送 + 收尾可能拖 ~30s)
     // 完成后才启动 —— 砍掉情绪评估的启动延迟, 让 buff / "情绪分析中" 徽章尽快结算.
     if (body?.emotionEval) {
       console.log('[TIMING] emotion: dispatched', new Date().toISOString());
-      ctx.waitUntil(runEmotionEval(body, workerEnv, request.url));
+      ctx.waitUntil(runEmotionEval(body, requestedEnv, request.url));
     }
     console.log('[TIMING] reply: dispatched', new Date().toISOString());
-    return await (cfWorker as any).fetch(request, workerEnv, ctx);
+    return await (cfWorker as any).fetch(request, requestedEnv, ctx);
   },
   async scheduled(_event: unknown, env: Env) {
     const workerEnv = await prepareBlobStoreEnv(env);
