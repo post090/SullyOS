@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { CharacterProfile, ApiPreset, APIConfig, CharacterBuff } from '../../types';
+import { isScheduleFeatureOn } from '../../utils/scheduleGenerator';
 
 interface EmotionSettingsPanelProps {
     char: CharacterProfile;
@@ -59,14 +60,14 @@ const EmotionSettingsPanel: React.FC<EmotionSettingsPanelProps> = ({
 
     const handleSave = () => {
         const api = url ? { baseUrl: url, apiKey: key, model } : undefined;
-        // 与日程强制同步：日程开启时情绪必跑。enabled 由 scheduleStyle 驱动，
-        // 此处只写 api 字段；enabled 由 Chat 层在设置 scheduleStyle 时同步置 true。
-        onSave({ enabled: !!char.scheduleStyle, api });
+        // 与日程强制同步：日程/情绪总开关开启时情绪必跑。
+        // 注意 scheduleFeatureEnabled=true 时即使还没选 scheduleStyle，也应保持情绪开启。
+        onSave({ enabled: isScheduleFeatureOn(char), api });
         setDirty(false);
     };
 
     const buffs: CharacterBuff[] = char.activeBuffs || [];
-    const scheduleOn = !!char.scheduleStyle;
+    const scheduleOn = isScheduleFeatureOn(char);
 
     return (
         <div className="space-y-4 pt-4 border-t border-slate-100">
