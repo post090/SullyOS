@@ -409,6 +409,12 @@ export async function applyAssistantPostProcessing(
     let aiContent = replayedTagPrefix ? `${replayedTagPrefix}${rawAiContent}` : rawAiContent;
     aiContent = normalizeAiContent(aiContent);
 
+    // 模型常在"执行功能"那条回复里先写一段正文 A (例: "来了来了！让我搜个应景的好东西…"), 再跟一个
+    // [[RECALL/SEARCH/XHS_...]] 指令。下面的二轮重生会把 aiContent 整段换成基于结果的 B, A 就丢了
+    // (用户只看到 B)。这里把 A 的原文留底, 末尾在确实跑过二轮时 (data !== initialData) 拼回 B 前面,
+    // 做到 A + B 一起展示。
+    const firstPassForLeadIn = aiContent;
+
     // ─── Step 2: 二轮 LLM 钩子 ───
 
     // 5. Handle Recall (Loop if needed)
@@ -416,9 +422,9 @@ export async function applyAssistantPostProcessing(
     if (!skipSecondPassLLM && recallMatch) {
         const year = recallMatch[1];
         const month = recallMatch[2];
-        // 模型常把 [[RECALL]] 指令和本轮正文写在同一条回复里。先留底 (去掉所有 RECALL 标签后的正文),
-        // 万一下面的二轮 LLM 吐空 / 只剩标签, 可以回退到这段正文, 避免"只闪了下召回状态、本轮回复整段丢失"。
-        const recallFallbackBody = aiContent.replace(/\[\[RECALL:\s*\d{4}[-/年]\d{1,2}\]\]/g, '').trim();
+        // 模型常把 [[RECALL]] 指令和本轮正文 A 写在同一条回复里。把 A 作为 assistant 上文喂给二轮,
+        // 让二轮结果 B 接着 A 往下说 (A 会在末尾被统一拼回 B 前面一起展示)。
+        const recallLeadIn = aiContent.replace(/\[\[RECALL:\s*\d{4}[-/年]\d{1,2}\]\]/g, '').trim();
         const rr = await runRecall({ year, month }, agenticCtx);
 
         if (rr.ok && rr.alreadyActive) {
@@ -426,7 +432,7 @@ export async function applyAssistantPostProcessing(
             aiContent = aiContent.replace(/\[\[RECALL:\s*\d{4}[-/年]\d{1,2}\]\]/g, '').trim();
         } else if (rr.ok && rr.logsText) {
             setRecallStatus(`正在调阅 ${year}年${month}月 的详细档案...`);
-            const recallMessages = [...fullMessages, { role: 'user', content: `[系统: 已成功调取 ${year}-${month} 的详细日志]\n${rr.logsText}\n[系统: 现在请结合这些细节回答用户。保持对话自然。]` }];
+            const recallMessages = [...fullMessages, ...(recallLeadIn ? [{ role: 'assistant', content: recallLeadIn }] : []), { role: 'user', content: `[系统: 已成功调取 ${year}-${month} 的详细日志]\n${rr.logsText}\n[系统: 现在请结合这些细节回答用户。保持对话自然。]` }];
             try {
                 data = await safeFetchJson(`${baseUrl}/chat/completions`, {
                     method: 'POST', headers,
@@ -438,11 +444,6 @@ export async function applyAssistantPostProcessing(
                 addToast(`已调用 ${year}-${month} 详细记忆`, 'info');
             } catch (recallErr: any) {
                 console.error('Recall API failed:', recallErr.message);
-            }
-            // 二轮没产出可见正文 → 回退到模型本轮已写好的正文, 至少把本轮回复展示出来。
-            if (!aiContent.replace(/\[\[RECALL:\s*\d{4}[-/年]\d{1,2}\]\]/g, '').trim() && recallFallbackBody) {
-                console.log('♻️ [Recall] 二轮回复为空, 回退到本轮原始正文');
-                aiContent = recallFallbackBody;
             }
         } else {
             // !rr.ok && rr.reason === 'no_logs' — matches original "set status, no-op, clear" path
@@ -1477,6 +1478,19 @@ export async function applyAssistantPostProcessing(
         setXhsStatus('');
     }
     aiContent = aiContent.replace(/\[\[XHS_POST:.*?\]\]/gs, '').trim();
+
+    // ─── Step 2.9: 把"执行功能前的本轮正文 A"拼回二轮结果 B 前面, 让一轮+二轮都展示 ───
+    // 只在确实跑过二轮 (data !== initialData; 只有重生分支会重新赋值 data) 时拼; 没跑二轮时 aiContent
+    // 本来就是 A, 再拼会重复。XHS_* / READ_NOTE 标签 ChatParser.sanitize 不剥, 这里先在 A 上剥掉
+    // (其余 RECALL/SEARCH/DIARY/... 由后面的 sanitize 统一清), SEND_EMOJI 等留着走正常渲染。
+    // 下游 chunkText 按换行/句子切, A、B 自然落成相邻的不同气泡。
+    if (data !== initialData) {
+        const leadIn = firstPassForLeadIn
+            .replace(/\[\[READ_NOTE:[\s\S]*?\]\]/g, '')
+            .replace(/\[\[XHS_[A-Z_]+(?::[\s\S]*?)?\]\]/g, '')
+            .trim();
+        if (leadIn) aiContent = aiContent.trim() ? `${leadIn}\n\n${aiContent}` : leadIn;
+    }
 
     // ─── Step 3: ChatParser.parseAndExecuteActions ───
     aiContent = await ChatParser.parseAndExecuteActions(aiContent, char.id, char.name, addToast, musicHooks);
