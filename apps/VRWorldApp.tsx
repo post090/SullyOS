@@ -13,6 +13,8 @@ import { VR_ROOMS, getRoom, VR_DEFAULT_INTERVAL_MIN } from '../utils/vrWorld/con
 import { buildNovelAsync, groupAnnotationsBySeg, getBookmark } from '../utils/vrWorld/novel';
 import { decodeTextFile } from '../utils/vrWorld/decodeText';
 import { PostOffice, type RemoteReply } from '../utils/vrWorld/postOffice';
+import { getVRApi, setVRApi, getVRApiLog, clearVRApiLog, type VRApiCall } from '../utils/vrWorld/vrApi';
+import { safeResponseJson } from '../utils/safeApi';
 
 const genLocalId = (p: string) => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 
@@ -27,7 +29,7 @@ const stripSelfName = (text: string | undefined, name: string | undefined): stri
     }
     return text;
 };
-import type { CharacterProfile, VRWorldNovel, VRNovelAnnotation, VRCardMeta, VRRoomId, VRMusicRoomState, CharPlaylistSong, VRGuestbookState, VRGuestbookMessage, VRLetter } from '../types';
+import type { CharacterProfile, VRWorldNovel, VRNovelAnnotation, VRCardMeta, VRRoomId, VRMusicRoomState, CharPlaylistSong, VRGuestbookState, VRGuestbookMessage, VRLetter, ApiPreset, APIConfig } from '../types';
 
 // ============ chibi 形象解析（vrState.chibi → 立绘 → 头像） ============
 interface ChibiDisplay { img: string; scale: number; offsetY: number; flip: boolean; isFallback: boolean; }
@@ -40,7 +42,7 @@ const getChibi = (char: CharacterProfile): ChibiDisplay => {
     return { img: fb, scale: 1, offsetY: 0, flip: false, isFallback: true };
 };
 
-type Tab = 'world' | 'library' | 'settings';
+type Tab = 'world' | 'library' | 'settings' | 'api';
 
 interface FeedItem {
     msgId: number; charId: string; charName: string; avatar: string;
@@ -67,7 +69,7 @@ const IDLE_QUIPS: Record<VRRoomId, string[]> = {
 };
 
 const VRWorldApp: React.FC = () => {
-    const { closeApp, characters, updateCharacter, addToast, registerBackHandler, userProfile } = useOS();
+    const { closeApp, characters, updateCharacter, addToast, registerBackHandler, userProfile, apiPresets, apiConfig } = useOS();
     const userName = userProfile?.name || '我';
     const [tab, setTab] = useState<Tab>('world');
     const [novels, setNovels] = useState<VRWorldNovel[]>([]);
@@ -256,7 +258,7 @@ const VRWorldApp: React.FC = () => {
 
             {/* Tab — 发丝下划线 */}
             <div className="relative flex px-5 gap-6 shrink-0 z-10 pb-px">
-                {([['world', '世界'], ['library', '书库'], ['settings', '接入']] as [Tab, string][]).map(([t, label]) => (
+                {([['world', '世界'], ['library', '书库'], ['settings', '接入'], ['api', 'API']] as [Tab, string][]).map(([t, label]) => (
                     <button key={t} onClick={() => setTab(t)} className="relative pb-2 text-[13.5px] tracking-[0.22em] transition-colors"
                         style={{ fontFamily: `'Noto Serif SC',serif`, color: tab === t ? 'rgba(255,255,255,.95)' : 'rgba(255,255,255,.38)' }}>
                         {label}
@@ -278,10 +280,12 @@ const VRWorldApp: React.FC = () => {
                     <LibraryView novels={novels} characters={characters} onOpen={setReaderNovel}
                         onAdd={() => setShowUpload(true)}
                         onDelete={async (id) => { await DB.deleteVRNovel(id); await loadNovels(); addToast?.('已删除', 'success'); }} />
-                ) : (
+                ) : tab === 'settings' ? (
                     <SettingsView characters={characters} updateCharacter={updateCharacter} addToast={addToast}
                         novelCount={novels.length} onReload={reloadAll}
                         onRequestEnable={requestEnable} onEditChibi={setChibiEditChar} />
+                ) : (
+                    <VRApiSettings apiPresets={apiPresets} chatApi={apiConfig} addToast={addToast} />
                 )}
             </div>
 
@@ -628,6 +632,7 @@ const HelpModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                     <div>· 「世界」页的<b>动态</b>长按可删除；满 20 条一页、可翻页。</div>
                     <div>· 角色在留言簿说的话，会原样进 ta 的聊天，不只是一句小总结。</div>
                     <div>· 邮局/收件箱里的信多了也会分页，慢慢翻。</div>
+                    <div>· 彼方较费 API：可在 <b>「API」</b> 标签给它单独指定一份（和设置里的预设共用），还能看<b>调用记录</b>对账。</div>
                 </Block>
 
                 <div className="h-2" />
@@ -1877,6 +1882,121 @@ const SettingsView: React.FC<{
                     { label: '🎮 娱乐室 · 放开玩', onClick: () => go('gym') },
                     { label: '✉️ 邮局 · 写漂流信', onClick: () => go('postoffice') },
                 ]} onClose={() => setPickFor(null)} />
+        </div>
+    );
+};
+
+// ============ 彼方 · API 设置 + 调用记录 ============
+const VRApiSettings: React.FC<{ apiPresets: ApiPreset[]; chatApi: APIConfig; addToast?: (m: string, t?: any) => void }> = ({ apiPresets, chatApi, addToast }) => {
+    const [vrApi, setVr] = useState<APIConfig | null>(() => getVRApi());
+    const [log, setLog] = useState<VRApiCall[]>(() => getVRApiLog());
+    const [testing, setTesting] = useState(false);
+    const [testResult, setTestResult] = useState<string | null>(null);
+
+    useEffect(() => {
+        const h = () => setLog(getVRApiLog());
+        window.addEventListener('vr-api-log', h);
+        return () => window.removeEventListener('vr-api-log', h);
+    }, []);
+
+    const follow = !vrApi?.baseUrl;
+    const effective = follow ? chatApi : vrApi!;
+    const sameAs = (c: APIConfig) => !follow && vrApi!.baseUrl === c.baseUrl && vrApi!.model === c.model && vrApi!.apiKey === c.apiKey;
+    const host = (u?: string) => { try { return u ? new URL(u).host : '—'; } catch { return u || '—'; } };
+
+    const choose = (cfg: APIConfig | null) => {
+        setVRApi(cfg); setVr(cfg); setTestResult(null);
+        addToast?.(cfg ? '已切换彼方 API' : '彼方改为跟随聊天默认', 'success');
+    };
+
+    const test = async () => {
+        const cfg = effective;
+        if (!cfg?.baseUrl) { setTestResult('❌ 当前没有可用的 API'); return; }
+        setTesting(true); setTestResult(null);
+        try {
+            const res = await fetch(`${cfg.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.apiKey || 'sk-none'}` },
+                body: JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: 'Hi' }], max_tokens: 5, stream: false }),
+            });
+            if (res.ok) { const d = await safeResponseJson(res); const r = d.choices?.[0]?.message?.content || ''; setTestResult(`✅ 连接成功 — 模型回复:"${r.slice(0, 24)}"`); }
+            else { const t = await res.text().catch(() => ''); setTestResult(`❌ HTTP ${res.status}: ${t.slice(0, 80)}`); }
+        } catch (e: any) { setTestResult(`❌ 连接失败: ${e.message}`); } finally { setTesting(false); }
+    };
+
+    const okCount = log.filter(l => l.ok).length;
+
+    return (
+        <div className="space-y-3">
+            <p className="text-[11px] text-indigo-300/60 leading-relaxed">
+                彼方里的角色会自主、按间隔登入触发模型调用，比较费 API。你可以在这里给彼方<b className="text-indigo-200">单独指定一份 API</b>（和「设置」里保存的预设共用同一批），不设则跟随聊天默认。
+            </p>
+
+            {/* 当前生效 */}
+            <div className="rounded-2xl p-3.5" style={{ background: 'rgba(255,255,255,0.045)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                <div className="text-[10px] tracking-[0.2em] text-indigo-200/60 mb-1.5" style={{ fontFamily: `'Noto Serif SC',serif` }}>当前生效</div>
+                <div className="text-[12.5px] text-white/90 font-semibold">{effective?.model || '未配置'}</div>
+                <div className="text-[10px] text-white/40 mt-0.5">{host(effective?.baseUrl)} · {follow ? '跟随聊天默认' : '彼方独立'}</div>
+                <button onClick={test} disabled={testing} className="mt-2.5 text-[11px] px-3 py-1.5 rounded-full font-semibold disabled:opacity-50"
+                    style={{ background: 'rgba(120,180,255,.16)', color: '#bcd4ff', border: '1px solid rgba(140,180,255,.3)' }}>
+                    {testing ? '测试中…' : '🧪 测试连接'}
+                </button>
+                {testResult && <div className={`mt-2 text-[10.5px] px-2.5 py-1.5 rounded-lg leading-snug ${testResult.startsWith('✅') ? 'text-emerald-300' : 'text-rose-300'}`} style={{ background: 'rgba(0,0,0,.25)' }}>{testResult}</div>}
+            </div>
+
+            {/* 选择 API */}
+            <div>
+                <div className="text-[10px] tracking-[0.2em] text-indigo-200/55 mb-1.5 px-0.5" style={{ fontFamily: `'Noto Serif SC',serif` }}>选择彼方 API</div>
+                <button onClick={() => choose(null)}
+                    className="w-full flex items-center gap-2 rounded-xl p-3 mb-1.5 text-left active:scale-[0.99] transition-transform"
+                    style={{ background: follow ? 'rgba(120,180,255,.12)' : 'rgba(255,255,255,.04)', border: `1px solid ${follow ? 'rgba(140,180,255,.4)' : 'rgba(255,255,255,.07)'}` }}>
+                    <div className="flex-1 min-w-0">
+                        <div className="text-[12px] text-white/90 font-semibold">跟随聊天默认</div>
+                        <div className="text-[10px] text-white/40 truncate">{chatApi?.model || '未配置'} · {host(chatApi?.baseUrl)}</div>
+                    </div>
+                    {follow && <span className="text-[10px] text-sky-300 font-bold shrink-0">✓ 使用中</span>}
+                </button>
+                {apiPresets.length === 0 ? (
+                    <p className="text-[10.5px] text-white/35 px-1 py-1.5">「设置」里还没有保存的 API 预设。去设置里保存几个模型，这里就能选。</p>
+                ) : apiPresets.map(p => {
+                    const on = sameAs(p.config);
+                    return (
+                        <button key={p.id} onClick={() => choose(p.config)}
+                            className="w-full flex items-center gap-2 rounded-xl p-3 mb-1.5 text-left active:scale-[0.99] transition-transform"
+                            style={{ background: on ? 'rgba(120,180,255,.12)' : 'rgba(255,255,255,.04)', border: `1px solid ${on ? 'rgba(140,180,255,.4)' : 'rgba(255,255,255,.07)'}` }}>
+                            <div className="flex-1 min-w-0">
+                                <div className="text-[12px] text-white/90 font-semibold truncate">{p.name}</div>
+                                <div className="text-[10px] text-white/40 truncate">{p.config.model} · {host(p.config.baseUrl)}</div>
+                            </div>
+                            {on && <span className="text-[10px] text-sky-300 font-bold shrink-0">✓ 使用中</span>}
+                        </button>
+                    );
+                })}
+            </div>
+
+            {/* 调用记录 */}
+            <div className="rounded-2xl p-3" style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.07)' }}>
+                <div className="flex items-center gap-1.5 mb-2">
+                    <span className="text-[10px] tracking-[0.2em] text-indigo-200/60" style={{ fontFamily: `'Noto Serif SC',serif` }}>调用记录</span>
+                    <span className="text-[9.5px] text-white/40 rounded-full px-1.5 leading-tight" style={{ background: 'rgba(255,255,255,.08)' }}>{log.length}{log.length ? ` · 成功${okCount}` : ''}</span>
+                    {log.length > 0 && <button onClick={() => { clearVRApiLog(); setLog([]); }} className="ml-auto text-[10px] text-white/40 hover:text-rose-300/80">清空</button>}
+                </div>
+                {log.length === 0 ? (
+                    <p className="text-[10.5px] text-white/35 py-2 text-center">还没有调用。角色每次登入彼方触发的模型调用都会记在这里，方便你对账。</p>
+                ) : (
+                    <div className="space-y-1">
+                        {log.slice(0, 60).map((l, i) => (
+                            <div key={i} className="flex items-center gap-2 text-[10.5px] py-1 border-b border-white/5 last:border-0">
+                                <span className={`shrink-0 ${l.ok ? 'text-emerald-400/80' : 'text-rose-400/80'}`}>{l.ok ? '●' : '○'}</span>
+                                <span className="text-white/75 truncate">{l.charName || '—'}</span>
+                                <span className="text-indigo-300/40 shrink-0">{l.room ? getRoom(l.room as VRRoomId).name : ''}</span>
+                                <span className="ml-auto text-white/30 shrink-0 tabular-nums">{(l.ms / 1000).toFixed(1)}s</span>
+                                <span className="text-white/35 shrink-0 tabular-nums w-[68px] text-right">{new Date(l.ts).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
         </div>
     );
 };

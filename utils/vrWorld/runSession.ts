@@ -26,6 +26,7 @@ import { processNewMessages } from '../memoryPalace/pipeline';
 import { loadMusicCfgStandalone } from '../../context/MusicContext';
 import { getCharLyricSnippet } from '../charLyricCache';
 import { getRoom, VR_DEFAULT_INTERVAL_MIN } from './constants';
+import { getVRApi, logVRApiCall } from './vrApi';
 import { getReadingWindow, getBookmark, buildAnnotation } from './novel';
 import {
     buildVRSystemAddendum, buildLibraryRoomTurn, parseVROutput,
@@ -113,7 +114,9 @@ export async function runVRSession(deps: VRSessionDeps): Promise<VRSessionResult
 
     if (running.has(char.id)) return { ok: false, reason: 'busy' };
 
-    const vrApi = char.vrState?.api?.baseUrl ? char.vrState.api : apiConfig;
+    // API 优先级：角色自带覆盖 > 彼方独立 API > 聊天默认
+    const vrGlobalApi = getVRApi();
+    const vrApi = char.vrState?.api?.baseUrl ? char.vrState.api : (vrGlobalApi?.baseUrl ? vrGlobalApi : apiConfig);
     if (!vrApi.baseUrl) return { ok: false, reason: 'no-api' };
 
     const novels = await DB.getVRNovels();
@@ -233,17 +236,25 @@ export async function runVRSession(deps: VRSessionDeps): Promise<VRSessionResult
         });
         const systemPrompt = payload.systemPrompt + buildVRSystemAddendum(room, char.name);
 
-        // 调 LLM
+        // 调 LLM（记录一次调用，供"调用记录"对账）
         const baseUrl = vrApi.baseUrl.replace(/\/+$/, '');
-        const data = await safeFetchJson(`${baseUrl}/chat/completions`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${vrApi.apiKey || 'sk-none'}` },
-            body: JSON.stringify({
-                model: vrApi.model,
-                messages: [{ role: 'system', content: systemPrompt }, ...payload.cleanedApiMessages, { role: 'user', content: roomTurn }],
-                temperature: 0.9, stream: false,
-            }),
-        });
+        const callStart = Date.now();
+        let data: any;
+        try {
+            data = await safeFetchJson(`${baseUrl}/chat/completions`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${vrApi.apiKey || 'sk-none'}` },
+                body: JSON.stringify({
+                    model: vrApi.model,
+                    messages: [{ role: 'system', content: systemPrompt }, ...payload.cleanedApiMessages, { role: 'user', content: roomTurn }],
+                    temperature: 0.9, stream: false,
+                }),
+            });
+            logVRApiCall({ ts: callStart, charName: char.name, room: room.id, model: vrApi.model, baseUrl, ok: true, ms: Date.now() - callStart });
+        } catch (e: any) {
+            logVRApiCall({ ts: callStart, charName: char.name, room: room.id, model: vrApi.model, baseUrl, ok: false, ms: Date.now() - callStart, error: (e?.message || String(e)).slice(0, 160) });
+            throw e;
+        }
         let aiContent: string = data.choices?.[0]?.message?.content || '';
         aiContent = aiContent.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
 
