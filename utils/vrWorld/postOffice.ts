@@ -9,6 +9,11 @@ const DEFAULT_BASE = 'https://noir2.cc.cd/po';
 const BASE_KEY = 'vr_po_base';
 const DEVICE_KEY = 'vr_po_device';
 
+/** 单封正文字数上限（按字符：1 汉字/标点 = 1 字）。UI 输入框可用它做限制提示。 */
+export const MAX_LETTER_CHARS = 400;
+/** 按字符截断到上限（兜底；后端也会再截一次） */
+const clipContent = (s: string): string => [...(s || '')].slice(0, MAX_LETTER_CHARS).join('');
+
 export const getPostOfficeBase = (): string => {
     try { return (localStorage.getItem(BASE_KEY) || DEFAULT_BASE).replace(/\/+$/, ''); }
     catch { return DEFAULT_BASE; }
@@ -47,8 +52,13 @@ export function maskPen(name: string): string {
     return PEN_POOL[h % PEN_POOL.length];
 }
 
-export interface RemoteLetter { id: string; pen: string; content: string; created_at: number; }
+export interface RemoteLetter {
+    id: string; pen: string; content: string; created_at: number;
+    likes?: number; dislikes?: number; views?: number; reply_count?: number;
+}
 export interface RemoteReply { id: string; letter_id: string; pen: string; content: string; created_at: number; }
+/** 我寄出的信的热度统计（赞/踩/浏览量/回信数）。 */
+export interface RemoteLetterStat { id: string; likes: number; dislikes: number; views: number; reply_count: number; created_at: number; }
 
 async function call<T>(path: string, opts: RequestInit & { query?: Record<string, string> } = {}): Promise<T> {
     const base = getPostOfficeBase();
@@ -72,7 +82,7 @@ export const PostOffice = {
 
     /** 上传待寄出的信，返回服务端分配的 id 列表（笔名自动马赛克） */
     async uploadLetters(letters: { pen: string; content: string; lang?: string }[]): Promise<string[]> {
-        const masked = letters.map(l => ({ ...l, pen: maskPen(l.pen) }));
+        const masked = letters.map(l => ({ ...l, pen: maskPen(l.pen), content: clipContent(l.content) }));
         const r = await call<{ ids: string[] }>('/letters', { method: 'POST', body: JSON.stringify({ device: getDeviceId(), letters: masked }) });
         return r.ids || [];
     },
@@ -85,7 +95,7 @@ export const PostOffice = {
 
     /** 上传回信（笔名自动马赛克） */
     async uploadReplies(replies: { letterId: string; pen: string; content: string }[]): Promise<number> {
-        const masked = replies.map(rp => ({ ...rp, pen: maskPen(rp.pen) }));
+        const masked = replies.map(rp => ({ ...rp, pen: maskPen(rp.pen), content: clipContent(rp.content) }));
         const r = await call<{ accepted: number }>('/replies', { method: 'POST', body: JSON.stringify({ device: getDeviceId(), replies: masked }) });
         return r.accepted || 0;
     },
@@ -96,9 +106,44 @@ export const PostOffice = {
         return r.replies || [];
     },
 
+    /** 取回"我寄出的信"的赞/踩/浏览量等热度（与 fetchReplies 同一接口，按需取用） */
+    async fetchMyStats(): Promise<RemoteLetterStat[]> {
+        const r = await call<{ letters: RemoteLetterStat[] }>('/replies', { query: { device: getDeviceId() } });
+        return r.letters || [];
+    },
+
+    /** 点赞(1) / 点踩=举报(-1) / 撤销(0)。返回最新计数；信若已被删则 deleted=true */
+    async vote(letterId: string, vote: 1 | -1 | 0): Promise<{ likes: number; dislikes: number; deleted?: boolean }> {
+        const r = await call<{ likes?: number; dislikes?: number; deleted?: boolean }>('/vote', {
+            method: 'POST', body: JSON.stringify({ device: getDeviceId(), letterId, vote }),
+        });
+        return { likes: r.likes ?? 0, dislikes: r.dislikes ?? 0, deleted: r.deleted };
+    },
+
     /** 原作者留档后释放（后端删除信+回复） */
     async release(letterIds: string[]): Promise<void> {
         if (letterIds.length === 0) return;
         await call('/release', { method: 'POST', body: JSON.stringify({ device: getDeviceId(), letterIds }) });
     },
 };
+
+// ── 身份导出 / 导入：换设备或清数据后找回「我的信」与责任 ──────────────
+const ID_PREFIX = 'sullypo';
+const idChecksum = (s: string): string => {
+    let h = 0;
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return h.toString(36).slice(0, 4).padStart(4, '0');
+};
+/** 导出当前身份码（带校验位），可抄到别处导入。 */
+export function exportIdentity(): string {
+    const id = getDeviceId();
+    return `${ID_PREFIX}.${id}.${idChecksum(id)}`;
+}
+/** 导入身份码：校验通过则替换本地 deviceId，返回是否成功。 */
+export function importIdentity(code: string): boolean {
+    const parts = (code || '').trim().split('.');
+    if (parts.length !== 3 || parts[0] !== ID_PREFIX) return false;
+    const [, id, sum] = parts;
+    if (!id || idChecksum(id) !== sum) return false;
+    try { localStorage.setItem(DEVICE_KEY, id); return true; } catch { return false; }
+}

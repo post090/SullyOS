@@ -758,6 +758,12 @@ export interface VRLetter {
     replyStatus?: 'none' | 'queued' | 'sent'; // 未回 / 待发送回信 / 已发送
     reply?: { charId: string; pen: string; content: string; createdAt: number; userNote?: string };
     fetchedAt?: number;
+
+    // 互动热度缓存（服务端为准；UI 即时反馈用）
+    likes?: number;             // 点赞数
+    dislikes?: number;          // 点踩(=举报)数
+    views?: number;             // 被抽到/浏览次数
+    myVote?: 1 | -1 | 0;        // 我对这封信的投票（inbox 抽到的信）
 }
 
 /** 听歌房队列项。 */
