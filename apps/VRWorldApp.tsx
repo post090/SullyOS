@@ -1044,7 +1044,8 @@ const PostOfficePanel: React.FC<{ addToast?: (m: string, t?: any) => void; chara
     const refreshInbox = async () => {
         setBusy('inbox');
         try {
-            const remote = await PostOffice.fetchInbox(5);
+            const n = 2 + Math.floor(Math.random() * 4); // 每次随机捞 2~5 封，别一次太猛
+            const remote = await PostOffice.fetchInbox(n);
             const fresh: VRLetter[] = remote.map(r => ({ id: genLocalId('lt'), box: 'inbox', pen: r.pen, content: r.content, createdAt: r.created_at, remoteLetterId: r.id, replyStatus: 'none', fetchedAt: Date.now(), likes: r.likes ?? 0, dislikes: r.dislikes ?? 0, views: r.views ?? 0, myVote: 0 }));
             await DB.saveVRLetters(fresh);
             await load(); addToast?.(remote.length ? `收到 ${remote.length} 封陌生来信` : '暂时没有新的来信', 'info');
