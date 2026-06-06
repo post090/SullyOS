@@ -458,15 +458,22 @@ export async function applyAssistantPostProcessing(
         // 这里先剥掉翻译标签再逐字/前缀精确定位；匹配不到就兜底到「最近一条用户文字消息」
         // （[[QUOTE]] 基本放在回复开头、指代最近一句话，兜底足够稳），杜绝外语角色空引用。
         const resolveQuoteTarget = (quotedTextRaw: string): { id: number, content: string, name: string } | undefined => {
-            const quotedText = (quotedTextRaw || '')
-                .replace(/<\/?翻译>|<\/?原文>|<\/?译文>/g, '')
-                .replace(/%%BILINGUAL%%/gi, '')
-                .trim();
+            const raw = (quotedTextRaw || '').trim();
+            // 引用文本可能被翻译标签包裹：<原文>(外语) 与 <译文>(本地语) 都可能命中库里的中文用户消息。
+            // 不能直接剥标签——那样会把原文+译文拼成一串(如「你好Hello」)导致 includes 永远匹配不上。
+            // 这里把两边内容各自当候选逐个匹配；没有成对标签时再退化成「剥掉零散标签」的兜底候选。
+            const candidates: string[] = [];
+            const pushCand = (s?: string) => { const t = (s || '').trim(); if (t && !candidates.includes(t)) candidates.push(t); };
+            pushCand(raw.match(/<原文>([\s\S]*?)<\/原文>/)?.[1]);
+            pushCand(raw.match(/<译文>([\s\S]*?)<\/译文>/)?.[1]);
+            pushCand(raw.replace(/<\/?翻译>|<\/?原文>|<\/?译文>/g, '').replace(/%%BILINGUAL%%/gi, ''));
             const users = contextMsgs.filter((m: Message) => m.role === 'user' && typeof m.content === 'string' && !!m.content.trim());
+            const reversedUsers = users.slice().reverse();
             let targetMsg: Message | undefined;
-            if (quotedText) {
-                targetMsg = users.slice().reverse().find((m: Message) => m.content.includes(quotedText))
-                    || (quotedText.length > 10 ? users.slice().reverse().find((m: Message) => m.content.includes(quotedText.slice(0, 10))) : undefined);
+            for (const q of candidates) {
+                targetMsg = reversedUsers.find((m: Message) => m.content.includes(q))
+                    || (q.length > 10 ? reversedUsers.find((m: Message) => m.content.includes(q.slice(0, 10))) : undefined);
+                if (targetMsg) break;
             }
             // 兜底：精确匹配失败但角色明确想引用 → 取最近一条用户文字消息，避免空引用
             if (!targetMsg) targetMsg = users.filter((m: Message) => m.type === 'text' || !m.type).slice(-1)[0] || users.slice(-1)[0];
