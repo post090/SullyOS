@@ -2447,7 +2447,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           } else if (mode === 'media_only') {
               // media_only now includes themes/assets for complete media backup
               storesToProcess = ['gallery', 'emojis', 'emoji_categories', 'journal_stickers', 'user_profile', 'characters', 'messages', 'themes', 'assets', 'bank_data',
-                  'pixel_home_assets', 'pixel_home_layouts', 'daily_schedule'];
+                  'pixel_home_assets', 'pixel_home_layouts', 'daily_schedule', 'cc_custom_parts'];
           }
 
           // Fetch Social App & Room Assets (Optional, depends on mode)
