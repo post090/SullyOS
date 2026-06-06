@@ -303,7 +303,7 @@ export async function evaluateEmotionBackground(
                 temperature: 0.85,
                 stream: false
             })
-        });
+        }, 2, 0, { appName: '消息', charId: charData.id, charName: charData.name, purpose: '情绪评估' });
 
         const raw = data.choices?.[0]?.message?.content || '';
         return await applyEmotionEvalRaw(raw, charData);
@@ -821,7 +821,7 @@ export const useChatAI = ({
             let data = await safeFetchJson(`${baseUrl}/chat/completions`, {
                 method: 'POST', headers,
                 body: JSON.stringify(baseReqBody)
-            });
+            }, 2, 0, { appName: '消息', charId: char.id, charName: char.name, purpose: '聊天回复' });
             console.log(`⏱ [API call] ${Math.round(performance.now() - apiT0)}ms`);
             updateTokenUsage(data, historyMsgCount, 'initial');
 

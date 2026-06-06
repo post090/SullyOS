@@ -7,6 +7,7 @@
  */
 
 import { appendDevDebugLlmLog } from './devDebug';
+import { recordApiCall, type ApiCallMeta } from './apiCallLog';
 
 function isChatCompletionUrl(url: string): boolean {
     return url.includes('/chat/completions');
@@ -130,6 +131,8 @@ export async function safeFetchJson(
     options: RequestInit,
     maxRetries: number = 2,
     timeoutMs: number = 0,
+    /** 可选：补充「哪个 App / 哪个角色 / 用途」到 API 调用记录（设置 → API 调用记录）。 */
+    meta?: ApiCallMeta,
 ): Promise<any> {
     const retryableStatuses = new Set([429, 500, 502, 503, 504]);
     let lastError: Error | null = null;
@@ -183,6 +186,7 @@ export async function safeFetchJson(
                     requestBody: options.body,
                     response: data,
                 });
+                recordApiCall({ url: urlStr, body: options.body, status: response.status, ok: true, response: data, meta });
             }
             return data;
         } catch (e: any) {
@@ -216,6 +220,7 @@ export async function safeFetchJson(
                     requestBody: options.body,
                     error: e,
                 });
+                recordApiCall({ url: urlStr, body: options.body, status: lastStatus, ok: false, meta });
             }
             throw e;
         }
