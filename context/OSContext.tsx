@@ -7,6 +7,8 @@ import { VRScheduler } from '../utils/vrWorld/scheduler';
 import { runVRSession } from '../utils/vrWorld/runSession';
 import { ChatParser } from '../utils/chatParser';
 import { safeFetchJson } from '../utils/safeApi';
+import { recordApiCall, setApiCallAmbientContext } from '../utils/apiCallLog';
+import { INSTALLED_APPS } from '../constants';
 import { normalizeCharacterImpression, normalizeCharacterDefaults } from '../utils/impression';
 import { isScheduleFeatureOn } from '../utils/scheduleGenerator';
 import { evaluateEmotionBackground } from '../hooks/useChatAI';
@@ -705,6 +707,14 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       }
   };
 
+  // --- API 调用记录的环境兜底：当前在哪个 App、当前角色是谁 ---
+  // 裸 fetch 调用点无法传 meta，全局拦截器记录时用这份兜底标出 App / 角色。
+  useEffect(() => {
+      const appName = INSTALLED_APPS.find(a => a.id === activeApp)?.name;
+      const char = characters.find(c => c.id === activeCharacterId);
+      setApiCallAmbientContext({ appId: activeApp, appName, charId: char?.id, charName: char?.name });
+  }, [activeApp, activeCharacterId, characters]);
+
   // --- Global Error Interception ---
   useEffect(() => {
       if (interceptorsInitialized.current) return;
@@ -719,7 +729,29 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           
           try {
               const response = await originalFetch(...args);
-              
+
+              // 「API 调用记录」统一记录入口：所有 /chat/completions（裸 fetch + safeFetchJson
+              // 内部 fetch 都会经过这里）都记一笔。meta 优先取调用方挂在 init 上的 __sullyMeta
+              // （safeFetchJson 传的精确信息），裸 fetch 没有就由 recordApiCall 用环境兜底。
+              if (urlStr.includes('/chat/completions')) {
+                  const meta = (config as any)?.__sullyMeta;
+                  const body = (config as any)?.body;
+                  const status = response.status;
+                  const ok = response.ok;
+                  // clone 出来异步读 usage，不阻塞调用方拿 response
+                  let usageClone: Response | null = null;
+                  try { usageClone = response.clone(); } catch { usageClone = null; }
+                  if (usageClone) {
+                      usageClone.text().then((t) => {
+                          let parsed: any = undefined;
+                          try { parsed = JSON.parse(t); } catch { /* 流式/非 JSON：无 usage，照样记 */ }
+                          recordApiCall({ url: urlStr, body, status, ok, response: parsed, meta });
+                      }).catch(() => recordApiCall({ url: urlStr, body, status, ok, meta }));
+                  } else {
+                      recordApiCall({ url: urlStr, body, status, ok, meta });
+                  }
+              }
+
               if (!response.ok) {
                   // Only log if it's likely an API call (contains chat/completions or models)
                   if (urlStr.includes('/chat/completions') || urlStr.includes('/models')) {
@@ -749,6 +781,9 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               return response;
           } catch (err: any) {
               // Network Failure
+              if (urlStr.includes('/chat/completions')) {
+                  recordApiCall({ url: urlStr, body: (config as any)?.body, ok: false, meta: (config as any)?.__sullyMeta });
+              }
               setSystemLogs(prev => [{
                   id: `log-${Date.now()}`,
                   timestamp: Date.now(),

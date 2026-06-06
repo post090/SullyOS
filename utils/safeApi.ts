@@ -7,7 +7,7 @@
  */
 
 import { appendDevDebugLlmLog } from './devDebug';
-import { recordApiCall, type ApiCallMeta } from './apiCallLog';
+import { type ApiCallMeta } from './apiCallLog';
 
 function isChatCompletionUrl(url: string): boolean {
     return url.includes('/chat/completions');
@@ -139,10 +139,14 @@ export async function safeFetchJson(
     const urlStr = String(url);
     let lastStatus: number | undefined;
 
+    // 把 meta 挂到 RequestInit 上（浏览器忽略未知字段），交给全局 fetch 拦截器统一记录
+    // 到「API 调用记录」。这样裸 fetch 和 safeFetchJson 走同一个记录入口，不会重复计。
+    const metaOptions: RequestInit = meta ? { ...options, __sullyMeta: meta } as RequestInit : options;
+
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
         // 每次 attempt 建一个独立的 AbortController（仅用于 timeout）
         // 调用方自己的 options.signal 仍然有效，两者任一触发就 abort
-        let attemptOptions = options;
+        let attemptOptions = metaOptions;
         let timeoutHandle: any = null;
         if (timeoutMs > 0) {
             const ac = new AbortController();
@@ -155,7 +159,7 @@ export async function safeFetchJson(
                 }
                 options.signal.addEventListener('abort', () => ac.abort(), { once: true });
             }
-            attemptOptions = { ...options, signal: ac.signal };
+            attemptOptions = { ...metaOptions, signal: ac.signal };
         }
         try {
             const response = await fetch(url, attemptOptions);
@@ -186,7 +190,6 @@ export async function safeFetchJson(
                     requestBody: options.body,
                     response: data,
                 });
-                recordApiCall({ url: urlStr, body: options.body, status: response.status, ok: true, response: data, meta });
             }
             return data;
         } catch (e: any) {
@@ -220,7 +223,6 @@ export async function safeFetchJson(
                     requestBody: options.body,
                     error: e,
                 });
-                recordApiCall({ url: urlStr, body: options.body, status: lastStatus, ok: false, meta });
             }
             throw e;
         }
