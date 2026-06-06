@@ -476,12 +476,6 @@
     cursor: pointer; padding: 0; display: flex; align-items: center; justify-content: center; }
   .cc-cat-group { margin-top: 9px; }
   .cc-cat-title { font-size: 10.5px; color: var(--text-soft); font-weight: 600; margin-bottom: 4px; }
-  .cc-imghost { margin-bottom: 8px; border: 1px solid var(--cream-deep); border-radius: 12px; padding: 8px 10px; }
-  .cc-imghost summary { font-size: 11px; color: var(--text-soft); cursor: pointer; font-weight: 600; list-style: none; }
-  .cc-imghost summary::-webkit-details-marker { display: none; }
-  .cc-imghost summary::before { content: '☁️ '; }
-  .cc-imghost[open] summary { margin-bottom: 6px; }
-  .cc-imghost .cc-tip { font-size: 10px; color: var(--text-soft); line-height: 1.5; margin-top: 7px; opacity: 0.85; }
 </style>
 </head>
 <body>
@@ -598,27 +592,6 @@
         建议先<b>导出描线模板</b>，在它上面画好你的部件再传回来，就不会错位。
       </div>
 
-      <details class="cc-imghost">
-        <summary>图床设置（可选，上传后存 URL 省本地空间）</summary>
-        <div class="cc-field-label">服务商</div>
-        <div class="cc-chips" id="ihProvider"></div>
-        <div id="ihImgbb" style="display:none">
-          <div class="cc-field-label">ImgBB API Key</div>
-          <input class="cc-input" id="ihImgbbKey" placeholder="在 api.imgbb.com 申请">
-        </div>
-        <div id="ihCloud" style="display:none">
-          <div class="cc-field-label">Cloud name</div>
-          <input class="cc-input" id="ihCloudName" placeholder="Cloudinary 控制台">
-          <div class="cc-field-label">Unsigned upload preset</div>
-          <input class="cc-input" id="ihPreset" placeholder="须设为 Unsigned">
-        </div>
-        <button class="pill-btn" type="button" id="ihSave" style="width:100%;margin-top:8px;">保存图床设置</button>
-        <div class="cc-tip">
-          换色 / 出件需要图床发 CORS 头。<b>Cloudinary</b> 默认支持，较稳；ImgBB 的图片域名不一定带 CORS，
-          若发现自定义部件换色或出件异常，建议改用 Cloudinary 或保持本地存储。
-        </div>
-      </details>
-
       <button class="pill-btn" id="btnTemplate" type="button" style="width:100%;">🩻 导出描线模板（半透明 body）</button>
 
       <div class="cc-field-label">类目</div>
@@ -627,6 +600,7 @@
       <div class="cc-field-label">部件图（透明 PNG）</div>
       <input type="file" id="ccFile" accept="image/png,image/webp,image/*" style="display:none">
       <button class="cc-drop" id="ccDrop" type="button"><span>点此选择透明 PNG</span></button>
+      <input class="cc-input" id="ccUrl" placeholder="或粘贴图片直链 URL（已传图床的，省本地空间）" style="margin-top:8px">
 
       <div class="cc-field-label">名称</div>
       <input class="cc-input" id="ccName" placeholder="可留空，默认「自定义xx」">
@@ -634,10 +608,6 @@
       <label class="cc-check">
         <input type="checkbox" id="ccTintable">
         <span>可换色 —— 仅当这张是单色线稿/可着色层时勾选；成品彩图请<b>别勾</b></span>
-      </label>
-      <label class="cc-check" id="ccUploadRow" style="display:none">
-        <input type="checkbox" id="ccUpload" checked>
-        <span>上传到图床（<span id="ccUploadProvider"></span>）—— 不勾则存本地 base64</span>
       </label>
 
       <div id="ccListWrap"></div>
@@ -2204,86 +2174,20 @@ let ccPendingSrc = '';
 let ccCategory = 'fronthair';
 
 function openCustomModal() {
-  renderCcChips(); renderCcList(); loadIhForm(); refreshUploadRow();
+  renderCcChips(); renderCcList();
   document.getElementById('customModal').classList.add('show');
 }
 function closeCustomModal() { document.getElementById('customModal').classList.remove('show'); }
 
-/* ===== 图床设置（localStorage，iframe 与宿主同源，持久化）===== */
-const IH_PROVIDERS = [['', '不用'], ['imgbb', 'ImgBB'], ['cloudinary', 'Cloudinary']];
-let ihEditProvider = '';
-function getImgHostConfig() {
-  try { return JSON.parse(localStorage.getItem('cc_imghost_config') || 'null'); } catch (e) { return null; }
+/* 预览区显示一张图（文件 base64 或远端 URL 通用） */
+function ccShowPreview(src) {
+  const drop = document.getElementById('ccDrop');
+  drop.innerHTML = '';
+  const img = document.createElement('img'); img.src = src;
+  drop.appendChild(img);
 }
-function renderIhProviders() {
-  const wrap = document.getElementById('ihProvider'); if (!wrap) return;
-  wrap.innerHTML = '';
-  IH_PROVIDERS.forEach(([key, label]) => {
-    const b = document.createElement('button'); b.type = 'button';
-    b.className = 'cc-chip' + (key === ihEditProvider ? ' active' : '');
-    b.textContent = label;
-    b.onclick = () => { ihEditProvider = key; renderIhProviders(); toggleIhFields(); };
-    wrap.appendChild(b);
-  });
-}
-function toggleIhFields() {
-  document.getElementById('ihImgbb').style.display = ihEditProvider === 'imgbb' ? 'block' : 'none';
-  document.getElementById('ihCloud').style.display = ihEditProvider === 'cloudinary' ? 'block' : 'none';
-}
-function loadIhForm() {
-  const cfg = getImgHostConfig() || {};
-  ihEditProvider = cfg.provider || '';
-  document.getElementById('ihImgbbKey').value = cfg.imgbbKey || '';
-  document.getElementById('ihCloudName').value = cfg.cloudName || '';
-  document.getElementById('ihPreset').value = cfg.preset || '';
-  renderIhProviders(); toggleIhFields();
-}
-function saveIhConfig() {
-  const cfg = {
-    provider: ihEditProvider,
-    imgbbKey: document.getElementById('ihImgbbKey').value.trim(),
-    cloudName: document.getElementById('ihCloudName').value.trim(),
-    preset: document.getElementById('ihPreset').value.trim(),
-  };
-  localStorage.setItem('cc_imghost_config', JSON.stringify(cfg));
-  refreshUploadRow();
-  toast(cfg.provider ? '图床已设置 ☁' : '已关闭图床');
-}
-function refreshUploadRow() {
-  const cfg = getImgHostConfig();
-  const row = document.getElementById('ccUploadRow');
-  const has = !!(cfg && cfg.provider);
-  row.style.display = has ? 'flex' : 'none';
-  if (has) {
-    document.getElementById('ccUploadProvider').textContent =
-      cfg.provider === 'imgbb' ? 'ImgBB' : cfg.provider === 'cloudinary' ? 'Cloudinary' : cfg.provider;
-  }
-}
-/* 上传一张 dataURL 到图床，成功返回公开 URL，失败抛错，未配置返回 null */
-async function uploadToImageHost(dataUrl) {
-  const cfg = getImgHostConfig();
-  if (!cfg || !cfg.provider) return null;
-  const blob = await (await fetch(dataUrl)).blob();
-  if (cfg.provider === 'imgbb') {
-    if (!cfg.imgbbKey) return null;
-    const fd = new FormData();
-    fd.append('image', blob);
-    const r = await fetch('https://api.imgbb.com/1/upload?key=' + encodeURIComponent(cfg.imgbbKey), { method: 'POST', body: fd });
-    const j = await r.json();
-    if (j && j.success && j.data && j.data.url) return j.data.url;
-    throw new Error('ImgBB 返回异常');
-  }
-  if (cfg.provider === 'cloudinary') {
-    if (!cfg.cloudName || !cfg.preset) return null;
-    const fd = new FormData();
-    fd.append('file', blob);
-    fd.append('upload_preset', cfg.preset);
-    const r = await fetch('https://api.cloudinary.com/v1_1/' + encodeURIComponent(cfg.cloudName) + '/image/upload', { method: 'POST', body: fd });
-    const j = await r.json();
-    if (j && j.secure_url) return j.secure_url;
-    throw new Error('Cloudinary 返回异常');
-  }
-  return null;
+function ccResetPreview() {
+  document.getElementById('ccDrop').innerHTML = '<span>点此选择透明 PNG</span>';
 }
 
 function renderCcChips() {
@@ -2344,42 +2248,39 @@ function ccOnFile(file) {
   const reader = new FileReader();
   reader.onload = () => {
     ccPendingSrc = String(reader.result || '');
-    const drop = document.getElementById('ccDrop');
-    drop.innerHTML = '';
-    const img = document.createElement('img'); img.src = ccPendingSrc;
-    drop.appendChild(img);
+    document.getElementById('ccUrl').value = '';   // 文件与 URL 二选一
+    ccShowPreview(ccPendingSrc);
   };
   reader.readAsDataURL(file);
+}
+
+/* 粘贴图片直链（跟表情包一样，src 直接存远端 URL，省本地空间）*/
+function ccOnUrl() {
+  const url = document.getElementById('ccUrl').value.trim();
+  if (url) {
+    ccPendingSrc = '';                             // 用 URL 就清掉文件
+    document.getElementById('ccFile').value = '';
+    ccShowPreview(url);
+  } else {
+    ccResetPreview();
+  }
 }
 
 function resetCcForm() {
   ccPendingSrc = '';
   document.getElementById('ccName').value = '';
+  document.getElementById('ccUrl').value = '';
   document.getElementById('ccTintable').checked = false;
   document.getElementById('ccFile').value = '';
-  document.getElementById('ccDrop').innerHTML = '<span>点此选择透明 PNG</span>';
+  ccResetPreview();
 }
 
-async function saveCustomPart() {
-  if (!ccPendingSrc) { toast('先选一张透明 PNG'); return; }
+function saveCustomPart() {
+  // URL 优先（存远端直链）；否则用上传的文件 base64
+  const url = document.getElementById('ccUrl').value.trim();
+  const finalSrc = url || ccPendingSrc;
+  if (!finalSrc) { toast('先选一张透明 PNG，或粘贴图片 URL'); return; }
   const name = (document.getElementById('ccName').value || '').trim();
-  let finalSrc = ccPendingSrc;
-  // 配了图床且勾了上传 → 传图床拿 URL；失败自动回退本地 base64
-  const cfg = getImgHostConfig();
-  const wantUpload = cfg && cfg.provider && document.getElementById('ccUpload').checked;
-  const saveBtn = document.getElementById('ccSave');
-  if (wantUpload) {
-    saveBtn.disabled = true; saveBtn.textContent = '上传中…';
-    try {
-      const url = await uploadToImageHost(ccPendingSrc);
-      if (url) { finalSrc = url; toast('已上传图床 ☁'); }
-      else { toast('图床未配置完整，改存本地'); }
-    } catch (e) {
-      toast('图床上传失败，改存本地');
-    } finally {
-      saveBtn.disabled = false; saveBtn.textContent = '加入捏人器';
-    }
-  }
   const part = {
     id: ccCategory + '_cc_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6),
     categoryKey: ccCategory,
@@ -2459,8 +2360,8 @@ function exportTracingTemplate() {
   if (save) save.onclick = saveCustomPart;
   const tpl = document.getElementById('btnTemplate');
   if (tpl) tpl.onclick = exportTracingTemplate;
-  const ihSaveBtn = document.getElementById('ihSave');
-  if (ihSaveBtn) ihSaveBtn.onclick = saveIhConfig;
+  const urlInput = document.getElementById('ccUrl');
+  if (urlInput) urlInput.oninput = ccOnUrl;
 })();
 
 /* === 草稿自动保存 / 复用 ===
