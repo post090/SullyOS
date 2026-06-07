@@ -13,7 +13,6 @@ import type {
 } from '../../types';
 import { DB } from '../db';
 import { getVRApi } from './vrApi';
-import { ContextBuilder } from '../context';
 import { buildChatRequestPayload } from '../chatRequestPayload';
 import { safeFetchJson } from '../safeApi';
 import { STAGE_BUBBLE_MAX } from './constants';
@@ -53,11 +52,13 @@ export interface TheaterCtx {
     categories: EmojiCategory[];
 }
 
-/** 完整人设（项目统一的 ContextBuilder 核心上下文，不含详细记忆日志）—— 给导演用。 */
-const fullPersona = (ch: CharacterProfile, user: UserProfile): string => {
-    try { return ContextBuilder.buildCoreContext(ch, user, false, undefined, { skipUserProfile: true }); }
-    catch { return ch.systemPrompt || '（无设定）'; }
-};
+/** 导演用的精简人设：姓名 + 核心指令 + 世界观/补充设定（OOC 已在演员重写台词那步处理）。 */
+const directorPersona = (ch: CharacterProfile): string => [
+    `姓名：${ch.name}`,
+    `核心指令：${(ch.systemPrompt || '').trim() || '（无）'}`,
+    (ch.worldview || '').trim() ? `世界观 / 补充设定：${ch.worldview!.trim()}` : '',
+].filter(Boolean).join('\n');
+
 /** 较完整人设（核心性格 + 世界观，不切片）—— 给"固定两次"批量模式用，平衡长度。 */
 const personaBrief = (ch: CharacterProfile): string =>
     [ch.systemPrompt, ch.worldview && `世界观：${ch.worldview}`].filter(Boolean).join('\n').trim() || '（无设定）';
@@ -151,7 +152,7 @@ export async function runDirector(script: VRScript, cast: VRCastAssign[], notes:
     const personas = cast.map(c => {
         if (c.isNpc) return { actorName: c.actorName, roleName: c.roleName, persona: '即兴客串的 NPC，无固定人设，可自由塑造' };
         const ch = ctx.characters.find(x => x.id === c.actorId);
-        return { actorName: c.actorName, roleName: c.roleName, persona: ch ? fullPersona(ch, ctx.userProfile) : '（未知）' };
+        return { actorName: c.actorName, roleName: c.roleName, persona: ch ? directorPersona(ch) : '（未知）' };
     });
     const out = await chat(api, [{
         role: 'user',

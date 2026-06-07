@@ -678,7 +678,7 @@ export function buildDirectorTurn(
     userRequirement?: string,
 ): string {
     const roster = cast.map(c => `${c.actorName} 饰 ${c.roleName}`).join('；');
-    const cards = personas.map(p => `———— ${p.actorName}（饰 ${p.roleName}）的完整人设 ————\n${p.persona || '（无特别设定）'}`).join('\n\n');
+    const cards = personas.map(p => `———— ${p.actorName}（饰 ${p.roleName}）的人设要点 ————\n${p.persona || '（无特别设定）'}`).join('\n\n');
     const feedback = notes.map(n =>
         `· ${n.actorName}（${n.roleName}）态度【${n.attitude || (n.cooperative ? '配合' : '抵触')}】：${n.note}\n  ${n.lines ? `ta 按自己口吻重写的戏份（请尽量原样保留这些台词/语气）：\n  「${n.lines.replace(/\n/g, '\n  ')}」` : '（照原剧本演即可）'}`
     ).join('\n');
@@ -690,7 +690,7 @@ export function buildDirectorTurn(
             `这些是观众一定要看到的内容，**必须在演出中完整体现，绝不能删减、淡化或绕过**。如果某演员不情愿演这部分，也只能用"干巴巴棒读、敷衍、心不在焉、出戏、机械照念"等消极方式来表现 ta 的不情愿——但**该说的台词、该演的情节必须照样出现**。`,
             '',
         ] : []),
-        `**参演演员的完整人设（判断"选角贴不贴合角色"、以及在演员没自己写台词时据此补写，别 OOC）**：`,
+        `**参演演员的人设要点（姓名/核心指令/世界观；用来判断"选角贴不贴合角色"，以及在演员没自己写台词时据此补写、别 OOC）**：`,
         cards || '（无）',
         '',
         '原始剧本：',
