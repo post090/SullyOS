@@ -205,9 +205,11 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
     const headerDensityClass = useCenteredLayout
         ? (headerDensity === 'compact' ? 'px-4 py-2' : headerDensity === 'airy' ? 'px-6 py-4' : 'px-5 py-3')
         : (headerDensity === 'compact' ? 'px-4 pb-3' : headerDensity === 'airy' ? 'px-6 pb-5' : 'px-5 pb-4');
+    // safe-top 让位拆成单独 spacer（bg-transparent + backdrop-blur，跟 iOS status bar 一致自适应容器色），
+    // header 主体保留 chromeStyle 自己的 bg，刘海下不再铺一条白带。
     const headerSafeStyle: React.CSSProperties = useCenteredLayout
-        ? { minHeight: `calc(${headerBaseHeight} + var(--safe-top))`, paddingTop: `calc(var(--safe-top) + ${headerDensity === 'compact' ? '0.5rem' : headerDensity === 'airy' ? '1rem' : '0.75rem'})` }
-        : { height: `calc(${headerBaseHeight} + var(--safe-top))` };
+        ? { minHeight: headerBaseHeight, paddingTop: headerDensity === 'compact' ? '0.5rem' : headerDensity === 'airy' ? '1rem' : '0.75rem' }
+        : { height: headerBaseHeight };
     const primaryTextClass = isDarkHeader ? 'text-white' : isPixelHeader ? 'text-[#fff7ed]' : 'text-slate-800';
     const secondaryTextClass = isDarkHeader ? 'text-slate-400' : isPixelHeader ? 'text-[#f3ddc7]' : 'text-slate-400';
     const iconButtonClass = isDarkHeader
@@ -360,7 +362,9 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
     );
 
     return (
-        <div className={`${headerDensityClass} flex ${useCenteredLayout ? 'items-center' : 'items-end'} shrink-0 z-30 sticky top-0 relative ${headerToneClass}`} style={headerSafeStyle}>
+        <div className="shrink-0 z-30 sticky top-0">
+        <div className="bg-transparent backdrop-blur-xl" style={{ height: 'var(--safe-top)' }} />
+        <div className={`${headerDensityClass} flex ${useCenteredLayout ? 'items-center' : 'items-end'} relative ${headerToneClass}`} style={headerSafeStyle}>
             {selectionMode ? (
                 <div className="flex items-center justify-between w-full">
                     <button onClick={onCancelSelection} className={`text-sm font-bold px-2 py-1 ${secondaryTextClass}`}>取消</button>
@@ -486,6 +490,7 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
                 </div>,
                 document.body,
             )}
+        </div>
         </div>
     );
 };

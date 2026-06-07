@@ -1092,9 +1092,9 @@ ${attachedImagesNote}
     if (view === 'list') {
         return (
             <div className="h-full w-full bg-slate-50 flex flex-col font-light">
-                {/* safe-top spacer 染成跟容器同色（slate-50），避免 header 白 bg 在刘海下铺成一条突兀的白带 */}
+                {/* safe-top spacer 透明 + backdrop-blur，下方容器/list bubbles 透出+模糊（跟 iOS 系统 status bar 一致），避免 header 白 bg 在刘海下铺一条突兀白带 */}
                 <div className="shrink-0 z-10 sticky top-0">
-                    <div className="bg-slate-50/80 backdrop-blur-md" style={{ height: 'var(--safe-top)' }} />
+                    <div className="bg-transparent backdrop-blur-xl" style={{ height: 'var(--safe-top)' }} />
                     <div className="bg-white/70 backdrop-blur-md flex items-end pb-3 px-4 border-b border-white/40 h-20">
                         <button onClick={closeApp} className="p-2 -ml-2 rounded-full hover:bg-black/5 active:scale-90 transition-transform">
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6 text-slate-600"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" /></svg>
@@ -1195,9 +1195,9 @@ ${attachedImagesNote}
                 </div>
             )}
 
-            {/* Header — safe-top spacer 单独染容器同色（#f0f4f8），header 主体保持白色不突兀 */}
+            {/* Header — safe-top spacer 透明 + backdrop-blur 自适应容器色，跟 iOS status bar 一致 */}
             <div className="shrink-0 z-30 sticky top-0 transition-all">
-            <div className="bg-[#f0f4f8]/80 backdrop-blur-xl" style={{ height: 'var(--safe-top)' }} />
+            <div className="bg-transparent backdrop-blur-xl" style={{ height: 'var(--safe-top)' }} />
             <div className="bg-white/80 backdrop-blur-xl px-5 flex items-end pb-4 border-b border-slate-200/60 shadow-sm h-24">
                 {selectionMode ? (
                     <div className="flex items-center justify-between w-full">
