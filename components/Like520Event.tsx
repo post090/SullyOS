@@ -316,7 +316,8 @@ const LIKE520_CSS = `
 
 .l520-topbar {
   position: relative; z-index: 5;
-  padding: 14px 18px 6px;
+  /* in-flow 自吃刘海让位（外壳 .l520-root 不能加 padding，否则 absolute mask/装饰被推出露色块） */
+  padding: calc(14px + var(--safe-top)) 18px 6px;
   display: flex; flex-direction: column; gap: 8px;
   flex-shrink: 0;
 }
@@ -695,7 +696,8 @@ const LIKE520_CSS = `
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 8px;
-  padding: 10px 18px 16px;
+  /* in-flow 自吃 home 条让位 */
+  padding: 10px 18px calc(16px + var(--safe-bottom));
   flex-shrink: 0;
 }
 .l520-act {
@@ -958,7 +960,8 @@ const LIKE520_CSS = `
 /* ===== Letter ===== */
 .l520-letter-stage {
   flex: 1; overflow-y: auto;
-  padding: 14px 18px 18px;
+  /* in-flow 自吃刘海 + home 条让位 */
+  padding: calc(14px + var(--safe-top)) 18px calc(18px + var(--safe-bottom));
   position: relative; z-index: 5;
 }
 .l520-letter-paper {
@@ -2109,7 +2112,7 @@ const WakeUpView: React.FC<{
                         style={{
                             position: 'relative',
                             zIndex: 3,
-                            paddingBottom: 28,
+                            paddingBottom: 'calc(28px + var(--safe-bottom))',
                             animation: 'l520-fade-in 0.8s ease-out both',
                         }}
                     >
@@ -2210,7 +2213,7 @@ const UncoveredLineView: React.FC<{
                     />
                 </div>
             </div>
-            <div style={{ position: 'relative', zIndex: 3, paddingBottom: 18 }}>
+            <div style={{ position: 'relative', zIndex: 3, paddingBottom: 'calc(18px + var(--safe-bottom))' }}>
                 <OrnateDialog
                     charName={charName}
                     onAdvance={() => { if (isLast) onComplete(); else setIdx(i => i + 1); }}
@@ -2330,7 +2333,7 @@ const ExitButton: React.FC<{ onClick: () => void }> = ({ onClick }) => (
         onClick={onClick}
         title="关闭"
         style={{
-            position: 'absolute', top: 10, right: 10, zIndex: 50,
+            position: 'absolute', top: 'calc(10px + var(--safe-top))', right: 10, zIndex: 50,
             width: 30, height: 30, borderRadius: '50%',
             background: 'rgba(255,248,236,0.92)',
             border: '1px solid #b8923f',
@@ -2558,7 +2561,7 @@ const PuzzleView: React.FC<{
             <CornerOrnaments />
             <AmbientLayer />
             <ExitButton onClick={onClose} />
-            <div style={{ flex: 1, overflowY: 'auto', padding: '24px 16px', position: 'relative', zIndex: 5, display: 'flex', flexDirection: 'column', alignItems: 'center', maxWidth: 420, margin: '0 auto' }}>
+            <div style={{ flex: 1, overflowY: 'auto', padding: 'calc(24px + var(--safe-top)) 16px calc(24px + var(--safe-bottom))', position: 'relative', zIndex: 5, display: 'flex', flexDirection: 'column', alignItems: 'center', maxWidth: 420, margin: '0 auto' }}>
                 <div style={{ color: '#7a2e3a', fontFamily: "'Noto Serif SC', serif", fontSize: 13, letterSpacing: 5, marginBottom: 4 }}>♥ 拼 图 卡 片 ♥</div>
                 <div style={{ color: '#9D7585', fontFamily: "'Cormorant Garamond', serif", fontStyle: 'italic', fontSize: 11, letterSpacing: 3, marginBottom: 14 }}>{title}</div>
                 {photoUrl ? (
