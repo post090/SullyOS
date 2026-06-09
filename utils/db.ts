@@ -12,7 +12,7 @@ import {
 import { exportPostOfficeLocal, importPostOfficeLocal } from './vrWorld/postOffice';
 
 const DB_NAME = 'AetherOS_Data';
-const DB_VERSION = 61; // Bumped: v61 add 'vr_presets' store (彼方·剧院 用户自定义写作风格预设)
+const DB_VERSION = 62; // Bumped: v62 add messages [charId, type] 复合索引（彼方动态按 vr_card 直取，免 getAll 整段聊天史）
 
 const STORE_CHARACTERS = 'characters';
 const STORE_MESSAGES = 'messages';
@@ -174,7 +174,17 @@ export const openDB = (): Promise<IDBDatabase> => {
               } catch (e) { console.log('Index already exists'); }
           }
       }
-      
+
+      // v62: messages 加 [charId, type] 复合索引。彼方动态按 (charId, 'vr_card') 直取 vr_card，
+      // 成本只跟 vr_card 条数相关，跟总消息量无关——上万条聊天的用户也不必把整段历史 getAll
+      // 进内存再筛。没有 type 字段的老消息不会进此索引，正好不影响（我们只查 vr_card）。
+      try {
+          const msgStore = (event.target as IDBOpenDBRequest).transaction?.objectStore(STORE_MESSAGES);
+          if (msgStore && !msgStore.indexNames.contains('charId_type')) {
+              msgStore.createIndex('charId_type', ['charId', 'type'], { unique: false });
+          }
+      } catch (e) { console.log('charId_type index migration skipped', e); }
+
       createStore(STORE_EMOJIS, { keyPath: 'name' });
       createStore(STORE_EMOJI_CATEGORIES, { keyPath: 'id' });
 
@@ -475,19 +485,40 @@ export const DB = {
   // 这些机制只管「LLM 上下文能否看到」；彼方动态是用户自己的浏览界面，
   // 只要消息还在 IndexedDB 里就应当永远可见——哪怕它早被新聊天挤出聊天取数窗口、
   // 或被归档标记为「对 AI 隐藏」。（清空聊天会真删消息，删掉就没了——那是预期行为。）
+  //
+  // 性能：走 [charId, type] 复合索引直取 vr_card，成本只跟该角色 vr_card 条数相关，
+  // 跟总消息量无关——上万条聊天的用户也不会把整段历史读进内存。
   getVRCardsByCharId: async (charId: string): Promise<Message[]> => {
     const db = await openDB();
     return new Promise((resolve, reject) => {
       const transaction = db.transaction(STORE_MESSAGES, 'readonly');
       const store = transaction.objectStore(STORE_MESSAGES);
+      if (store.indexNames.contains('charId_type')) {
+          const idx = store.index('charId_type');
+          const req = idx.getAll(IDBKeyRange.only([charId, 'vr_card']));
+          req.onsuccess = () => {
+              const results = (req.result || []).filter((m: Message) => !m.groupId && (m as any).metadata?.vrCard);
+              resolve(results);
+          };
+          req.onerror = () => reject(req.error);
+          return;
+      }
+      // 兜底：复合索引尚未建好的极少数情况（如升级事务还没跑完），用倒序游标扫，
+      // 凑够 80 条 vr_card 即停——避免 getAll 整段历史。
       const index = store.index('charId');
-      const request = index.getAll(IDBKeyRange.only(charId));
-      request.onsuccess = () => {
-          const results = (request.result || []).filter((m: Message) =>
-              !m.groupId && m.type === 'vr_card' && (m as any).metadata?.vrCard);
-          resolve(results);
+      const collected: Message[] = [];
+      const cursorReq = index.openCursor(IDBKeyRange.only(charId), 'prev');
+      cursorReq.onsuccess = () => {
+          const cursor = cursorReq.result;
+          if (cursor && collected.length < 80) {
+              const m = cursor.value as Message;
+              if (!m.groupId && m.type === 'vr_card' && (m as any).metadata?.vrCard) collected.push(m);
+              cursor.continue();
+          } else {
+              resolve(collected);
+          }
       };
-      request.onerror = () => reject(request.error);
+      cursorReq.onerror = () => reject(cursorReq.error);
     });
   },
 
