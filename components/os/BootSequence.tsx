@@ -16,6 +16,8 @@ const BOOT_SEEN_KEY = 'sullyos_boot_seen_session';
 interface Props {
   /** 数据是否已就绪（IndexedDB 加载完）。未就绪时场景持续呼吸等待，不退场。 */
   dataReady: boolean;
+  /** 当前壁纸（url / data / blob / 渐变或颜色字符串 / 空）。开机场景以它为底「活过来」。 */
+  wallpaper?: string;
   /** 退场动画播完后回调，交还控制权给 PhoneShell。 */
   onDone: () => void;
 }
@@ -25,7 +27,11 @@ const prefersReducedMotion = () =>
   !!window.matchMedia &&
   window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-const BootSequence: React.FC<Props> = ({ dataReady, onDone }) => {
+const BootSequence: React.FC<Props> = ({ dataReady, wallpaper, onDone }) => {
+  // 壁纸解析：url/data/blob 走 url() 并虚化压暗；渐变/颜色字符串直接当背景；空则回退深空渐变。
+  const wp = wallpaper?.trim() || '';
+  const wpIsImage = /^(https?:|data:|blob:)/.test(wp);
+  const wpBackground = wp ? (wpIsImage ? `url(${wp})` : wp) : '';
   // 本会话是否首次看到开场：刷新页面仍属同 session → 走极短版。
   const firstThisSession = useMemo(() => {
     try { return !sessionStorage.getItem(BOOT_SEEN_KEY); } catch { return true; }
@@ -128,13 +134,29 @@ const BootSequence: React.FC<Props> = ({ dataReady, onDone }) => {
           className="absolute inset-0"
           style={{ animation: cinematic ? 'bootCamera 6s ease-out forwards' : undefined, willChange: 'transform' }}
         >
-          {/* 深空大气底（底部透出黎明般的暖紫光晕，制造地平线/景深） */}
+          {/* 深空大气底（无壁纸时的回退；有壁纸时也垫底，让暗部仍有紫调景深） */}
           <div className="absolute inset-0" style={{
             animation: cinematic ? 'bootSceneIn 700ms ease-out both' : 'bootSceneIn 300ms ease-out both',
             background: 'radial-gradient(130% 120% at 50% 118%, #3a2766 0%, #1d1740 34%, #0c0b22 66%, #05060f 100%)',
           }} />
-          {/* 星云叠加：紫 + 青双光源 */}
+          {/* 壁纸层：以用户壁纸为底「活过来」。图片虚化压暗 + 预放大遮住虚化边；相机层再缓推。 */}
+          {wpBackground && (
+            <>
+              <div className="absolute inset-0 bg-cover bg-center" style={{
+                background: wpBackground,
+                backgroundSize: 'cover',
+                backgroundPosition: 'center',
+                filter: wpIsImage ? 'blur(10px)' : 'none',
+                transform: wpIsImage ? 'scale(1.14)' : undefined,
+                animation: cinematic ? 'bootSceneIn 700ms ease-out both' : 'bootSceneIn 300ms ease-out both',
+              }} />
+              {/* 压暗 scrim：保证柔光/尘埃/logo 在任意壁纸上都清晰可读 */}
+              <div className="absolute inset-0" style={{ background: 'rgba(6,7,18,0.5)' }} />
+            </>
+          )}
+          {/* 星云叠加：紫 + 青双光源（screen 混合，轻轻晕染壁纸，与整套世界观统一） */}
           <div className="absolute inset-0" style={{
+            mixBlendMode: 'screen',
             background: 'radial-gradient(70% 55% at 72% 22%, rgba(139,108,232,0.30), transparent 60%), radial-gradient(64% 48% at 22% 32%, rgba(64,150,210,0.20), transparent 62%)',
           }} />
           {/* 核心柔光（呼吸）—— logo 所在处的光源 */}
