@@ -111,9 +111,6 @@ importers:
       '@rei-standard/amsg-shared':
         specifier: 0.2.0
         version: 0.2.0
-      '@rei-standard/amsg-sw':
-        specifier: 2.2.0
-        version: 2.2.0
     devDependencies:
       wrangler:
         specifier: ^3.78.0
@@ -873,10 +870,6 @@ packages:
 
   '@rei-standard/amsg-shared@0.2.0':
     resolution: {integrity: sha512-tAGoanWMEEGIadB47doerirymqHdpTKA81MRSHv13FRAJuDcsixtTu3iPFy1OIww6jPyUBCFloCm8LZ/f/fGeg==}
-    engines: {node: '>=20'}
-
-  '@rei-standard/amsg-sw@2.2.0':
-    resolution: {integrity: sha512-GHVlrWXmIlPAnA3+VRpRS7kHiJO/b7CTP62uvYnyGZB4uR/Axt02Bcr7Std91+t0YLcPNLMlgU9CmaHFUldLaQ==}
     engines: {node: '>=20'}
 
   '@rei-standard/amsg-sw@2.3.0':
@@ -2756,10 +2749,6 @@ snapshots:
       - supports-color
 
   '@rei-standard/amsg-shared@0.2.0': {}
-
-  '@rei-standard/amsg-sw@2.2.0':
-    dependencies:
-      '@rei-standard/amsg-shared': 0.2.0
 
   '@rei-standard/amsg-sw@2.3.0':
     dependencies:

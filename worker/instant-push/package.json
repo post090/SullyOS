@@ -9,8 +9,7 @@
   },
   "dependencies": {
     "@rei-standard/amsg-instant": "0.9.1-next.0",
-    "@rei-standard/amsg-shared": "0.2.0",
-    "@rei-standard/amsg-sw": "2.2.0"
+    "@rei-standard/amsg-shared": "0.2.0"
   },
   "devDependencies": {
     "wrangler": "^3.78.0"
