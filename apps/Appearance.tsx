@@ -626,7 +626,17 @@ const PresetManager: React.FC<PresetManagerProps> = ({ presets, onSave, onApply,
 };
 
 const Appearance: React.FC = () => {
-  const { theme, updateTheme, closeApp, setCustomIcon, customIcons, addToast, appearancePresets, saveAppearancePreset, applyAppearancePreset, deleteAppearancePreset, renameAppearancePreset, exportAppearancePreset, importAppearancePreset, resetAppearance } = useOS();
+  const { theme, updateTheme, closeApp, setCustomIcon, customIcons, addToast, appearancePresets, saveAppearancePreset, applyAppearancePreset, deleteAppearancePreset, renameAppearancePreset, exportAppearancePreset, importAppearancePreset, resetAppearance, characters, updateCharacter } = useOS();
+  // 一键还原全部「聊天白框自定义 CSS」：清掉全局 + 每个角色自带的。
+  // 兼作救援：单角色的坏 CSS 把聊天界面整崩、进不去该角色设置时，从这里一键全清即可恢复。
+  const resetAllChromeCss = () => {
+    let n = 0;
+    if (theme.chatChromeCustomCss) { updateTheme({ chatChromeCustomCss: '' }); n++; }
+    (characters || []).forEach((c: any) => {
+      if (c?.chromeCustomCss) { updateCharacter(c.id, { chromeCustomCss: '' } as any); n++; }
+    });
+    addToast(n ? `已还原 ${n} 处聊天白框美化` : '没有需要还原的白框美化', n ? 'success' : 'info');
+  };
   const [activeTab, setActiveTab] = useState<'theme' | 'icons' | 'presets' | 'chat'>('theme');
   const wallpaperInputRef = useRef<HTMLInputElement>(null);
   const [wallpaperUrl, setWallpaperUrl] = useState('');
@@ -1474,7 +1484,7 @@ const Appearance: React.FC = () => {
                 currentTheme={theme}
             />
         ) : activeTab === 'chat' ? (
-            <ModularChatAppearanceEditor theme={theme} updateTheme={updateTheme} />
+            <ModularChatAppearanceEditor theme={theme} updateTheme={updateTheme} onResetAllChrome={resetAllChromeCss} />
         ) : null}
       </div>
     </div>

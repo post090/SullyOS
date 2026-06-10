@@ -446,7 +446,7 @@ const AppLoadingFallback: React.FC = () => {
 };
 
 const PhoneShell: React.FC = () => {
-  const { theme, isLocked, unlock, activeApp, closeApp, openApp, virtualTime, isDataLoaded, toasts, unreadMessages, characters, handleBack, suspendedCall, resumeCall, activeCharacterId, errorDialog, dismissError } = useOS();
+  const { theme, isLocked, unlock, activeApp, closeApp, openApp, virtualTime, isDataLoaded, toasts, unreadMessages, characters, handleBack, suspendedCall, resumeCall, activeCharacterId, errorDialog, dismissError, updateCharacter, updateTheme } = useOS();
   const useIOSStandaloneLayout = isIOSStandaloneWebApp();
   // 冷启动「世界入场」是否已结束。结束前由 BootSequence 接管整屏（同时取代旧的黑屏 spinner）。
   const [bootDone, setBootDone] = useState(false);
@@ -810,6 +810,35 @@ const PhoneShell: React.FC = () => {
 
           {/* Overlays: Global Mini Player (when music is playing in background) */}
           <GlobalMiniPlayer />
+
+          {/* 白框「脱离 CSS 控制」的救援按钮：当前聊天启用了自定义白框 CSS 时，于外壳层（聊天 DOM 之外）
+              悬浮一个一键还原。全内联样式 + id 守护(#sully-safe-reset，特异性高于 *，连 *{display:none!important}
+              也盖不掉)，确保坏 CSS 把聊天整崩、啥都点不了时，这个按钮永远点得到。 */}
+          {activeApp === AppID.Chat && (() => {
+            const ac = characters.find(c => c.id === activeCharacterId);
+            if (!ac?.chromeCustomCss && !theme.chatChromeCustomCss) return null;
+            return (
+              <>
+                <style>{`#sully-safe-reset{position:fixed!important;top:calc(var(--safe-top) + 6px)!important;left:50%!important;transform:translateX(-50%)!important;visibility:visible!important;opacity:1!important;pointer-events:auto!important;display:flex!important;z-index:2147483647!important;}`}</style>
+                <button
+                  id="sully-safe-reset"
+                  onClick={() => {
+                    if (!window.confirm('还原这个聊天的白框美化？将清空该角色及全局的自定义 CSS（样式写坏卡死时用它救援）。')) return;
+                    if (ac?.chromeCustomCss) updateCharacter(ac.id, { chromeCustomCss: '' } as any);
+                    if (theme.chatChromeCustomCss) updateTheme({ chatChromeCustomCss: '' });
+                  }}
+                  style={{
+                    position: 'fixed', top: 'calc(var(--safe-top) + 6px)', left: '50%', transform: 'translateX(-50%)',
+                    zIndex: 2147483647, display: 'flex', alignItems: 'center', gap: '4px',
+                    padding: '4px 10px', borderRadius: '999px',
+                    background: 'rgba(15,23,42,0.5)', color: '#fff', fontSize: '11px', fontWeight: 700,
+                    border: '1px solid rgba(255,255,255,0.25)', cursor: 'pointer',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.3)', WebkitBackdropFilter: 'blur(4px)', backdropFilter: 'blur(4px)',
+                  }}
+                >⟲ 还原白框</button>
+              </>
+            );
+          })()}
 
           {/* Overlays: Toasts (Top) */}
           <div className="absolute top-12 left-0 w-full flex flex-col items-center gap-2 pointer-events-none z-[60]">

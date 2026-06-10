@@ -2035,6 +2035,11 @@ const Chat: React.FC = () => {
              {/* 白框自定义 CSS：全局默认在前、角色专属在后（后者叠加覆盖）。作用于 .sully-chat-* 各零件。 */}
              {osTheme.chatChromeCustomCss && <style>{osTheme.chatChromeCustomCss}</style>}
              {char.chromeCustomCss && <style>{char.chromeCustomCss}</style>}
+             {/* 守护样式（注在用户 CSS 之后）：保证返回键永远可见可点 —— 防止坏 CSS 把它隐藏/变透明/拦截点击，
+                 让用户在样式写崩时仍能退出聊天（再去「外观→聊天界面→一键还原」清掉坏 CSS）。不锁位置，正常挪位仍可用。 */}
+             {(osTheme.chatChromeCustomCss || char.chromeCustomCss) && (
+               <style>{`.sully-chat-back{visibility:visible!important;opacity:1!important;pointer-events:auto!important;}`}</style>
+             )}
              {/* 角色「登场」过场：切换/进入时以 ta 的头像氛围铺底登场，再推进穿过进入聊天。key 切换即重放。 */}
              {showEntry && char && (
                <CharacterEntryTransition
