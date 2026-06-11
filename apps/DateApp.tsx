@@ -179,7 +179,6 @@ const DateApp: React.FC = () => {
                 userProfile,
                 allMsgs: msgs,
                 emojis,
-                timeStr: `${virtualTime.day} ${formatTime()}`,
             });
             const content = await callLLM(messages, apiConfig.temperature ?? 0.85);
             setPeekStatus(content);
@@ -303,7 +302,6 @@ const DateApp: React.FC = () => {
             emojis,
             userText: text,
             variant: 'send',
-            timeStr: `${virtualTime.day} ${formatTime()}`,
         });
         const content = await callLLM(messages, apiConfig.temperature ?? 0.85);
 
@@ -345,7 +343,6 @@ const DateApp: React.FC = () => {
             emojis,
             userText: lastUserMsg.content,
             variant: 'reroll',
-            timeStr: `${virtualTime.day} ${formatTime()}`,
         });
         // Reroll 略调高温度求多样性，但绝不低于用户配置的基线。
         const content = await callLLM(messages, Math.max(apiConfig.temperature ?? 0.85, 0.9));

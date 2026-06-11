@@ -25,6 +25,17 @@ import { injectMemoryPalace } from './memoryPalace/pipeline';
 
 export type ApiMessage = { role: string; content: any };
 
+/**
+ * 注入 prompt 的当前时间，直接取真实系统时间（完整日期 + 星期 + 时分）。
+ * 不要从 OSContext 的 virtualTime 取——那个名字唬人，实际也是每秒同步的真实
+ * 时间，但只有"星期 + 时:分"，缺日期，而且没必要让 prompt 构建依赖 React 状态。
+ */
+const getRealTimeStr = (): string => {
+    const now = new Date();
+    const days = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+    return `${ChatPrompts.formatDate(now.getTime())} ${days[now.getDay()]}`;
+};
+
 /** 立绘系统要求必备的五种基础情绪；角色自定义立绘在此之上叠加 */
 export const REQUIRED_DATE_EMOTIONS = ['normal', 'happy', 'angry', 'sad', 'shy'];
 
@@ -73,7 +84,8 @@ const flattenHistoryToText = (apiMessages: ApiMessage[]): string =>
  * VN 模式系统提示（send 与 reroll 共用同一份，避免两处手抄漂移）。
  * reroll 的差异只体现在末尾 user 消息的 System Note 里，不在这里分叉。
  */
-const buildVNModeBlock = (char: CharacterProfile, timeStr: string): string => {
+const buildVNModeBlock = (char: CharacterProfile): string => {
+    const timeStr = getRealTimeStr();
     const dateEmotions = getDateEmotions(char);
     return `### [Visual Novel Mode: 视觉小说脚本模式]
 你正在与用户进行**面对面**的互动。这不是聊天，是一场真实的见面。
@@ -148,9 +160,9 @@ export const DatePrompts = {
         userProfile: UserProfile;
         allMsgs: Message[];
         emojis: Emoji[];
-        timeStr: string;
     }): { messages: ApiMessage[] } => {
-        const { char, userProfile, allMsgs, emojis, timeStr } = input;
+        const { char, userProfile, allMsgs, emojis } = input;
+        const timeStr = getRealTimeStr();
         const limit = char.contextLimit || 500;
         const peekLimit = Math.min(limit, 50);
         const lastMsg = allMsgs[allMsgs.length - 1];
@@ -203,16 +215,15 @@ export const DatePrompts = {
         emojis: Emoji[];
         userText: string;
         variant: 'send' | 'reroll';
-        timeStr: string;
     }): Promise<{ messages: ApiMessage[] }> => {
-        const { char, userProfile, allMsgs, emojis, userText, variant, timeStr } = input;
+        const { char, userProfile, allMsgs, emojis, userText, variant } = input;
 
         const historyMsgs = buildDateHistory(allMsgs, char, userProfile, emojis);
 
         // 向量召回挂到 char.memoryPalaceInjection，buildCoreContext 会读取
         await injectMemoryPalace(char, allMsgs, undefined, userProfile?.name);
         const systemPrompt = ContextBuilder.buildCoreContext(char, userProfile)
-            + buildVNModeBlock(char, timeStr);
+            + buildVNModeBlock(char);
 
         const note = variant === 'send'
             ? `(System Note: 严格遵守 VN 格式。每一行都要以 [emotion] 开头，根据内容逐行切换情绪标签，不要整段只用同一个。叙述行写出场景的呼吸感，不要罗列动作。)`
