@@ -875,6 +875,8 @@ export interface WorldProfile {
     narrativeStyle?: WorldNarrativeStyle;
     /** narrativeStyle='custom' 时的自定义文风提示词 */
     narrativeStyleCustom?: string;
+    /** 大段正文的叙述人称：first=第一人称(我) / second=第二人称(你) / third=第三人称(名字/ta)。默认 first */
+    narrationPerson?: 'first' | 'second' | 'third';
     /** 参与的角色（CharacterProfile.id） */
     memberIds: string[];
     npcs: WorldNPC[];
@@ -930,8 +932,9 @@ export interface WorldCharBeat {
     };
     /** 共处时当面对在场成员说的话（不是手机）——对话对象的演绎轮里会完整听到并被要求回应 */
     dialogues?: { with: string; lines: string[] }[];
-    /** 本轮产出的关系变化（按名字回填到 world.relationships） */
-    relationshipDeltas?: { withName: string; delta: number; reason?: string }[];
+    /** 本轮产出的关系变化（按名字回填到 world.relationships）。newLabel：仅在关系重大转折时，
+     *  角色对这段关系的新看法/称呼（覆盖 label，平时不给）。 */
+    relationshipDeltas?: { withName: string; delta: number; reason?: string; newLabel?: string }[];
 }
 
 /** 一轮演绎（"观测"或离线 tick 触发，推进半天剧情时间；IndexedDB world_episodes 表）。 */

@@ -90,6 +90,8 @@ export function applyRelationshipDeltas(world: WorldProfile, beats: WorldCharBea
             }
             // 好感范围 -100 ~ +100（可为负 = 嫌隙/敌意）
             rel.value = Math.max(-100, Math.min(100, rel.value + rd.delta));
+            // 重大转折时，角色对这段关系的看法（label）也会变
+            if (rd.newLabel) rel.label = rd.newLabel;
         }
     }
 }

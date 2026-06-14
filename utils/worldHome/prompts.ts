@@ -36,6 +36,19 @@ export const NARRATIVE_STYLES: Record<Exclude<WorldNarrativeStyle, 'custom'>, { 
     },
 };
 
+/** 大段正文的叙述人称要求。 */
+export function narrationPersonGuide(world: WorldProfile, charName: string): string {
+    switch (world.narrationPerson) {
+        case 'second':
+            return `用**第二人称**写这段正文：以「你」称呼${charName}自己（像有人在旁白注视着 ta），全程「你…」。`;
+        case 'third':
+            return `用**第三人称**写这段正文：以「${charName}」或「ta」来叙述自己，像小说旁白。`;
+        case 'first':
+        default:
+            return `用**第一人称**写这段正文：以「我」叙述，是${charName}自己的内心视角。`;
+    }
+}
+
 export function narrativeStyleGuide(world: WorldProfile): string {
     if (world.narrativeStyle === 'custom' && world.narrativeStyleCustom?.trim()) {
         return world.narrativeStyleCustom.trim();
@@ -295,7 +308,7 @@ ${groupSection}
     { "time": "8:30", "place": "河堤", "event": "晨跑，碰到了遛狗的邻居", "shared": true },
     { "time": "10:00", "place": "…", "event": "…", "shared": true }
   ],
-  "narrative": "【大段正文，600~900字，分3~5个自然段（\\n\\n分段）】聚焦这半天里一件有意义的事 + 一次内心动静的拉扯（一个犹豫、一个决定、一次没说出口的话）。文风要求：${narrativeStyleGuide(world)}",
+  "narrative": "【大段正文，600~900字，分3~5个自然段（\\n\\n分段）】聚焦这一段里一件有意义的事 + 一次内心动静的拉扯（一个犹豫、一个决定、一次没说出口的话）。${narrationPersonGuide(world, char.name)} 文风要求：${narrativeStyleGuide(world)}",
   "memo": ["你随手记在备忘录里的话（0~3条：待办/碎碎念/不敢说出口的，完全私人）"],
   "impulse": { "text": "你此刻状态背后的冲动/待决策（想辞职/想告白/想搬走/想加把劲…没有就省略这个字段）", "options": ["选项A", "选项B"] },
   "secrets": [{ "text": "这半天你瞒着别人的事（对应 timeline 里 shared=false 的条目；没有就空数组）", "hideFrom": ["瞒着谁的名字；空数组=瞒所有人"] }],
@@ -306,7 +319,7 @@ ${groupSection}
     "dms": [{ "to": "成员名", "lines": ["私聊消息，像真人在手机上打字——可以连发好几条短的、聊得来回多一点"] }],
     "group": ["发到世界群聊的话（0~4条）"]
   },
-  "relationships": [{ "with": "成员名", "delta": -4到4的整数, "reason": "为什么" }]
+  "relationships": [{ "with": "成员名", "delta": -4到4的整数, "reason": "为什么", "relabel": "（仅在这段关系发生重大转折时才给）你对这段关系新的定位/称呼，例如从「死对头」变成「不打不相识的损友」；平时省略此字段" }]
 }
 规则：
 - timeline 给 3~6 条，时间要符合${storyTime.includes('早') ? '清晨到上午' : storyTime.includes('中午') ? '午间到下午' : '傍晚到深夜'}；**shared=false 表示这段你想瞒着**（别人看不到，但可能成为伏笔）。
@@ -473,7 +486,7 @@ export function parseCharBeat(raw: string, char: CharacterProfile, memberNames: 
     const relationshipDeltas = Array.isArray(j.relationships)
         ? j.relationships
             .filter((r: any) => r && typeof r.with === 'string' && nameSet.has(r.with))
-            .map((r: any) => ({ withName: r.with, delta: clampNum(r.delta, -4, 4, 0), reason: r.reason ? String(r.reason).slice(0, 100) : undefined }))
+            .map((r: any) => ({ withName: r.with, delta: clampNum(r.delta, -4, 4, 0), reason: r.reason ? String(r.reason).slice(0, 100) : undefined, newLabel: r.relabel && String(r.relabel).trim() ? String(r.relabel).trim().slice(0, 24) : undefined }))
             .slice(0, 5)
         : [];
     const timeline = Array.isArray(j.timeline)

@@ -12,7 +12,7 @@
  * 演绎引擎跑在 OSContext 全局（WorldScheduler.onTrigger → runWorldEpisode），
  * 本组件只负责触发与观察——用户点完"观测"就算切去和别人私聊，演绎照样完成。
  */
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useOS } from '../context/OSContext';
 import {
     ArrowLeft, Plus, GearSix, Trash, House, UsersThree,
@@ -592,6 +592,21 @@ const WorldEditor: React.FC<{
                         )}
                     </div>
                 )}
+                <div className="pt-1">
+                    <div className={`${labelCls} mb-1.5`}>叙述人称（大段正文用第几人称写）</div>
+                    <div className="grid grid-cols-3 gap-1.5">
+                        {([['first', '第一人称', '「我」'], ['second', '第二人称', '「你」'], ['third', '第三人称', '名字/ta']] as const).map(([p, name, hint]) => {
+                            const on = (w.narrationPerson || 'first') === p;
+                            return (
+                                <button key={p} onClick={() => upd({ narrationPerson: p })}
+                                    className={`px-2 py-2 rounded-xl border text-center transition-all ${on ? 'bg-stone-900 border-stone-900 text-white shadow-md' : 'bg-white border-stone-200 text-stone-700'}`}>
+                                    <div className="text-[12px] font-bold">{name}</div>
+                                    <div className={`text-[9.5px] mt-0.5 ${on ? 'text-white/65' : 'text-stone-400'}`}>{hint}</div>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
             </div>
 
             <div className={sectionCls}>
@@ -909,7 +924,8 @@ const WorldView: React.FC<{
     characters: CharacterProfile[];
     onEdit: () => void;
     onWorldUpdated: () => void;
-}> = ({ world, characters, onEdit, onWorldUpdated }) => {
+    onBack?: () => void;
+}> = ({ world, characters, onEdit, onWorldUpdated, onBack }) => {
     const { addToast } = useOS();
     const [episodes, setEpisodes] = useState<WorldEpisode[]>([]);
     const [progress, setProgress] = useState<{ done: number; total: number; charName?: string } | null>(
@@ -918,6 +934,7 @@ const WorldView: React.FC<{
     const [openHouseId, setOpenHouseId] = useState<string | null>(null);
     const [openEpisodeId, setOpenEpisodeId] = useState<string | null>(null);
     const [openChapterId, setOpenChapterId] = useState<string | null>(null);
+    const [chapterPage, setChapterPage] = useState(0);
     const [phoneView, setPhoneView] = useState<{ ownerId: string; tab?: 'feed' | 'dm' | 'group' } | null>(null);
 
     const members = useMemo(() => world.memberIds.map(id => characters.find(c => c.id === id)).filter(Boolean) as CharacterProfile[], [world.memberIds, characters]);
@@ -1001,6 +1018,18 @@ const WorldView: React.FC<{
         addToast('伏笔已点燃——下一轮观测时爆发', 'success');
     };
 
+    const deleteSeed = (seedId: string) => {
+        void mutateWorld({ seeds: (world.seeds || []).filter(s => s.id !== seedId) });
+        addToast('伏笔已删除', 'success');
+    };
+    // 长按删除：按住 ~550ms 触发
+    const seedPressRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const startSeedPress = (seedId: string) => {
+        if (seedPressRef.current) clearTimeout(seedPressRef.current);
+        seedPressRef.current = setTimeout(() => deleteSeed(seedId), 550);
+    };
+    const cancelSeedPress = () => { if (seedPressRef.current) { clearTimeout(seedPressRef.current); seedPressRef.current = null; } };
+
     // 主题 token：昼/夜两套
     const t = isNight ? {
         pageBg: 'linear-gradient(180deg,#11142a 0%,#171b35 30%,#1b2038 100%)',
@@ -1050,6 +1079,11 @@ const WorldView: React.FC<{
                     </>
                 )}
                 <div className="relative px-4 pt-4 pb-4">
+                    {onBack && (
+                        <button onClick={onBack} className="absolute top-3 right-3 z-10 p-1.5 rounded-full bg-black/25 backdrop-blur text-white/90 active:scale-90 transition-transform" title="返回">
+                            <ArrowLeft size={16} weight="bold" />
+                        </button>
+                    )}
                     <div className="flex items-center gap-1.5">
                         <span className={`text-[8.5px] font-black px-2 py-0.5 rounded-full tracking-wider ${MODE_INFO[world.mode].badge}`}>{MODE_INFO[world.mode].short}</span>
                         <span className={`text-[8.5px] font-black px-2 py-0.5 rounded-full tracking-wider ${TIME_MODE_INFO[world.timeMode || 'real'].badge}`}>{TIME_MODE_INFO[world.timeMode || 'real'].short}</span>
@@ -1102,9 +1136,14 @@ const WorldView: React.FC<{
                                 <div className="h-full rounded-full transition-all duration-500" style={{ width: `${Math.round((daysIntoChapter / SIM_CHAPTER_DAYS) * 100)}%`, background: 'linear-gradient(90deg,#a78bfa,#7c3aed)' }} />
                             </div>
                         </div>
-                        {chapters.length > 0 && (
+                        {chapters.length > 0 && (() => {
+                            const CH_PER = 5;
+                            const chTotal = Math.max(1, Math.ceil(chapters.length / CH_PER));
+                            const chPage = Math.min(chapterPage, chTotal - 1);
+                            const shown = chapters.slice(chPage * CH_PER, chPage * CH_PER + CH_PER);
+                            return (
                             <div className="space-y-2 mt-2.5">
-                                {chapters.map(ch => {
+                                {shown.map(ch => {
                                     const open = openChapterId === ch.id;
                                     return (
                                         <div key={ch.id} className={`rounded-2xl border overflow-hidden ${t.panel}`}>
@@ -1130,8 +1169,18 @@ const WorldView: React.FC<{
                                         </div>
                                     );
                                 })}
+                                {chTotal > 1 && (
+                                    <div className="flex items-center justify-center gap-3 pt-1">
+                                        <button onClick={() => setChapterPage(Math.max(0, chPage - 1))} disabled={chPage === 0}
+                                            className={`w-8 h-8 rounded-full flex items-center justify-center disabled:opacity-30 active:scale-90 transition-all ${t.chip}`}><CaretRight size={13} className="rotate-180" weight="bold" /></button>
+                                        <span className={`text-[11px] font-bold tabular-nums ${t.textSub}`}>{chPage + 1}/{chTotal}</span>
+                                        <button onClick={() => setChapterPage(Math.min(chTotal - 1, chPage + 1))} disabled={chPage >= chTotal - 1}
+                                            className={`w-8 h-8 rounded-full flex items-center justify-center disabled:opacity-30 active:scale-90 transition-all ${t.chip}`}><CaretRight size={13} weight="bold" /></button>
+                                    </div>
+                                )}
                             </div>
-                        )}
+                            );
+                        })()}
                     </div>
                 )}
 
@@ -1254,11 +1303,12 @@ const WorldView: React.FC<{
                 {(world.seeds || []).length > 0 && (
                     <div className={`rounded-2xl border p-3.5 ${t.panel}`}>
                         <div className={`text-[10px] font-black tracking-[0.25em] uppercase flex items-center gap-1.5 mb-2.5 ${t.textLabel}`}>
-                            <EyeSlash size={11} weight="fill" />伏笔栏 · 只有你看得到
+                            <EyeSlash size={11} weight="fill" />伏笔栏 · 只有你看得到<span className="normal-case tracking-normal font-medium opacity-60 ml-1">（长按删除）</span>
                         </div>
                         <div className="space-y-2">
                             {(world.seeds || []).filter(s => s.status !== 'resolved').slice().reverse().map(seed => (
-                                <div key={seed.id} className={`rounded-xl border p-2.5 ${seed.status === 'armed' ? 'border-rose-400/60 bg-rose-400/10' : t.panelSolid}`}>
+                                <div key={seed.id} className={`rounded-xl border p-2.5 select-none ${seed.status === 'armed' ? 'border-rose-400/60 bg-rose-400/10' : t.panelSolid}`}
+                                    onPointerDown={() => startSeedPress(seed.id)} onPointerUp={cancelSeedPress} onPointerLeave={cancelSeedPress} onPointerCancel={cancelSeedPress}>
                                     <div className={`text-[11px] leading-snug ${t.textMain}`}>
                                         <span className="font-black">{seed.charName}</span>
                                         <span className={`text-[9px] ml-1.5 ${t.textSub}`}>{seed.storyTime} · 瞒着{seed.hideFrom.length > 0 ? seed.hideFrom.join('、') : '所有人'}</span>
@@ -1458,7 +1508,9 @@ const WorldHomeApp: React.FC<{ embedded?: boolean; onFullscreen?: (full: boolean
     return (
         <div className="h-full w-full flex flex-col" style={{ background: pageBg }}>
             <GameStyles />
-            {/* 顶栏（内嵌进「小小窝」的家园分区时，列表页不再重复 ← 标题，只留齿轮/新建） */}
+            {/* 顶栏：内嵌进「小小窝」时，列表页只留齿轮/新建；进世界（正式开始玩）整条隐去做全屏，
+                返回靠世界视图里的浮动返回键。 */}
+            {!(embedded && view === 'world') && (
             <div className={`${embedded && view === 'list' ? 'h-12' : 'h-20'} flex items-end pb-3 px-4 shrink-0 sticky top-0 z-10`} style={{ background: headerBg }}>
                 <div className="flex items-center gap-2 w-full">
                     {!(embedded && view === 'list') && (
@@ -1483,6 +1535,7 @@ const WorldHomeApp: React.FC<{ embedded?: boolean; onFullscreen?: (full: boolean
                     )}
                 </div>
             </div>
+            )}
 
             {showApiSettings && (
                 <WorldApiSettings
@@ -1570,6 +1623,7 @@ const WorldHomeApp: React.FC<{ embedded?: boolean; onFullscreen?: (full: boolean
                     characters={characters}
                     onEdit={() => { setDraft(active); setView('edit'); }}
                     onWorldUpdated={reload}
+                    onBack={goBack}
                 />
             )}
         </div>

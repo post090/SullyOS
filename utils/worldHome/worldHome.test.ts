@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { extractJson, parseCharBeat, parseNpcScene, storyTimeLabel, buildModeRule, buildWorldCharTurn, parseRolledNpcs, buildNpcRollPrompt, NARRATIVE_STYLES } from './prompts';
+import { extractJson, parseCharBeat, parseNpcScene, storyTimeLabel, buildModeRule, buildWorldCharTurn, parseRolledNpcs, buildNpcRollPrompt, NARRATIVE_STYLES, narrationPersonGuide } from './prompts';
 import { applyRelationshipDeltas, collectSeeds, buildSummary } from './engine';
 import { ensureThreads, applyBeatToThreads, applyNpcGroupLines, dmThreadsOf, groupThreadOf, formatThreadForPrompt, dmThreadId, GROUP_THREAD_ID } from './threads';
 import { WorldScheduler } from './scheduler';
@@ -173,6 +173,33 @@ describe('AI roll NPC', () => {
     it('parseRolledNpcs：裸数组也能解析，解析失败返回空', () => {
         expect(parseRolledNpcs('[{"name":"阿福","persona":"门卫"}]')).toHaveLength(1);
         expect(parseRolledNpcs('不是 JSON')).toEqual([]);
+    });
+});
+
+describe('关系看法（label）可变 + 叙述人称', () => {
+    const char = mkChar('a', '小满');
+    const members = ['小满', '阿岚'];
+
+    it('parseCharBeat：重大转折时解析 relabel → newLabel', () => {
+        const raw = JSON.stringify({
+            location: '镇上', narrative: 'x', mood: 'y',
+            relationships: [{ with: '阿岚', delta: 3, reason: '一起扛过事', relabel: '不打不相识的损友' }],
+        });
+        const beat = parseCharBeat(raw, char, members);
+        expect(beat.relationshipDeltas?.[0]).toMatchObject({ withName: '阿岚', delta: 3, newLabel: '不打不相识的损友' });
+    });
+
+    it('parseCharBeat：没给 relabel 时 newLabel 为 undefined', () => {
+        const raw = JSON.stringify({ location: 'x', narrative: 'x', mood: 'y', relationships: [{ with: '阿岚', delta: 1 }] });
+        const beat = parseCharBeat(raw, char, members);
+        expect(beat.relationshipDeltas?.[0].newLabel).toBeUndefined();
+    });
+
+    it('narrationPersonGuide：随设置切换第一/二/三人称', () => {
+        expect(narrationPersonGuide({ narrationPerson: 'first' } as any, '小满')).toContain('第一人称');
+        expect(narrationPersonGuide({ narrationPerson: 'second' } as any, '小满')).toContain('第二人称');
+        expect(narrationPersonGuide({ narrationPerson: 'third' } as any, '小满')).toContain('第三人称');
+        expect(narrationPersonGuide({} as any, '小满')).toContain('第一人称'); // 默认
     });
 });
 
