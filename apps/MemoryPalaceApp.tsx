@@ -8,6 +8,7 @@ import {
     manuallyBindMemories, removeMemoryFromBox, unbindAllLiveMemories,
     reviveArchivedMemory,
     wipeAllMemoryPalace,
+    exportMemoryPalace, importMemoryPalace, isMemoryPalaceExportFile,
 } from '../utils/memoryPalace';
 import type { Anticipation, MigrationProgress, DigestResult, MemoryLink, EventBox } from '../utils/memoryPalace';
 
@@ -453,6 +454,17 @@ export default function MemoryPalaceApp() {
     // 一键清空
     const [wiping, setWiping] = useState(false);
     const [wipeResult, setWipeResult] = useState<string | null>(null);
+
+    // 导出记忆（接入外置记忆库）
+    const [exporting, setExporting] = useState(false);
+    const [exportResult, setExportResult] = useState<string | null>(null);
+    // 默认带上向量：多数用户长期用同一套 embedding 模型，向量可直接复用、免重新向量化
+    const [exportWithVectors, setExportWithVectors] = useState(true);
+
+    // 导入记忆
+    const [importing, setImporting] = useState(false);
+    const [importResult, setImportResult] = useState<string | null>(null);
+    const importInputRef = React.useRef<HTMLInputElement>(null);
 
     // 关联记忆状态（记忆详情页展示 EventBox 兄弟 + 兼容展示遗留 causal link）
     const [linkedMemories, setLinkedMemories] = useState<LinkedMemoryUI[]>([]);
@@ -1399,6 +1411,82 @@ export default function MemoryPalaceApp() {
             setWipeResult(`[err]清空失败：${e?.message || e}`);
         } finally {
             setWiping(false);
+        }
+    };
+
+    /** 导出当前角色的记忆宫殿为 JSON 文件（接入外置记忆库）。
+     *  含记忆节点 / 事件盒 / 期盼，不含向量（向量与 embedding 模型强绑定，外置库无意义）。 */
+    const handleExportMemories = async () => {
+        if (!char) return;
+        setExporting(true);
+        setExportResult(null);
+        try {
+            const data = await exportMemoryPalace(
+                [{ id: char.id, name: char.name }],
+                { includeVectors: exportWithVectors },
+            );
+            const c = data.characters[0]?.counts;
+            const nodeCount = c?.nodes ?? 0;
+            if (nodeCount === 0) {
+                setExportResult('[warn]当前角色还没有记忆宫殿节点，没什么可导出的');
+                return;
+            }
+            const json = JSON.stringify(data, null, 2);
+            const safeName = (char.name || 'character').replace(/[\\/:*?"<>|]/g, '_');
+            const fileName = `${safeName}_记忆宫殿_${new Date().toISOString().slice(0, 10)}.json`;
+            const blob = new Blob([json], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            const vecPart = exportWithVectors ? `、${c.vectors} 条向量` : '';
+            setExportResult(`[ok]已导出 ${nodeCount} 条记忆、${c.eventBoxes} 个事件盒、${c.anticipations} 个期盼${vecPart}`);
+        } catch (e: any) {
+            setExportResult(`[err]导出失败：${e?.message || e}`);
+        } finally {
+            setExporting(false);
+        }
+    };
+
+    /** 选了导入文件后：解析 JSON → 校验 → 合并进当前角色的记忆宫殿。 */
+    const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const fileObj = e.target.files?.[0];
+        // 清空 input，方便重复选同一个文件也能再次触发 onChange
+        if (importInputRef.current) importInputRef.current.value = '';
+        if (!fileObj || !char) return;
+        setImporting(true);
+        setImportResult(null);
+        try {
+            const text = await fileObj.text();
+            const data = JSON.parse(text);
+            if (!isMemoryPalaceExportFile(data)) {
+                setImportResult('[err]这不是 SullyOS 记忆宫殿导出文件');
+                return;
+            }
+            const totalNodes = data.characters.reduce((s, c) => s + (c.nodes?.length || 0), 0);
+            const hadVectors = data.includeVectors;
+            if (!confirm(
+                `即将把文件里的 ${totalNodes} 条记忆合并进【${char.name}】的记忆宫殿。\n\n`
+                + `· 不会覆盖现有记忆，是追加合并（重复导入会得到多份副本）。\n`
+                + (hadVectors ? '· 文件含向量，将一并导入。\n' : '· 文件不含向量，导入后这些记忆需重建向量才能被语义检索。\n')
+                + `\n确定继续？`
+            )) return;
+
+            const result = await importMemoryPalace(data, char.id);
+            const vecPart = result.vectors > 0 ? `、${result.vectors} 条向量` : '';
+            setImportResult(
+                `[ok]已导入 ${result.nodes} 条记忆、${result.eventBoxes} 个事件盒、${result.anticipations} 个期盼${vecPart}`
+                + (hadVectors ? '' : '（无向量，建议到「全局设置」重建向量后再用语义检索）')
+            );
+            await loadStats();
+        } catch (err: any) {
+            setImportResult(`[err]导入失败：${err?.message || err}`);
+        } finally {
+            setImporting(false);
         }
     };
 
@@ -3216,6 +3304,102 @@ create table if not exists memory_vectors (
                     >
                         {digesting ? `${char.name}正在静静地回想…` : '手动触发消化'}
                     </button>
+                </div>
+
+                {/* 导出 / 导入记忆：接入外置记忆库、跨设备迁移 */}
+                <div style={{ marginTop: 16, background: '#eff6ff', borderRadius: 16, padding: 16, border: '1px solid #bfdbfe' }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#1e40af', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <Icon name="download" size={14} />
+                        <span>导出 / 导入记忆</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 12, lineHeight: 1.6 }}>
+                        把 <b>{char.name}</b> 记忆宫殿里的全部记忆导出成 JSON：含每条记忆的正文、房间、重要性、情绪、标签、时间，
+                        以及事件盒（整合回忆）和窗台期盼。
+                    </div>
+
+                    {/* 是否带向量：长期用同一 embedding 模型就勾上，向量可直接复用免重新向量化 */}
+                    <label style={{
+                        display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer',
+                        marginBottom: 12, fontSize: 11, color: '#334155', lineHeight: 1.6,
+                    }}>
+                        <input
+                            type="checkbox"
+                            checked={exportWithVectors}
+                            onChange={e => setExportWithVectors(e.target.checked)}
+                            style={{ marginTop: 2, flexShrink: 0, cursor: 'pointer' }}
+                        />
+                        <span>
+                            <b>同时导出向量</b>（推荐）<br/>
+                            <span style={{ color: '#64748b' }}>
+                                继续用<b>同一个 embedding 模型</b>时向量可直接复用，免重新向量化、检索结果一致；
+                                换模型则无效。取消勾选只导文本结构，文件更小。
+                            </span>
+                        </span>
+                    </label>
+
+                    {exportResult && (
+                        <div style={{ fontSize: 12, marginBottom: 8, color: exportResult.startsWith('[err]') ? '#dc2626' : exportResult.startsWith('[warn]') ? '#d97706' : '#16a34a' }}>
+                            <StatusMessage msg={exportResult} />
+                        </div>
+                    )}
+
+                    <button
+                        onClick={handleExportMemories}
+                        disabled={exporting}
+                        style={{
+                            width: '100%', padding: '10px 0', borderRadius: 12,
+                            border: 'none', fontWeight: 700, fontSize: 13,
+                            color: 'white',
+                            background: exporting ? '#d4d4d4' : '#2563eb',
+                            cursor: exporting ? 'not-allowed' : 'pointer',
+                        }}
+                    >
+                        {exporting ? '导出中…' : (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                                <Icon name="download" size={13} />
+                                <span>导出为 JSON</span>
+                            </span>
+                        )}
+                    </button>
+
+                    {/* 导入：把导出的 JSON 合并回当前角色（跨设备迁移 / 恢复） */}
+                    <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid #dbeafe' }}>
+                        <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 10, lineHeight: 1.6 }}>
+                            把之前导出的 JSON 合并进 <b>{char.name}</b> 的记忆宫殿（追加，不覆盖现有记忆）。
+                            用于跨设备迁移或恢复。
+                        </div>
+
+                        {importResult && (
+                            <div style={{ fontSize: 12, marginBottom: 8, color: importResult.startsWith('[err]') ? '#dc2626' : importResult.startsWith('[warn]') ? '#d97706' : '#16a34a' }}>
+                                <StatusMessage msg={importResult} />
+                            </div>
+                        )}
+
+                        <input
+                            ref={importInputRef}
+                            type="file"
+                            accept="application/json,.json"
+                            onChange={handleImportFile}
+                            style={{ display: 'none' }}
+                        />
+                        <button
+                            onClick={() => importInputRef.current?.click()}
+                            disabled={importing}
+                            style={{
+                                width: '100%', padding: '10px 0', borderRadius: 12,
+                                border: '1px solid #bfdbfe', fontWeight: 700, fontSize: 13,
+                                color: '#1d4ed8', background: 'white',
+                                cursor: importing ? 'not-allowed' : 'pointer',
+                            }}
+                        >
+                            {importing ? '导入中…' : (
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                                    <Icon name="document" size={13} />
+                                    <span>从 JSON 导入</span>
+                                </span>
+                            )}
+                        </button>
+                    </div>
                 </div>
                 </>)}
 
