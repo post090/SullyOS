@@ -12,6 +12,7 @@ import {
 } from '../types';
 import { exportPostOfficeLocal, importPostOfficeLocal } from './vrWorld/postOffice';
 import { exportLuckinLocal, importLuckinLocal } from './luckinMcpClient';
+import { exportMcdLocal, importMcdLocal } from './mcdMcpClient';
 import { exportWorldHomeLocal, importWorldHomeLocal } from './worldHome/localBackup';
 
 const DB_NAME = 'AetherOS_Data';
@@ -2288,6 +2289,7 @@ export const DB = {
           worldEpisodes,
           worldHomeLocal: exportWorldHomeLocal(), // 家园本机配置：全局 API + 文风收藏（存 localStorage）
           luckinLocal: exportLuckinLocal(),       // 瑞幸 token + 启用状态（存 localStorage）
+          mcdLocal: exportMcdLocal(),             // 麦当劳 token + 启用状态（存 localStorage）
       };
   },
 
@@ -2415,6 +2417,7 @@ export const DB = {
           data.worldEpisodes !== undefined,
           (data as any).worldHomeLocal !== undefined,
           (data as any).luckinLocal !== undefined,
+          (data as any).mcdLocal !== undefined,
           data.pixelHomeAssets !== undefined,
           data.pixelHomeLayouts !== undefined,
           data.userProfile !== undefined,
@@ -2705,6 +2708,10 @@ export const DB = {
       await runSection('瑞幸配置', (data as any).luckinLocal !== undefined, async () => {
           importLuckinLocal((data as any).luckinLocal); // token + 启用状态
           (data as any).luckinLocal = undefined;
+      }, 1);
+      await runSection('麦当劳配置', (data as any).mcdLocal !== undefined, async () => {
+          importMcdLocal((data as any).mcdLocal); // token + 启用状态
+          (data as any).mcdLocal = undefined;
       }, 1);
       await runSection('歌曲', data.songs !== undefined, async () => {
           await clearAndAdd(STORE_SONGS, data.songs, '歌曲', false);

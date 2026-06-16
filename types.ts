@@ -2394,6 +2394,7 @@ export interface FullBackupData {
     vrPostOffice?: Record<string, string>;     // 邮局本机配置：身份 deviceId / 后端地址（存 localStorage）
     worldHomeLocal?: Record<string, string>;   // 家园本机配置：全局 API + 文风收藏（存 localStorage）
     luckinLocal?: Record<string, string>;      // 瑞幸：token + 启用状态（存 localStorage）
+    mcdLocal?: Record<string, string>;         // 麦当劳：token + 启用状态（存 localStorage）
     songs?: SongSheet[]; // Songwriting app data
     
     // Bank Data
