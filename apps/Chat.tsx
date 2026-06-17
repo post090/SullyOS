@@ -314,7 +314,7 @@ const Chat: React.FC = () => {
                 // parseVoiceOutput already sanitized it (whitelisted sound tags only).
                 spokenText = voiceTagContent;
                 // originalText = text OUTSIDE the voice tag (the display/Chinese text)
-                const textOutsideTag = msg.content.replace(/<[语語]音>[\s\S]*?<\/[语語]音>/g, '').trim();
+                const textOutsideTag = msg.content.replace(/<[语語]音[^>]*>[\s\S]*?<\/[语語]音>/g, '').trim();
                 originalText = textOutsideTag ? cleanTextForTts(textOutsideTag) : '';
                 // If voice lang is set and no Chinese text outside the tag, translate spoken text back to Chinese
                 if (voiceLang && !originalText && spokenText) {
