@@ -792,8 +792,8 @@ ${identityMap}
                    We ensure this doesn't re-render on state changes like comments.
                 */}
                 <div className="flex-1 w-full h-full flex flex-col animate-slide-up relative overflow-hidden">
-                    {/* Header - Shrink 0 to stay at top, with safe-area for notch devices */}
-                    <div className="flex items-center justify-between px-4 bg-white/60 backdrop-blur-xl border-b border-white/20 shrink-0 relative z-20" style={{ paddingTop: 'max(12px, env(safe-area-inset-top))', paddingBottom: '12px' }}>
+                    {/* Header —— 自理安全区：--chrome-top 让开刘海 + SullyOS 状态栏（含 iOS env 偶发返回 0 的 JS 兜底） */}
+                    <div className="flex items-center justify-between px-4 bg-white/60 backdrop-blur-xl border-b border-white/20 shrink-0 relative z-20" style={{ paddingTop: 'calc(var(--chrome-top) + 12px)', paddingBottom: '12px' }}>
                         <button onClick={() => setSelectedPost(null)} className="p-2 -m-2 active:opacity-60"><Icons.Back onClick={() => setSelectedPost(null)} /></button>
                         <div className="flex items-center gap-2">
                             <img src={selectedPost.authorAvatar} className="w-8 h-8 rounded-full object-cover border border-white/50" />
@@ -958,8 +958,8 @@ ${identityMap}
             {/* --- Create Post Modal (Full Screen Overlay) --- */}
             {isCreateOpen && (
                 <div className="absolute inset-0 z-50 bg-white flex flex-col animate-slide-up">
-                    {/* Create Header */}
-                    <div className="h-14 flex items-center justify-between px-4 bg-white sticky top-0 z-20 border-b border-slate-50">
+                    {/* Create Header —— 自理安全区：--chrome-top 让开刘海 + SullyOS 状态栏 */}
+                    <div className="flex items-center justify-between px-4 bg-white sticky top-0 z-20 border-b border-slate-50" style={{ paddingTop: 'calc(var(--chrome-top) + 0.75rem)', paddingBottom: '0.75rem' }}>
                         <button onClick={() => setIsCreateOpen(false)} className="text-slate-600 text-sm font-bold px-2 py-1">取消</button>
                         <span className="text-sm font-bold text-slate-800">发布笔记</span>
                         <button 
@@ -1008,8 +1008,8 @@ ${identityMap}
             {/* --- Main Feed View --- */}
             <div className={`flex-col h-full ${selectedPost || isCreateOpen ? 'hidden' : 'flex'}`}>
                 
-                {/* Top Nav - Glass */}
-                <div className="h-11 flex items-center justify-between px-4 sticky top-0 bg-white/60 backdrop-blur-xl z-30 border-b border-white/20">
+                {/* Top Nav - Glass —— 自理安全区：用 --chrome-top 让开刘海 + SullyOS 状态栏（外壳不再加 padding） */}
+                <div className="flex items-center justify-between px-4 sticky top-0 bg-white/60 backdrop-blur-xl z-30 border-b border-white/20" style={{ paddingTop: 'calc(var(--chrome-top) + 0.5rem)', paddingBottom: '0.5rem' }}>
                     <button onClick={closeApp} className="p-1"><Icons.Back onClick={closeApp} /></button>
                     <div className="flex gap-6 text-base font-bold text-slate-300">
                         <button className={`${activeTab === 'home' ? 'text-slate-800 scale-110 border-b-2 border-[#ff2442] pb-1' : 'hover:text-slate-500'} transition-all`} onClick={() => setActiveTab('home')}>发现</button>
