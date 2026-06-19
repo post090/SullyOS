@@ -23,6 +23,103 @@ const APP_LAYOUTS: { id: LayoutId; name: string; desc: string; icon: string }[] 
     { id: 'novel', name: '小说风格', desc: '章节 / 正文阅读', icon: '📖' },
 ];
 
+// ============================================================
+//  SHARED PREMIUM UI PIECES
+//  (module-scope: defining these inside CheckPhone gave them a new identity
+//   on every render, which remounted whole sub-app subtrees → list items kept
+//   re-playing their entrance animation (闪烁) and chat scroll snapped back.)
+// ============================================================
+const StatusStrip: React.FC = () => {
+    const clock = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    return (
+        <div className="h-9 flex justify-between px-6 items-center z-30 relative pt-2 text-white/70 shrink-0">
+            <span className="text-[12px] font-semibold tracking-tight tabular-nums">{clock}</span>
+            <div className="flex gap-1.5 items-center">
+                <svg viewBox="0 0 24 24" fill="currentColor" className="w-3 h-3"><path d="M2 22h3V10H2v12zm6 0h3V6H8v16zm6 0h3V2h-3v20zm6 0h3v-8h-3v8z" /></svg>
+                <svg viewBox="0 0 24 24" fill="currentColor" className="w-3 h-3"><path fillRule="evenodd" d="M1.371 8.143c5.858-5.857 15.356-5.857 21.213 0a.75.75 0 0 1 0 1.061l-.53.53a.75.75 0 0 1-1.06 0c-4.98-4.979-13.053-4.979-18.032 0a.75.75 0 0 1-1.06 0l-.53-.53a.75.75 0 0 1 0-1.06Zm3.182 3.182c4.1-4.1 10.749-4.1 14.85 0a.75.75 0 0 1 0 1.061l-.53.53a.75.75 0 0 1-1.062 0 8.25 8.25 0 0 0-11.667 0 .75.75 0 0 1-1.06 0l-.53-.53a.75.75 0 0 1 0-1.06Zm3.204 3.182a6 6 0 0 1 8.486 0 .75.75 0 0 1 0 1.061l-.53.53a.75.75 0 0 1-1.061 0 3.75 3.75 0 0 0-5.304 0 .75.75 0 0 1-1.06 0l-.53-.53a.75.75 0 0 1 0-1.06Zm3.182 3.182a1.5 1.5 0 0 1 2.122 0 .75.75 0 0 1 0 1.061l-.53.53a.75.75 0 0 1-1.061 0l-.53-.53a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" /></svg>
+                <div className="w-5 h-2.5 border border-current rounded-[3px] relative px-px flex items-center"><div className="h-1.5 bg-current w-3/4 rounded-[1px]" /></div>
+            </div>
+        </div>
+    );
+};
+
+const TermHeader: React.FC<{ title: string; sub?: string; accent: string; onBack: () => void; right?: React.ReactNode }> =
+    ({ title, sub, accent, onBack, right }) => (
+        <div className="shrink-0 z-20">
+            <StatusStrip />
+            <div className="h-14 flex items-center justify-between px-4">
+                <button onClick={onBack} className="w-9 h-9 -ml-1 rounded-full flex items-center justify-center text-white/80 bg-white/[0.05] border border-white/[0.08] active:scale-90 transition">
+                    <CaretLeft size={18} weight="bold" />
+                </button>
+                <div className="flex-1 text-center px-2">
+                    <div className="text-[15px] font-semibold text-white tracking-wide truncate">{title}</div>
+                    {sub && <div className="text-[10px] tracking-[0.2em] uppercase mt-0.5" style={{ color: accent }}>{sub}</div>}
+                </div>
+                <div className="w-9 flex justify-end">{right}</div>
+            </div>
+        </div>
+    );
+
+const RefreshFab: React.FC<{ onClick: () => void; label: string; accent: string; loading?: boolean }> =
+    ({ onClick, label, accent, loading }) => (
+        <div className="absolute bottom-7 w-full flex justify-center pointer-events-none z-30">
+            <button
+                disabled={loading}
+                onClick={onClick}
+                className="pointer-events-auto px-6 py-3 rounded-full font-semibold text-[12px] flex items-center gap-2 active:scale-95 transition shadow-[0_8px_30px_rgba(0,0,0,0.5)] text-white border border-white/10"
+                style={{ background: `linear-gradient(135deg, ${accent}, ${accent}cc)` }}
+            >
+                {loading
+                    ? <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    : <ArrowsClockwise size={15} weight="bold" />}
+                {loading ? '同步中…' : label}
+            </button>
+        </div>
+    );
+
+const SubAppShell: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+    <div className="absolute inset-0 w-full h-full flex flex-col z-[60] overflow-hidden text-white"
+        style={{ background: 'radial-gradient(140% 90% at 50% 0%, #15171d 0%, #0a0b0f 70%)' }}>
+        {children}
+    </div>
+);
+
+const EmptyState: React.FC<{ text: string }> = ({ text }) => (
+    <div className="flex flex-col items-center justify-center h-64 text-white/30 gap-3">
+        <Tray size={44} weight="light" />
+        <span className="text-xs tracking-wide">{text}</span>
+    </div>
+);
+
+const DelBtn: React.FC<{ onDelete: () => void }> = ({ onDelete }) => (
+    <button onClick={onDelete} className="absolute top-2 right-2 w-5 h-5 bg-rose-500/80 text-white rounded-full flex items-center justify-center text-[11px] leading-none opacity-0 group-hover:opacity-100 transition z-10">×</button>
+);
+
+const HomeCard: React.FC<{
+    icon: React.ReactNode; label: string; sub: string; accent: string;
+    badge?: number; onClick: () => void; spanFull?: boolean;
+}> = ({ icon, label, sub, accent, badge, onClick, spanFull }) => (
+    <button onClick={onClick}
+        className={`relative ${spanFull ? 'col-span-2' : ''} rounded-[24px] p-4 text-left overflow-hidden border border-white/[0.07] bg-white/[0.035] backdrop-blur-xl active:scale-[0.98] transition-transform duration-300 min-h-[140px] flex flex-col justify-between group`}>
+        <div className="absolute -top-8 -right-8 w-32 h-32 rounded-full blur-2xl pointer-events-none opacity-50"
+            style={{ background: `radial-gradient(circle, ${accent}, transparent 70%)` }} />
+        <div className="flex items-start justify-between relative z-10">
+            <div className="w-12 h-12 rounded-2xl flex items-center justify-center border border-white/[0.08]"
+                style={{ background: `linear-gradient(135deg, ${accent}33, ${accent}0a)`, color: accent, boxShadow: `inset 0 0 16px ${accent}22` }}>
+                {icon}
+            </div>
+            {badge ? (
+                <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-rose-500 text-white text-[11px] font-bold flex items-center justify-center shadow-[0_0_12px_rgba(244,63,94,0.6)]">{badge}</span>
+            ) : null}
+        </div>
+        <div className="relative z-10">
+            <div className="text-[15px] font-semibold tracking-[0.18em] text-white uppercase">{label}</div>
+            <div className="text-[11px] text-white/45 mt-1">{sub}</div>
+            <div className="h-[3px] w-9 rounded-full mt-2.5" style={{ background: `linear-gradient(90deg, ${accent}, transparent)` }} />
+        </div>
+    </button>
+);
+
 const CheckPhone: React.FC = () => {
     const { closeApp, characters, activeCharacterId, updateCharacter, apiConfig, addToast, userProfile } = useOS();
     const [view, setView] = useState<'select' | 'phone'>('select');
@@ -58,11 +155,11 @@ const CheckPhone: React.FC = () => {
     useEffect(() => {
         if (targetChar) {
             const updated = characters.find(c => c.id === targetChar.id);
-            if (updated) {
+            if (updated && updated !== targetChar) {
                 setTargetChar(updated);
                 if (selectedChatRecord) {
                     const freshRecord = updated.phoneState?.records?.find(r => r.id === selectedChatRecord.id);
-                    if (freshRecord) setSelectedChatRecord(freshRecord);
+                    if (freshRecord && freshRecord !== selectedChatRecord) setSelectedChatRecord(freshRecord);
                 }
             }
         }
@@ -456,68 +553,6 @@ Format:
     const quote = targetChar?.socialProfile?.bio || '“有些话，隔着屏幕，反而更接近真实。”';
 
     // ============================================================
-    //  SHARED PREMIUM UI PIECES
-    // ============================================================
-    const StatusStrip: React.FC = () => (
-        <div className="h-9 flex justify-between px-6 items-center z-30 relative pt-2 text-white/70 shrink-0">
-            <span className="text-[12px] font-semibold tracking-tight tabular-nums">{clockNow}</span>
-            <div className="flex gap-1.5 items-center">
-                <svg viewBox="0 0 24 24" fill="currentColor" className="w-3 h-3"><path d="M2 22h3V10H2v12zm6 0h3V6H8v16zm6 0h3V2h-3v20zm6 0h3v-8h-3v8z" /></svg>
-                <svg viewBox="0 0 24 24" fill="currentColor" className="w-3 h-3"><path fillRule="evenodd" d="M1.371 8.143c5.858-5.857 15.356-5.857 21.213 0a.75.75 0 0 1 0 1.061l-.53.53a.75.75 0 0 1-1.06 0c-4.98-4.979-13.053-4.979-18.032 0a.75.75 0 0 1-1.06 0l-.53-.53a.75.75 0 0 1 0-1.06Zm3.182 3.182c4.1-4.1 10.749-4.1 14.85 0a.75.75 0 0 1 0 1.061l-.53.53a.75.75 0 0 1-1.062 0 8.25 8.25 0 0 0-11.667 0 .75.75 0 0 1-1.06 0l-.53-.53a.75.75 0 0 1 0-1.06Zm3.204 3.182a6 6 0 0 1 8.486 0 .75.75 0 0 1 0 1.061l-.53.53a.75.75 0 0 1-1.061 0 3.75 3.75 0 0 0-5.304 0 .75.75 0 0 1-1.06 0l-.53-.53a.75.75 0 0 1 0-1.06Zm3.182 3.182a1.5 1.5 0 0 1 2.122 0 .75.75 0 0 1 0 1.061l-.53.53a.75.75 0 0 1-1.061 0l-.53-.53a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" /></svg>
-                <div className="w-5 h-2.5 border border-current rounded-[3px] relative px-px flex items-center"><div className="h-1.5 bg-current w-3/4 rounded-[1px]" /></div>
-            </div>
-        </div>
-    );
-
-    // Dark "terminal" header used inside every sub-app
-    const TermHeader: React.FC<{ title: string; sub?: string; accent: string; onBack: () => void; right?: React.ReactNode }> =
-        ({ title, sub, accent, onBack, right }) => (
-            <div className="shrink-0 z-20">
-                <StatusStrip />
-                <div className="h-14 flex items-center justify-between px-4">
-                    <button onClick={onBack} className="w-9 h-9 -ml-1 rounded-full flex items-center justify-center text-white/80 bg-white/[0.05] border border-white/[0.08] active:scale-90 transition">
-                        <CaretLeft size={18} weight="bold" />
-                    </button>
-                    <div className="flex-1 text-center px-2">
-                        <div className="text-[15px] font-semibold text-white tracking-wide truncate">{title}</div>
-                        {sub && <div className="text-[10px] tracking-[0.2em] uppercase mt-0.5" style={{ color: accent }}>{sub}</div>}
-                    </div>
-                    <div className="w-9 flex justify-end">{right}</div>
-                </div>
-            </div>
-        );
-
-    const RefreshFab: React.FC<{ onClick: () => void; label: string; accent: string }> = ({ onClick, label, accent }) => (
-        <div className="absolute bottom-7 w-full flex justify-center pointer-events-none z-30">
-            <button
-                disabled={isLoading}
-                onClick={onClick}
-                className="pointer-events-auto px-6 py-3 rounded-full font-semibold text-[12px] flex items-center gap-2 active:scale-95 transition shadow-[0_8px_30px_rgba(0,0,0,0.5)] text-white border border-white/10"
-                style={{ background: `linear-gradient(135deg, ${accent}, ${accent}cc)` }}
-            >
-                {isLoading
-                    ? <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    : <ArrowsClockwise size={15} weight="bold" />}
-                {isLoading ? '同步中…' : label}
-            </button>
-        </div>
-    );
-
-    const SubAppShell: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-        <div className="absolute inset-0 w-full h-full flex flex-col z-[60] overflow-hidden text-white"
-            style={{ background: 'radial-gradient(140% 90% at 50% 0%, #15171d 0%, #0a0b0f 70%)' }}>
-            {children}
-        </div>
-    );
-
-    const EmptyState: React.FC<{ text: string }> = ({ text }) => (
-        <div className="flex flex-col items-center justify-center h-64 text-white/30 gap-3">
-            <Tray size={44} weight="light" />
-            <span className="text-xs tracking-wide">{text}</span>
-        </div>
-    );
-
-    // ============================================================
     //  SUB-APPS
     // ============================================================
     const renderChatList = () => {
@@ -550,7 +585,7 @@ Format:
                         );
                     })}
                 </div>
-                <RefreshFab onClick={() => handleGenerate('chat')} label="刷新消息" accent={accent} />
+                <RefreshFab onClick={() => handleGenerate('chat')} label="刷新消息" accent={accent} loading={isLoading} />
             </SubAppShell>
         );
     };
@@ -641,7 +676,7 @@ Format:
                         );
                     })}
                 </div>
-                <RefreshFab onClick={() => handleGenerate('call')} label="刷新通话" accent={accent} />
+                <RefreshFab onClick={() => handleGenerate('call')} label="刷新通话" accent={accent} loading={isLoading} />
             </SubAppShell>
         );
     };
@@ -684,7 +719,7 @@ Format:
                         </div>
                     ))}
                 </div>
-                <RefreshFab onClick={() => handleGenerate('order')} label="刷新订单" accent={accent} />
+                <RefreshFab onClick={() => handleGenerate('order')} label="刷新订单" accent={accent} loading={isLoading} />
             </SubAppShell>
         );
     };
@@ -718,7 +753,7 @@ Format:
                         </div>
                     ))}
                 </div>
-                <RefreshFab onClick={() => handleGenerate('delivery')} label="刷新外卖" accent={accent} />
+                <RefreshFab onClick={() => handleGenerate('delivery')} label="刷新外卖" accent={accent} loading={isLoading} />
             </SubAppShell>
         );
     };
@@ -752,14 +787,10 @@ Format:
                         </div>
                     ))}
                 </div>
-                <RefreshFab onClick={() => handleGenerate('social')} label="刷新动态" accent={accent} />
+                <RefreshFab onClick={() => handleGenerate('social')} label="刷新动态" accent={accent} loading={isLoading} />
             </SubAppShell>
         );
     };
-
-    const DelBtn: React.FC<{ r: PhoneEvidence }> = ({ r }) => (
-        <button onClick={() => handleDeleteRecord(r)} className="absolute top-2 right-2 w-5 h-5 bg-rose-500/80 text-white rounded-full flex items-center justify-center text-[11px] leading-none opacity-0 group-hover:opacity-100 transition z-10">×</button>
-    );
 
     const renderCustomItem = (r: PhoneEvidence, idx: number, total: number, accent: string, layout: LayoutId, app: PhoneCustomApp) => {
         switch (layout) {
@@ -775,7 +806,7 @@ Format:
                                 <span className="text-[9px] px-2 py-0.5 rounded-full bg-white/[0.06] text-white/50 tracking-wider">已下单</span>
                             </div>
                         </div>
-                        <DelBtn r={r} />
+                        <DelBtn onDelete={() => handleDeleteRecord(r)} />
                     </div>
                 );
             case 'feed':
@@ -793,7 +824,7 @@ Format:
                             <span className="flex items-center gap-1.5 text-[11px]"><Heart size={14} weight="fill" style={{ color: accent }} /> {3 + (r.id.length % 30)}</span>
                             <span className="flex items-center gap-1.5 text-[11px]"><ChatCircle size={14} /> {1 + (r.id.length % 9)}</span>
                         </div>
-                        <DelBtn r={r} />
+                        <DelBtn onDelete={() => handleDeleteRecord(r)} />
                     </div>
                 );
             case 'forum':
@@ -809,7 +840,7 @@ Format:
                             <span>· {1 + (r.id.length % 200)} 回复</span>
                             <span>· {fmtClock(r.timestamp)}</span>
                         </div>
-                        <DelBtn r={r} />
+                        <DelBtn onDelete={() => handleDeleteRecord(r)} />
                     </div>
                 );
             case 'novel':
@@ -822,7 +853,7 @@ Format:
                             <span>{r.value || '连载中'}</span>
                             <span className="tabular-nums">{fmtClock(r.timestamp)}</span>
                         </div>
-                        <DelBtn r={r} />
+                        <DelBtn onDelete={() => handleDeleteRecord(r)} />
                     </div>
                 );
             default:
@@ -834,7 +865,7 @@ Format:
                         </div>
                         <div className="text-[12px] text-white/55 leading-relaxed whitespace-pre-wrap">{r.detail}</div>
                         <div className="text-[9.5px] text-white/25 mt-2 text-right tabular-nums">{fmtClock(r.timestamp)}</div>
-                        <DelBtn r={r} />
+                        <DelBtn onDelete={() => handleDeleteRecord(r)} />
                     </div>
                 );
         }
@@ -853,7 +884,7 @@ Format:
                     {list.length === 0 && <EmptyState text="暂无数据" />}
                     {list.map((r, idx) => renderCustomItem(r, idx, list.length, accent, layout, app))}
                 </div>
-                <RefreshFab onClick={() => handleGenerate(app.id, app.prompt, layout)} label="刷新数据" accent={accent} />
+                <RefreshFab onClick={() => handleGenerate(app.id, app.prompt, layout)} label="刷新数据" accent={accent} loading={isLoading} />
             </SubAppShell>
         );
     };
@@ -861,31 +892,6 @@ Format:
     // ============================================================
     //  HOME DESKTOP (mirrors the reference design)
     // ============================================================
-    const HomeCard: React.FC<{
-        icon: React.ReactNode; label: string; sub: string; accent: string;
-        badge?: number; onClick: () => void; spanFull?: boolean;
-    }> = ({ icon, label, sub, accent, badge, onClick, spanFull }) => (
-        <button onClick={onClick}
-            className={`relative ${spanFull ? 'col-span-2' : ''} rounded-[24px] p-4 text-left overflow-hidden border border-white/[0.07] bg-white/[0.035] backdrop-blur-xl active:scale-[0.98] transition-transform duration-300 min-h-[140px] flex flex-col justify-between group`}>
-            <div className="absolute -top-8 -right-8 w-32 h-32 rounded-full blur-2xl pointer-events-none opacity-50"
-                style={{ background: `radial-gradient(circle, ${accent}, transparent 70%)` }} />
-            <div className="flex items-start justify-between relative z-10">
-                <div className="w-12 h-12 rounded-2xl flex items-center justify-center border border-white/[0.08]"
-                    style={{ background: `linear-gradient(135deg, ${accent}33, ${accent}0a)`, color: accent, boxShadow: `inset 0 0 16px ${accent}22` }}>
-                    {icon}
-                </div>
-                {badge ? (
-                    <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-rose-500 text-white text-[11px] font-bold flex items-center justify-center shadow-[0_0_12px_rgba(244,63,94,0.6)]">{badge}</span>
-                ) : null}
-            </div>
-            <div className="relative z-10">
-                <div className="text-[15px] font-semibold tracking-[0.18em] text-white uppercase">{label}</div>
-                <div className="text-[11px] text-white/45 mt-1">{sub}</div>
-                <div className="h-[3px] w-9 rounded-full mt-2.5" style={{ background: `linear-gradient(90deg, ${accent}, transparent)` }} />
-            </div>
-        </button>
-    );
-
     const renderHomePage = () => (
         <div className="w-1/2 h-full overflow-y-auto no-scrollbar overscroll-none px-6 pt-2 pb-32">
             {/* Header */}

@@ -274,8 +274,8 @@ const PersonaSim: React.FC<Props> = ({ targetChar, onExit, openLifeLog, sim, onS
     useEffect(() => () => stopFF(), []);
 
     const restart = () => {
+        // 重看同一场演出不再重复写入「生活记录」(savedRef 保持已保存)
         setIdx(0);
-        savedRef.current = false;
         setPhase('play');
     };
 
