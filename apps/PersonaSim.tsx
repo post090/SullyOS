@@ -36,7 +36,7 @@ interface Beat {
         compose?: { to?: string; drafts: string[]; sent?: string | null };
         text?: string;
     };
-    flashback?: { caption?: string; date?: string; tint?: string };
+    flashback?: { label?: string; caption?: string; date?: string; tint?: string };
 }
 
 interface SimScript {
@@ -135,8 +135,12 @@ const PersonaSim: React.FC<Props> = ({ targetChar, onExit, openLifeLog }) => {
                 return `${who}: ${c}`;
             }).join('\n');
 
+            // 认识时长护栏：从最早一条消息推算，给 AI 判断闪回是否合理 / 用什么时间口径
+            const firstTs = msgs.find(m => typeof m.timestamp === 'number')?.timestamp;
+            const acquaintance = describeAcquaintance(firstTs, userProfile.name, targetChar.name);
+
             setLoadStage('正在生成这一天…');
-            const prompt = buildDirectorPrompt(context, recent, mode, t, targetChar.name);
+            const prompt = buildDirectorPrompt(context, recent, mode, t, targetChar.name, acquaintance);
 
             const res = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
                 method: 'POST',
@@ -482,7 +486,7 @@ const BeatStage: React.FC<{ beat: Beat; char: CharacterProfile }> = ({ beat, cha
                 style={{ background: `radial-gradient(circle at 50% 45%, ${f?.tint || '#3a2a4a'} 0%, #07080c 78%)` }}>
                 <div className="absolute top-4 left-4 right-4 rounded-2xl px-4 py-2.5 bg-black/50 backdrop-blur-xl border border-white/[0.12] flex items-center gap-2 animate-slide-down">
                     <ImageSquare size={16} className="text-pink-300" />
-                    <span className="text-[12px] text-white/85 font-medium">去年今日</span>
+                    <span className="text-[12px] text-white/85 font-medium">{f?.label || f?.date || '过去的某天'}</span>
                 </div>
                 <div className="w-[68%] aspect-[4/5] rounded-2xl overflow-hidden border border-white/[0.1] shadow-2xl relative grayscale-[35%]"
                     style={{ background: `linear-gradient(160deg, ${f?.tint || '#5a4a6a'}, #1a1520)` }}>
@@ -738,7 +742,21 @@ export const LifeLog: React.FC<{ targetChar: CharacterProfile; onBack: () => voi
 // ============================================================
 //  DIRECTOR PROMPT + PARSER
 // ============================================================
-function buildDirectorPrompt(context: string, recent: string, mode: 'daily' | 'event', theme: string, name: string): string {
+// 把「最早一条消息距今多久」翻译成给导演看的认识时长描述（闪回时间口径护栏）
+function describeAcquaintance(firstTs: number | undefined, userName: string, charName: string): string {
+    if (!firstTs) {
+        return `${charName} 与 ${userName} 还没有可考的相处记录（可能是初次接触）。`;
+    }
+    const days = Math.floor((Date.now() - firstTs) / 86400000);
+    let span: string;
+    if (days <= 1) span = '不到一天';
+    else if (days < 30) span = `约 ${days} 天`;
+    else if (days < 365) span = `约 ${Math.floor(days / 30)} 个月`;
+    else span = `约 ${(days / 365).toFixed(1)} 年`;
+    return `${charName} 与 ${userName} 自首次接触至今${span}（${days} 天）。`;
+}
+
+function buildDirectorPrompt(context: string, recent: string, mode: 'daily' | 'event', theme: string, name: string, acquaintance: string): string {
     return `${context}
 
 ### [最近的聊天上下文]
@@ -748,6 +766,7 @@ ${recent || '（暂无最近对话）'}
 你现在是一位沉浸式叙事导演。请把「${name}」的一段人生，编排成一场**以手机为载体的第一人称演出**。
 体验类型：${mode === 'daily' ? '日常模拟（普通日子，重生活感与陪伴）' : '事件模拟（特殊事件，重情绪张力）'}
 体验内容：「${theme}」
+关系时间线（重要护栏）：${acquaintance}
 
 观众（用户）将**成为 ${name}**，通过 TA 使用手机的行为，亲身经历这段时间。
 
@@ -759,7 +778,11 @@ ${recent || '（暂无最近对话）'}
 5. **真实手机感**：可穿插与主线无关的真实手机事件——来电、电量不足、验证码、快递通知、垃圾短信、天气预警、自动续费、各种推送。它们不一定推动剧情，但增强真实。
 6. **环境碎片**：可出现与主线无关的痕迹——没做完的待办、半年前的截图、忘记删的照片、一堆浏览器标签、购物车、旧闹钟、收藏夹。这些共同拼出 TA 的人格。
 7. **情绪高潮放慢节奏**：关键节点用「打开→关闭→重新打开→停顿→锁屏→再打开→输入→删除→输入→删除→最终发送(或不发)」这种反复的 beat 序列制造张力，并把这些 beat 的 pace 设为 3。
-8. ${mode === 'event' ? '在某个时刻插入一次「记忆闪回」(flashback)：顶部弹出「去年今日」通知→相册自动打开一张一年前的照片→沉默两秒→什么都不说→继续今天。杀伤力来自“过去突然闯进现在”。' : '可在某个安静时刻插入一次「记忆闪回」(flashback)：顶部「去年今日」→旧照片→沉默。'}
+8. 【记忆闪回 · 务必先判断是否合理，宁可不插也不要 OOC】闪回是 ${name} **自己的一段过去突然闯进现在**（相册自动弹出一张旧照片→沉默→什么都不说→继续今天，杀伤力来自“过去闯进现在”）。但是否插入、用什么时间口径，必须严格符合人设与世界观：
+   - 时间标签(label)由你决定，必须与上面的「关系时间线」以及角色自身的人生阶段/世界观自洽。例如真的相识一年以上才用「去年今日」；几个月就用「三个月前的今天」「那天」；刚认识或时间线不支持，**绝不要**用「去年」。
+   - 照片不一定与用户有关，可以是 ${name} 自己更早的人生片段（地方、人、物）。
+   - 如果该角色的设定/世界观里根本没有「拍照片 / 现代时间感 / 可追溯的过去」，或任何闪回都会显得突兀 OOC，就**完全不要**加 flashback beat。
+   - ${mode === 'event' ? '事件模拟下，若合理，优先安排一次闪回来强化情绪；若不合理则跳过。' : '日常模拟下，仅在某个安静且合理的时刻择机插入，可有可无。'}
 
 【输出格式】严格输出**一个 JSON 对象**（不要任何额外文字、不要 markdown 代码块），结构如下：
 {
@@ -782,7 +805,7 @@ ${recent || '（暂无最近对话）'}
 - {"kind":"app","app":{"name":"备忘录","view":"notes","notes":{"title":"待办","items":["...","..."]}}}
 - {"kind":"app","app":{"name":"浏览器","view":"browser","browser":{"tabs":["...","..."]}}}
 - {"kind":"app","app":{"name":"天气","view":"weather","weather":{"city":"...","temp":22,"desc":"多云"}}}
-- {"kind":"flashback","time":"15:00","flashback":{"caption":"...","date":"去年的今天","tint":"#4a3a5a"},"monologue":""}  // 记忆闪回，monologue留空=沉默
+- {"kind":"flashback","time":"15:00","flashback":{"label":"三个月前的今天","caption":"...","date":"...","tint":"#4a3a5a"},"monologue":""}  // 记忆闪回(可选)，label=自洽的时间口径，monologue留空=沉默
 - {"kind":"end","time":"23:40"}  // 最后一个 beat 必须是 end
 
 请确保 beats 有清晰的时间推进、节奏起伏、至少一处 compose 或 search 的“打字/删除”行为、至少一处环境碎片、一处情绪高潮(pace=3 的连续 beats)。直接输出 JSON 对象。`;
