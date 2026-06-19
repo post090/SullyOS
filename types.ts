@@ -559,9 +559,10 @@ export interface ChatTheme {
 export interface PhoneCustomApp {
     id: string;
     name: string;
-    icon: string; 
-    color: string; 
-    prompt: string; 
+    icon: string;
+    color: string;
+    prompt: string;
+    layout?: 'generic' | 'shop' | 'feed' | 'forum' | 'novel'; // 参考样板 UI 风格，默认 generic
 }
 
 export interface PhoneEvidence {

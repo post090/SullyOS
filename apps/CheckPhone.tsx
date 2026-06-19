@@ -12,6 +12,16 @@ import {
     Storefront, Heart, ArrowsClockwise, Tray, DotsThree
 } from '@phosphor-icons/react';
 
+type LayoutId = NonNullable<PhoneCustomApp['layout']>;
+
+const APP_LAYOUTS: { id: LayoutId; name: string; desc: string; icon: string }[] = [
+    { id: 'generic', name: '通用卡片', desc: '标题 + 内容信息流', icon: '🗂️' },
+    { id: 'shop', name: '购物风格', desc: '商品 / 价格 / 状态', icon: '🛍️' },
+    { id: 'feed', name: '社交动态', desc: '头像 / 正文 / 点赞', icon: '💬' },
+    { id: 'forum', name: '论坛风格', desc: '帖子 / 楼层 / 回复', icon: '📋' },
+    { id: 'novel', name: '小说风格', desc: '章节 / 正文阅读', icon: '📖' },
+];
+
 const CheckPhone: React.FC = () => {
     const { closeApp, characters, activeCharacterId, updateCharacter, apiConfig, addToast, userProfile } = useOS();
     const [view, setView] = useState<'select' | 'phone'>('select');
@@ -31,6 +41,7 @@ const CheckPhone: React.FC = () => {
     const [newAppIcon, setNewAppIcon] = useState('✨');
     const [newAppColor, setNewAppColor] = useState('#8b9cff');
     const [newAppPrompt, setNewAppPrompt] = useState('');
+    const [newAppLayout, setNewAppLayout] = useState<NonNullable<PhoneCustomApp['layout']>>('generic');
 
     // Swipe tracking for paging
     const touchStartX = useRef<number | null>(null);
@@ -119,7 +130,8 @@ const CheckPhone: React.FC = () => {
             name: newAppName,
             icon: newAppIcon,
             color: newAppColor,
-            prompt: newAppPrompt
+            prompt: newAppPrompt,
+            layout: newAppLayout
         };
 
         const currentApps = targetChar.phoneState?.customApps || [];
@@ -130,6 +142,7 @@ const CheckPhone: React.FC = () => {
         setShowCreateModal(false);
         setNewAppName('');
         setNewAppPrompt('');
+        setNewAppLayout('generic');
         setPage(1);
         addToast(`已安装 ${newAppName}`, 'success');
     };
@@ -150,7 +163,7 @@ const CheckPhone: React.FC = () => {
     };
 
     // --- Core Generation Logic ---
-    const handleGenerate = async (type: string, customPrompt?: string) => {
+    const handleGenerate = async (type: string, customPrompt?: string, layout?: LayoutId) => {
         if (!targetChar || !apiConfig.apiKey) {
             addToast('配置错误', 'error');
             return;
@@ -175,11 +188,17 @@ const CheckPhone: React.FC = () => {
             let logPrefix = "";
 
             if (customPrompt) {
+                const layoutHint: Record<LayoutId, string> = {
+                    generic: `这是一个【通用信息流】App。格式JSON数组: [{ "title": "标题/项目名", "detail": "详细内容", "value": "可选的数值/状态(如 +100)" }, ...]`,
+                    shop: `这是一个【购物】App，请生成商品/订单。title=商品名, detail=规格或物流状态, value=价格(如 ¥129.00)。格式JSON数组: [{ "title": "...", "detail": "...", "value": "¥..." }, ...]`,
+                    feed: `这是一个【社交动态】App（类似朋友圈/微博）。title=发布时间或心情, detail=动态正文。格式JSON数组: [{ "title": "...", "detail": "..." }, ...]`,
+                    forum: `这是一个【论坛/贴吧】App。title=帖子标题, detail=帖子正文, value=所在板块(如 #日常)。格式JSON数组: [{ "title": "...", "detail": "...", "value": "#..." }, ...]`,
+                    novel: `这是一个【小说阅读】App。title=章节标题, detail=该章正文片段(150字左右), value=字数(如 1.2万字)。格式JSON数组: [{ "title": "第N章 ...", "detail": "...", "value": "..." }, ...]`,
+                };
                 promptInstruction = `用户正在查看你的手机 App: "${type}"。
 该 App 的功能/用户想看的内容是: "${customPrompt}"。
-请生成 2-4 条符合该 App 功能的记录。
-必须符合你的人设（例如银行余额要符合身份，备忘录要符合性格）。
-格式JSON数组: [{ "title": "标题/项目名", "detail": "详细内容/金额/状态", "value": "可选的数值状态(如 +100)" }, ...]`;
+请生成 2-4 条符合该 App 功能的记录，必须符合你的人设。
+${layoutHint[layout || 'generic']}`;
                 const customApp = customApps.find(a => a.id === type);
                 logPrefix = customApp ? customApp.name : type;
             } else {
@@ -715,29 +734,103 @@ Format:
         );
     };
 
+    const DelBtn: React.FC<{ r: PhoneEvidence }> = ({ r }) => (
+        <button onClick={() => handleDeleteRecord(r)} className="absolute top-2 right-2 w-5 h-5 bg-rose-500/80 text-white rounded-full flex items-center justify-center text-[11px] leading-none opacity-0 group-hover:opacity-100 transition z-10">×</button>
+    );
+
+    const renderCustomItem = (r: PhoneEvidence, idx: number, total: number, accent: string, layout: LayoutId, app: PhoneCustomApp) => {
+        switch (layout) {
+            case 'shop':
+                return (
+                    <div key={r.id} className="group relative flex gap-3 rounded-2xl p-3 bg-white/[0.035] border border-white/[0.06] animate-slide-up">
+                        <div className="w-16 h-16 rounded-xl shrink-0 flex items-center justify-center text-2xl" style={{ background: `linear-gradient(135deg, ${accent}33, ${accent}0d)` }}>{app.icon}</div>
+                        <div className="flex-1 min-w-0 flex flex-col">
+                            <div className="text-[13px] font-medium text-white/95 leading-snug line-clamp-2">{r.title}</div>
+                            <div className="text-[10.5px] text-white/40 mt-0.5 line-clamp-1">{r.detail}</div>
+                            <div className="mt-auto flex items-center justify-between pt-1.5">
+                                <span className="text-[14px] font-bold" style={{ color: accent }}>{r.value || '¥ --'}</span>
+                                <span className="text-[9px] px-2 py-0.5 rounded-full bg-white/[0.06] text-white/50 tracking-wider">已下单</span>
+                            </div>
+                        </div>
+                        <DelBtn r={r} />
+                    </div>
+                );
+            case 'feed':
+                return (
+                    <div key={r.id} className="group relative rounded-2xl p-4 bg-white/[0.035] border border-white/[0.06] animate-slide-up">
+                        <div className="flex items-center gap-3 mb-2.5">
+                            <div className="w-9 h-9 rounded-full flex items-center justify-center text-lg" style={{ background: `linear-gradient(135deg, ${accent}55, ${accent}15)` }}>{app.icon}</div>
+                            <div className="min-w-0">
+                                <div className="text-[13px] font-semibold text-white/95">{charName}</div>
+                                <div className="text-[10px] text-white/35">{r.title || fmtClock(r.timestamp)}</div>
+                            </div>
+                        </div>
+                        <div className="text-[13px] text-white/80 leading-relaxed whitespace-pre-wrap">{r.detail}</div>
+                        <div className="flex items-center gap-5 mt-3 pt-2.5 border-t border-white/[0.06] text-white/40">
+                            <span className="flex items-center gap-1.5 text-[11px]"><Heart size={14} weight="fill" style={{ color: accent }} /> {3 + (r.id.length % 30)}</span>
+                            <span className="flex items-center gap-1.5 text-[11px]"><ChatCircle size={14} /> {1 + (r.id.length % 9)}</span>
+                        </div>
+                        <DelBtn r={r} />
+                    </div>
+                );
+            case 'forum':
+                return (
+                    <div key={r.id} className="group relative rounded-2xl p-4 bg-white/[0.035] border border-white/[0.06] animate-slide-up">
+                        <div className="flex items-start justify-between gap-2 mb-1.5">
+                            <span className="text-[14px] font-semibold text-white/95 leading-snug line-clamp-2 flex-1">{r.title}</span>
+                            {r.value && <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md shrink-0" style={{ color: accent, background: `${accent}1f` }}>{r.value}</span>}
+                        </div>
+                        <div className="text-[12px] text-white/55 leading-relaxed line-clamp-3 whitespace-pre-wrap">{r.detail}</div>
+                        <div className="flex items-center gap-3 mt-2.5 text-[10px] text-white/35">
+                            <span className="flex items-center gap-1">{app.icon} {charName}</span>
+                            <span>· {1 + (r.id.length % 200)} 回复</span>
+                            <span>· {fmtClock(r.timestamp)}</span>
+                        </div>
+                        <DelBtn r={r} />
+                    </div>
+                );
+            case 'novel':
+                return (
+                    <div key={r.id} className="group relative rounded-2xl p-4 bg-white/[0.035] border border-white/[0.06] animate-slide-up" style={{ boxShadow: `inset 0 0 30px ${accent}10` }}>
+                        <div className="text-[10px] tracking-[0.2em] uppercase mb-1" style={{ color: accent }}>Chapter {total - idx}</div>
+                        <div className="text-[15px] font-semibold text-white/95 mb-2" style={{ fontFamily: "'Shippori Mincho','Noto Sans SC',serif" }}>{r.title}</div>
+                        <div className="text-[12.5px] text-white/60 leading-loose line-clamp-4 whitespace-pre-wrap" style={{ fontFamily: "'Shippori Mincho','Noto Sans SC',serif" }}>{r.detail}</div>
+                        <div className="flex items-center justify-between mt-3 pt-2 border-t border-white/[0.06] text-[10px] text-white/30">
+                            <span>{r.value || '连载中'}</span>
+                            <span className="tabular-nums">{fmtClock(r.timestamp)}</span>
+                        </div>
+                        <DelBtn r={r} />
+                    </div>
+                );
+            default:
+                return (
+                    <div key={r.id} className="group relative rounded-2xl p-4 bg-white/[0.035] border border-white/[0.06] animate-slide-up" style={{ boxShadow: `inset 0 0 24px ${accent}14` }}>
+                        <div className="flex justify-between items-start gap-2 mb-1.5">
+                            <span className="text-[13.5px] font-semibold text-white/95 line-clamp-1">{r.title}</span>
+                            {r.value && <span className="text-[12px] font-bold px-2 py-0.5 rounded-full shrink-0" style={{ color: accent, background: `${accent}1f` }}>{r.value}</span>}
+                        </div>
+                        <div className="text-[12px] text-white/55 leading-relaxed whitespace-pre-wrap">{r.detail}</div>
+                        <div className="text-[9.5px] text-white/25 mt-2 text-right tabular-nums">{fmtClock(r.timestamp)}</div>
+                        <DelBtn r={r} />
+                    </div>
+                );
+        }
+    };
+
     const renderCustomApp = (app: PhoneCustomApp) => {
         const accent = app.color || '#8b9cff';
+        const layout = app.layout || 'generic';
+        const layoutMeta = APP_LAYOUTS.find(l => l.id === layout);
         const list = records.filter(r => r.type === app.id).sort((a, b) => b.timestamp - a.timestamp);
         return (
             <SubAppShell>
-                <TermHeader title={app.name} sub="custom app" accent={accent} onBack={() => setActiveAppId('home')}
+                <TermHeader title={app.name} sub={layoutMeta?.name || 'custom app'} accent={accent} onBack={() => setActiveAppId('home')}
                     right={<span className="text-lg">{app.icon}</span>} />
                 <div className="flex-1 overflow-y-auto px-4 pt-2 no-scrollbar pb-28 overscroll-contain space-y-3">
                     {list.length === 0 && <EmptyState text="暂无数据" />}
-                    {list.map(r => (
-                        <div key={r.id} className="group relative rounded-2xl p-4 bg-white/[0.035] border border-white/[0.06] animate-slide-up"
-                            style={{ boxShadow: `inset 0 0 24px ${accent}14` }}>
-                            <div className="flex justify-between items-start gap-2 mb-1.5">
-                                <span className="text-[13.5px] font-semibold text-white/95 line-clamp-1">{r.title}</span>
-                                {r.value && <span className="text-[12px] font-bold px-2 py-0.5 rounded-full shrink-0" style={{ color: accent, background: `${accent}1f` }}>{r.value}</span>}
-                            </div>
-                            <div className="text-[12px] text-white/55 leading-relaxed whitespace-pre-wrap">{r.detail}</div>
-                            <div className="text-[9.5px] text-white/25 mt-2 text-right tabular-nums">{fmtClock(r.timestamp)}</div>
-                            <button onClick={() => handleDeleteRecord(r)} className="absolute top-2 right-2 w-5 h-5 bg-rose-500/80 text-white rounded-full flex items-center justify-center text-[11px] leading-none opacity-0 group-hover:opacity-100 transition">×</button>
-                        </div>
-                    ))}
+                    {list.map((r, idx) => renderCustomItem(r, idx, list.length, accent, layout, app))}
                 </div>
-                <RefreshFab onClick={() => handleGenerate(app.id, app.prompt)} label="刷新数据" accent={accent} />
+                <RefreshFab onClick={() => handleGenerate(app.id, app.prompt, layout)} label="刷新数据" accent={accent} />
             </SubAppShell>
         );
     };
@@ -1070,6 +1163,25 @@ Format:
                             className="w-full h-24 bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs resize-none"
                         />
                         <p className="text-[9px] text-slate-400 mt-1">AI 将根据此指令生成该 App 内部的数据。</p>
+                    </div>
+                    <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase block mb-2">界面样板 (UI Style)</label>
+                        <div className="grid grid-cols-2 gap-2">
+                            {APP_LAYOUTS.map(l => {
+                                const active = newAppLayout === l.id;
+                                return (
+                                    <button key={l.id} type="button" onClick={() => setNewAppLayout(l.id)}
+                                        className={`text-left rounded-xl p-2.5 border transition flex items-center gap-2.5 ${active ? 'border-transparent text-white' : 'border-slate-200 bg-slate-50 text-slate-600'}`}
+                                        style={active ? { background: newAppColor } : undefined}>
+                                        <span className="text-lg leading-none shrink-0">{l.icon}</span>
+                                        <div className="min-w-0">
+                                            <div className="text-[12px] font-bold leading-tight">{l.name}</div>
+                                            <div className={`text-[9px] leading-tight truncate ${active ? 'text-white/80' : 'text-slate-400'}`}>{l.desc}</div>
+                                        </div>
+                                    </button>
+                                );
+                            })}
+                        </div>
                     </div>
                 </div>
             </Modal>
