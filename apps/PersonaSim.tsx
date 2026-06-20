@@ -61,7 +61,7 @@ interface Props {
     onExit: () => void;
     openLifeLog: () => void;
     sim: SimState;
-    onStart: (mode: 'daily' | 'event', theme: string) => void;
+    onStart: (mode: 'daily' | 'event', theme: string, presence: 'default' | 'light' | 'none') => void;
     onConsumed: () => void;
 }
 
@@ -111,9 +111,9 @@ const Typewriter: React.FC<{ drafts: string[]; sent?: string | null; className?:
 // ============================================================
 export async function generatePersonaScript(opts: {
     char: CharacterProfile; userProfile: UserProfile; apiConfig: SimApiConfig;
-    mode: 'daily' | 'event'; theme: string;
+    mode: 'daily' | 'event'; theme: string; userPresence?: 'default' | 'light' | 'none';
 }): Promise<SimScript> {
-    const { char, userProfile, apiConfig, mode, theme } = opts;
+    const { char, userProfile, apiConfig, mode, theme, userPresence = 'default' } = opts;
     await injectMemoryPalace(char, undefined, theme, userProfile.name);
     const context = ContextBuilder.buildCoreContext(char, userProfile, true, char.memoryPalaceInjection);
     const msgs = await DB.getMessagesByCharId(char.id);
@@ -126,7 +126,7 @@ export async function generatePersonaScript(opts: {
     }).join('\n');
     const firstTs = msgs.find(m => typeof m.timestamp === 'number')?.timestamp;
     const acquaintance = describeAcquaintance(firstTs, userProfile.name, char.name);
-    const prompt = buildDirectorPrompt(context, recent, mode, theme, char.name, acquaintance);
+    const prompt = buildDirectorPrompt(context, recent, mode, theme, char.name, acquaintance, userProfile.name, userPresence);
     const res = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },
@@ -152,6 +152,7 @@ const PersonaSim: React.FC<Props> = ({ targetChar, onExit, openLifeLog, sim, onS
     const [phase, setPhase] = useState<'idle' | 'play' | 'end'>('idle');
     const [mode, setMode] = useState<'daily' | 'event'>('daily');
     const [theme, setTheme] = useState('');
+    const [presence, setPresence] = useState<'default' | 'light' | 'none'>('default');
     const [script, setScript] = useState<SimScript | null>(null);
     const [idx, setIdx] = useState(0);
     const [autoplay, setAutoplay] = useState(false);
@@ -179,7 +180,7 @@ const PersonaSim: React.FC<Props> = ({ targetChar, onExit, openLifeLog, sim, onS
         const trimmed = t.trim();
         if (!trimmed) { addToast('请选择或输入体验内容', 'error'); return; }
         setMode(m); setTheme(trimmed);
-        onStart(m, trimmed);
+        onStart(m, trimmed, presence);
     };
 
     // ----- consume a ready script (generated in background) and start playing -----
@@ -358,6 +359,28 @@ const PersonaSim: React.FC<Props> = ({ targetChar, onExit, openLifeLog, sim, onS
                     <p className="text-[11px] text-white/35 mb-4 px-1">
                         {mode === 'daily' ? '体验 TA 某个普通日子的生活 · 生活感与陪伴' : '体验 TA 人生中的某个特殊事件 · 情绪张力'}
                     </p>
+
+                    {/* 你的存在感（这一天里"你"占多少分量） */}
+                    <div className="text-[10px] uppercase tracking-wider text-white/40 mb-2 px-1">你的存在感</div>
+                    <div className="grid grid-cols-3 gap-2 mb-5">
+                        {([
+                            { id: 'default', label: '默认', desc: '自然出现' },
+                            { id: 'light', label: '轻度', desc: '淡淡背景' },
+                            { id: 'none', label: '无你', desc: '只有 TA' },
+                        ] as const).map(o => {
+                            const active = presence === o.id;
+                            return (
+                                <button key={o.id} onClick={() => setPresence(o.id)}
+                                    className="rounded-2xl py-2.5 border transition active:scale-[0.98] text-center"
+                                    style={active
+                                        ? { background: ACCENT, color: '#1a1530', borderColor: 'transparent' }
+                                        : { background: 'rgba(255,255,255,0.035)', borderColor: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.8)' }}>
+                                    <div className="text-[12.5px] font-semibold">{o.label}</div>
+                                    <div className={`text-[9px] mt-0.5 ${active ? 'text-[#1a1530]/70' : 'text-white/35'}`}>{o.desc}</div>
+                                </button>
+                            );
+                        })}
+                    </div>
 
                     {/* ① 选方向（点一下填进下方，可继续编辑） */}
                     <div className="text-[10px] uppercase tracking-wider text-white/40 mb-2 px-1">① 选个大方向</div>
@@ -1065,7 +1088,20 @@ function buildVariation(): string {
 ※ 严禁套路化：不要从「起床/关闹钟/看天气」开场，也不要默认以「睡觉/锁屏」收尾，更不要走「醒来→刷一圈微信微博→睡觉」的流水账。下方字段示例只演示 JSON 格式，时间和内容一律按本场变奏来。`;
 }
 
-function buildDirectorPrompt(context: string, recent: string, mode: 'daily' | 'event', theme: string, name: string, acquaintance: string): string {
+// user 存在感三档（这一天里"你"占多少分量）
+function buildPresenceRule(presence: 'default' | 'light' | 'none', userName: string): string {
+    const u = userName || '用户';
+    switch (presence) {
+        case 'none':
+            return `这一天**完全是 TA 自己的人生**：${u} 不出现、不被想起、不被寻找。即使 TA 记忆里有 ${u}，这一天也绝不浮现。所有消息、念头、痕迹都由 TA 自己的生活与其他人构成，绝对不要出现、暗示、惦记 ${u}。`;
+        case 'light':
+            return `${u} 只是**极淡的背景**——整场重心是 TA 自己。最多偶尔扫过一条 ${u} 的旧消息、一闪而过的一个念头，点到即止，绝不聚焦、不展开、不围着 ${u} 转。`;
+        default:
+            return `${u} 是 TA 生活里**自然存在的一条线**——可以有 ${u} 的消息、对 ${u} 的惦记、痕迹里出现 ${u}，关系与平时聊天一致；但此刻 ${u} 不在场，不要替 ${u} 说话或行动。`;
+    }
+}
+
+function buildDirectorPrompt(context: string, recent: string, mode: 'daily' | 'event', theme: string, name: string, acquaintance: string, userName: string, presence: 'default' | 'light' | 'none'): string {
     return `${context}
 
 ### [最近的聊天上下文]
@@ -1076,6 +1112,7 @@ ${recent || '（暂无最近对话）'}
 体验类型：${mode === 'daily' ? '日常模拟（普通日子，重生活感与陪伴）' : '事件模拟（特殊事件，重情绪张力）'}
 体验内容：「${theme}」
 关系时间线（重要护栏）：${acquaintance}
+你的存在感（${userName || '用户'}在这一天里的位置 · 必须严格遵守）：${buildPresenceRule(presence, userName)}
 
 观众（用户）将**成为 ${name}**，通过 TA 使用手机的行为，亲身经历这段时间。
 

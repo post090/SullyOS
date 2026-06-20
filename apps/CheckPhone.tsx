@@ -492,14 +492,14 @@ Format:
     };
 
     // ----- 人格模拟：后台生成（生成期间用户可离开本 App 去别处逛） -----
-    const runSim = async (m: 'daily' | 'event', t: string) => {
+    const runSim = async (m: 'daily' | 'event', t: string, presence: 'default' | 'light' | 'none' = 'default') => {
         if (!targetChar) return;
         if (!apiConfig.apiKey) { addToast('请先配置 API', 'error'); return; }
         const cid = targetChar.id, cname = targetChar.name;
         personaSimStore.set({ status: 'loading', mode: m, theme: t, charId: cid, charName: cname });
         try {
             const generated = await generatePersonaScript({
-                char: targetChar, userProfile, apiConfig: apiConfig as any, mode: m, theme: t,
+                char: targetChar, userProfile, apiConfig: apiConfig as any, mode: m, theme: t, userPresence: presence,
             });
             personaSimStore.set({ status: 'ready', mode: m, theme: t, script: generated, charId: cid, charName: cname });
             addToast('演出已就绪', 'success');
