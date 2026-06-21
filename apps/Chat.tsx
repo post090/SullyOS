@@ -850,14 +850,16 @@ const Chat: React.FC = () => {
                 .replace(/[\s,，。.!！?？、:：;；#·\-—…"'""''（）()]/g, '')
                 .trim();
             const xhsFullMatch = text.match(/xiaohongshu\.com\/(?:discovery\/item|explore)\/([a-f0-9]{24})/);
-            const xhsShortMatch = text.match(/xhslink\.com\/[A-Za-z0-9/]+/i);
+            const xhsShortMatch = text.match(/(?:https?:\/\/)?xhslink\.com\/[A-Za-z0-9/]+/i);
             if (xhsFullMatch || xhsShortMatch) {
                 let noteId = xhsFullMatch?.[1] || '';
                 let xsecToken = text.match(/xsec_token=([^&\s]+)/)?.[1];
                 // 短链（xhslink.com）不含 id/token —— 先经 sfworker 展开成真实链接再提取。
                 if (!noteId && xhsShortMatch) {
                     try {
-                        const finalUrl = await expandShortUrl(xhsShortMatch[0]);
+                        // 正则可能匹配到不带协议头的裸链接，补上 https 再展开（否则 new URL 报 Invalid URL）。
+                        const shortUrl = /^https?:\/\//i.test(xhsShortMatch[0]) ? xhsShortMatch[0] : `https://${xhsShortMatch[0]}`;
+                        const finalUrl = await expandShortUrl(shortUrl);
                         noteId = finalUrl.match(/(?:discovery\/item|explore|item)\/([a-f0-9]{24})/)?.[1] || '';
                         xsecToken = xsecToken || finalUrl.match(/xsec_token=([^&\s]+)/)?.[1];
                         if (isDevDebugAvailable()) console.log('[卡片调试] 小红书短链展开 →', finalUrl, '| noteId =', noteId);
