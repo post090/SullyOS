@@ -2052,7 +2052,7 @@ const MessageItem = React.memo(({
         // srcDoc 用一个全宽中心化的 wrapper, 让 270px 的卡片在 iframe 里居中、背景透明。
         const srcDoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;padding:0;background:transparent;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#334155;}body{display:flex;justify-content:center;padding:0;}*{box-sizing:border-box;}img{max-width:100%;}</style></head><body>${html}</body></html>`;
         return commonLayout(
-            <div className="rounded-[18px] overflow-hidden bg-white/0 shadow-sm border border-fuchsia-100/60 max-w-[280px]">
+            <div className="rounded-[18px] overflow-hidden bg-transparent max-w-[280px]">
                 <iframe
                     title="html-card"
                     srcDoc={srcDoc}
@@ -2353,7 +2353,7 @@ const MessageItem = React.memo(({
         return commonLayout(
             <div className="relative group">
                 {m.content ? (
-                    <img src={m.content} className="max-w-[200px] max-h-[300px] rounded-2xl shadow-sm border border-black/5" alt="Uploaded" loading="lazy" decoding="async" />
+                    <img src={m.content} className="max-w-[200px] max-h-[300px] rounded-2xl" alt="Uploaded" loading="lazy" decoding="async" />
                 ) : (
                     <div className="px-4 py-6 rounded-2xl bg-slate-100 text-slate-400 text-xs italic text-center min-w-[120px]">[图片已丢失]</div>
                 )}
