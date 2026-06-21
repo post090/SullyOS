@@ -19,7 +19,8 @@ import type { EventBox, MemoryNode, EmbeddingConfig, MemoryRoom, RemoteVectorCon
 import {
     EVENT_BOX_COMPRESSION_THRESHOLD,
     EVENT_BOX_SEAL_THRESHOLD,
-    EVENT_BOX_SUMMARY_TARGET_CHARS,
+    EVENT_BOX_SUMMARY_TARGET_MIN_CHARS,
+    EVENT_BOX_SUMMARY_TARGET_MAX_CHARS,
     EVENT_BOX_SUMMARY_HARD_MAX_CHARS,
 } from './types';
 import { EventBoxDB, MemoryNodeDB } from './db';
@@ -27,6 +28,7 @@ import type { LightLLMConfig } from './pipeline';
 import { vectorizeAndStore } from './vectorStore';
 import { bulkSetArchived } from './supabaseVector';
 import { safeFetchJson, extractJson } from '../safeApi';
+import { enforceSummaryLengthBudget } from './summaryLengthBudget';
 
 const VALID_ROOMS: MemoryRoom[] = [
     'living_room', 'bedroom', 'study', 'user_room',
@@ -146,7 +148,7 @@ async function callCompressionLLM(
 
 **要求（严格遵守）**：
 1. **第一人称**（用「我」），从 ${charName} 的视角写。${userLabel} 用名字直接称呼。
-2. **字数目标 ${EVENT_BOX_SUMMARY_TARGET_CHARS} 字以内，绝对上限 ${EVENT_BOX_SUMMARY_HARD_MAX_CHARS} 字**。紧凑、务实、不口水。
+2. **字数目标 ${EVENT_BOX_SUMMARY_TARGET_MIN_CHARS}-${EVENT_BOX_SUMMARY_TARGET_MAX_CHARS} 字，绝对上限 ${EVENT_BOX_SUMMARY_HARD_MAX_CHARS} 字**。紧凑、务实、不口水。
 3. **只保留关键信息**：具体人物、动作、对象、场景、转折、情绪。**去掉所有语气填充、修辞铺陈、重复感慨**（如「真是的」、「怎么说呢」、「不过话说回来」等）。事实先行。
 4. **带时间点但不冗余**：每件事标一次日期就够（「3 月 20 日…4 月 5 日…」），不要每句都重复时间。
 5. **连贯但简洁**：不套「起因/经过/结果」模板，但要让读者能按顺序看懂事情怎么发展的。
@@ -162,7 +164,7 @@ async function callCompressionLLM(
 
 严格 JSON，不要 markdown 包裹（content 里的引用一律用「」/《》/'，不要用 "）：
 {
-  "content": "（紧凑的第一人称回忆，${EVENT_BOX_SUMMARY_TARGET_CHARS}字内）",
+  "content": "（紧凑的第一人称回忆，${EVENT_BOX_SUMMARY_TARGET_MIN_CHARS}-${EVENT_BOX_SUMMARY_TARGET_MAX_CHARS}字）",
   "name": "...",
   "tags": ["...", "..."],
   "room": "...",
@@ -215,11 +217,16 @@ async function callCompressionLLM(
                 return null;
             }
         }
-        // 硬截断安全网：LLM 超限时截断并追加提示，避免单盒 summary 无限膨胀
+        // 长度兜底：超过硬上限时，先让模型把这段二次压缩回目标区间（不丢信息），
+        // 压不动或二次压缩失败才退回硬截断保证有界。详见 enforceSummaryLengthBudget。
         let content = String(parsed.content);
         if (content.length > EVENT_BOX_SUMMARY_HARD_MAX_CHARS) {
-            console.warn(`🗜️ [Compression] LLM summary ${content.length} 字超过硬上限 ${EVENT_BOX_SUMMARY_HARD_MAX_CHARS}，截断`);
-            content = content.slice(0, EVENT_BOX_SUMMARY_HARD_MAX_CHARS) + '……';
+            console.warn(`🗜️ [Compression] LLM summary ${content.length} 字超过硬上限 ${EVENT_BOX_SUMMARY_HARD_MAX_CHARS}，尝试二次压缩`);
+            content = await enforceSummaryLengthBudget(
+                content,
+                (t) => recompressSummary(t, EVENT_BOX_SUMMARY_TARGET_MAX_CHARS, llmConfig, charName),
+                EVENT_BOX_SUMMARY_HARD_MAX_CHARS,
+            );
         }
         return {
             content,
@@ -231,6 +238,53 @@ async function callCompressionLLM(
         };
     } catch (err: any) {
         console.error(`🗜️ [Compression] LLM 调用失败: ${err?.message || err}`);
+        return null;
+    }
+}
+
+// ─── 整合回忆长度兜底：超限二次压缩，压不动才硬截断 ──────────
+
+/**
+ * 让模型把过长的整合回忆压缩回 targetMaxChars 字内（纯文本输出，不走 JSON）。
+ * 失败返回 null，由 enforceSummaryLengthBudget 决定兜底。
+ */
+async function recompressSummary(
+    text: string,
+    targetMaxChars: number,
+    llmConfig: LightLLMConfig,
+    charName: string,
+): Promise<string | null> {
+    const systemPrompt = `你是 ${charName}。下面这段第一人称回忆写得太长了。请在**不丢关键信息**（具体人物、地点、事件、转折、情绪）的前提下，把它压缩到 ${targetMaxChars} 字以内。
+要求：保持第一人称（「我」）、连贯通顺；只删语气填充和重复铺陈，不删事实；引用一律用「」《》或单引号，不要用半角双引号。
+直接输出压缩后的回忆正文，不要解释、不要 JSON、不要 markdown 包裹。`;
+    try {
+        const data = await safeFetchJson(
+            `${llmConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`,
+            {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${llmConfig.apiKey}`,
+                },
+                body: JSON.stringify({
+                    model: llmConfig.model,
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: text },
+                    ],
+                    temperature: 0.3,
+                    max_tokens: 4000,
+                    stream: false,
+                }),
+            },
+            2, 0, { appName: '记忆宫殿', purpose: '事件压缩-二次压缩' }
+        );
+        const reply = (data.choices?.[0]?.message?.content || '').trim();
+        // 模型偶尔仍会裹 ``` 代码块，剥掉常见包裹
+        const cleaned = reply.replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```$/, '').trim();
+        return cleaned || null;
+    } catch (err: any) {
+        console.warn(`🗜️ [Compression] 二次压缩 LLM 调用失败: ${err?.message || err}`);
         return null;
     }
 }
