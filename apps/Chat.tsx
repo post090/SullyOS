@@ -834,27 +834,48 @@ const Chat: React.FC = () => {
 
         const savedUserMsgId = await DB.saveMessage(msgPayload);
 
-        // Detect XHS link in user text and create xhs_card via MCP
+        // 小红书链接 → xhs_card。主路径不依赖任何后端：小红书分享文案自带标题（【标题】）
+        // 和笔记 id/token，直接解析就能建卡，让「没部署小红书 MCP」的用户也能让角色看到分享了哪篇笔记。
+        // 配了 MCP 的话再抓详情补正文/封面/作者（锦上添花，抓失败也不影响基础卡）。
         if (type === 'text') {
             const xhsUrlMatch = text.match(/xiaohongshu\.com\/(?:discovery\/item|explore)\/([a-f0-9]{24})/);
-            const mcpUrl = realtimeConfig?.xhsMcpConfig?.serverUrl;
-            if (xhsUrlMatch && mcpUrl && realtimeConfig?.xhsMcpConfig?.enabled) {
-                const noteUrl = `https://www.xiaohongshu.com/explore/${xhsUrlMatch[1]}`;
-                try {
-                    const result = await XhsMcpClient.getNoteDetail(mcpUrl, noteUrl);
-                    if (result.success && result.data) {
-                        const note = normalizeNote(result.data);
-                        await DB.saveMessage({
-                            charId: char.id,
-                            role: 'user',
-                            type: 'xhs_card',
-                            content: note.title || '小红书笔记',
-                            metadata: { xhsNote: note }
-                        });
+            if (xhsUrlMatch) {
+                const noteId = xhsUrlMatch[1];
+                const xsecToken = text.match(/xsec_token=([^&\s]+)/)?.[1];
+                // 文案标题形如「【标题 | 小红书 - 你的生活兴趣社区】」，剥掉 "| 小红书…" 后缀。
+                const titleFromText = (text.match(/【(.+?)】/)?.[1] || '')
+                    .replace(/\s*[|｜]\s*小红书.*$/, '').trim();
+
+                // 基础卡数据全部来自分享文案，零后端依赖。
+                let note: any = {
+                    noteId, title: titleFromText || '', desc: '', author: '',
+                    authorId: '', likes: 0, xsecToken,
+                };
+
+                // 有小红书 MCP 才抓详情补全（正文/封面/作者/赞数）。
+                const mcpUrl = realtimeConfig?.xhsMcpConfig?.serverUrl;
+                if (mcpUrl && realtimeConfig?.xhsMcpConfig?.enabled) {
+                    try {
+                        // 详情必须带 xsec_token，token 就在用户粘贴的链接里——之前重拼 URL 把它丢了导致抓空。
+                        const noteUrl = `https://www.xiaohongshu.com/explore/${noteId}${xsecToken ? `?xsec_token=${xsecToken}&xsec_source=pc_share` : ''}`;
+                        const result = await XhsMcpClient.getNoteDetail(mcpUrl, noteUrl, xsecToken);
+                        if (result.success && result.data) {
+                            const fetched = normalizeNote(result.data);
+                            // 抓到的字段补全基础卡；标题仍优先用文案标题（通常更完整可读）。
+                            note = { ...note, ...fetched, title: titleFromText || fetched.title || '', xsecToken: fetched.xsecToken || xsecToken };
+                        }
+                    } catch (e) {
+                        console.warn('XHS link fetch via MCP failed (已用文案兜底):', e);
                     }
-                } catch (e) {
-                    console.warn('XHS link fetch via MCP failed:', e);
                 }
+
+                await DB.saveMessage({
+                    charId: char.id,
+                    role: 'user',
+                    type: 'xhs_card',
+                    content: note.title || '小红书笔记',
+                    metadata: { xhsNote: note }
+                });
             }
 
             // 通用网页分享：检测到普通 http(s) 链接 → 抓取正文存成 webpage_card，

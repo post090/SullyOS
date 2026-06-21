@@ -145,6 +145,22 @@ export function normalizeMessageContent(
         return '[TRPG游戏片段]';
     }
 
+    // 小红书卡片：把笔记标题 + 正文 desc + 作者翻成可读文本喂给角色。标题来自分享文案
+    // （无需后端），desc/作者来自 MCP 抓取（可能没有）。没专门分支时会走默认只给 content(=标题)，
+    // 抓空时甚至空字符串，角色读不到任何东西。
+    if (type === 'xhs_card') {
+        const note: any = msg.metadata?.xhsNote || {};
+        const title = (note.title || msg.content || '').trim();
+        const desc = (note.desc || '').trim();
+        const author = (note.author || '').trim();
+        const authorPart = author ? `（作者：${author}）` : '';
+        const head = `[小红书笔记] ${userName}分享了一篇小红书笔记${title ? `《${title}》` : ''}${authorPart}`;
+        if (desc) return `${head}\n笔记正文：\n${desc}`;
+        // 只有标题（没部署 MCP / 没抓到正文）：角色至少知道是哪篇笔记，但别假装读过正文。
+        if (title) return `${head}\n（注：只拿到了笔记标题，正文/图片没抓到——要读完整内容需部署小红书功能。别假装读过正文。）`;
+        return `${head}\n（注：这篇笔记的内容没能获取到。）`;
+    }
+
     // 网页卡片：用户粘贴链接分享的网页。卡片只给人看封面，上下文/归档/palace 要读到
     // 提取出的正文纯文字，角色才"看见"了网页内容（正文截到 ~1500 字防 token 爆）。
     if (type === 'webpage_card') {
