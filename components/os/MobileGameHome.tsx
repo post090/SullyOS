@@ -25,13 +25,18 @@ const PAL = {
     cloud: '#faf6ff',   // 近白紫
 };
 
-// 白色磨砂粉紫卡
+// 白色磨砂粉紫卡（气泡黏土鼓润边：外柔影 + 底内阴影 + 顶内高光）
 const CARD = {
-    background: 'linear-gradient(150deg, rgba(255,255,255,0.74), rgba(236,228,247,0.52))',
-    border: '1px solid rgba(255,255,255,0.85)',
-    boxShadow: '0 8px 22px rgba(150,120,200,0.18), inset 0 1px 0 rgba(255,255,255,0.85)',
+    background: 'linear-gradient(150deg, rgba(255,255,255,0.78), rgba(238,231,249,0.56))',
+    boxShadow: '0 9px 22px rgba(150,120,200,0.2), inset 0 -4px 8px rgba(180,150,214,0.18), inset 0 4px 6px rgba(255,255,255,0.95)',
     backdropFilter: 'blur(14px) saturate(1.1)',
     WebkitBackdropFilter: 'blur(14px) saturate(1.1)',
+} as React.CSSProperties;
+
+// 气泡黏土瓷砖（快捷入口图标底）—— 充气鼓润感
+const CLAY = {
+    background: 'linear-gradient(160deg, #ffffff 0%, #efe7f9 100%)',
+    boxShadow: '0 10px 20px rgba(150,120,200,0.28), inset 0 -5px 9px rgba(182,152,216,0.34), inset 0 5px 7px rgba(255,255,255,0.98)',
 } as React.CSSProperties;
 
 const FONT_DISPLAY = `'DM Serif Display', serif`;     // 大时钟 / Lv / 日期数字
@@ -329,12 +334,9 @@ const MobileGameHome: React.FC = () => {
                 <div className="grid grid-cols-4 gap-2.5 animate-fade-in">
                     {QUICK_ENTRIES.map(e => (
                         <button key={e.id} onClick={() => openApp(e.id)} className="flex flex-col items-center gap-2 active:scale-90 transition-transform">
-                            <div className="relative w-[3.9rem] h-[3.9rem] rounded-[1.45rem] flex items-center justify-center overflow-hidden"
-                                style={{ background: 'linear-gradient(150deg, #ffffff, #ede6f8)', border: '1px solid rgba(255,255,255,0.95)', boxShadow: '0 7px 16px rgba(150,120,200,0.22), inset 0 1.5px 2px rgba(255,255,255,1)' }}>
-                                {/* 顶部光泽 */}
-                                <div className="absolute inset-x-0 top-0 h-1/2 pointer-events-none" style={{ background: 'linear-gradient(180deg, rgba(255,255,255,0.7), transparent)' }} />
-                                <span className="absolute top-1 right-1.5 text-[8px] z-10" style={{ color: PAL.pink, opacity: 0.85 }}>✦</span>
-                                <div className="relative w-[2.4rem] h-[2.4rem]" style={{ filter: 'drop-shadow(0 3px 5px rgba(150,120,200,0.3))' }}>{renderAppArt(e.id)}</div>
+                            <div className="relative w-[3.9rem] h-[3.9rem] rounded-[1.55rem] flex items-center justify-center" style={CLAY}>
+                                <span className="absolute top-1.5 right-2 text-[8px]" style={{ color: PAL.pink, opacity: 0.85 }}>✦</span>
+                                <div className="w-[2.4rem] h-[2.4rem]" style={{ filter: 'drop-shadow(0 3px 5px rgba(150,120,200,0.3))' }}>{renderAppArt(e.id)}</div>
                             </div>
                             <span className="text-[11px]" style={{ fontFamily: FONT_CN, color: PAL.grape }}>{e.cn}</span>
                         </button>
