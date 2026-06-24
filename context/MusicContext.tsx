@@ -13,6 +13,7 @@ import React, {
 } from 'react';
 import { cachedCall as _cachedCall, invalidate as _invalidateCache, clearAll as _clearAllCache } from '../utils/musicCache';
 import { DB } from '../utils/db';
+import { getProxyWorkerUrl, DEFAULT_PROXY_WORKER } from '../utils/proxyWorker';
 import type { PostProcessMusicHooks } from '../utils/applyAssistantPostProcessing';
 
 /* ───────────── 类型 ───────────── */
@@ -82,31 +83,37 @@ const loadLocalAlbum = (): Song[] => {
 const saveLocalAlbum = (songs: Song[]) => {
   try { localStorage.setItem(LS_LOCAL_ALBUM_KEY, JSON.stringify(songs)); } catch {}
 };
-const DEFAULT_WORKER = 'https://sullymeow.ccwu.cc';
+// 音乐的默认 worker = 中心配置（设置 → 自定义网络代理）。用户没在播放器里单独
+// 设过地址时，跟着中心 worker 走；在播放器里手填过自定义地址的，那个地址覆盖生效。
+const musicDefaultWorker = (): string => getProxyWorkerUrl();
 
 export const MUSIC_DEFAULT_CFG: MusicCfg = {
-  workerUrl: DEFAULT_WORKER,
+  workerUrl: musicDefaultWorker(),
   cookie: '',
   quality: 'exhigh',
 };
 
 /* ───────────── 工具 ───────────── */
-// 旧 worker 域名 → 新自定义域名的迁移表。老用户 localStorage 里存的还是
-// sully-n.qegj567.workers.dev，国内访问超时；自定义域名走 CF 边缘到同一个
-// worker，行为一致。第一次读到自动改写并落盘，下次刷新就稳定了。
-const STALE_WORKER_HOSTS = [/sully-n\.qegj567\.workers\.dev/i];
+// worker 地址迁移：把"非自定义"的存量地址一律视为"没单独设过" → 跟随中心 worker。
+//   1. 旧的 sully-n.qegj567.workers.dev 默认（国内超时，早就该弃用）；
+//   2. 停在公共默认实例（= 中心配置的默认值）上的——中心没改时这是 no-op，
+//      中心换成自部署 worker 后，音乐自动跟着切过去。
+// 只有用户在播放器里手填的、跟默认不一样的地址才原样保留。读到需要改写时落盘一次。
+const normalizeHost = (u: string): string => u.trim().replace(/\/+$/, '').toLowerCase();
+const FOLLOW_CENTRAL_HOSTS = [/sully-n\.qegj567\.workers\.dev/i];
 const migrateWorkerUrl = (url: string | undefined): string => {
-  if (!url) return DEFAULT_WORKER;
-  for (const re of STALE_WORKER_HOSTS) {
-    if (re.test(url)) return DEFAULT_WORKER;
-  }
+  const central = musicDefaultWorker();
+  if (!url) return central;
+  const norm = normalizeHost(url);
+  if (norm === normalizeHost(DEFAULT_PROXY_WORKER)) return central;
+  if (FOLLOW_CENTRAL_HOSTS.some((re) => re.test(norm))) return central;
   return url;
 };
 
 const loadCfg = (): MusicCfg => {
   try {
     const raw = localStorage.getItem(LS_CFG_KEY);
-    if (!raw) return MUSIC_DEFAULT_CFG;
+    if (!raw) return { ...MUSIC_DEFAULT_CFG, workerUrl: musicDefaultWorker() };
     const parsed = JSON.parse(raw);
     const cfg = { ...MUSIC_DEFAULT_CFG, ...parsed };
     const migrated = migrateWorkerUrl(cfg.workerUrl);
@@ -115,7 +122,7 @@ const loadCfg = (): MusicCfg => {
       try { localStorage.setItem(LS_CFG_KEY, JSON.stringify(cfg)); } catch {}
     }
     return cfg;
-  } catch { return MUSIC_DEFAULT_CFG; }
+  } catch { return { ...MUSIC_DEFAULT_CFG, workerUrl: musicDefaultWorker() }; }
 };
 
 /**

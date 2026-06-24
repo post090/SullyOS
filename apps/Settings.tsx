@@ -1715,8 +1715,8 @@ const Settings: React.FC = () => {
 
                 <p className="text-[10px] text-slate-400 px-1 mt-2 leading-relaxed">
                     只填到域名（如 <b>{DEFAULT_PROXY_WORKER}</b>），不要带 /search、/webdav、/api 等路径。
-                    联网搜索 / 备份代理 / Notion / 飞书 / 点单 / 网页抓取 / 出图 / 小红书 Lite 都会切到这里填的 Worker。
-                    只有音乐（网易云）在自己的播放器里有独立地址，不受这里影响。
+                    联网搜索 / 备份代理 / Notion / 飞书 / 点单 / 网页抓取 / 出图 / 小红书 Lite / 音乐 都会切到这里填的 Worker。
+                    （音乐播放器里还留了一个独立地址框，单独填了就以那个为准。）
                 </p>
             </section>
         )}
