@@ -1489,6 +1489,22 @@ export interface DialogueItem {
     voiceEmotion?: string;
 }
 
+/**
+ * 「观测协议 OBSERVE」结构化观测数据：开启后由 LLM 在正文最前面输出一段
+ * ⟦OBSERVE⟧ 块，前端解析成这四个维度，渲染成可独立查看的全息 HUD。
+ * 所有字段可缺省——模型偶尔漏写某项时不应让面板崩掉。
+ */
+export interface DateObservation {
+    /** 时间：结合场景的当前时刻（不一定等于系统时间） */
+    time?: string;
+    /** 地点：角色此刻所在的具体地点 */
+    place?: string;
+    /** 状态：角色的身心状态 */
+    state?: string;
+    /** 细节：正在发生的动作 / 微小细节 */
+    detail?: string;
+}
+
 export interface DateState {
     dialogueQueue: DialogueItem[];
     dialogueBatch: DialogueItem[];
@@ -1497,7 +1513,9 @@ export interface DateState {
     currentSprite: string;
     isNovelMode: boolean;
     timestamp: number;
-    peekStatus: string; 
+    peekStatus: string;
+    /** 当前批次解析出的观测数据（开了 OBSERVE 才有），用于恢复会话时回填 HUD */
+    observation?: DateObservation;
 }
 
 
@@ -1768,6 +1786,8 @@ export interface CharacterProfile {
   dateSkinSets?: SkinSet[];     // Multiple skin sets for portrait mode
   activeSkinSetId?: string;     // Currently active skin set ID
   dateStyleConfig?: DateStyleConfig; // 见面模式文风（写作风格 / 叙事人称 / 自定义补充）
+  /** 观测协议 OBSERVE：开启后每条回复注入「时间/地点/状态/细节」结构化观测，渲染成全息 HUD */
+  dateObserve?: { enabled?: boolean };
 
   savedDateState?: DateState;
   specialMomentRecords?: Record<string, SpecialMomentRecord>;

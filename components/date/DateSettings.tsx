@@ -261,6 +261,21 @@ const DateSettings: React.FC<DateSettingsProps> = ({ char, onBack }) => {
                 </section>
 
                 <section className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
+                    <div className="flex items-center justify-between">
+                        <div className="pr-4">
+                            <h3 className="text-xs font-bold text-slate-400 uppercase">观测协议 · OBSERVE</h3>
+                            <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">开启后，每条回复都会附上 {char.name} 此刻的「时间 / 地点 / 状态 / 细节」，渲染成可独立查看的全息观测面板。修改后从下一条回复生效。</p>
+                        </div>
+                        <button
+                            onClick={() => updateCharacter(char.id, { dateObserve: { enabled: !char.dateObserve?.enabled } })}
+                            className={`w-12 h-7 rounded-full transition-colors relative shrink-0 ${char.dateObserve?.enabled ? 'bg-primary' : 'bg-slate-200'}`}
+                        >
+                            <div className={`absolute top-0.5 w-6 h-6 bg-white rounded-full shadow-md transition-transform ${char.dateObserve?.enabled ? 'translate-x-5' : 'translate-x-0.5'}`}></div>
+                        </button>
+                    </div>
+                </section>
+
+                <section className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
                     <h3 className="text-xs font-bold text-slate-400 uppercase">文风与叙事 (Writing Style)</h3>
                     <p className="text-[11px] text-slate-400 mt-1 mb-4">调整见面时 AI 的写作风格与叙事人称，修改后从下一条回复开始生效。</p>
 

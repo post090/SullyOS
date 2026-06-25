@@ -18,7 +18,7 @@
  * prompt（peek 旧版手搓 mapper 的问题即在此，已统一修掉）。
  */
 
-import { CharacterProfile, UserProfile, Message, Emoji, DateStyleConfig } from '../types';
+import { CharacterProfile, UserProfile, Message, Emoji, DateStyleConfig, DateObservation } from '../types';
 import { ContextBuilder } from './context';
 import { ChatPrompts } from './chatPrompts';
 import { injectMemoryPalace } from './memoryPalace/pipeline';
@@ -242,6 +242,79 @@ export const DIG_FOCUS_HINTS = [
 const pickFocusHint = (): string =>
     DIG_FOCUS_HINTS[Math.floor(Math.random() * DIG_FOCUS_HINTS.length)];
 
+// ─────────────────────────────────────────────────────────────
+// 观测协议 OBSERVE（全方位观察 char：时间 / 地点 / 状态 / 细节）
+//
+// 开启后，让模型在「正文最前面」吐一段定界的结构化观测块，前端 extractObservation
+// 把它从正文里剥出来渲染成全息 HUD（独立查看），剩余文本照常走 VN 解析。
+// 定界符用不常见的 ⟦⟧，避免和 [emotion] 立绘标签 / 台词引号撞车。
+// 字段标签固定中文 + 全角竖线，解析时对中英 key、半角竖线、冒号都容错。
+// ─────────────────────────────────────────────────────────────
+
+export const OBSERVE_OPEN = '⟦OBSERVE⟧';
+export const OBSERVE_CLOSE = '⟦/OBSERVE⟧';
+
+/** 整块（含定界符）的提取正则：宽松匹配大小写、定界符内空格、闭合斜杠两侧空格 */
+const OBSERVE_BLOCK_RE = /⟦\s*OBSERVE\s*⟧([\s\S]*?)⟦\s*\/\s*OBSERVE\s*⟧/i;
+
+const isObserveOn = (char: CharacterProfile): boolean => char.dateObserve?.enabled === true;
+
+/** 观测块提示词。仅在开关打开时注入；放在 VN 块末尾（场景上下文之后）。 */
+const buildObserveBlock = (charName: string): string => `
+### 👁 观测协议（OBSERVE，必须严格执行）
+在你**整段回复的最前面**，先输出一段「观测块」，用来让用户全方位观察${charName}此刻的状态。
+观测块**不受**上面「一行一念 / 每行 [emotion] 开头」规则约束——它是独立的元信息，紧接着才是正常的 VN 正文。
+
+格式**必须**逐字如下（四个字段都要给，简洁有画面，每项一句话即可，别写成大段）：
+${OBSERVE_OPEN}
+时间｜（结合场景的当下时刻，可比系统时间更具体，如"傍晚六点过，天刚擦黑"）
+地点｜（${charName}此刻所在的具体地点与环境）
+状态｜（${charName}的身心状态：情绪、体感、正在经历的内在波动）
+细节｜（此刻最值得被注意的一个动作 / 微小细节）
+${OBSERVE_CLOSE}
+
+输出完观测块后**另起一行**，开始正常的 VN 正文（每行 [emotion] 开头）。不要重复观测块，整段回复只在开头出现一次。`;
+
+/**
+ * 从模型输出里剥出观测块。返回结构化数据 + 去掉观测块后的正文。
+ * 没有匹配到完整定界块时不强行解析（避免误伤正文），observation 返回 null。
+ */
+export const extractObservation = (text: string): { observation: DateObservation | null; rest: string } => {
+    if (!text) return { observation: null, rest: text };
+    const m = text.match(OBSERVE_BLOCK_RE);
+    if (!m || m.index === undefined) return { observation: null, rest: text };
+    const observation = parseObserveFields(m[1]);
+    const rest = (text.slice(0, m.index) + text.slice(m.index + m[0].length)).replace(/^\s*\n/, '').trim();
+    // 整块都是观测、没有正文时，rest 为空也照常返回（调用方会处理）
+    return { observation, rest };
+};
+
+/** 只去观测块、不要结构化数据时用（novel 模式渲染历史正文） */
+export const stripObservation = (text: string): string => extractObservation(text).rest || (text || '');
+
+/** 块内逐行解析：按关键词归类，兼容全/半角竖线与中英冒号 */
+const parseObserveFields = (body: string): DateObservation => {
+    const obs: DateObservation = {};
+    for (const raw of body.split('\n')) {
+        const line = raw.trim();
+        if (!line) continue;
+        const sep = line.search(/[｜|:：]/);
+        if (sep < 0) continue;
+        const key = line.slice(0, sep).trim().toLowerCase();
+        const val = line.slice(sep + 1).trim().replace(/^（|）$/g, '').trim();
+        if (!val) continue;
+        if (/时间|time/.test(key)) obs.time = val;
+        else if (/地点|地区|场所|place|location|site/.test(key)) obs.place = val;
+        else if (/状态|心境|status|state/.test(key)) obs.state = val;
+        else if (/细节|动作|detail|trace|action/.test(key)) obs.detail = val;
+    }
+    return obs;
+};
+
+/** HUD / 持久化判定：四个字段至少有一个非空才算有效观测 */
+export const hasObservation = (obs: DateObservation | null | undefined): obs is DateObservation =>
+    !!obs && !!(obs.time || obs.place || obs.state || obs.detail);
+
 const getDateEmotions = (char: CharacterProfile): string[] =>
     [...REQUIRED_DATE_EMOTIONS, ...(char.customDateSprites || [])];
 
@@ -296,6 +369,7 @@ const buildVNModeBlock = (char: CharacterProfile, userName: string): string => {
     const povBlock = buildPovBlock(styleConfig, char.name, userName);
     const extraBlock = buildExtraStyleBlock(styleConfig);
     const digBlock = isDigDeeperOn(styleConfig) ? `${DIG_DEEPER_BLOCK}\n` : '';
+    const observeBlock = isObserveOn(char) ? buildObserveBlock(char.name) : '';
     return `### [Visual Novel Mode: 视觉小说脚本模式]
 你正在与用户进行**面对面**的互动。这不是聊天，是一场真实的见面。
 
@@ -315,7 +389,7 @@ ${digBlock}${povBlock}${extraBlock}### 场景上下文
 1. **Time**: 当前时间 ${timeStr}。
 2. **Location**: 你们现在**面对面**。
 3. **Context**: 参考历史记录。如果刚刚才看到开场白（Opening），请自然接话。
-`;
+${observeBlock}`;
 };
 
 /**
@@ -393,8 +467,8 @@ export const DatePrompts = {
 ### 逻辑检查
 1. **上下文连贯性**: 参考 [最近记录]（注意消息来源标签：[聊天]是文字聊天、[约会]是面对面、[通话]是语音通话）。如果有 [TIME SKIP] 且间隔很久，开启新场景；如果是 [SCENE CONTINUATION]，说明刚刚还在聊天，**必须**自然衔接最近的聊天话题和情绪状态，不要无视之前的对话内容。
 2. **状态一致性**: ${gapHint.includes('天') ? '如果间隔了很多天，可能在发呆、忙碌或者有点落寞。' : '根据最近的聊天内容和情绪来决定当前状态。如果刚聊完，角色的状态应该与聊天内容相呼应。'}
-3. **描写风格**: ${preset.peekHint}。不要输出任何前缀，直接输出描写内容。
-${extraBlock ? `\n${extraBlock}` : ''}`;
+3. **描写风格**: ${preset.peekHint}。${isObserveOn(char) ? '先按下方「观测协议」输出观测块，再开始描写内容（描写本身不要加任何前缀）。' : '不要输出任何前缀，直接输出描写内容。'}
+${extraBlock ? `\n${extraBlock}` : ''}${isObserveOn(char) ? `\n${buildObserveBlock(char.name)}` : ''}`;
 
         return {
             messages: [

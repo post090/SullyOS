@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
-import { CharacterProfile, Message, DateState, DialogueItem, UserProfile } from '../../types';
+import { CharacterProfile, Message, DateState, DialogueItem, UserProfile, DateObservation } from '../../types';
 import Modal from '../../components/os/Modal';
 import { useOS } from '../../context/OSContext';
 import { DB } from '../../utils/db';
 import DateSettings from './DateSettings';
+import ObserveHUD from './ObserveHUD';
+import { extractObservation, hasObservation } from '../../utils/datePrompts';
 import { cleanTextForTts, VALID_EMOTIONS } from '../../utils/minimaxTts';
 import { synthesizeSpeech, characterHasVoice } from '../../utils/ttsRouter';
 import { resolveTtsProvider } from '../../utils/ttsProvider';
@@ -135,6 +137,10 @@ const DateSession: React.FC<DateSessionProps> = ({
     const [currentText, setCurrentText] = useState('');
     const [displayedText, setDisplayedText] = useState('');
     const [isTextAnimating, setIsTextAnimating] = useState(false);
+
+    // 观测协议 OBSERVE：当前批次解析出的结构化观测，驱动全息 HUD
+    const observeEnabled = !!char.dateObserve?.enabled;
+    const [observation, setObservation] = useState<DateObservation | null>(initialState?.observation ?? null);
     
     // Interaction State
     const [input, setInput] = useState('');
@@ -365,9 +371,11 @@ const DateSession: React.FC<DateSessionProps> = ({
             if (!initSprite) initSprite = char.avatar;
             setCurrentSprite(initSprite);
             
-            // Parse Peek Status as opening
+            // Parse Peek Status as opening — 先剥出观测块（开了 OBSERVE 才有）
             const startText = peekStatus || "Waiting for connection...";
-            const items = parseDialogue(startText, 'normal');
+            const { observation: peekObs, rest: peekRest } = extractObservation(startText);
+            if (hasObservation(peekObs)) setObservation(peekObs);
+            const items = parseDialogue(peekRest, 'normal');
             setDialogueBatch(items);
             setDialogueQueue(items);
             
@@ -499,8 +507,10 @@ const DateSession: React.FC<DateSessionProps> = ({
 
         try {
             const aiContent = await onSendMessage(text);
-            // Parse new content
-            const items = parseDialogue(aiContent, 'normal');
+            // 先剥出观测块更新 HUD，再解析剩余正文
+            const { observation: obs, rest } = extractObservation(aiContent);
+            if (hasObservation(obs)) setObservation(obs);
+            const items = parseDialogue(rest, 'normal');
             setDialogueBatch(items);
             setDialogueQueue(items);
             if (items.length > 0) {
@@ -520,7 +530,9 @@ const DateSession: React.FC<DateSessionProps> = ({
         setIsTyping(true);
         try {
             const aiContent = await onReroll();
-            const items = parseDialogue(aiContent, 'normal');
+            const { observation: obs, rest } = extractObservation(aiContent);
+            if (hasObservation(obs)) setObservation(obs);
+            const items = parseDialogue(rest, 'normal');
             setDialogueBatch(items);
             setDialogueQueue(items);
             if (items.length > 0) processNextDialogue(items[0], items.slice(1));
@@ -539,7 +551,8 @@ const DateSession: React.FC<DateSessionProps> = ({
         currentSprite,
         isNovelMode,
         timestamp: Date.now(),
-        peekStatus
+        peekStatus,
+        observation: observation || undefined,
     });
 
     const handleExitClick = () => {
@@ -731,6 +744,18 @@ const DateSession: React.FC<DateSessionProps> = ({
                             </button>
                         )}
 
+                        {/* 观测协议 OBSERVE 开关：开启后回复带「时间/地点/状态/细节」全息 HUD */}
+                        <button onClick={() => {
+                                const next = !observeEnabled;
+                                updateCharacter(char.id, { dateObserve: { enabled: next } });
+                                addToast(next ? '观测已开启 · 下条回复生效' : '观测已关闭', 'info');
+                                setShowMenu(false); setShowVoiceLangPicker(false);
+                            }}
+                            className={`h-9 px-3.5 rounded-full flex items-center gap-2 text-xs font-bold border shadow-lg active:scale-95 transition-all backdrop-blur-md ${observeEnabled ? 'bg-cyan-400/20 border-cyan-300/40 text-cyan-50' : 'bg-black/40 border-white/15 text-white/60 hover:bg-white/20'}`}>
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178Z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" /></svg>
+                            观测{observeEnabled ? ' · 开' : ' · 关'}
+                        </button>
+
                         <button onClick={() => { setShowSettings(true); setShowMenu(false); setShowVoiceLangPicker(false); }} className="h-9 px-3.5 rounded-full flex items-center gap-2 text-xs font-bold border shadow-lg active:scale-95 transition-all bg-black/40 backdrop-blur-md border-white/15 text-white hover:bg-white/20">
                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 0 1 0 2.555c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.212 1.281c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 0 1 0-2.555c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281Z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" /></svg>
                             布置场景
@@ -743,6 +768,15 @@ const DateSession: React.FC<DateSessionProps> = ({
                     </div>
                 )}
             </div>
+
+            {/* 观测协议 OBSERVE — 立绘模式悬浮 HUD（左上角，独立查看可放大） */}
+            {observeEnabled && !isNovelMode && hasObservation(observation) && (
+                <div className="absolute top-0 left-0 p-4 pt-12 z-[90] pointer-events-none">
+                    <div className="pointer-events-auto">
+                        <ObserveHUD observation={observation!} variant="hud" charName={char.name} />
+                    </div>
+                </div>
+            )}
 
             {/* Novel Mode View */}
             {isNovelMode && (
@@ -765,11 +799,19 @@ const DateSession: React.FC<DateSessionProps> = ({
                                     </div>
                                 </div>
                             )}
-                            {sessionMessages.length === 0 && peekStatus && (
-                                <div className={`italic text-center text-sm mb-8 px-4 ${char.dateLightReading ? 'text-stone-400' : 'text-slate-200/50'}`}>
-                                    {cleanTextForDisplay(peekStatus).split('\n').map((line, idx) => line.trim() && <p key={idx} className="whitespace-pre-wrap leading-relaxed tracking-wide my-2">{line}</p>)}
-                                </div>
-                            )}
+                            {sessionMessages.length === 0 && peekStatus && (() => {
+                                const { observation: peekObs, rest: peekBody } = extractObservation(peekStatus);
+                                return (
+                                    <>
+                                        {observeEnabled && hasObservation(peekObs) && (
+                                            <div className="max-w-md mx-auto mb-6"><ObserveHUD observation={peekObs} variant="card" charName={char.name} /></div>
+                                        )}
+                                        <div className={`italic text-center text-sm mb-8 px-4 ${char.dateLightReading ? 'text-stone-400' : 'text-slate-200/50'}`}>
+                                            {cleanTextForDisplay(peekBody).split('\n').map((line, idx) => line.trim() && <p key={idx} className="whitespace-pre-wrap leading-relaxed tracking-wide my-2">{line}</p>)}
+                                        </div>
+                                    </>
+                                );
+                            })()}
                             {sessionMessages.map((msg) => (
                                 <div
                                     key={msg.id}
@@ -795,9 +837,15 @@ const DateSession: React.FC<DateSessionProps> = ({
                                     )}
                                     {msg.role === 'user' ? (
                                         <p className={`whitespace-pre-wrap font-serif text-[16px] text-right leading-loose tracking-wide italic pr-4 ${char.dateLightReading ? 'text-stone-400 border-r-2 border-stone-300/50' : 'text-slate-400 border-r-2 border-slate-600/50'}`}>{cleanTextForDisplay(msg.content)} <span className="text-[10px] uppercase font-sans not-italic ml-2 opacity-50">{userProfile.name}</span></p>
-                                    ) : (
+                                    ) : (() => {
+                                        // 观测协议：从这条回复里剥出观测块，正文上方渲染独立卡片，正文本身不显示块文本
+                                        const { observation: msgObs, rest: msgBody } = extractObservation(msg.content || '');
+                                        return (
                                         <div>
-                                            {(msg.content || '').split('\n').map((line, idx) => {
+                                            {observeEnabled && hasObservation(msgObs) && (
+                                                <ObserveHUD observation={msgObs} variant="card" charName={char.name} />
+                                            )}
+                                            {(msgBody || '').split('\n').map((line, idx) => {
                                                 const cleanLine = cleanTextForDisplay(line);
                                                 if (!cleanLine) return null;
                                                 const lineIsDialogue = isDialogueLine(line);
@@ -829,7 +877,7 @@ const DateSession: React.FC<DateSessionProps> = ({
                                                 );
                                             })}
                                         </div>
-                                    )}
+                                        ); })()}
                                 </div>
                             ))}
                         </div>

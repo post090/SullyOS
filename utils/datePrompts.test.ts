@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { DatePrompts, DATE_STYLE_PRESETS } from './datePrompts';
+import { DatePrompts, DATE_STYLE_PRESETS, extractObservation, stripObservation, hasObservation, OBSERVE_OPEN, OBSERVE_CLOSE } from './datePrompts';
 import type { CharacterProfile, UserProfile, Message } from '../types';
 
 const makeChar = (overrides: Partial<CharacterProfile> = {}): CharacterProfile => ({
@@ -103,6 +103,69 @@ describe('DatePrompts.buildSessionPayload', () => {
         const reroll = await DatePrompts.buildSessionPayload({ ...baseInput(makeChar()), variant: 'reroll' });
         const lastReroll = reroll.messages[reroll.messages.length - 1];
         expect(lastReroll.content).toContain('Reroll');
+    });
+});
+
+describe('OBSERVE 观测协议', () => {
+    const block = `${OBSERVE_OPEN}
+时间｜傍晚六点过，天刚擦黑
+地点｜便利店门口的塑料凳上
+状态｜有点疲惫，但见到你眼神亮了一下
+细节｜指尖无意识地敲着关东煮的纸杯
+${OBSERVE_CLOSE}`;
+
+    it('开关打开时注入观测块提示词，关闭时不注入', async () => {
+        const on = await DatePrompts.buildSessionPayload({
+            char: makeChar({ dateObserve: { enabled: true } }),
+            userProfile: user, allMsgs: [makeMsg({ role: 'assistant', content: '[normal] 开场' }), makeMsg({ content: 'hi' })],
+            emojis: [], userText: 'hi', variant: 'send',
+        });
+        expect(sysOf(on.messages)).toContain('观测协议');
+        expect(sysOf(on.messages)).toContain(OBSERVE_OPEN);
+
+        const off = await DatePrompts.buildSessionPayload({
+            char: makeChar(),
+            userProfile: user, allMsgs: [makeMsg({ role: 'assistant', content: '[normal] 开场' }), makeMsg({ content: 'hi' })],
+            emojis: [], userText: 'hi', variant: 'send',
+        });
+        expect(sysOf(off.messages)).not.toContain('观测协议');
+    });
+
+    it('extractObservation 解析四字段并剥出正文', () => {
+        const full = `${block}\n[normal] 抬眼看你。\n[happy] "你来啦。"`;
+        const { observation, rest } = extractObservation(full);
+        expect(observation).not.toBeNull();
+        expect(observation!.time).toContain('傍晚六点');
+        expect(observation!.place).toContain('便利店');
+        expect(observation!.state).toContain('疲惫');
+        expect(observation!.detail).toContain('纸杯');
+        expect(rest).toContain('[normal] 抬眼看你。');
+        expect(rest).not.toContain(OBSERVE_OPEN);
+        expect(rest).not.toContain('时间｜');
+    });
+
+    it('解析对半角竖线/英文 key/冒号容错', () => {
+        const alt = `${OBSERVE_OPEN}\nTIME: dusk\nplace | a rooftop\n状态：calm\nDETAIL：a slow breath\n${OBSERVE_CLOSE}`;
+        const { observation } = extractObservation(alt);
+        expect(observation!.time).toBe('dusk');
+        expect(observation!.place).toBe('a rooftop');
+        expect(observation!.state).toBe('calm');
+        expect(observation!.detail).toBe('a slow breath');
+    });
+
+    it('没有观测块时原样返回，observation 为 null', () => {
+        const plain = '[normal] 普通的一行。\n[happy] "嗨。"';
+        const { observation, rest } = extractObservation(plain);
+        expect(observation).toBeNull();
+        expect(rest).toBe(plain);
+        expect(hasObservation(observation)).toBe(false);
+    });
+
+    it('stripObservation 去块保正文；hasObservation 判定有效性', () => {
+        expect(stripObservation(`${block}\n[normal] 正文`)).toBe('[normal] 正文');
+        expect(hasObservation({ time: '黄昏' })).toBe(true);
+        expect(hasObservation({})).toBe(false);
+        expect(hasObservation(null)).toBe(false);
     });
 });
 
