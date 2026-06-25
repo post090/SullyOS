@@ -118,9 +118,27 @@ export const stripFishMarkupForDisplay = (text?: string | null): string => {
 export const resolveFishAudioApiKey = (apiConfig: APIConfig): string =>
   normalizeApiKey(apiConfig.fishAudioApiKey || '');
 
+/**
+ * 归一化鱼声音色 id（reference_id）。容忍用户直接粘 fish.audio 网页链接：
+ *   https://fish.audio/app/text-to-speech/?modelId=98655a12fa944e26b274c535e5e03842
+ * 也容忍只粘 id 本身。reference_id 是 32 位十六进制（UUID 去横线）。
+ */
+export const normalizeFishReferenceId = (raw?: string | null): string => {
+  const s = (raw || '').trim();
+  if (!s) return '';
+  // 1) URL 里的 ?modelId=... / &modelId=...
+  const byQuery = s.match(/[?&]modelId=([a-z0-9]+)/i);
+  if (byQuery) return byQuery[1];
+  // 2) 任意位置的 32 位十六进制串（覆盖纯 id 和路径形式）
+  const byHex = s.match(/[a-f0-9]{32}/i);
+  if (byHex) return byHex[0];
+  // 3) 兜底：去掉可能的查询串/空白
+  return s.split(/[?#\s]/)[0];
+};
+
 /** 该角色能否用鱼声合成（必须有 Key + reference_id）。 */
 export const canSynthesizeFish = (char: CharacterProfile, apiConfig: APIConfig): boolean =>
-  !!resolveFishAudioApiKey(apiConfig) && !!char.voiceProfile?.fishReferenceId;
+  !!resolveFishAudioApiKey(apiConfig) && !!normalizeFishReferenceId(char.voiceProfile?.fishReferenceId);
 
 const isNative = (): boolean => {
   try {
@@ -206,7 +224,7 @@ export async function synthesizeSpeechFishDetailed(
   const apiKey = resolveFishAudioApiKey(apiConfig);
   if (!apiKey) throw new Error('缺少鱼声 Fish Audio API Key');
   const vp = char.voiceProfile;
-  const referenceId = (vp?.fishReferenceId || '').trim();
+  const referenceId = normalizeFishReferenceId(vp?.fishReferenceId);
   if (!referenceId) throw new Error('角色未配置鱼声音色（reference_id）');
 
   const model = (vp?.fishModel || apiConfig.fishAudioModel || DEFAULT_FISH_MODEL).trim() || DEFAULT_FISH_MODEL;

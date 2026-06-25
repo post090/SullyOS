@@ -1160,9 +1160,9 @@ ${isInitialGeneration ? `
                                            fishReferenceId: e.target.value,
                                        })}
                                        className="w-full bg-white rounded-2xl px-3 py-2 text-xs border border-slate-200"
-                                       placeholder="reference_id（从 fish.audio 语音库复制）"
+                                       placeholder="粘贴 reference_id 或整条 fish.audio 链接"
                                    />
-                                   <p className="text-[10px] text-slate-400">设置里语音服务商选「鱼声 Fish」后，该角色用这个 reference_id 合成；与上面的 MiniMax voice_id 各存各的，互不影响。</p>
+                                   <p className="text-[10px] text-slate-400">从 fish.audio 选好音色后，把那一页的链接（含 ?modelId=…）或 32 位 id 直接贴进来都行，会自动识别。设置里语音选「鱼声 Fish」后该角色就用它合成；与上面的 MiniMax voice_id 各存各的。</p>
                                </div>
 
                                {(voiceOptions.system.length + voiceOptions.voice_cloning.length + voiceOptions.voice_generation.length) > 0 && (
