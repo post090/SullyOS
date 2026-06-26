@@ -9,7 +9,7 @@ import { isScheduleFeatureOn } from '../utils/scheduleGenerator';
 import { isDevDebugAvailable } from '../utils/devDebug';
 import { safeResponseJson } from '../utils/safeApi';
 import {
-    CaretLeft, Play, Pause, MoonStars, Cloud, ArrowClockwise, X, Eye, Sparkle, Lock,
+    CaretLeft, Play, Pause, MoonStars, ArrowClockwise, X, Eye, Sparkle, Lock,
 } from '@phosphor-icons/react';
 
 // ============================================================
@@ -178,9 +178,11 @@ ${recent || '（暂无最近对话）'}
 - **碎片，不是段落。** 像电影字幕、漂浮的念头、找到的诗句。一次只给一两个意象。
   正例：「海。」「冰冷的鞋。」「一只倒着飞的鸟。」「你的声音。」「门在微笑。」
   反例（禁止）：「我梦见自己走在沙滩上，然后……」
-- 大量使用单字、断句、重复、留白。**沉默是梦的一部分**，要安排 silence 碎片。
+- 大量使用单字、断句、重复、留白。**沉默是梦的一部分**，要安排 silence 碎片（建议占总数的 1/5 左右，散布在各处）。
 - 情绪高于逻辑：让观众先感受到，再（也许永远不）理解。困惑可以接受，美高于解释，神秘高于确定。
-- 不要每次都用同一种排版——靠 kind 的多样让不同的梦在视觉上截然不同。
+- **这些碎片会被一片片拼贴、累积在同一张画布上一起被看见（不是一句一屏的幻灯片）**。所以请像做拼贴／剪报那样思考：让相邻碎片互相并置、彼此碰撞出意味；多用不同的 kind 交错（line/word/silence/repeat/dialogue/stage/list/screenplay/diary/message/image 轮着来，别连用同一种）。
+- 善用 emphasis（whisper 轻声 / loud 巨大 / fade 将熄）与 align（left/center/right）制造大小与左右散布的层次——这正是拼贴诗的视觉骨架。
+- image 碎片的灵魂是 caption（那句配文才是诗），务必写 caption；不要只丢一个没配文的空画面。
 
 【梦境原型 · 必须从中选 1 个】（archetype 字段）
 sweet 甜梦(温暖/甜点/柔软的笑) · nightmare 噩梦(被追逐/怪物/黑暗走廊/未完成的尖叫) · flower 花之梦(花海/雨/温柔治愈/生长) · flying 飞翔之梦(漂浮/天空/失重/自由) · falling 坠落之梦(无尽下坠/失控/永不到来的落地) · starry 星空之梦(星系/月光/无限远/孤独) · ocean 海之梦(潮汐/鲸/深水/水面下未知之物) · childhood 童年之梦(旧家/父母/夏日午后/不再存在的东西/怀旧) · anxiety 焦虑之梦(考试/迟到/丢手机/赶不上车/一切几乎要出错) · forgotten 遗忘之梦(模糊/残缺/名字消失/句子说到一半停住/边回忆边消散) · prophetic 预言之梦(似曾相识/门/钥匙/镜子/预感/意味深长却从不解释) · lucid 清醒梦(梦者意识到这是梦/现实可被编辑/梦会回应/可重塑世界/俏皮而自指)
@@ -285,145 +287,108 @@ const Ambient: React.FC<{ kind: Ambient; accent: string }> = ({ kind, accent }) 
 };
 
 // ============================================================
-//  FRAGMENT VIEW — 拼贴诗排版的核心
+//  COLLAGE — 拼贴诗排版：碎片各自不同的对齐 / 角度 / 大小 / 浓淡，
+//  逐个浮现并「累积」在同一张可滚动画布上，靠并置与留白产生意义。
 // ============================================================
-const emphClass = (e?: DreamFragment['emphasis']): string => {
-    switch (e) {
-        case 'whisper': return 'opacity-50';
-        case 'loud': return 'opacity-100';
-        case 'fade': return 'opacity-30 italic';
-        default: return 'opacity-90';
-    }
-};
-const alignClass = (a?: DreamFragment['align']): string =>
-    a === 'left' ? 'text-left items-start' : a === 'right' ? 'text-right items-end' : 'text-center items-center';
+const emphOpacity = (e?: DreamFragment['emphasis']): number =>
+    e === 'whisper' ? 0.52 : e === 'fade' ? 0.32 : e === 'loud' ? 1 : 0.85;
 
-const FragmentView: React.FC<{ frag: DreamFragment; theme: DreamTheme }> = ({ frag, theme }) => {
-    const ff = theme.serif ? SERIF : undefined;
-    const wrap = `w-full max-w-[300px] flex flex-col justify-center ${alignClass(frag.align)} ${emphClass(frag.emphasis)}`;
+const CollageItem: React.FC<{ frag: DreamFragment; theme: DreamTheme; index: number }> = ({ frag, theme, index }) => {
+    const i = index;
+    const ff = SERIF;                  // 梦以衬线诗体为主；剧本用等宽
+    const tint = theme.accent;
 
+    // silence = 纯留白（负空间），偶尔留一点极淡的痕迹——而不是一整屏「啥也没有」
     if (frag.kind === 'silence') {
+        const h = 52 + Math.floor(rnd(i + 1) * 78);
         return (
-            <div className="flex items-center justify-center">
-                <span className="tracking-[0.6em] text-white/15 text-sm select-none">· · ·</span>
+            <div style={{ height: h }} className="w-full flex items-center justify-center" aria-hidden>
+                {rnd(i + 5) > 0.62 && <span className="text-white/10 tracking-[0.7em] text-xs select-none">·</span>}
             </div>
         );
     }
 
-    if (frag.kind === 'word') {
-        const big = frag.emphasis === 'loud' ? 'text-[56px]' : frag.emphasis === 'whisper' ? 'text-[30px]' : 'text-[44px]';
-        return (
-            <div className={wrap}>
-                <span className={`${big} font-extralight tracking-[0.15em] text-white leading-none`}
-                    style={{ fontFamily: ff, textShadow: `0 2px 30px ${theme.accent}40` }}>
-                    {frag.text}
-                </span>
-            </div>
-        );
-    }
+    // 拼贴摆位：左/中/右散布 + 轻微旋转 + 不等的上间距（负空间）
+    const kindForcesLeft = frag.kind === 'list' || frag.kind === 'screenplay' || frag.kind === 'dialogue' || frag.kind === 'diary';
+    const align: 'left' | 'center' | 'right' =
+        frag.kind === 'message' ? 'right'
+            : kindForcesLeft ? 'left'
+                : (frag.align || (['left', 'center', 'right', 'center', 'right', 'left'][i % 6] as 'left' | 'center' | 'right'));
+    const alignSelf = align === 'left' ? 'flex-start' : align === 'right' ? 'flex-end' : 'center';
+    const rot = (rnd(i * 3.1 + 1) - 0.5) * 5;
+    const gapTop = i === 0 ? 4 : 22 + Math.floor(rnd(i + 2) * 46);
+    const wrapStyle: React.CSSProperties = {
+        alignSelf, marginTop: gapTop, transform: `rotate(${rot}deg)`,
+        opacity: emphOpacity(frag.emphasis), maxWidth: '86%', textAlign: align,
+    };
+    const colItems = align === 'right' ? 'items-end' : align === 'center' ? 'items-center' : 'items-start';
 
-    if (frag.kind === 'repeat') {
+    let inner: React.ReactNode = null;
+
+    if (frag.kind === 'line') {
+        const sz = frag.emphasis === 'loud' ? 26 : frag.emphasis === 'whisper' ? 15 : 19;
+        inner = <span className="font-light text-white leading-relaxed whitespace-pre-wrap"
+            style={{ fontFamily: ff, fontSize: sz, textShadow: `0 1px 20px ${tint}22` }}>{frag.text}</span>;
+    } else if (frag.kind === 'word') {
+        const sz = frag.emphasis === 'whisper' ? 30 : frag.emphasis === 'loud' ? 50 : 40;
+        inner = <span className="font-extralight tracking-[0.12em] text-white leading-none"
+            style={{ fontFamily: ff, fontSize: sz, textShadow: `0 2px 30px ${tint}55` }}>{frag.text}</span>;
+    } else if (frag.kind === 'repeat') {
         const word = frag.text || '…';
         const count = Math.max(2, Math.min(6, frag.count || 3));
-        return (
-            <div className={`${wrap} gap-1.5`}>
-                {Array.from({ length: count }).map((_, i) => (
-                    <span key={i} className="text-[22px] font-light text-white animate-fade-in"
-                        style={{ fontFamily: ff, opacity: Math.max(0.18, 1 - i * 0.22), animationDelay: `${i * 260}ms`, animationFillMode: 'backwards', letterSpacing: `${i * 0.04}em` }}>
-                        {word}
-                    </span>
-                ))}
-            </div>
-        );
-    }
-
-    if (frag.kind === 'dialogue') {
-        return (
-            <div className={`${wrap} gap-2.5`}>
-                {(frag.lines || []).map((l, i) => (
-                    <span key={i} className="text-[16px] font-light text-white/85 leading-relaxed animate-fade-in"
-                        style={{ fontFamily: ff, animationDelay: `${i * 420}ms`, animationFillMode: 'backwards' }}>
-                        {l}
-                    </span>
-                ))}
-            </div>
-        );
-    }
-
-    if (frag.kind === 'stage') {
-        return (
-            <div className={wrap}>
-                <span className="text-[15px] text-white/60 italic leading-relaxed" style={{ fontFamily: ff }}>
-                    <span className="text-white/30">[ </span>{frag.text}<span className="text-white/30"> ]</span>
+        inner = <span className={`inline-flex flex-col ${colItems}`}>
+            {Array.from({ length: count }).map((_, k) => (
+                <span key={k} className="font-light text-white leading-tight"
+                    style={{ fontFamily: ff, fontSize: 22 - k * 1.4, opacity: Math.max(0.18, 1 - k * 0.2), letterSpacing: `${k * 0.05}em` }}>{word}</span>
+            ))}
+        </span>;
+    } else if (frag.kind === 'dialogue') {
+        inner = <span className="inline-flex flex-col gap-1.5 items-start">
+            {(frag.lines || []).map((l, k) => (
+                <span key={k} className="text-[15px] font-light text-white/80 leading-relaxed" style={{ fontFamily: ff }}>{l}</span>
+            ))}
+        </span>;
+    } else if (frag.kind === 'stage') {
+        inner = <span className="text-[14px] text-white/55 italic leading-relaxed" style={{ fontFamily: ff }}>
+            <span className="text-white/25">[ </span>{frag.text}<span className="text-white/25"> ]</span>
+        </span>;
+    } else if (frag.kind === 'list') {
+        inner = <span className="inline-flex flex-col gap-2 items-start">
+            {(frag.lines || []).map((l, k) => (
+                <span key={k} className="text-[15px] font-light text-white/80 leading-relaxed flex items-baseline gap-2" style={{ fontFamily: ff }}>
+                    <span style={{ color: tint }}>·</span>{l}
                 </span>
-            </div>
-        );
+            ))}
+        </span>;
+    } else if (frag.kind === 'screenplay') {
+        inner = <span className="inline-flex flex-col gap-1.5 items-start">
+            {(frag.lines || []).map((l, k) => (
+                <span key={k} className={k === 0 ? 'text-[10px] tracking-[0.25em] uppercase' : 'text-[13.5px] text-white/80'}
+                    style={{ fontFamily: MONO, color: k === 0 ? tint : undefined }}>{l}</span>
+            ))}
+        </span>;
+    } else if (frag.kind === 'diary') {
+        inner = <span className="inline-block rounded-lg px-4 py-3 text-left bg-white/[0.035] border border-white/[0.08]"
+            style={{ boxShadow: `0 6px 28px ${tint}10`, maxWidth: 244 }}>
+            {frag.date && <span className="block text-[9.5px] text-white/30 mb-1.5 tracking-wide" style={{ fontFamily: ff }}>{frag.date}</span>}
+            <span className="block text-[13.5px] text-white/80 leading-loose whitespace-pre-wrap" style={{ fontFamily: ff }}>{frag.text}</span>
+        </span>;
+    } else if (frag.kind === 'message') {
+        inner = <span className="inline-flex flex-col items-end gap-1">
+            {frag.date && <span className="text-[9.5px] text-white/30 pr-1">{frag.date}</span>}
+            <span className="px-3.5 py-2 rounded-2xl rounded-br-md text-[13.5px] leading-relaxed text-[#15121c]" style={{ background: tint, maxWidth: 230 }}>{frag.text}</span>
+            <span className="text-[8.5px] text-white/25 pr-1">· 未送达 ·</span>
+        </span>;
+    } else { // image — 小拍立得 + 配文（配文才是诗；图只是小点缀，绝不做成大空屏）
+        const it = frag.tint || tint;
+        inner = <span className="inline-flex flex-col items-center gap-2">
+            <span className="block rounded-xl overflow-hidden border border-white/[0.1]"
+                style={{ width: 112, height: 112, background: `linear-gradient(150deg, ${it}cc, #14121a)`, boxShadow: `0 8px 30px ${it}30` }} />
+            {frag.caption && <span className="text-[13.5px] text-white/[0.78] leading-relaxed text-center" style={{ fontFamily: ff, maxWidth: 220 }}>{frag.caption}</span>}
+        </span>;
     }
 
-    if (frag.kind === 'list') {
-        return (
-            <div className="w-full max-w-[280px] flex flex-col items-start gap-3 text-left">
-                {(frag.lines || []).map((l, i) => (
-                    <span key={i} className="text-[16px] font-light text-white/85 leading-relaxed animate-fade-in flex items-baseline gap-2.5"
-                        style={{ fontFamily: ff, animationDelay: `${i * 320}ms`, animationFillMode: 'backwards' }}>
-                        <span style={{ color: theme.accent }}>·</span>{l}
-                    </span>
-                ))}
-            </div>
-        );
-    }
-
-    if (frag.kind === 'screenplay') {
-        const lines = frag.lines || [];
-        return (
-            <div className="w-full max-w-[300px] flex flex-col items-start gap-2.5 text-left">
-                {lines.map((l, i) => (
-                    <span key={i}
-                        className={`animate-fade-in leading-relaxed ${i === 0 ? 'text-[11px] tracking-[0.25em] uppercase' : 'text-[14px] text-white/85'}`}
-                        style={{ fontFamily: MONO, color: i === 0 ? theme.accent : undefined, animationDelay: `${i * 360}ms`, animationFillMode: 'backwards' }}>
-                        {l}
-                    </span>
-                ))}
-            </div>
-        );
-    }
-
-    if (frag.kind === 'diary') {
-        return (
-            <div className="w-[280px] rounded-xl px-5 py-4 bg-white/[0.035] border border-white/[0.08] backdrop-blur-sm animate-fade-in"
-                style={{ boxShadow: `0 8px 40px ${theme.accent}12` }}>
-                {frag.date && <div className="text-[10px] text-white/30 mb-2 tracking-wide" style={{ fontFamily: ff }}>{frag.date}</div>}
-                <div className="text-[14px] text-white/80 leading-loose whitespace-pre-wrap" style={{ fontFamily: ff }}>{frag.text}</div>
-            </div>
-        );
-    }
-
-    if (frag.kind === 'message') {
-        return (
-            <div className="w-full max-w-[280px] flex flex-col items-end gap-1.5">
-                {frag.date && <span className="text-[10px] text-white/30 pr-1">{frag.date}</span>}
-                <div className="px-4 py-2.5 rounded-2xl rounded-br-md max-w-[88%] text-[14px] leading-relaxed text-[#15121c] animate-slide-up"
-                    style={{ background: theme.accent }}>
-                    {frag.text}
-                </div>
-                <span className="text-[9px] text-white/25 pr-1">· 未送达 ·</span>
-            </div>
-        );
-    }
-
-    // image — 象征画面 + 配文
-    const tint = frag.tint || theme.accent;
-    return (
-        <div className="flex flex-col items-center gap-4 animate-fade-in" style={{ animationDuration: '1.2s' }}>
-            <div className="w-[200px] aspect-[4/5] rounded-2xl overflow-hidden border border-white/[0.08] relative grayscale-[25%]"
-                style={{ background: `linear-gradient(155deg, ${tint}, #14121a)`, boxShadow: `0 12px 50px ${tint}30` }}>
-                <div className="absolute inset-0 flex items-center justify-center opacity-25">
-                    <Cloud size={44} weight="thin" className="text-white" />
-                </div>
-            </div>
-            {frag.caption && <p className="text-[14px] text-white/75 text-center max-w-[240px] leading-relaxed" style={{ fontFamily: ff }}>{frag.caption}</p>}
-        </div>
-    );
+    return <div className="animate-fade-in" style={wrapStyle}>{inner}</div>;
 };
 
 // ============================================================
@@ -456,9 +421,8 @@ const DreamTheater: React.FC<{ char: CharacterProfile; onExit: () => void }> = (
 
     const [phase, setPhase] = useState<Phase>('idle');
     const [script, setScript] = useState<DreamScript | null>(null);
-    const [idx, setIdx] = useState(0);
+    const [revealed, setRevealed] = useState(1);   // 已浮现的碎片数（拼贴累积）
     const [autoplay, setAutoplay] = useState(true);
-    const [hintFaded, setHintFaded] = useState(false);
     // 仅本地测试：强制指定原型（null = 让模型自动选）
     const [forcedArchetype, setForcedArchetype] = useState<DreamArchetype | null>(null);
     const devAvailable = isDevDebugAvailable();
@@ -466,10 +430,9 @@ const DreamTheater: React.FC<{ char: CharacterProfile; onExit: () => void }> = (
     const [collection, setCollection] = useState<DreamCollection>(() => loadCollection());
     const [boxReveal, setBoxReveal] = useState<{ archetype: DreamArchetype; isNew: boolean; count: number } | null>(null);
     const savedRef = useRef(false);
-    const ffTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+    const scrollRef = useRef<HTMLDivElement | null>(null);
 
     const frags = script?.fragments || [];
-    const frag = frags[idx];
     const theme = THEMES[script?.archetype || 'starry'];
     const isDeepSleep = script?.archetype === 'deepsleep';
 
@@ -478,11 +441,11 @@ const DreamTheater: React.FC<{ char: CharacterProfile; onExit: () => void }> = (
         if (!apiConfig?.baseUrl || !apiConfig?.apiKey || !apiConfig?.model) {
             addToast('请先在设置里配置 API', 'error'); return;
         }
-        setPhase('loading'); savedRef.current = false; setIdx(0); setBoxReveal(null);
+        setPhase('loading'); savedRef.current = false; setRevealed(1); setBoxReveal(null);
         try {
             const s = await generateDreamScript({ char, userProfile, apiConfig, forcedArchetype: forcedArchetype || undefined });
             setScript(s);
-            setAutoplay(true); setHintFaded(false);
+            setRevealed(1); setAutoplay(true);
             setPhase('play');
         } catch (e) {
             console.error('dream gen failed', e);
@@ -541,62 +504,59 @@ const DreamTheater: React.FC<{ char: CharacterProfile; onExit: () => void }> = (
         }
     }, [char, updateCharacter, theme.accent]);
 
-    // ----- 收束：落库 + buff + 开盲盒 → end -----
+    // ----- 收束：落库 + buff + 开盲盒 → end（双触发安全：savedRef 守卫，不重复抽/不覆盖揭晓） -----
     const finishDream = useCallback(() => {
         if (!script) return;
-        const fresh = !savedRef.current; // 重看(replay)不再解锁/不重复抽盲盒
-        persist(script);
-        if (fresh) {
-            const r = unlockCollectible(script.archetype);
-            setCollection(r.collection);
-            setBoxReveal({ archetype: script.archetype, isNew: r.isNew, count: r.count });
-        } else {
-            const cur = loadCollection();
-            setBoxReveal({ archetype: script.archetype, isNew: false, count: cur[script.archetype]?.count || 1 });
-        }
+        if (savedRef.current) { setPhase('end'); return; } // 已收束过（含 replay）→ 只去结束页
+        persist(script);                                   // 内部置 savedRef=true
+        const r = unlockCollectible(script.archetype);
+        setCollection(r.collection);
+        setBoxReveal({ archetype: script.archetype, isNew: r.isNew, count: r.count });
         setPhase('end');
     }, [script, persist]);
 
-    // ----- advance -----
-    const advance = useCallback(() => {
-        setIdx(i => (i >= frags.length - 1 ? i : i + 1));
-        if (!hintFaded) setHintFaded(true);
-    }, [frags.length, hintFaded]);
-
-    // reaching the last fragment → end (deep sleep has no fragments → handled in its scene)
+    // ----- 逐个浮现（累积式拼贴）-----
     useEffect(() => {
-        if (phase === 'play' && !isDeepSleep && frags.length > 0 && idx >= frags.length - 1) {
-            // 让最后一拍停留片刻再收束
-            const t = setTimeout(() => finishDream(), 2600);
+        if (phase !== 'play' || isDeepSleep || !autoplay) return;
+        if (revealed >= frags.length) return;
+        const last = frags[revealed - 1];
+        const base: Record<DreamFragment['kind'], number> = {
+            silence: 1200, word: 2400, line: 2700, repeat: 2800, dialogue: 3000,
+            stage: 2500, list: 3200, screenplay: 3400, diary: 3600, message: 2900, image: 3200,
+        };
+        const delay = (base[last?.kind] || 2600) + (last?.pace === 3 ? 1800 : last?.pace === 2 ? 900 : 0);
+        const t = setTimeout(() => setRevealed(r => Math.min(frags.length, r + 1)), delay);
+        return () => clearTimeout(t);
+    }, [phase, isDeepSleep, autoplay, revealed, frags]);
+
+    // ----- 全部浮现后自动收束（也可随时点「醒来」；绝不卡死）-----
+    useEffect(() => {
+        if (phase === 'play' && !isDeepSleep && frags.length > 0 && revealed >= frags.length) {
+            const t = setTimeout(() => finishDream(), 3600);
             return () => clearTimeout(t);
         }
-    }, [phase, idx, frags.length, isDeepSleep, finishDream]);
+    }, [phase, isDeepSleep, frags.length, revealed, finishDream]);
 
-    // ----- autoplay -----
+    // ----- 新碎片浮现时平滑滚到底，让最新的进入视野 -----
     useEffect(() => {
-        if (phase !== 'play' || isDeepSleep || !autoplay || !frag) return;
-        if (idx >= frags.length - 1) return;
-        const base: Record<DreamFragment['kind'], number> = {
-            silence: 3400, word: 3200, line: 4000, repeat: 4400, dialogue: 4400,
-            stage: 3800, list: 5000, screenplay: 5200, diary: 5600, message: 4400, image: 6200,
-        };
-        const delay = (base[frag.kind] || 4000) + (frag.pace === 3 ? 3200 : frag.pace === 2 ? 1500 : 0);
-        const t = setTimeout(advance, delay);
-        return () => clearTimeout(t);
-    }, [phase, isDeepSleep, autoplay, idx, frag, frags.length, advance]);
+        if (phase !== 'play' || !scrollRef.current) return;
+        const el = scrollRef.current;
+        requestAnimationFrame(() => el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' }));
+    }, [revealed, phase]);
 
-    // ----- long-press fast forward -----
-    const startFF = () => { if (!ffTimer.current) ffTimer.current = setInterval(advance, 280); };
-    const stopFF = () => { if (ffTimer.current) { clearInterval(ffTimer.current); ffTimer.current = null; } };
-    useEffect(() => () => stopFF(), []);
+    // 轻触：让下一片浮现；都浮现完则收束
+    const revealNextOrFinish = () => {
+        if (revealed < frags.length) setRevealed(r => Math.min(frags.length, r + 1));
+        else finishDream();
+    };
 
-    const restart = () => { setIdx(0); setPhase('play'); setAutoplay(true); };
+    const restart = () => { savedRef.current = true; setRevealed(1); setAutoplay(true); setPhase('play'); };
 
     // ----- replay a saved dream -----
     const replay = (s: DreamScript) => {
         savedRef.current = true; // 重看不再写库 / 不再叠 buff / 不再抽盲盒
         setBoxReveal(null);
-        setScript(s); setIdx(0); setAutoplay(true); setHintFaded(false); setPhase('play');
+        setScript(s); setRevealed(1); setAutoplay(true); setPhase('play');
     };
 
     const dreamLogs = char.dreamLogs || [];
@@ -901,41 +861,44 @@ const DreamTheater: React.FC<{ char: CharacterProfile; onExit: () => void }> = (
     }
 
     // ========================================================
-    //  PLAY — fragment stage
+    //  PLAY — collage canvas（碎片累积，可滚动回看整首拼贴诗）
     // ========================================================
     return (
         <Shell bg={theme.bg}>
             <Ambient kind={theme.ambient} accent={theme.accent} />
 
-            {/* exit (subtle) */}
+            {/* exit（放弃，不收束） */}
             <button onClick={onExit} className="absolute top-0 left-0 m-3 w-9 h-9 rounded-full flex items-center justify-center text-white/40 bg-white/[0.04] border border-white/[0.06] active:scale-90 transition z-30"
                 style={{ marginTop: 'max(0.75rem, calc(env(safe-area-inset-top, 0px) + 0.5rem))' }}>
                 <X size={16} />
             </button>
 
-            {/* stage */}
-            <div
-                className="flex-1 relative z-10 overflow-hidden select-none flex items-center justify-center px-8"
-                onClick={advance}
-                onPointerDown={e => { (e.target as HTMLElement).setPointerCapture?.(e.pointerId); const t = setTimeout(startFF, 420); (e.currentTarget as any)._ff = t; }}
-                onPointerUp={e => { clearTimeout((e.currentTarget as any)._ff); stopFF(); }}
-                onPointerLeave={e => { clearTimeout((e.currentTarget as any)._ff); stopFF(); }}
-            >
-                {frag && (
-                    <div key={idx} className="w-full flex items-center justify-center animate-fade-in" style={{ animationDuration: '1.1s' }}>
-                        <FragmentView frag={frag} theme={theme} />
-                    </div>
-                )}
+            {/* 拼贴画布：轻触让下一片浮现；可上下滚动回看 */}
+            <div ref={scrollRef} onClick={revealNextOrFinish}
+                className="flex-1 relative z-10 overflow-y-auto no-scrollbar select-none">
+                <div className="min-h-full flex flex-col px-7 pt-20 pb-44">
+                    {frags.slice(0, revealed).map((f, i) => (
+                        <CollageItem key={i} frag={f} theme={theme} index={i} />
+                    ))}
+                    {revealed >= frags.length && (
+                        <div className="self-center mt-14 mb-4 flex flex-col items-center gap-3 animate-fade-in">
+                            <span className="text-white/25 tracking-[0.45em] text-[11px]" style={{ fontFamily: SERIF }}>梦在这里散了</span>
+                            <button onClick={(e) => { e.stopPropagation(); finishDream(); }}
+                                className="px-6 py-2.5 rounded-full text-[12px] font-semibold active:scale-95 transition"
+                                style={{ background: theme.accent, color: '#15121c' }}>醒来</button>
+                        </div>
+                    )}
+                </div>
             </div>
 
-            {/* breathing progress + controls */}
-            <div className="shrink-0 z-30 px-6 pb-7 pt-2">
+            {/* 底部：进度 + 提示 + 醒来 / 暂停 */}
+            <div className="shrink-0 z-30 px-6 pb-7 pt-2 bg-gradient-to-t from-black/40 to-transparent">
                 <div className="h-[2px] rounded-full bg-white/[0.06] overflow-hidden mb-3">
-                    <div className="h-full rounded-full transition-all duration-700" style={{ width: `${((idx + 1) / Math.max(1, frags.length)) * 100}%`, background: `${theme.accent}88` }} />
+                    <div className="h-full rounded-full transition-all duration-700" style={{ width: `${(revealed / Math.max(1, frags.length)) * 100}%`, background: `${theme.accent}88` }} />
                 </div>
                 <div className="flex items-center justify-between">
-                    <span className="text-[10px]" style={{ color: theme.accent, opacity: 0.6, fontFamily: SERIF }}>{theme.label}</span>
-                    <span className={`text-[10px] text-white/25 transition-opacity duration-1000 ${hintFaded ? 'opacity-0' : 'opacity-100'}`}>轻触继续 · 长按快进</span>
+                    <button onClick={(e) => { e.stopPropagation(); finishDream(); }} className="text-[11px] text-white/45 active:scale-95">醒来</button>
+                    <span className={`text-[10px] text-white/25 transition-opacity duration-1000 ${revealed > 1 ? 'opacity-0' : 'opacity-100'}`}>轻触，让梦继续浮现</span>
                     <button onClick={(e) => { e.stopPropagation(); setAutoplay(a => !a); }}
                         className="w-9 h-9 rounded-full flex items-center justify-center border border-white/[0.1] text-white/70 active:scale-90 transition"
                         style={autoplay ? { background: theme.accent, color: '#15121c', borderColor: 'transparent' } : undefined}>
