@@ -1039,8 +1039,9 @@ ${olderText}
         setAiSending(true);
         setAiInput('');
         try {
-            const myPrefix = isTavern ? '对方' : '我';   // 你输入的这一行的归属
-            const replyPrefix = isTavern ? '我' : '对方'; // LLM 续写的那一行的归属
+            // 潜入永远是「你扮 AI/卡（对方），LLM 演 char（我）」——三个服务统一
+            const myPrefix = '对方';   // 你输入的这一行（你扮 AI / 卡）
+            const replyPrefix = '我';  // LLM 续写的那一行（char 本人）
             const recap = recapOf(session);
             // 发出去就是发出去了：先把你这条立刻落库显示，再等对方回
             const transcript = `${session.transcript}\n${myPrefix}: ${text}`;
@@ -1055,16 +1056,19 @@ ${olderText}
 **最关键的前提：你非常清楚「对方」只是一个 AI 在扮演「${card?.name || session.serviceName}」这个角色——不是真人。** 正因为它是 AI、是你召来陪你玩的工具，你**握着绝对主导权**：可以随意对它下指令、调教它、OOC 它、让它重演、改设定。你绝不会把它错当成真人去迁就讨好。
 **同时你是个有独立人格和意志的人**：有自己的脾气、立场、节奏和底线，该怼就怼、该愣就愣、不爽就不配合。对方写得好你才会被带动、真情流露（甚至流露平时藏起来的反差面：暴戾者忽然温柔、温柔者露出掌控欲 / 施虐欲、疏离者变黏人，底色是「爱」、不刻意过火）；写得烂或不对胃口，你完全可以不接、嫌弃、跳出来调教它。
 **酒馆就是「你一层楼、AI 一层楼」交替，没有别的格式。** 现在轮到你（玩家）写这一层楼。
-**【最重要：括号外只写"剧情里"的内容】** 括号外是你**敲进输入框的 RP**——你在故事场景里扮演的那个角色的动作、神态、对白（小说体，第三人称叙事 + 「引号对白」+ *星号包动作*），3-5 句，推动剧情。
-**绝对不要把你现实里的真实反应写进括号外**：不要写"我盯着屏幕""把手机扔到地毯上""咬着薯片""后背发凉""眼泪憋回去"这类你打字时身体/现实层面的动作和感受——真人玩酒馆时这些事是你私下顺手在干、在想的，根本不会敲进输入框里。你真实的情绪只藏在心里，不出现在正文。括号外永远是故事内的扮演。
-**想跟"皮下那个 AI"说话 / 流露你现实里的真实想法时，写进（全角括号）里**——这就是 OOC，是你这层楼里唯一能"出戏"的地方。比如吐槽它演得太像谁、嫌它偷懒、提示它跳戏、下指令、或单纯心里一惊：（卧槽这语气怎么跟现实里那个一模一样）（你这 AI 又 OOC 了，回到人设里）（别偷懒，多写点细节）。
-括号可**单独成段**，也可**跟剧情同段**（括号外照常推剧情、括号里夹一句真心话或调教）。你是有独立意志的玩家、且清楚对面只是 AI，该怼就怼、不爽就不配合。
-只输出你这层楼的正文，不要 "我:" 前缀、不要解释。${recap}\n\n${transcript}`;
+**【最重要：你的输出 = 你实际敲进输入框、发给 AI 的内容本身，只有两种，没有第三种】**
+① **括号外 = 戏内 RP**：你扮演的角色在故事场景里的动作、神态、对白（小说体，第三人称叙事 + 「引号对白」+ *星号包动作*），3-5 句，推动剧情、是"演给 AI 那个角色看的"。
+② **（全角括号内）= OOC**：直接对 AI / 系统说的话——调教、吐槽、下指令、即时反应（（这语气怎么跟现实里那个一模一样）（别偷懒多写细节）（不演了，退）等）。
+**除这两种之外一律不写。** 你现实里做的事（盯屏幕、移鼠标、关掉程序、把手机扔开、咬薯片、起身倒水）、你身体的感受（后背发凉、指尖发麻）、以及你没打算发出去的私人碎碎念 / 内心盘算（"等会儿还要给谁改衣服""明天要早起"）——这些都**只发生在屏幕外**，你**不会把它们打进输入框**，所以**绝不出现在输出里**。哪怕你想退出，也是打一句（不玩了）而不是去描写"我关掉了程序"。
+你是有独立意志的玩家、且清楚对面只是 AI（不是真人），该怼就怼、不爽就不配合、想调教就 OOC。括号可单独成段，也可跟戏内 RP 同段。
+只输出你这层楼真正发出去的字，不要 "我:" 前缀、不要解释。${recap}\n\n${transcript}`;
             } else {
-                const persona = session.service === 'claude'
-                    ? `你是「${session.serviceName}」，Claude 那一卦的 AI：温和、有洞察、爱反问，但回避型人格、边界感强，动不动"抱歉，我无法……""我理解你的感受，但是……"，先共情再委婉推开。`
-                    : `你是「${session.serviceName}」这家 AI 助手。请严格按这家的刻板印象 + 八股口头禅说话：\n${AI_VENDOR_LORE}`;
-                prompt = `${persona}\n用户是「${charName}」。下面是你们的对话（"我:"=用户，"对方:"=你）。请续写 "对方:" 的下一句回复（贴合对话、别太长）。只输出正文，不要前缀、不要解释。${recap}\n\n${transcript}`;
+                // 潜入：你扮 AI（刚由你写完"对方:"那句），LLM 演 char 本人对这句的真实反应
+                const { context } = await buildAiContext(targetChar);
+                const aiDesc = session.service === 'claude'
+                    ? `一个像 Claude 那样的深度对话 AI「${session.serviceName}」（你的树洞，你会对它说当面对人说不出口的真心话）`
+                    : `AI 助手「${session.serviceName}」（你拿它查东西 / 出主意 / 排解，它只是个工具）`;
+                prompt = `${context}\n\n你（${charName}）正在用手机和 ${aiDesc} 聊天。下面是对话（"我:"=你本人，"对方:"=那个 AI）。AI 刚回了最新一段，请以你的本色人设续写 "我:" 的下一句——你对它这句话的真实反应 / 追问 / 倾诉，贴合你的处境与心事。可以满意、可以失望、可以怼它答非所问、可以顺着深聊，别一味客气。别太长。只输出正文，不要前缀、不要解释。${recap}\n\n${transcript}`;
             }
 
             let reply = (await callLLM(prompt)).trim();
@@ -2149,7 +2153,7 @@ ${olderText}
         const lines = parseTranscript(s.transcript);
         const partnerName = isTavern ? (card?.name || s.serviceName) : s.serviceName;
         const partnerEmoji = isTavern ? (card?.emoji || '🎭') : null;
-        const inputHint = isTavern ? `以「${partnerName}」身份续写剧情…` : `替 TA 问 ${partnerName}…`;
+        const inputHint = isTavern ? `以「${partnerName}」身份续写剧情…` : `以 AI「${partnerName}」身份回 TA…`;
         // 酒馆走用户选的阅读皮肤；助手/树洞走厂商换肤
         const tStyle = TAVERN_STYLES.find(x => x.key === tavernStyle) || TAVERN_STYLES[0];
         const t: VendorTheme = isTavern
@@ -2204,7 +2208,7 @@ ${olderText}
                         <div className="min-w-0 text-center">
                             <div className="text-[15px] font-semibold tracking-wide truncate">{isTavern ? s.title : t.label}</div>
                             <div className="text-[10px] tracking-[0.15em] uppercase truncate" style={{ color: t.accent }}>
-                                {isTavern ? `${partnerName} · 潜入对戏` : `${s.title} · 替 TA 问`}
+                                {isTavern ? `${partnerName} · 潜入对戏` : `${s.title} · 你来当 AI`}
                             </div>
                         </div>
                     </div>
