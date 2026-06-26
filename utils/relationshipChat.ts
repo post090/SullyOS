@@ -323,11 +323,12 @@ export async function runRealConversation(
         // ---- A 发 ----
         const aPrompt = `${ctxA}
 
-### [你的最近上下文（和用户的私聊）]
+### [你和用户「${user.name}」的私聊背景（仅供参考，不是这场对话）]
 ${recentA}
 
 ### [人际关系 · 私聊「${b.name}」]
-你是「${a.name}」。你正在用手机和「${b.name}」私聊，这是你日常的社交往来。${
+你是「${a.name}」。你正在用手机和「${b.name}」私聊，这是你日常的社交往来。
+⚠️ 分清人：「${b.name}」是**另一个独立的人**，**不是**用户「${user.name}」。上面那段只是你和「${user.name}」的背景；别把「${b.name}」当成「${user.name}」，也别把只属于「${user.name}」的称呼、昵称、记忆、关系硬套到「${b.name}」身上。${
             p.bNote ? `
 
 【机主对「${b.name}」的备注 —— 这是已确立的事实/关系背景，必须当作真实情况严格遵守，不得无视或与之矛盾】：
@@ -376,11 +377,12 @@ ${labeled() || '（还没开始，由你起头）'}
         // ---- B 回 ----
         const bPrompt = `${ctxB}
 
-### [你的最近上下文（和用户的私聊）]
+### [你和用户「${user.name}」的私聊背景（仅供参考，不是这场对话）]
 ${recentB}
 
 ### [人际关系 · 「${a.name}」私聊你]
-你是「${b.name}」。「${a.name}」正在用手机私聊你。${
+你是「${b.name}」。「${a.name}」正在用手机私聊你。
+⚠️ 分清人：「${a.name}」是**另一个独立的人**，**不是**用户「${user.name}」。上面那段只是你和「${user.name}」的背景；别把「${a.name}」当成「${user.name}」，也别把只属于「${user.name}」的称呼、昵称、记忆、关系硬套到「${a.name}」身上。${
             p.aNote ? `
 
 【机主对「${a.name}」的备注 —— 这是已确立的事实/关系背景，必须当作真实情况严格遵守，不得无视或与之矛盾】：
@@ -473,7 +475,7 @@ export async function runNpcConversation(
     const prompt = `${ctxHost}
 
 ### [人际关系 · 与虚构联系人的聊天]
-你是「${p.host.name}」。你正在用手机和「${p.npcName}」私聊。${
+你是「${p.host.name}」。你正在用手机和「${p.npcName}」私聊。「${p.npcName}」是另一个独立的人，**不是**用户「${p.user.name}」——别把 TA 当成用户、也别把只属于用户的称呼/记忆套上去。${
         p.identity ? `对方身份：${p.identity}。` : ''
     }${
         p.note ? `
