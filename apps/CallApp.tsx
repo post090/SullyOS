@@ -7,7 +7,7 @@ import { resolveMiniMaxApiKey } from '../utils/minimaxApiKey';
 import { hashTtsParams, getCachedTts, saveCachedTts } from '../utils/ttsCache';
 import { cleanTextForTts, insertSpeechBreaks, convertHexAudioToBlob, fetchRemoteAudioBlob, VALID_EMOTIONS, stripEmotionTags, VOICE_ACTING_GUIDE, cleanVoiceMarkupForDisplay } from '../utils/minimaxTts';
 import { FISH_VOICE_ACTING_GUIDE, synthesizeSpeechFishDetailed, resolveFishAudioApiKey, cleanTextForTtsFish, stripFishMarkupForDisplay } from '../utils/fishAudioTts';
-import { resolveTtsProvider, getTtsProvider } from '../utils/ttsProvider';
+import { resolveTtsProvider, getTtsProvider, getVoicePromptOverride } from '../utils/ttsProvider';
 import { startStt, isSttSupported, type SttSession } from '../utils/speechToText';
 import { ContextBuilder } from '../utils/context';
 import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
@@ -252,7 +252,7 @@ const buildCallPrompt = (userName: string, charName?: string, coreContext?: stri
 
 注意：不要写小说式中文旁白，如”（我靠在椅背上，目光看向远方）”——会被直接删掉，等于白写。
 
-${getTtsProvider() === 'fishaudio' ? FISH_VOICE_ACTING_GUIDE : VOICE_ACTING_GUIDE}
+${getVoicePromptOverride(getTtsProvider()) ?? (getTtsProvider() === 'fishaudio' ? FISH_VOICE_ACTING_GUIDE : VOICE_ACTING_GUIDE)}
 
 ### 底线
 
