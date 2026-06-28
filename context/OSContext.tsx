@@ -1593,6 +1593,10 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                   reqBody.thinking = { type: 'enabled', budget_tokens: 4000 };
                   reqBody.reasoning_effort = 'medium';
                   reqBody.extra_body = { ...(reqBody.extra_body || {}), thinking: { type: 'enabled', budget_tokens: 4000 } };
+                  // 开思考时不带采样参数: Claude 系在 thinking 启用时只接受 temperature=1，
+                  // 传 0.85 会被 400。删掉用服务端默认；对非 Claude 模型同样安全。
+                  delete reqBody.temperature;
+                  delete reqBody.top_p;
               }
               const data = await safeFetchJson(`${baseUrl}/chat/completions`, {
                   method: 'POST', headers,

@@ -4,7 +4,7 @@ import { DB } from '../utils/db';
 import { CharacterProfile, PhoneEvidence, PhoneCustomApp, PhoneContact, ConvTopic, AiSession, AiServiceKind, TavernCard } from '../types';
 import { ContextBuilder } from '../utils/context';
 import Modal from '../components/os/Modal';
-import { safeResponseJson } from '../utils/safeApi';
+import { safeResponseJson, extractContent, extractJson } from '../utils/safeApi';
 import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
 import {
     runRealConversation, runNpcConversation, upsertContact, matchRealChar,
@@ -685,14 +685,10 @@ ${realCharRule}
 
             if (!response.ok) throw new Error('API Error');
             const data = await safeResponseJson(response);
-            let content = data.choices[0].message.content;
-            content = content.replace(/```json/g, '').replace(/```/g, '').trim();
-            const firstBracket = content.indexOf('[');
-            const lastBracket = content.lastIndexOf(']');
-            if (firstBracket > -1 && lastBracket > -1) content = content.substring(firstBracket, lastBracket + 1);
-
-            let json = [];
-            try { json = JSON.parse(content); } catch (e) { json = []; }
+            // extractContent + extractJson：兼容 Claude 返回格式（正文在 reasoning_content、
+            // 包 ```json 代码块、夹散文、尾逗号、内层未转义引号…），裸 JSON.parse 解不出来会丢空。
+            const content = extractContent(data);
+            const json = extractJson(content) || [];
 
             const newRecordsToAdd: PhoneEvidence[] = [];
 
@@ -821,7 +817,9 @@ ${realCharRule}
         });
         if (!response.ok) throw new Error('API Error');
         const data = await safeResponseJson(response);
-        return (data.choices?.[0]?.message?.content as string) || '';
+        // 用 extractContent 而非裸读 message.content：兼容 Claude/思考类模型把正文放在
+        // reasoning_content、或正文里夹 <think> 块的情况，否则前端拿到空串（"后台出字前端没内容"）。
+        return extractContent(data);
     };
 
     // 组 context：跟 handleGenerate 一致（含记忆宫殿 + 时间感知 + 最近聊天），让偷看到的 AI 记录贴合真实近况
@@ -901,17 +899,14 @@ ${AI_VENDOR_LORE}
 
             const fullPrompt = `${context}\n\n### [Recent Chat Context]\n${recentMsgs}\n\n### [Task]\n${task}\n请结合「当前时间 / 距离上次联系」和人设，让内容贴合你近期的真实状态。只输出 JSON，不要解释。`;
 
-            let content = (await callLLM(fullPrompt)).replace(/```json/g, '').replace(/```/g, '').trim();
+            const content = await callLLM(fullPrompt);
             const now = Date.now();
             const rid = () => Math.random().toString(36).slice(2, 8);
             const newSessions: AiSession[] = [];
             const newCards: TavernCard[] = [];
 
             if (service === 'tavern') {
-                const s = content.indexOf('{'), e = content.lastIndexOf('}');
-                if (s > -1 && e > -1) content = content.substring(s, e + 1);
-                let obj: any = {};
-                try { obj = JSON.parse(content); } catch { obj = {}; }
+                const obj: any = extractJson(content) || {};
                 // 卡片去重 + 永不顶掉：同名卡复用已有 id（不重建、不覆盖、不挤掉），只新增真正没有过的
                 const nameToId: Record<string, string> = {};
                 for (const c of (targetChar.phoneState?.aiAgent?.cards || [])) nameToId[normName(c.name)] = c.id;
@@ -931,10 +926,8 @@ ${AI_VENDOR_LORE}
                     });
                 }
             } else {
-                const s = content.indexOf('['), e = content.lastIndexOf(']');
-                if (s > -1 && e > -1) content = content.substring(s, e + 1);
-                let arr: any[] = [];
-                try { arr = JSON.parse(content); } catch { arr = []; }
+                const parsed = extractJson(content);
+                const arr: any[] = Array.isArray(parsed) ? parsed : [];
                 for (const sess of arr) {
                     if (!sess?.transcript) continue;
                     newSessions.push({
@@ -1257,10 +1250,8 @@ ${olderText}
 **transcript 写法**：长剧情小说体，第三人称叙事 + 引号对白，动作/神态/心理用 *星号*；"我:" = 你(玩家 ${charName}) 敲进输入框的 RP，"对方:" = AI 扮的「${card.name}」，交替推进，4-6 轮，首轮"对方:"当开场白、**整段以 "我:"(玩家)收尾**（停在等对方回应处）。**"我:"括号外只写故事里所扮角色的动作/对白，不要写你现实里的身体反应（盯屏幕/扔手机/吃东西等）；（全角括号内）= 越过角色直接跟皮下 AI 本体说话（骂它/OOC 提醒/指导怎么演/指出哪段不对）。**
 返回 JSON：{ "title": "剧情标题(12字内)", "transcript": "我: ...\\n对方: ..." }`;
             const fullPrompt = `${context}\n\n### [Recent Chat Context]\n${recentMsgs}\n\n### [Task]\n${task}\n只输出 JSON，不要解释。`;
-            let content = (await callLLM(fullPrompt)).replace(/```json/g, '').replace(/```/g, '').trim();
-            const a = content.indexOf('{'), b = content.lastIndexOf('}');
-            if (a > -1 && b > -1) content = content.substring(a, b + 1);
-            let obj: any = {}; try { obj = JSON.parse(content); } catch { obj = {}; }
+            const content = await callLLM(fullPrompt);
+            const obj: any = extractJson(content) || {};
             if (!obj.transcript) { addToast('没生成出来，再试一次', 'error'); return; }
             const now = Date.now();
             const sess: AiSession = {

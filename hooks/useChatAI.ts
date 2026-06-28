@@ -790,6 +790,12 @@ export const useChatAI = ({
                 baseReqBody.thinking = { type: 'enabled', budget_tokens: 4000 };
                 baseReqBody.reasoning_effort = 'medium';
                 baseReqBody.extra_body = { ...(baseReqBody.extra_body || {}), thinking: { type: 'enabled', budget_tokens: 4000 } };
+                // 开思考时不要带采样参数: Claude 系（含各种中转 claude-*）在 thinking 启用时
+                // 只接受 temperature=1，传 0.85 会被 400 ("temperature may only be set to 1 when
+                // thinking is enabled")。删掉让服务端用默认即可——对其它模型(非 Claude)也安全:
+                // 它们开思考时同样不需要我们指定温度，回退默认不影响行为。
+                delete baseReqBody.temperature;
+                delete baseReqBody.top_p;
             }
             // 流式时显式要求 usage 统计随末尾 chunk 一起返回，否则 token 徽标拿不到数据
             if (userStream) {
