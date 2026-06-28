@@ -592,10 +592,21 @@ export const useChatAI = ({
         currentMsgs: Message[],
         overrideApiConfig?: { baseUrl: string; apiKey: string; model: string },
         onInstantPosted?: () => void,
+        opts?: { skipEmotionInjection?: boolean },
     ) => {
         if (isTyping || !char) return;
         const effectiveApi = overrideApiConfig || apiConfig;
         if (!effectiveApi.baseUrl) { alert("请先在设置中配置 API URL"); return; }
+
+        // 重 roll（回溯重生）时不带入上一轮的情绪余波：清掉 buff 注入（buffInjection/activeBuffs）和
+        // 意识流（innerState/evolvedNarrative），让主回复与情绪评估两边都从干净状态独立重新生成——
+        // 否则上一次生成留下的情绪 buff 与内心独白会被原样再注入，两次 roll 受同一情绪底色裹挟，失去独立性。
+        // charForGen 只是本地浅拷贝（清空 buff 字段），不落 DB，不影响角色持久化的情绪状态——
+        // 紧接着重跑的情绪评估会基于新回复覆写出新的 buff/innerState。
+        const skipEmotionInjection = !!opts?.skipEmotionInjection;
+        const charForGen: CharacterProfile = skipEmotionInjection
+            ? { ...char, buffInjection: '', activeBuffs: [] }
+            : char;
 
         setIsTyping(true);
         setRecallStatus('');
@@ -641,12 +652,12 @@ export const useChatAI = ({
             const luckinMiniOpen = !!luckinMiniSnap?.open;
 
             const payload = await stageT('payload', buildChatRequestPayload({
-                char, userProfile, groups, emojis, categories,
+                char: charForGen, userProfile, groups, emojis, categories,
                 historyMsgs: contextMsgs,
                 recentMsgsHint: currentMsgs,
                 contextLimit: limit,
                 realtimeConfig,
-                innerState: evolvedNarrative || undefined,
+                innerState: skipEmotionInjection ? undefined : (evolvedNarrative || undefined),
                 userListeningContext: (() => {
                     if (music.current && music.playing && music.lyric.length > 0) {
                         const idx = music.activeLyricIdx;
@@ -719,7 +730,7 @@ export const useChatAI = ({
                 : null;
             if (emotionEvalEnabled && !instantOn && emotionApi) {
                 setEmotionStatus('evaluating');
-                evaluateEmotionBackground(char, userProfile, systemPrompt, cleanedApiMessages, emotionApi)
+                evaluateEmotionBackground(charForGen, userProfile, systemPrompt, cleanedApiMessages, emotionApi)
                     .then((innerState) => {
                         if (innerState) setEvolvedNarrative(innerState);
                     })
@@ -731,7 +742,7 @@ export const useChatAI = ({
                 ? {
                     // includeContext=false: 不嵌 system prompt + 对话历史 (worker 复用本次请求的 messages 作前文),
                     // 把 emotionEval 块压到最小, 让请求体留在 keepalive 64KB 上限内 (关前端也能跑完).
-                    prompt: buildEmotionEvalPrompt(char, userProfile, systemPrompt, cleanedApiMessages, false),
+                    prompt: buildEmotionEvalPrompt(charForGen, userProfile, systemPrompt, cleanedApiMessages, false),
                     api: { baseUrl: emotionApi.baseUrl, apiKey: emotionApi.apiKey, model: emotionApi.model },
                 }
                 : undefined;

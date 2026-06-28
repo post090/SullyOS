@@ -1053,7 +1053,8 @@ const Chat: React.FC = () => {
         setMessages(newHistory);
         addToast('回溯对话中...', 'info');
 
-        triggerAI(newHistory);
+        // 重 roll：不注入上一轮残留的情绪 buff 与意识流（innerState），两边独立重新生成。
+        triggerAI(newHistory, undefined, undefined, { skipEmotionInjection: true });
     };
 
     const handleImageSelect = async (file: File) => {
