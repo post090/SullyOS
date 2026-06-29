@@ -20,6 +20,8 @@ interface ChatInputAreaProps {
     characters: CharacterProfile[];
     activeCharacterId: string;
     onCharSelect: (id: string) => void;
+    /** 每个角色的未读消息数，用于在「切换会话」头像上显示红点 */
+    unreadMessages?: Record<string, number>;
     customThemes: ChatTheme[];
     onUpdateTheme: (id: string) => void;
     onRemoveTheme: (id: string) => void;
@@ -57,6 +59,7 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
     input, setInput, isTyping, selectionMode,
     showPanel, setShowPanel, onSend, onDeleteSelected, onForwardSelected, selectedCount,
     emojis, characters, activeCharacterId, onCharSelect,
+    unreadMessages = {},
     customThemes, onUpdateTheme, onRemoveTheme, activeThemeId,
     onPanelAction, onImageSelect, isSummarizing,
     categories = [], activeCategory = 'default',
@@ -763,12 +766,20 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                             <div>
                                 <h3 className="text-xs font-bold text-slate-400 px-1 tracking-wider uppercase mb-3">切换会话</h3>
                                 <div className="space-y-3">
-                                    {characters.map(c => (
+                                    {characters.map(c => {
+                                        const unread = c.id !== activeCharacterId ? (unreadMessages[c.id] || 0) : 0;
+                                        return (
                                         <div key={c.id} onClick={() => onCharSelect(c.id)} className={`flex items-center gap-4 p-3 rounded-[20px] border cursor-pointer ${c.id === activeCharacterId ? 'bg-white border-primary/30 shadow-md' : 'bg-white/50 border-transparent'}`}>
-                                            <img src={c.avatar} className="w-12 h-12 rounded-2xl object-cover" />
+                                            <div className="relative shrink-0">
+                                                <img src={c.avatar} className="w-12 h-12 rounded-2xl object-cover" />
+                                                {unread > 0 && (
+                                                    <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center shadow-[0_0_8px_rgba(244,63,94,0.6)] ring-2 ring-white" aria-label={`${unread} 条未读消息`}>{unread > 99 ? '99+' : unread}</span>
+                                                )}
+                                            </div>
                                             <div className="flex-1"><div className="font-bold text-sm text-slate-700">{c.name}</div><div className="text-xs text-slate-400 truncate">{c.description}</div></div>
                                         </div>
-                                    ))}
+                                        );
+                                    })}
                                 </div>
                             </div>
                         </div>
