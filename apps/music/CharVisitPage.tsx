@@ -10,15 +10,16 @@
  * - 点歌单进详情（若歌单空，可以一键让 char 搜歌填充）。
  * - 点任一首歌 → 用全局 MusicContext 播放 (沿用 user 的 cookie / 配额)。
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useOS } from '../../context/OSContext';
 import { useMusic, musicApi, toHttps, Song } from '../../context/MusicContext';
 import { CharacterProfile, CharPlaylist, CharPlaylistSong } from '../../types';
 import { CharMusicPersona } from '../../utils/charMusicPersona';
 import { computeCurrentListening } from '../../utils/charMusicSchedule';
+import { removeSongsFromPlaylist } from '../../utils/charPlaylistEdit';
 import { DB } from '../../utils/db';
 import { C, Sparkle, MizuHeader, BokehBg, MiniPlayer } from './MusicUI';
-import { ArrowLeft, MusicNote, Heart, Plus, MagnifyingGlass } from '@phosphor-icons/react';
+import { ArrowLeft, MusicNote, Heart, Plus, MagnifyingGlass, Trash, Check } from '@phosphor-icons/react';
 
 interface Props {
   charId: string;
@@ -62,6 +63,56 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
   const [initializing, setInitializing] = useState(false);
   const [expandedPl, setExpandedPl] = useState<string | null>(null);
   const [fillingPl, setFillingPl] = useState<string | null>(null);
+
+  // 选择模式：长按或点「选择」进入，可勾选多首歌一起删
+  const [selectingPl, setSelectingPl] = useState<string | null>(null);
+  const [selectedSongIds, setSelectedSongIds] = useState<Set<number>>(new Set());
+
+  const enterSelectMode = (plId: string, songId?: number) => {
+    setExpandedPl(plId);
+    setSelectingPl(plId);
+    setSelectedSongIds(songId != null ? new Set([songId]) : new Set());
+  };
+  const exitSelectMode = () => {
+    setSelectingPl(null);
+    setSelectedSongIds(new Set());
+  };
+  const toggleSelected = (songId: number) => {
+    setSelectedSongIds(prev => {
+      const next = new Set(prev);
+      if (next.has(songId)) next.delete(songId); else next.add(songId);
+      return next;
+    });
+  };
+
+  // 长按检测：按住约 0.5s 触发；手指/鼠标移动超过阈值视为滚动，取消长按
+  const lpTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lpFired = useRef(false);
+  const lpStart = useRef<{ x: number; y: number } | null>(null);
+  const clearLongPress = () => {
+    if (lpTimer.current) { clearTimeout(lpTimer.current); lpTimer.current = null; }
+  };
+  const songPressHandlers = (pl: CharPlaylist, song: CharPlaylistSong) => ({
+    onPointerDown: (e: React.PointerEvent) => {
+      if (selectingPl) return; // 已在选择模式，不需要长按
+      lpFired.current = false;
+      lpStart.current = { x: e.clientX, y: e.clientY };
+      clearLongPress();
+      lpTimer.current = setTimeout(() => {
+        lpFired.current = true;
+        enterSelectMode(pl.id, song.id);
+      }, 500);
+    },
+    onPointerMove: (e: React.PointerEvent) => {
+      if (!lpStart.current) return;
+      if (Math.abs(e.clientX - lpStart.current.x) > 10 || Math.abs(e.clientY - lpStart.current.y) > 10) {
+        clearLongPress();
+      }
+    },
+    onPointerUp: clearLongPress,
+    onPointerLeave: clearLongPress,
+    onPointerCancel: clearLongPress,
+  });
 
   const profile = char?.musicProfile;
   const initialized = !!(char && CharMusicPersona.isInitialized(char));
@@ -130,6 +181,23 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
 
   const togglePlaylist = (plId: string) => {
     setExpandedPl(prev => (prev === plId ? null : plId));
+    exitSelectMode(); // 收起或切到别的歌单时，退出选择模式
+  };
+
+  /** 把当前选中的歌从歌单里一起删掉（弹一次确认） */
+  const deleteSelected = (pl: CharPlaylist) => {
+    if (!char || !profile || selectedSongIds.size === 0) return;
+    const n = selectedSongIds.size;
+    const ok = typeof window !== 'undefined'
+      ? window.confirm(`从《${pl.title}》移除选中的 ${n} 首歌？`)
+      : true;
+    if (!ok) return;
+    const nextPlaylists = removeSongsFromPlaylist(profile.playlists, pl.id, selectedSongIds, Date.now());
+    updateCharacter(char.id, {
+      musicProfile: { ...profile, playlists: nextPlaylists, updatedAt: Date.now() },
+    });
+    addToast(`已移除 ${n} 首`, 'success');
+    exitSelectMode();
   };
 
   /** 让 char 用偏爱艺人作为关键词去搜歌 → 自动填充空歌单
@@ -437,23 +505,83 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
                             </button>
                           </div>
                         ) : (
-                          <div className="space-y-1 pt-2">
-                            {pl.songs.map((s, i) => (
-                              <button
-                                key={s.id}
-                                onClick={() => playPlaylistSong(pl, s)}
-                                className="w-full flex items-center gap-2 py-1.5 px-2 rounded-lg hover:bg-white/40 transition-colors text-left"
-                              >
-                                <span className="text-[10px] w-4 shrink-0" style={{ color: C.faint }}>{i + 1}</span>
-                                <div className="flex-1 min-w-0">
-                                  <div className="text-xs truncate" style={{ color: C.text }}>{s.name}</div>
-                                  <div className="text-[9px] truncate" style={{ color: C.muted }}>{s.artists}</div>
-                                </div>
-                                {s.fee === 1 && (
-                                  <span className="text-[8px] px-1 rounded" style={{ color: C.vip, border: `1px solid ${C.vip}50` }}>VIP</span>
-                                )}
-                              </button>
-                            ))}
+                          <div className="pt-2">
+                            {/* 操作条：平时显示「选择」；选择模式下变成 取消 · 已选 N · 删除 */}
+                            <div className="flex items-center justify-between px-2 pb-1.5">
+                              {selectingPl === pl.id ? (
+                                <>
+                                  <button
+                                    onClick={exitSelectMode}
+                                    className="text-[11px] px-1 py-0.5"
+                                    style={{ color: C.muted }}
+                                  >
+                                    取消
+                                  </button>
+                                  <span className="text-[10px]" style={{ color: C.faint }}>
+                                    已选 {selectedSongIds.size} 首
+                                  </span>
+                                  <button
+                                    onClick={() => deleteSelected(pl)}
+                                    disabled={selectedSongIds.size === 0}
+                                    className="text-[11px] px-1 py-0.5 flex items-center gap-1 disabled:opacity-40"
+                                    style={{ color: C.vip }}
+                                  >
+                                    <Trash size={12} weight="bold" />
+                                    删除
+                                  </button>
+                                </>
+                              ) : (
+                                <>
+                                  <span className="text-[10px]" style={{ color: C.faint }}>{pl.songs.length} 首</span>
+                                  <button
+                                    onClick={() => enterSelectMode(pl.id)}
+                                    className="text-[11px] px-1 py-0.5"
+                                    style={{ color: C.primary }}
+                                  >
+                                    选择
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                            <div className="space-y-1">
+                              {pl.songs.map((s, i) => {
+                                const selecting = selectingPl === pl.id;
+                                const checked = selectedSongIds.has(s.id);
+                                return (
+                                  <button
+                                    key={s.id}
+                                    onClick={() => {
+                                      if (lpFired.current) { lpFired.current = false; return; } // 长按已触发，吞掉这次 click
+                                      if (selecting) { toggleSelected(s.id); return; }
+                                      playPlaylistSong(pl, s);
+                                    }}
+                                    {...songPressHandlers(pl, s)}
+                                    className="w-full flex items-center gap-2 py-1.5 px-2 rounded-lg hover:bg-white/40 transition-colors text-left"
+                                  >
+                                    {selecting ? (
+                                      <span
+                                        className="w-4 h-4 shrink-0 rounded-full border flex items-center justify-center"
+                                        style={{
+                                          borderColor: checked ? C.primary : C.faint,
+                                          background: checked ? C.primary : 'transparent',
+                                        }}
+                                      >
+                                        {checked && <Check size={10} weight="bold" color="white" />}
+                                      </span>
+                                    ) : (
+                                      <span className="text-[10px] w-4 shrink-0" style={{ color: C.faint }}>{i + 1}</span>
+                                    )}
+                                    <div className="flex-1 min-w-0">
+                                      <div className="text-xs truncate" style={{ color: C.text }}>{s.name}</div>
+                                      <div className="text-[9px] truncate" style={{ color: C.muted }}>{s.artists}</div>
+                                    </div>
+                                    {s.fee === 1 && !selecting && (
+                                      <span className="text-[8px] px-1 rounded" style={{ color: C.vip, border: `1px solid ${C.vip}50` }}>VIP</span>
+                                    )}
+                                  </button>
+                                );
+                              })}
+                            </div>
                           </div>
                         )}
                       </div>
@@ -546,7 +674,7 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
                   background: `${C.sakura}14`,
                   border: `1px solid ${C.sakura}35`,
                 }}
-                title="清空现有音乐人格并重新让 LLM 生成"
+                title="清空后重新生成。"
               >
                 {initializing ? '重新敲门中…' : '重新生成音乐人格'}
               </button>
