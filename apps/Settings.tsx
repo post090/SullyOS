@@ -1715,8 +1715,7 @@ const Settings: React.FC = () => {
                 </span>
             </div>
             <p className="text-xs text-slate-500 mb-3 leading-relaxed">
-                Proactive Push 和 Instant Push <b>共用同一份 VAPID 密钥对</b>。两边 key 不一致时会反复 unsubscribe 抢同一个 pushManager 订阅 ——
-                "推送成功但收不到"的常见原因。
+                Proactive Push 和 Instant Push <b>共用同一份 VAPID 密钥对</b>。重新生成会让已开的推送失效，需要重新开启。
             </p>
             <button
                 type="button"
@@ -2386,8 +2385,8 @@ const Settings: React.FC = () => {
                       ))}
                   </div>
                   <div className="rounded-2xl bg-slate-50 p-3 text-[11px] leading-relaxed text-slate-600">
-                      <div>可直接复用向量：<b className="text-emerald-600">{csyPreview.reusableVectors}</b></div>
-                      <div>需要重新向量化：<b className="text-amber-600">{csyPreview.rebuildRequired}</b></div>
+                      <div>可直接沿用的记忆：<b className="text-emerald-600">{csyPreview.reusableVectors}</b></div>
+                      <div>需要重新整理的记忆：<b className="text-amber-600">{csyPreview.rebuildRequired}</b></div>
                       {csyPreview.embeddingModels.length > 0 && (
                           <div className="mt-1 break-all text-[10px] text-slate-400">模型：{csyPreview.embeddingModels.join('、')}</div>
                       )}
@@ -2418,7 +2417,7 @@ const Settings: React.FC = () => {
           <div className="space-y-3 text-[11px] leading-relaxed text-slate-600">
               <section className="rounded-2xl bg-cyan-50 p-3">
                   <div className="font-bold text-cyan-800 mb-1">哪些内容会迁移？</div>
-                  <p>角色、聊天、世界书、相册等兼容数据会正常恢复；CSY 本地向量记忆会转换为 SullyOS 记忆宫殿。相同模型与维度的向量直接复用，否则保留记忆正文，等待重新向量化。</p>
+                  <p>角色、聊天、世界书、相册等兼容数据会正常恢复；CSY 本地向量记忆会转换为 SullyOS 记忆宫殿。能直接沿用的记忆会保留；剩下的会保留文字内容，之后自动重新整理。</p>
               </section>
 
               <section className="rounded-2xl bg-emerald-50 p-3">
@@ -2428,14 +2427,14 @@ const Settings: React.FC = () => {
 
               <section className="rounded-2xl bg-violet-50 p-3">
                   <div className="font-bold text-violet-800 mb-1">迁移后怎么再次导出？</div>
-                  <p>回到本页，点击上方的「整合导出」或「纯文字备份」。两者都会带上记忆节点、向量以及全部 <code className="font-mono">legacyCsy</code> 信息。以后恢复这份 SullyOS 备份时，使用普通「导入备份」即可。</p>
+                  <p>回到本页，点击上方的「整合导出」或「纯文字备份」。两份备份都会完整包含记忆内容。以后恢复这份 SullyOS 备份时，使用普通「导入备份」即可。</p>
                   <p className="mt-1 font-semibold text-rose-600">不要只导出「媒体与美化素材」：它不包含记忆宫殿。</p>
               </section>
 
               <section className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-amber-800">
                   <div className="font-bold mb-1">迁移前请注意</div>
                   <p>迁移会替换本机现有角色、聊天和对应应用数据；已有 SullyOS 数据请先完整备份。CSY 文件里本来没有的后端记忆、定时消息、信件或语音音频，迁移器无法凭空恢复。</p>
-                  <p className="mt-1">主 API、副 API 与 Embedding 配置会映射；CSY 后端 token 不会迁移。</p>
+                  <p className="mt-1">接口相关设置会一并迁移，登录凭证需要重新填。</p>
               </section>
           </div>
       </Modal>

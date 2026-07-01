@@ -641,7 +641,7 @@ const ReviewStep: React.FC<{
                             {privilege != null && Number(privilege) > 0 && <div className="flex justify-between text-emerald-600"><span>已优惠</span><span>-{fmtMoney(privilege)}</span></div>}
                             {Array.isArray(preview.couponCodeList) && preview.couponCodeList.length > 0 && <div className="flex justify-between text-[11px] text-[#16386F]"><span>已自动用券</span><span>{preview.couponCodeList.length} 张</span></div>}
                             {(!privilege || Number(privilege) <= 0) && !(Array.isArray(preview.couponCodeList) && preview.couponCodeList.length > 0) && (
-                                <div className="text-[10px] text-slate-400 leading-snug">本单暂无可用券 · 瑞幸券由你的账号/当前活动决定（previewOrder 已自动尝试，非系统问题）</div>
+                                <div className="text-[10px] text-slate-400 leading-snug">本单暂时没有可用券。</div>
                             )}
                             <div className="flex justify-between border-t border-[#EFE9DC] pt-1.5"><span className="text-slate-500">实付</span><span className="font-bold text-[#16386F]">{fmtMoney(finalPrice)}</span></div>
                         </>

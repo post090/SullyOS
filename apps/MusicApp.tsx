@@ -454,7 +454,7 @@ const MusicApp: React.FC = () => {
         <div className="flex-1 overflow-y-auto px-4 py-4 space-y-5 text-sm relative z-10 shizuku-scrollbar">
           <div className="rounded-2xl p-3.5 shizuku-glass" style={{ boxShadow: `0 2px 16px ${C.glow}08` }}>
             <div className="text-[10px] mb-2 tracking-wider flex items-center gap-1.5" style={{ color: C.muted }}>
-              <Sparkle size={6} color={C.glow} delay={0} /> 后端 Worker 地址
+              <Sparkle size={6} color={C.glow} delay={0} /> 服务地址
             </div>
             <input className="w-full rounded-xl px-3 py-2 outline-none text-xs shizuku-glass" value={cfg.workerUrl}
               onChange={e => setDraft({ workerUrl: e.target.value })} placeholder="https://..."
@@ -462,7 +462,7 @@ const MusicApp: React.FC = () => {
           </div>
           <div className="rounded-2xl p-3.5 shizuku-glass" style={{ boxShadow: `0 2px 16px ${C.glow}08` }}>
             <div className="text-[10px] mb-2 tracking-wider flex items-center gap-1.5" style={{ color: C.muted }}>
-              <Sparkle size={6} color={C.sakura} delay={0.5} /> 会员 Cookie (MUSIC_U)
+              <Sparkle size={6} color={C.sakura} delay={0.5} /> 会员 Cookie
             </div>
             <textarea className="w-full rounded-xl px-3 py-2 outline-none text-[10px] shizuku-glass" rows={3} value={cfg.cookie}
               onChange={e => setDraft({ cookie: e.target.value })} placeholder="MUSIC_U=xxx 或直接粘贴值..."

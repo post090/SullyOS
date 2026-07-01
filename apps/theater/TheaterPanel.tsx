@@ -150,7 +150,7 @@ const TheaterPanel: React.FC<{ addToast?: (m: string, t?: any) => void }> = ({ a
                         <>
                             <div className="flex gap-2 mb-3 flex-wrap">
                                 <TButton size="sm" variant="primary" icon={<Plus size={13} weight="bold" />} onClick={() => setWriteOpen(true)}>我来写</TButton>
-                                <TButton size="sm" icon={<Sparkle size={13} weight="bold" />} onClick={() => setLlmOpen(true)}>LLM 代写</TButton>
+                                <TButton size="sm" icon={<Sparkle size={13} weight="bold" />} onClick={() => setLlmOpen(true)}>AI 代写</TButton>
                                 <UploadButton onParsed={async (p) => { const s: VRScript = { id: tid('scr'), ...p, authorId: 'user', authorName: userProfile?.name || '我', source: 'upload', createdAt: Date.now() }; await DB.saveVRScript(s); await reload(); addToast?.(`已收录《${s.title}》`, 'success'); }} />
                             </div>
                             {scripts.length === 0 ? (
@@ -272,7 +272,7 @@ const StageView: React.FC<{ script: VRScript; ctx: TheaterCtx; apiConfig: any; a
     const runStaging = async () => {
         const api = await resolveTheaterApi(apiConfig);
         if (!api) { addToast?.('没配 API，去「API」标签填一下', 'error'); return; }
-        setBusy(mode === 'two-call' ? '演员们在读剧本（固定2次调用）…' : `${charCount} 位演员在各自读剧本…`);
+        setBusy(mode === 'two-call' ? '演员们在读剧本（固定生成2段）…' : `${charCount} 位演员在各自读剧本…`);
         try {
             const result = await collectActorNotes(script, cast, mode, ctx, api);
             setNotes(result); setStep('notes');
@@ -349,7 +349,7 @@ const StageView: React.FC<{ script: VRScript; ctx: TheaterCtx; apiConfig: any; a
 
                     <div style={{ fontSize: 11, letterSpacing: '.12em', color: TH.goldSoft, fontFamily: SERIF, marginBottom: 6 }}>表演方式</div>
                     <div className="grid grid-cols-2 gap-2 mb-2">
-                        {([['per-role', '逐角色', '每位角色各调一次 LLM（精准、贴人设）'], ['two-call', '固定两次', '1 次搞定全部演员（省，但可能 OOC）']] as const).map(([m, t, d]) => {
+                        {([['per-role', '逐角色', '每位角色各生成一段（精准、贴人设）'], ['two-call', '固定两次', '1 次搞定全部演员（省，但可能 OOC）']] as const).map(([m, t, d]) => {
                             const on = mode === m;
                             return <button key={m} onClick={() => setMode(m)} style={{ borderRadius: 12, padding: 10, textAlign: 'left', background: on ? 'rgba(216,178,113,.12)' : TH.bg2, border: `1px solid ${on ? TH.gold : TH.line}` }}>
                                 <div style={{ fontSize: 11.5, fontWeight: 800, color: on ? TH.gold : TH.text }}>{t}</div>
@@ -357,7 +357,7 @@ const StageView: React.FC<{ script: VRScript; ctx: TheaterCtx; apiConfig: any; a
                             </button>;
                         })}
                     </div>
-                    <p style={{ fontSize: 9.5, color: TH.sub, marginBottom: 8, textAlign: 'center' }}>本次约调用 <b style={{ color: TH.gold }}>{mode === 'two-call' ? (charCount > 0 ? 2 : 1) : charCount + 1}</b> 次 LLM{mode === 'per-role' ? `（${charCount} 角色 + 1 导演；NPC 不计）` : '（演员 1 次 + 导演 1 次）'}</p>
+                    <p style={{ fontSize: 9.5, color: TH.sub, marginBottom: 8, textAlign: 'center' }}>本次大约要生成 <b style={{ color: TH.gold }}>{mode === 'two-call' ? (charCount > 0 ? 2 : 1) : charCount + 1}</b> 段{mode === 'per-role' ? `（${charCount} 角色 + 1 导演；NPC 不计）` : '（演员 1 段 + 导演 1 段）'}</p>
                     <TButton variant="primary" block disabled={!allCast} onClick={runStaging}>{allCast ? '开始编排 →' : '先给每个角色选演员'}</TButton>
                 </>
             )}
@@ -670,12 +670,12 @@ const LLMScriptModal: React.FC<{ open: boolean; onClose: () => void; apiConfig: 
         const api = await resolveTheaterApi(apiConfig);
         if (!api) { addToast?.('没配 API', 'error'); return; }
         setBusy(true);
-        try { const p = await generateScript(brief.trim() || '自由发挥，写一出有意思的短剧', api, presetPrompt || undefined); const s: VRScript = { id: tid('scr'), title: p.title, logline: p.logline, roles: p.roles, body: p.body, authorId: 'llm', authorName: 'LLM 编剧', source: 'llm', createdAt: Date.now() }; await DB.saveVRScript(s); addToast?.(`写好了《${s.title}》`, 'success'); setBrief(''); setPresetKey(''); setPresetPrompt(''); onSaved(); }
+        try { const p = await generateScript(brief.trim() || '自由发挥，写一出有意思的短剧', api, presetPrompt || undefined); const s: VRScript = { id: tid('scr'), title: p.title, logline: p.logline, roles: p.roles, body: p.body, authorId: 'llm', authorName: 'AI 编剧', source: 'llm', createdAt: Date.now() }; await DB.saveVRScript(s); addToast?.(`写好了《${s.title}》`, 'success'); setBrief(''); setPresetKey(''); setPresetPrompt(''); onSaved(); }
         catch (e: any) { addToast?.('代写失败：' + (e?.message || ''), 'error'); }
         finally { setBusy(false); }
     };
     return (
-        <TModal open={open} title="LLM 代写" width={360} onClose={busy ? undefined : onClose} maskClosable={!busy} footer={<div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}><TButton onClick={onClose} disabled={busy}>取消</TButton><TButton variant="primary" disabled={busy} onClick={gen}>{busy ? '写作中…' : '写'}</TButton></div>}>
+        <TModal open={open} title="AI 代写" width={360} onClose={busy ? undefined : onClose} maskClosable={!busy} footer={<div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}><TButton onClick={onClose} disabled={busy}>取消</TButton><TButton variant="primary" disabled={busy} onClick={gen}>{busy ? '写作中…' : '写'}</TButton></div>}>
             <div style={{ maxHeight: '52vh', overflowY: 'auto' }}>
                 <PresetChips value={presetKey} onChange={(k, pr) => { setPresetKey(k); setPresetPrompt(pr); }} />
                 <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6, color: TH.text }}>主题 / 脑洞（可空）</div>

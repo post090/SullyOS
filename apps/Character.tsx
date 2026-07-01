@@ -1105,7 +1105,7 @@ ${isInitialGeneration ? `
                                    <div className="flex items-center justify-between gap-3">
                                        <div className="min-w-0">
                                            <p className="text-xs font-bold text-slate-700">聊天 · 时间感知强化</p>
-                                           <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">默认开。向聊天注入「距离上次多久」提示，强化时间观念、主动匹配现实时间。关掉后弱化程度看模型自身理解。</p>
+                                           <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">默认开。开启后角色会记得你们多久没聊、主动贴近真实时间；关掉后这种感觉会变弱。</p>
                                        </div>
                                        <button
                                            onClick={() => handleChange('timeAwarenessEnabled', formData.timeAwarenessEnabled === false)}
@@ -1121,7 +1121,7 @@ ${isInitialGeneration ? `
                                    <div className="flex items-center justify-between gap-3">
                                        <div className="min-w-0">
                                            <p className="text-xs font-bold text-slate-700">自定义时区</p>
-                                           <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">默认关（跟随本机）。开启后角色活在自己的时区里，「当前时间 / 消息时间戳 / 深夜判断」都按所选时区折算，并知道与你有时差——适合异国恋、角色身处异国。</p>
+                                           <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">默认关（跟随本机）。开启后角色活在自己的时区里，按所选时区过日子，也知道和你有时差——适合异国恋、角色身处异国。</p>
                                        </div>
                                        <button
                                            onClick={() => handleChange('customTimezoneEnabled', !formData.customTimezoneEnabled)}
@@ -1149,7 +1149,7 @@ ${isInitialGeneration ? `
                                    <div className="flex items-center justify-between gap-3">
                                        <div className="min-w-0">
                                            <p className="text-xs font-bold text-slate-700">线下时间感知（约会）</p>
-                                           <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">默认开。见面时向剧本注入「当前真实时间」，让线下剧情跟着现实时间走。关掉后剧情脱离现实时间线，更适合纯架空。</p>
+                                           <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">默认开。见面时剧情会跟着现实时间走。关掉后剧情脱离现实时间线，更适合纯架空。</p>
                                        </div>
                                        <button
                                            onClick={() => handleChange('dateTimeAwarenessEnabled', formData.dateTimeAwarenessEnabled === false ? undefined : false)}

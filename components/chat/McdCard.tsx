@@ -608,7 +608,7 @@ const UnrecognizedDiag: React.FC<{ data: any; rawText?: string; toolName: string
     return (
         <div className="bg-white/70 rounded-lg border-2 border-dashed border-orange-300">
             <div className="px-2 pt-2 pb-1.5 flex items-center gap-1.5">
-                <span className="text-[9px] px-1.5 py-0.5 bg-orange-100 text-orange-700 rounded-full font-bold">⚠️ 未识别结构</span>
+                <span className="text-[9px] px-1.5 py-0.5 bg-orange-100 text-orange-700 rounded-full font-bold">⚠️ 这条点单信息读取失败</span>
                 <span className="text-[10px] text-slate-400 font-mono truncate">{toolName}</span>
             </div>
             <div className="px-2 pb-1.5 space-y-0.5 text-[10px] text-slate-600 font-mono leading-snug">

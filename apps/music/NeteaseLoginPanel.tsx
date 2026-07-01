@@ -60,7 +60,7 @@ const NeteaseLoginPanel: React.FC<Props> = ({ onBack, onLoggedIn }) => {
             const m = cookie.match(/MUSIC_U=([^;]+)/i);
             const musicU = m ? m[1] : '';
             if (!musicU) {
-              addToast('登录成功但未拿到 MUSIC_U', 'error');
+              addToast('登录信息没拿全，请重试。', 'error');
               return;
             }
             onLoggedIn(`MUSIC_U=${musicU}`);
@@ -123,7 +123,7 @@ const NeteaseLoginPanel: React.FC<Props> = ({ onBack, onLoggedIn }) => {
       const m = cookie.match(/MUSIC_U=([^;]+)/i);
       const musicU = m ? m[1] : '';
       if (!musicU) {
-        addToast('登录成功但未拿到 MUSIC_U', 'error');
+        addToast('登录信息没拿全，请重试。', 'error');
         return;
       }
       onLoggedIn(`MUSIC_U=${musicU}`);

@@ -133,7 +133,7 @@ const CHANGELOG_ENTRIES: ChangelogEntry[] = [
     {
         id: CHANGELOG_2026_05_27,
         title: '2026 年 5 月 27 日 · 小更新',
-        subtitle: '情绪 buff 也接入 Instant Push · 发完即走，聊天和情绪都不用守前端（附配置视频）',
+        subtitle: '情绪 buff 也接入 Instant Push · 发完即走，聊天和情绪都不用一直开着 App（附配置视频）',
         date: '2026-05-27',
         src: 'changelogs/2026-5-27.html',
         accent: 'from-rose-100 to-amber-100 border-rose-200',

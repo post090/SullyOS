@@ -158,7 +158,7 @@ const ObserveSettings: React.FC<ObserveSettingsProps> = ({ char }) => {
                     {/* ── 每个维度的提示词与标签自定义 ── */}
                     <div>
                         <h4 className="text-[11px] font-bold text-slate-500 mb-1">每个部分生成什么（自定义提示词）</h4>
-                        <p className="text-[10px] text-slate-400 mb-2.5 leading-snug">「显示标签」只改面板上的字样；「生成提示」决定这一格让 AI 写什么。留空即用默认。关掉的维度不注入、面板也不显示。</p>
+                        <p className="text-[10px] text-slate-400 mb-2.5 leading-snug">「显示标签」只改面板上的字样；「生成提示」决定这一格让 AI 写什么。留空即用默认。关掉的维度不会生成、面板上也不显示。</p>
                         <div className="space-y-2.5">
                             {OBSERVE_DIMENSIONS.map(dim => {
                                 const on = fields[dim.key]?.enabled !== false;

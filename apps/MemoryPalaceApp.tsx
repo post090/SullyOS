@@ -2832,13 +2832,7 @@ export default function MemoryPalaceApp() {
                         fontSize: 11, color: '#1e3a8a', lineHeight: 1.7,
                     }}>
                         <div style={{ fontWeight: 700, marginBottom: 4 }}>rerank 是干啥的？</div>
-                        主召回走 embedding + BM25 + 启发式加权，有时会被噪声 spike 稀释。
-                        rerank 用 <b>cross-encoder</b> 模型直接理解 (query, doc) 的语义相关性，
-                        额外挑几条追加到注入，对焦点话题的覆盖率更稳。
-                        <div style={{ marginTop: 6 }}>
-                            <b>只对"这一轮 user 发言"生效</b>——候选池用拼起来的 user 最新发言独立走一次 hybrid（优先云），
-                            再把 pool 交给 rerank 打分，去重后追加 top N（默认 5）。不启用也不影响主召回。
-                        </div>
+                        开了之后能让跟你这句话最相关的记忆更准地被翻出来；可选增强，不开也不影响。
                     </div>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
@@ -4621,7 +4615,7 @@ create table if not exists memory_vectors (
                                                         </div>
                                                         <button
                                                             onClick={(e) => { e.stopPropagation(); handleReviveArchived(box, n); }}
-                                                            title="复活：把这条记忆从 summary 里拉回活节点，独立参与召回"
+                                                            title="复活：把这条记忆单独拎出来，让它重新生效。"
                                                             style={{
                                                                 position: 'absolute', top: 6, right: 6,
                                                                 fontSize: 10, padding: '3px 8px', borderRadius: 6,

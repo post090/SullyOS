@@ -368,7 +368,7 @@ export const ChatAppearanceEditor: React.FC<Props> = ({ theme, updateTheme, onRe
             <section className={groupClass}>
                 <div className="mb-3">
                     <h2 className="text-sm font-bold uppercase tracking-widest text-slate-400">聊天壳预设</h2>
-                    <p className="mt-1 text-[10px] text-slate-400">先把聊天界面做成可换壳，再继续拆细到更多模块级 DIY。</p>
+                    <p className="mt-1 text-[10px] text-slate-400">自由更换聊天界面的外观。</p>
                 </div>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                     {presets.map((preset) => (

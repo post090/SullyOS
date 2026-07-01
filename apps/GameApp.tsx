@@ -943,7 +943,7 @@ ${logText}
         }
 
         if (lastUserIndex === -1) {
-            addToast('没有可供重生的上下文', 'info');
+            addToast('没有可以重新推演的内容。', 'info');
             return;
         }
 
@@ -1427,7 +1427,7 @@ Output: A concise summary in Chinese (e.g. "探索了地牢并击败了史莱姆
                                 </div>
                                 {showArchiveHelp && (
                                     <div className="mt-2.5 text-[10px] text-white/50 leading-relaxed bg-black/30 rounded-xl p-3 space-y-1.5 border border-white/10">
-                                        <p>两种模式都会<b className="text-white/70">每满 20 条剧情自动总结一次</b>，总结都会一直保留在游戏的前情提要里、并送进 GM 的上下文。区别只在于：</p>
+                                        <p>两种模式都会<b className="text-white/70">每满 20 条剧情自动总结一次</b>，总结会一直保留在游戏的前情提要里，GM 也会一直记得。区别只在于：</p>
                                         <p><b className="text-purple-300">自动归档</b>：每次总结会<b className="text-white/70">立即同步到参与角色的聊天 App</b>（角色会"记得"和你跑过团）。</p>
                                         <p><b className="text-purple-300">手动归档</b>：自动总结<b className="text-white/70">不会</b>打扰角色的聊天，只有你在菜单里点「归档记忆并退出」时，才把整段经历送进角色聊天。</p>
                                     </div>

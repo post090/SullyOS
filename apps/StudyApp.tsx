@@ -783,7 +783,7 @@ You are now acting as a private tutor for ${userProfile.name}.
             
         } catch (e: any) {
             console.error("Teach Error:", e);
-            setCurrentText(`抱歉，生成失败: ${e.message}。请检查模型是否支持长文本或 Max Tokens 设置。`);
+            setCurrentText(`抱歉，生成失败: ${e.message}。可能是这次输出太长了，换个模型或精简一下再试。`);
             setClassroomState('idle');
         }
     };

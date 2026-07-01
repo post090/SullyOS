@@ -2794,7 +2794,7 @@ ${olderText}
                                             </div>
                                         ))}
                                     </div>
-                                    <p className="text-[9.5px] text-white/25 mt-2">※ 每聊满 {ARCHIVE_EVERY} 条自动浓缩成一条第一人称记忆，进上下文；原文仍在聊天里可看</p>
+                                    <p className="text-[9.5px] text-white/25 mt-2">※ 每聊满 {ARCHIVE_EVERY} 条自动浓缩成一条第一人称记忆让 TA 记住；原文仍在聊天里可看</p>
                                 </div>
                             )}
 

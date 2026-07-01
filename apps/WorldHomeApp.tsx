@@ -848,7 +848,7 @@ const WorldEditor: React.FC<{
 
             <div className={sectionCls}>
                 <div className="flex items-center justify-between gap-2">
-                    <div className={labelCls}>NPC（无记忆，纯为世界观服务，一次调用全演完）</div>
+                    <div className={labelCls}>NPC（无记忆，只为撑世界观）</div>
                     <div className="flex items-center gap-1.5 shrink-0">
                         <button onClick={rollNpcs} disabled={rolling}
                             className="text-[11px] px-2.5 py-1 rounded-lg bg-violet-100 text-violet-700 font-bold flex items-center gap-1 border border-violet-200 disabled:opacity-50 active:scale-95 transition-transform">
@@ -902,7 +902,7 @@ const WorldEditor: React.FC<{
                 <div className={sectionCls}>
                     <div className={labelCls}>记忆与聊天</div>
                     <label className="flex items-center justify-between">
-                        <span className="text-[12px] text-stone-700">生成内容注入聊天（world_card，进上下文与记忆）</span>
+                        <span className="text-[12px] text-stone-700">把这个世界发生的事同步进和角色的聊天、记忆里</span>
                         <input type="checkbox" checked={w.injectToChat !== false} onChange={e => upd({ injectToChat: e.target.checked })} className="w-4 h-4 accent-amber-500" />
                     </label>
                     <div className="text-[10px] text-stone-400 leading-snug">世界靠你主动「观测」推进半天（早/午/晚三段时光流逝），需要的时候来点一下就行。</div>

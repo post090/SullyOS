@@ -538,7 +538,7 @@ Generate realistic results linking to hypothetical URLs.`;
                         />
                         <p className="text-[10px] text-slate-400 mt-2 leading-relaxed bg-slate-50 p-2 rounded">
                             <span className="font-bold">注意：</span> 配置 Key 后可搜索现实世界的内容（如B站、小红书）。<br/>
-                            但由于安全限制，无法直接渲染原网页。浏览器会利用 AI 将搜索结果重新排版为“仿真页面”。
+                            但页面由 AI 重新排版呈现，可能和原网站不一样。
                         </p>
                     </div>
                     <div className="flex items-center gap-3 bg-slate-50 p-3 rounded-xl border border-slate-100">
@@ -550,7 +550,7 @@ Generate realistic results linking to hypothetical URLs.`;
                         />
                         <div className="flex-1">
                             <span className="text-sm font-bold text-slate-700 block">启用真实搜索 (Experimental)</span>
-                            <span className="text-[10px] text-slate-400 block">连接 Brave API 获取实时索引。失败时自动回退到 AI 幻想模式。</span>
+                            <span className="text-[10px] text-slate-400 block">搜真实网络内容；搜不到时改由 AI 模拟生成。</span>
                         </div>
                     </div>
                 </div>

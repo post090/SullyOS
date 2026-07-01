@@ -752,9 +752,9 @@ ${charPart}
                 <p className="font-bold text-amber-700">几个新变化,先看一眼:</p>
                 <div className="rounded-2xl bg-amber-50 border border-amber-100 px-4 py-3 space-y-2">
                     <p><span className="font-bold text-amber-700">① 自动同步聊天:</span> 角色回复了你的日记之后,会自动变成一张漂亮卡片出现在和这个角色的聊天里 —— 不用再手动发送。你之后在日记本里改文字 / 删日记,聊天里那张卡片也会跟着同步。</p>
-                    <p><span className="font-bold text-amber-700">② 单向日记不进上下文:</span> 如果你只是单方面写给角色看(没让 ta 回复),这一篇就不会进入任何记忆,按以前的方式存着就好。</p>
-                    <p><span className="font-bold text-amber-700">③ 新日记不用管归档:</span> 本次更新<b>之后</b>新写的日记走的就是上面"自动同步聊天"那条线 —— 卡片落到聊天里之后, chatapp 的日度归档 / 记忆宫殿管线会跟处理其它消息一样把它顺带处理掉, 不需要也<b>不应该</b>再手动归档一次。所以新日记你看不到归档入口, 这是故意的。</p>
-                    <p><span className="font-bold text-amber-700">④ 老日记还能手动归档:</span> 本次更新<b>之前</b>留下的老日记里, 如果是角色回复过的, <b>点进那篇日记, 右上角会有一个"归档"按钮</b>, 点一下就行 —— 没开宫殿的角色走主 API 出散文式总结写进神经链接, 开了宫殿的就走副 API 一次抽多条结构化记忆, 节点入向量库 + 同一组内容也 bullet 化写进神经链接, 跟 chatapp 自动归档一模一样。</p>
+                    <p><span className="font-bold text-amber-700">② 单向日记不进记忆:</span> 如果你只是单方面写给角色看(没让 ta 回复),这一篇就不会进入任何记忆,按以前的方式存着就好。</p>
+                    <p><span className="font-bold text-amber-700">③ 新日记不用管归档:</span> 本次更新<b>之后</b>新写的日记走的就是上面"自动同步聊天"那条线 —— 卡片进了聊天后，系统会像处理普通消息一样自动帮你整理。不需要也<b>不应该</b>再手动归档一次。所以新日记你看不到归档入口, 这是故意的。</p>
+                    <p><span className="font-bold text-amber-700">④ 老日记还能手动归档:</span> 本次更新<b>之前</b>留下的老日记里, 如果是角色回复过的, <b>点进那篇日记, 右上角会有一个"归档"按钮</b>, 点一下就行 —— 就会把这篇日记整理进角色的记忆里，开了记忆宫殿的角色会记得更细。</p>
                 </div>
                 <p className="text-xs text-slate-400">这条提示只出现一次。</p>
             </div>
@@ -768,22 +768,22 @@ ${charPart}
         // 宫殿状态文案
         let palaceStatus: { tone: 'on' | 'off' | 'warn' | 'fail'; title: string; detail: string } = { tone: 'off', title: '', detail: '' };
         if (!p) {
-            palaceStatus = { tone: 'fail', title: '记忆宫殿 · 写入失败', detail: '入宫过程抛出异常, 详情看控制台。神经链接已 fallback 走主 API 散文版写入成功。' };
+            palaceStatus = { tone: 'fail', title: '记忆宫殿 · 写入失败', detail: '记忆宫殿这次没能写入，但日记已经成功存进神经链接。' };
         } else if (p.status === 'palace_disabled') {
-            palaceStatus = { tone: 'off', title: '记忆宫殿 · 未开启', detail: `${archiveResult.charName} 没开启记忆宫殿, 走的主 API 散文路径写神经链接。要让日记进向量记忆, 去角色设置打开"记忆宫殿"开关再归档。` };
+            palaceStatus = { tone: 'off', title: '记忆宫殿 · 未开启', detail: `${archiveResult.charName} 没开启记忆宫殿，这次按基础方式存进了神经链接。想让日记记得更细，去角色设置打开"记忆宫殿"开关再归档。` };
         } else if (p.status === 'lightllm_missing') {
-            palaceStatus = { tone: 'warn', title: '记忆宫殿 · 副 API 未配置', detail: '宫殿已开, 但宫殿副 API (memoryPalaceConfig.lightLLM) 没填; 没法做结构化抽取, 神经链接已 fallback 走主 API 散文版。' };
+            palaceStatus = { tone: 'warn', title: '记忆宫殿 · 副 API 未配置', detail: '记忆宫殿的后台模型还没配置，去设置里填一下就能用完整功能；这次先按基础方式存进了神经链接。' };
         } else if (p.status === 'embedding_missing') {
-            palaceStatus = { tone: 'warn', title: '记忆宫殿 · 嵌入模型未配置', detail: '宫殿已开, 但 embedding 配置缺失; 没法向量化, 神经链接已 fallback 走主 API 散文版。' };
+            palaceStatus = { tone: 'warn', title: '记忆宫殿 · 嵌入模型未配置', detail: '嵌入模型还没配置；这次先按基础方式存进了神经链接，去设置补上就能用完整功能。' };
         } else if (p.status === 'empty_input') {
             palaceStatus = { tone: 'warn', title: '记忆宫殿 · 内容为空', detail: '日记两页都没有正文, 没东西可入宫。' };
         } else if (p.status === 'extracted_none') {
-            palaceStatus = { tone: 'warn', title: '记忆宫殿 · 副 API 没提取出内容', detail: '副 API 读完日记但没认为有值得记的东西。神经链接已 fallback 走主 API 散文版写入。' };
+            palaceStatus = { tone: 'warn', title: '记忆宫殿 · 副 API 没提取出内容', detail: '读完这篇日记后没找到值得单独记的内容；日记本身已经存进神经链接了。' };
         } else {
             palaceStatus = {
                 tone: 'on',
                 title: `记忆宫殿 · 入了 ${p.stored} 条${p.skipped > 0 ? ` (另有 ${p.skipped} 条命中已有记忆去重)` : ''}`,
-                detail: '副 API 把日记拆成下面这几条结构化记忆并向量化, 同一组内容也 bullet 化进了上面的神经链接。后续聊天召回时按语义命中。createdAt 已对齐到日记当天。',
+                detail: '这篇日记被整理成下面这几条记忆，之后聊到相关内容时角色会想起来；日期按日记当天记。',
             };
         }
 
@@ -805,7 +805,7 @@ ${charPart}
                     {archiveResult.summaryOrigin === 'palace_bullets' ? (
                         <div className="rounded-xl bg-gradient-to-r from-emerald-50 to-purple-50 border border-emerald-200/60 px-3 py-2 text-[11px] text-slate-600">
                             ✓ 这次归档同时进了 <b className="text-emerald-700">神经链接</b> 和 <b className="text-purple-700">记忆宫殿</b>,
-                            两边拿的是 <b>同一组提取出来的内容</b> —— 副 API 抽出的 MemoryNode 直接 bullet 化写进神经链接, 跟 chatapp 的自动归档一致。
+                            两边拿的是 <b>同一组提取出来的内容</b> —— 这次提取出的几条记忆会一并存进神经链接。
                         </div>
                     ) : (
                         <div className="rounded-xl bg-emerald-50/70 border border-emerald-100 px-3 py-2 text-[11px] text-slate-600">
@@ -816,7 +816,7 @@ ${charPart}
                     {/* 神经链接 */}
                     <div className="rounded-2xl border border-emerald-100 bg-emerald-50/70 px-4 py-3 space-y-2">
                         <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-[10px] font-bold tracking-widest uppercase text-emerald-700">● 神经链接 · char.memories</span>
+                            <span className="text-[10px] font-bold tracking-widest uppercase text-emerald-700">● 神经链接</span>
                             <span className="text-[10px] text-emerald-600/70">写入 1 条 · 日期 {archiveResult.date}</span>
                             <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">mood={archiveResult.summaryOrigin === 'palace_bullets' ? 'diary_palace' : 'diary'}</span>
                         </div>

@@ -263,7 +263,7 @@ const HandbookApp: React.FC = () => {
                 characters, userProfile, apiConfig,
             });
             if (!result.newPage) {
-                addToast('重新生成失败 (角色 pass 了 / API 错误)', 'error');
+                addToast('这次没写出来，再试一次吧。', 'error');
                 return;
             }
 

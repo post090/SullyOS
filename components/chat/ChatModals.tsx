@@ -312,7 +312,7 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                              </div>
                          </div>
                          <p className="text-[10px] text-slate-400 mt-2 leading-relaxed">
-                             开启后，将不再显示 Date/App 产生的上下文提示文本（转账、戳一戳、图片发送提示除外）。
+                             开启后隐藏见面/小程序等自动产生的灰色提示（转账、戳一戳、发图提示除外）。
                          </p>
                      </div>
 
@@ -390,7 +390,6 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                          </div>
                          <p className="text-[10px] text-slate-400 mt-2 leading-relaxed">
                              开启后注入"用 [html]...[/html] 包裹的精美卡片"提示词，AI 会在合适场景输出邀请函 / 票据 / 通知等可视化模块。
-                             历史上下文里只保留剥离 HTML 后的文字摘要，不浪费 token。
                          </p>
                          {htmlModeEnabled && (
                              <div className="mt-3">
@@ -450,10 +449,10 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                                  disabled={isVectorizing}
                                  className="w-full py-3 bg-emerald-50 text-emerald-600 font-bold rounded-2xl border border-emerald-200 active:scale-95 transition-transform flex items-center justify-center gap-2"
                              >
-                                 {isVectorizing ? '🏰 向量化处理中...' : '🏰 一键向量化所有聊天记录'}
+                                 {isVectorizing ? '🏰 存进记忆宫殿中...' : '🏰 一键把所有聊天存进记忆宫殿'}
                              </button>
                              <p className="text-[10px] text-slate-400 mt-2 text-center leading-relaxed">
-                                 将所有未处理的聊天记录交给记忆宫殿向量化，完成后可安全清空聊天。<br/>
+                                 将所有未处理的聊天记录交给记忆宫殿处理，完成后可安全清空聊天。<br/>
                                  <span className="text-slate-300">看不懂这是什么的话不需要操作此按钮。</span>
                              </p>
                          </div>
@@ -498,8 +497,7 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                         if (palaceOn && !autoOn) {
                             return (
                                 <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-[11px] text-amber-900 leading-relaxed">
-                                    ⚠️ 记忆宫殿已开，但 <b>自动归档没开</b>——palace 只在后台做向量索引，
-                                    <b>不</b>会自动写到"本月日度总结"里。<br/>
+                                    ⚠️ 记忆宫殿已开，但<b>自动归档没开</b>——记忆宫殿只在后台默默建记忆，不会写进月度总结。<br/>
                                     想让它自动写 → 神经链接 → 角色 → 记忆宫殿开关下面的 <b>"📚 自动归档"</b>；
                                     或者继续用下方按钮手动按当前选中的 <b>「{activeName}」</b> 风格跑。
                                 </div>
@@ -571,7 +569,7 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                     {typeof activeCharacter.hideBeforeMessageId === 'number' && activeCharacter.hideBeforeMessageId > 0 && (
                         <div className="bg-violet-50 border border-violet-200 rounded-xl p-2.5 text-[11px] text-violet-800 leading-relaxed mb-2">
                             <b>💡 已经有隐藏起点了</b>：灰色消息是自动/手动归档时标记为"已总结"的，AI 现在看不到原文，但能看到它们的总结。<br/>
-                            <span className="text-violet-600">记忆宫殿向量记忆有自己的水位线（和这里无关），不用手动管。</span>
+                            <span className="text-violet-600">记忆宫殿的记忆是自动维护的，跟这里无关，不用手动管。</span>
                         </div>
                     )}
                     <div className="sticky top-0 bg-white/95 backdrop-blur-sm z-10 pb-1.5 -mx-1 px-1">
@@ -893,7 +891,7 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                                     <p className="text-xs font-bold text-slate-700">日程与情绪 Buff</p>
                                     <p className="text-[10px] text-slate-500 leading-relaxed mt-0.5">
                                         {isScheduleFeatureEnabled
-                                            ? '已开启：会调用副 API 生成今日日程，并在对话中评估情绪 buff。'
+                                            ? '已开启：角色会有今日日程，并在聊天中带上当下情绪。'
                                             : '已关闭：不调副 API，不生成日程，不注入情绪 buff。'}
                                     </p>
                                 </div>

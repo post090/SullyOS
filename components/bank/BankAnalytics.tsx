@@ -263,7 +263,7 @@ ${txList}
                         <div className="flex items-center justify-between mb-3 relative z-10">
                             <div className="flex items-center gap-2">
                                 <span className="w-8 h-8 bg-gradient-to-br from-[#FFD54F] to-[#FFB300] rounded-xl flex items-center justify-center text-lg shadow-md"><img src="https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f916.png" className="w-5 h-5" alt="" /></span>
-                                <span className="text-sm font-bold text-[#5D4037]">AI 智能分析</span>
+                                <span className="text-sm font-bold text-[#5D4037]">AI 消费分析</span>
                             </div>
                             <button
                                 onClick={analyzeWithAI}

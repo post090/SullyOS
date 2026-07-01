@@ -411,7 +411,7 @@ const MemoryArchivist: React.FC<MemoryArchivistProps> = ({ memories, refinedMemo
 
             {/* Core Memory Delete Confirm */}
             <Modal isOpen={showCoreDeleteConfirm} title="删除确认" onClose={() => setShowCoreDeleteConfirm(false)} footer={<div className="flex gap-2 w-full"><button onClick={() => setShowCoreDeleteConfirm(false)} className="flex-1 py-3 bg-slate-100 font-bold rounded-2xl">取消</button><button onClick={confirmCoreDelete} className="flex-1 py-3 bg-red-500 text-white font-bold rounded-2xl">确认删除</button></div>}>
-                <p className="text-center text-sm text-slate-600 py-4">确定要删除该月的核心记忆吗？<br/><span className="text-xs text-red-400">删除后将丢失该月的 AI 上下文摘要。</span></p>
+                <p className="text-center text-sm text-slate-600 py-4">确定要删除该月的核心记忆吗？<br/><span className="text-xs text-red-400">删除后会丢失该月给角色用的核心记忆摘要。</span></p>
             </Modal>
 
             {/* 重新总结 —— 模板选择弹窗 */}

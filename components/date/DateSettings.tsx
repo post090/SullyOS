@@ -342,7 +342,7 @@ const DateSettings: React.FC<DateSettingsProps> = ({ char, onBack }) => {
                             placeholder="比如：多写环境互动；不要写心理活动；对话占比多一些……"
                             className="w-full h-20 px-4 py-3 bg-slate-100 rounded-xl text-sm resize-none focus:ring-1 focus:ring-primary/30 outline-none transition-all leading-relaxed"
                         />
-                        <p className="text-[10px] text-slate-300 mt-1">失焦自动保存，会原样追加进提示词，优先级高于风格预设。</p>
+                        <p className="text-[10px] text-slate-300 mt-1">点别处会自动保存；这段会照原样用上，比上面的风格优先。</p>
                     </div>
                 </Section>
 
@@ -543,7 +543,7 @@ const DateSettings: React.FC<DateSettingsProps> = ({ char, onBack }) => {
                         </div>
                         <div className="p-4 space-y-3">
                             <div>
-                                <label className="text-[11px] text-slate-500 font-bold mb-1 block">情绪 Key</label>
+                                <label className="text-[11px] text-slate-500 font-bold mb-1 block">情绪</label>
                                 <select
                                     value={skinUrlEmotionKey}
                                     onChange={e => setSkinUrlEmotionKey(e.target.value)}

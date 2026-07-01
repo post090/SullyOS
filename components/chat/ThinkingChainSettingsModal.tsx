@@ -123,11 +123,7 @@ const ThinkingChainSettingsModal: React.FC<Props> = ({ isOpen, onClose, value, o
                     <section className="rounded-2xl bg-amber-50/70 border border-amber-200/70 px-3.5 py-3 text-[11px] leading-[1.7] text-slate-600">
                         <div className="font-bold text-amber-700 mb-1 text-[11.5px]">⚠ 先看这里：「心象」到底是什么</div>
                         <p>
-                            这是 AI 模型**自己原生输出的思考链**——
-                            <code className="px-1 py-0.5 mx-0.5 rounded bg-white border border-amber-100 text-[10px] font-mono text-amber-700">reasoning_content</code>
-                            字段或
-                            <code className="px-1 py-0.5 mx-0.5 rounded bg-white border border-amber-100 text-[10px] font-mono text-amber-700">&lt;think&gt;</code>
-                            标签里的内容。**它不是我们额外让模型为角色生成的"内心戏"**，而是模型在准备回复时本来就有的元思考过程。
+                            这是 AI 模型**自己原生输出的思考链**——模型自带的思考过程。
                         </p>
                         <p className="mt-2">
                             正因如此——**它的本质决定了它不会像角色台词那样鲜活**，更像看一个演员在化妆间的喃喃自语，而不是舞台上的台词。这个功能本来就是给"喜欢看大模型思维链"的用户准备的彩蛋，**不一定适合每个人**。

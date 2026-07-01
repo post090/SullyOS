@@ -850,7 +850,7 @@ const SongwritingApp: React.FC = () => {
             processing: '生成中…',
             downloading: '下载音频…',
             done: '完成',
-            cached: '已命中缓存',
+            cached: '用上次生成的版本',
         };
 
         try {
@@ -1027,7 +1027,7 @@ const SongwritingApp: React.FC = () => {
         }
         const tags = promptDraft.trim();
         if (!tags) {
-            addToast('tags 不能为空', 'error');
+            addToast('风格描述不能为空。', 'error');
             return;
         }
         const updatedSong = { ...activeSong, aceStepCustomTags: tags };
@@ -1040,7 +1040,7 @@ const SongwritingApp: React.FC = () => {
     const handleAiWritePrompt = async () => {
         if (!activeSong) return;
         if (!apiConfig.baseUrl || !apiConfig.apiKey) {
-            addToast('请先在「设置」里配置 LLM API', 'error');
+            addToast('请先在设置里配置 AI 模型。', 'error');
             return;
         }
         setIsAiWritingPrompt(true);
@@ -2437,7 +2437,7 @@ const SongwritingApp: React.FC = () => {
                                 {provider === 'ace-step'
                                     ? '完整长歌（最长 4 分钟）— 自费走 Replicate，约 ¥0.1-0.3/首'
                                     : provider === 'minimax-paid'
-                                        ? '完整长歌（最长 4-6 分钟）— Token Plan，RPM 高'
+                                        ? '完整长歌（最长 4-6 分钟）— 出歌更快、不易排队'
                                         : '完整长歌（最长 4-6 分钟）— 完全免费 · 用你已填的 MiniMax Key'}
                             </p>
                         </div>
@@ -2534,7 +2534,7 @@ const SongwritingApp: React.FC = () => {
                                 <div className="flex items-center gap-2 min-w-0 flex-1">
                                     <span className="font-bold italic shrink-0" style={{ fontFamily: 'Georgia, serif', color: MusicC.accent, fontSize: 15, letterSpacing: '0.05em' }}>III</span>
                                     <CrossStar size={7} color={MusicC.lavender} delay={0.8} />
-                                    <label className="text-[10px] font-bold uppercase tracking-[0.25em] truncate" style={{ color: MusicC.primary }}>最终 prompt（喂给{provider === 'ace-step' ? ' ACE-Step' : ' MiniMax'}）</label>
+                                    <label className="text-[10px] font-bold uppercase tracking-[0.25em] truncate" style={{ color: MusicC.primary }}>最终风格描述（发给 AI）</label>
                                 </div>
                                 <button
                                     onClick={handleResetCustomPrompt}

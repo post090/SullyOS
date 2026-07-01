@@ -505,7 +505,7 @@ const GroupChat: React.FC = () => {
 
     const handleGroupSummary = async () => {
         if (!activeGroup || !apiConfig.apiKey) {
-            addToast('请检查配置', 'error');
+            addToast('请先在设置里填好 API。', 'error');
             return;
         }
 
@@ -1430,7 +1430,7 @@ ${attachedImagesNote}
                         <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 block">AI 上下文条数 ({contextLimit})</label>
                         <input type="range" min="20" max="5000" step="10" value={contextLimit} onChange={e => { const v = parseInt(e.target.value); setContextLimit(v); localStorage.setItem('groupchat_context_limit', String(v)); }} className="w-full h-2 bg-slate-200 rounded-full appearance-none accent-violet-500" />
                         <div className="flex justify-between text-[10px] text-slate-400 mt-1"><span>20 (省流)</span><span>5000 (超长记忆)</span></div>
-                        <p className="text-[9px] text-slate-400 mt-1 leading-tight">控制每次触发AI导演时发送的群聊历史消息数量。越多上下文越丰富，但消耗更多token。</p>
+                        <p className="text-[9px] text-slate-400 mt-1 leading-tight">角色每次发言时参考多少条群聊历史。越多越连贯，但越慢、越费 token。</p>
                     </div>
 
                     {/* Private Chat Group Context Cap */}
@@ -1438,7 +1438,7 @@ ${attachedImagesNote}
                         <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 block">私聊里"近期群活动"取条数 ({tempPrivateContextCap})</label>
                         <input type="range" min="20" max="500" step="10" value={tempPrivateContextCap} onChange={e => setTempPrivateContextCap(parseInt(e.target.value))} className="w-full h-2 bg-slate-200 rounded-full appearance-none accent-violet-500" />
                         <div className="flex justify-between text-[10px] text-slate-400 mt-1"><span>20 (省流)</span><span>500 (完整)</span></div>
-                        <p className="text-[9px] text-slate-400 mt-1 leading-tight">本群成员在自己的私聊里，最多看到本群最近多少条消息作为"近期群活动"上下文。每个群独立配额，避免活跃群把安静群挤掉。</p>
+                        <p className="text-[9px] text-slate-400 mt-1 leading-tight">本群成员在自己的私聊里，最多看到本群最近多少条消息作为"近期群活动"上下文。</p>
                     </div>
 
                     {/* Memory & Context Management */}

@@ -1166,7 +1166,7 @@ const LifeSimApp: React.FC = () => {
                         <div style={{ marginTop: 5, fontSize: 9, color: '#8b8099', fontWeight: 700 }}>
                             {isMainPlotThinking
                                 ? processingMsg
-                                : `${activeThinkingChar?.name || '角色'} 正在思考，API 已开始调用`}
+                                : `${activeThinkingChar?.name || '角色'} 正在思考…`}
                         </div>
                     )}
                 </div>

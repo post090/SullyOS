@@ -507,7 +507,7 @@ const VoiceDesignerApp: React.FC = () => {
             </div>
 
             <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm space-y-3">
-              <span className="text-xs font-bold text-slate-700">音色修饰 (voice_modify)</span>
+              <span className="text-xs font-bold text-slate-700">音色修饰</span>
               <Slider label="音调偏移" value={modifyPitch} min={-100} max={100} step={1} onChange={setModifyPitch} />
               <Slider label="强度" value={modifyIntensity} min={-100} max={100} step={1} onChange={setModifyIntensity} />
               <Slider label="音色" value={modifyTimbre} min={-100} max={100} step={1} onChange={setModifyTimbre} />

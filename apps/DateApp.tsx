@@ -846,7 +846,7 @@ const DateApp: React.FC = () => {
                                 </p>
                                 {memoryPalaceResult.batches.some(b => !b.ok) && (
                                     <p className="text-[10px] text-red-500 mt-1">
-                                        {memoryPalaceResult.batches.filter(b => !b.ok).map(b => `batch ${b.index} 失败`).join(', ')}
+                                        {memoryPalaceResult.batches.filter(b => !b.ok).map(b => `第 ${b.index} 批失败`).join(', ')}
                                     </p>
                                 )}
                             </div>

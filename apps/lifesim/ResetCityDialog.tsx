@@ -56,7 +56,7 @@ const ResetCityDialog: React.FC<{
 
                     <div className="retro-inset" style={{ padding: '7px 9px', marginTop: 8 }}>
                         <p style={{ fontSize: 9, color: '#7d746d', lineHeight: 1.6 }}>
-                            “确定” 会调用 API 把这局《都市人生》浓缩成一张像素风结算小卡片，并发送到参与角色的聊天记录里。
+                            “确定” 会把这局《都市人生》浓缩成一张像素风结算小卡片，并发送到参与角色的聊天记录里。
                         </p>
                     </div>
                 </div>
