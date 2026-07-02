@@ -12,6 +12,7 @@ import {
     WORLDBOOK_ROLE_LABELS,
 } from '../utils/worldbook';
 import { confirmExportSafety } from '../utils/exportGuard';
+import { shareOrDownloadFile } from '../utils/shareExport';
 
 const WorldbookApp: React.FC = () => {
     const { closeApp, worldbooks, addWorldbook, updateWorldbook, deleteWorldbook, addToast } = useOS();
@@ -192,17 +193,16 @@ const WorldbookApp: React.FC = () => {
         const json = serializeStandardWorldbook(books);
         // 导出前明文密钥体检 + 二次确认（世界书正常不含密钥 → 提示「安全，可分享」）。
         if (!(await confirmExportSafety(JSON.parse(json)))) return;
-        const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
         const safeName = category.replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_').trim() || 'worldbook';
-        const anchor = document.createElement('a');
-        anchor.href = url;
-        anchor.download = `${safeName}.json`;
-        document.body.appendChild(anchor);
-        anchor.click();
-        anchor.remove();
-        URL.revokeObjectURL(url);
-        addToast(`已导出「${category}」共 ${books.length} 条`, 'success');
+        // 原生 / WebView 壳里 `<a download>` 常常点了没反应，强制先拉起分享面板，兜底才走下载。
+        const result = await shareOrDownloadFile({
+            content: json,
+            fileName: `${safeName}.json`,
+            mimeType: 'application/json;charset=utf-8',
+            shareTitle: `导出世界书「${category}」`,
+        });
+        const verb = result === 'shared' ? '已调起分享' : '已导出';
+        addToast(`${verb}「${category}」共 ${books.length} 条`, 'success');
     };
 
     const requestDelete = (e: React.MouseEvent, book: Worldbook) => {
