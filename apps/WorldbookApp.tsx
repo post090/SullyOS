@@ -11,6 +11,7 @@ import {
     WORLDBOOK_POSITION_LABELS,
     WORLDBOOK_ROLE_LABELS,
 } from '../utils/worldbook';
+import { confirmExportSafety } from '../utils/exportGuard';
 
 const WorldbookApp: React.FC = () => {
     const { closeApp, worldbooks, addWorldbook, updateWorldbook, deleteWorldbook, addToast } = useOS();
@@ -186,9 +187,11 @@ const WorldbookApp: React.FC = () => {
         importRef.current?.click();
     };
 
-    const handleExportGroup = (event: React.MouseEvent, category: string, books: Worldbook[]) => {
+    const handleExportGroup = async (event: React.MouseEvent, category: string, books: Worldbook[]) => {
         event.stopPropagation();
         const json = serializeStandardWorldbook(books);
+        // 导出前明文密钥体检 + 二次确认（世界书正常不含密钥 → 提示「安全，可分享」）。
+        if (!(await confirmExportSafety(JSON.parse(json)))) return;
         const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const safeName = category.replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_').trim() || 'worldbook';

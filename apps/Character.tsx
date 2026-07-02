@@ -22,6 +22,7 @@ import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
 import { COMMON_TIMEZONES } from '../utils/timezone';
 import { toMountedWorldbook } from '../utils/worldbook';
 import { stripSensitiveCardFields } from '../utils/characterCard';
+import { confirmExportSafety } from '../utils/exportGuard';
 
 const CharacterCard: React.FC<{
     char: CharacterProfile;
@@ -813,6 +814,9 @@ ${isInitialGeneration ? `
           version: 1,
           type: 'sully_character_card'
       };
+
+      // 导出前明文密钥体检 + 二次确认：正常为「安全，可分享」；若意外检出密钥则中止并提示上报。
+      if (!(await confirmExportSafety(exportData))) return;
 
       const json = JSON.stringify(exportData, null, 2);
       const fileName = `${formData.name || 'Character'}_Card.json`;

@@ -11,6 +11,7 @@ import {
     exportMemoryPalace, importMemoryPalace, isMemoryPalaceExportFile,
 } from '../utils/memoryPalace';
 import type { Anticipation, MigrationProgress, DigestResult, MemoryLink, EventBox } from '../utils/memoryPalace';
+import { confirmExportSafety } from '../utils/exportGuard';
 import type { Message } from '../types';
 
 /** 手动总结面板：每页渲染多少条聊天记录（翻页，避免一次性塞几百条 DOM 卡顿） */
@@ -1564,6 +1565,8 @@ export default function MemoryPalaceApp() {
                 setExportResult('[warn]当前角色还没有记忆宫殿节点，没什么可导出的');
                 return;
             }
+            // 导出前明文密钥体检 + 二次确认（记忆宫殿正常不含密钥 → 提示「安全，可分享」）。
+            if (!(await confirmExportSafety(data))) return;
             const json = JSON.stringify(data, null, 2);
             const safeName = (char.name || 'character').replace(/[\\/:*?"<>|]/g, '_');
             const fileName = `${safeName}_记忆宫殿_${new Date().toISOString().slice(0, 10)}.json`;

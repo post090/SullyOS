@@ -10,6 +10,7 @@ import type {
   PixelHomeState, PixelRoomLayout, PixelAsset,
 } from './types';
 import { PixelLayoutDB, PixelAssetDB } from './pixelHomeDb';
+import { confirmExportSafety } from '../../utils/exportGuard';
 
 // ─── 导出 ────────────────────────────────────────────
 
@@ -75,6 +76,8 @@ export async function downloadPreset(
   author: string,
 ): Promise<void> {
   const json = await exportPreset(homeState, allAssets, presetName, author);
+  // 导出前明文密钥体检 + 二次确认（小屋预设正常不含密钥 → 提示「安全，可分享」）。
+  if (!(await confirmExportSafety(JSON.parse(json)))) return;
   const blob = new Blob([json], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

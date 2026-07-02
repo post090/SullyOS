@@ -528,6 +528,16 @@ const Settings: React.FC = () => {
 
   const handleExport = async (mode: 'text_only' | 'media_only' | 'full') => {
       try {
+          // 二次确认：整包备份（full / text_only）本就包含你的 API 密钥等设置——这是预期行为，
+          // 但绝不能发给别人。media_only 只有媒体、不含密钥，视为可分享。
+          if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+              const includesSettings = mode !== 'media_only';
+              const msg = includesSettings
+                  ? '该导出数据包含了明文密钥，请不要发送给任何人'
+                  : '该导出内容安全，可以用于分享';
+              if (!window.confirm(`${msg}\n\n点「确定」继续导出，「取消」中止。`)) return;
+          }
+
           // Trigger export (Context handles loading state UI)
           const blob = await exportSystem(mode);
           
