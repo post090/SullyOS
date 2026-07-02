@@ -2692,7 +2692,9 @@ const MessageItem = React.memo(({
         // Residual action/system tags that may have leaked through
         .replace(/\[\[(?:ACTION|RECALL|SEARCH|DIARY|READ_DIARY|FS_DIARY|FS_READ_DIARY|SEND_EMOJI|DIARY_START|DIARY_END|FS_DIARY_START|FS_DIARY_END)[:\s][\s\S]*?\]\]/g, '')
         .replace(/\[schedule_message[^\]]*\]/g, '')
-        .replace(/<[语語]音[^>]*>[\s\S]*?<\/[语語]音>/g, '')  // strip <语音 ...>...</语音> voice tags (tolerate emotion attr)
+        .replace(/<[语語]音[^>]*>[\s\S]*?<\/\s*[语語]音\s*>/g, '')  // strip <语音 ...>...</语音> voice tags (tolerate emotion attr / spaced close)
+        .replace(/<[语語]音[^>]*>[\s\S]*$/g, '')             // 未闭合开标签 (历史坏数据): 标签到末尾都是语音内容, 不当正文显示
+        .replace(/<\/\s*[语語]音\s*>/g, '')                  // 孤儿闭合标签 (历史坏数据): 剥标签留正文
         .replace(/^\s*---\s*$/gm, '')                // standalone --- lines
         .replace(/``+/g, '')                          // empty/stray backtick pairs
         .replace(/(^|\s)`(\s|$)/gm, '$1$2')         // lone backticks at boundaries
@@ -2725,12 +2727,19 @@ const MessageItem = React.memo(({
     const displayContent = (isShowingTarget && langBContent) ? langBContent : langAContent;
     const showTranslateButton = translationEnabled && hasBilingual && langBContent;
 
-    // Check if raw content has a <语音> tag (voice-only message that hasn't been TTS'd yet)
-    const hasVoiceTag = !isUser && /<[语語]音[^>]*>[\s\S]*?<\/[语語]音>/.test(m.content);
+    // Check if raw content has a <语音> tag (voice-only message that hasn't been TTS'd yet).
+    // 未闭合的开标签也算 (历史坏数据: 语音块曾被 chunkText 切碎, 开标签落单) —
+    // 当语音条渲染 + 转文字兜底, 而不是把原始标签漏给用户看。
+    const hasVoiceTag = !isUser && /<[语語]音[^>]*>/.test(m.content);
     // Spoken text inside the <语音> tag — lets the placeholder bar offer a 转文字 toggle
     // even when no audio was synthesized (e.g. character has no MiniMax voice configured),
     // so fake voice messages stay readable just like real ones.
-    const voiceTagText = hasVoiceTag ? cleanVoiceText(m.content.match(/<[语語]音[^>]*>([\s\S]*?)<\/[语語]音>/)?.[1]?.trim() || '') : '';
+    // 配对优先; 配不上 (未闭合) 就取开标签之后的全部内容。
+    const voiceTagText = hasVoiceTag ? cleanVoiceText((
+        m.content.match(/<[语語]音[^>]*>([\s\S]*?)<\/\s*[语語]音\s*>/)?.[1]
+        ?? m.content.match(/<[语語]音[^>]*>([\s\S]*)$/)?.[1]
+        ?? ''
+    ).trim()) : '';
     const hasVoiceContent = voiceData?.url || voiceLoading || hasVoiceTag;
     // Don't render empty bubbles (e.g. messages that were just "---"), unless voice data exists or pending
     if (!displayContent && !hasVoiceContent) return null;

@@ -33,6 +33,7 @@ import ProactiveSettingsModal from '../components/chat/ProactiveSettingsModal';
 import ThinkingChainSettingsModal from '../components/chat/ThinkingChainSettingsModal';
 import { useChatAI } from '../hooks/useChatAI';
 import { cleanTextForTts, parseVoiceOutput } from '../utils/minimaxTts';
+import { collectVoiceBatchSubtitle } from '../utils/voiceSubtitle';
 import { synthesizeSpeechDetailed, characterHasVoice } from '../utils/ttsRouter';
 import { resolveMiniMaxApiKey } from '../utils/minimaxApiKey';
 import { resolveFishAudioApiKey, stripFishMarkupForDisplay, cleanTextForTtsFish } from '../utils/fishAudioTts';
@@ -302,6 +303,27 @@ const Chat: React.FC = () => {
     handlePlayVoiceRef.current = handlePlayVoice;
     const onPlayVoiceStable = useCallback((id: number) => handlePlayVoiceRef.current(id), []);
 
+    // LLM 翻译兜底（语音条中外对照用）。查 res.ok + 失败重试一次 ——
+    // 以前不查状态码、失败静默吞掉，翻译一次拿不到就永远空着（「外语语音没翻译」主因）。
+    const llmTranslate = async (systemPrompt: string, text: string): Promise<string> => {
+        const attempt = async (): Promise<string> => {
+            const res = await fetch(`${apiConfig.baseUrl}/chat/completions`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiConfig.apiKey}` },
+                body: JSON.stringify({
+                    model: apiConfig.model,
+                    messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }],
+                    temperature: 0.3,
+                }),
+            });
+            if (!res.ok) throw new Error(`translate http ${res.status}`);
+            const data = await res.json();
+            return data?.choices?.[0]?.message?.content?.trim() || '';
+        };
+        try { return await attempt(); }
+        catch { try { return await attempt(); } catch { return ''; } }
+    };
+
     const handleManualTts = async (msg: Message, autoTriggered = false) => {
         if (voiceDataMap[msg.id] || voiceLoading.has(msg.id)) return;
 
@@ -343,25 +365,17 @@ const Chat: React.FC = () => {
                 // AI already provided the spoken text (possibly translated) in <语音> tag.
                 // parseVoiceOutput already sanitized it (whitelisted sound tags only).
                 spokenText = voiceTagContent;
-                // originalText = text OUTSIDE the voice tag (the display/Chinese text)
-                const textOutsideTag = msg.content.replace(/<[语語]音[^>]*>[\s\S]*?<\/[语語]音>/g, '').trim();
-                originalText = textOutsideTag ? cleanTextForTts(textOutsideTag) : '';
-                // If voice lang is set and no Chinese text outside the tag, translate spoken text back to Chinese
+                // originalText = text OUTSIDE the voice tag (the display/Chinese text).
+                // parseVoiceOutput 已做标签自愈 + 提取, 别再自己 replace 一遍。
+                originalText = parsedVoice.display ? cleanTextForTts(parsedVoice.display) : '';
+                // 字幕对齐模式下中文字幕通常被 chunk 成同批次的独立气泡, 语音消息标签外没字。
+                // 先从兄弟气泡把字幕收回来当翻译 —— 确定性、零成本、跟用户看到的字幕逐字一致。
+                if (voiceLang && !originalText) {
+                    originalText = collectVoiceBatchSubtitle(messages, msg.id);
+                }
+                // 收不到 (纯语音回合) 再让 LLM 把外语翻回中文, 带 ok 检查 + 重试。
                 if (voiceLang && !originalText && spokenText) {
-                    try {
-                        const transRes = await fetch(`${apiConfig.baseUrl}/chat/completions`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiConfig.apiKey}` },
-                            body: JSON.stringify({
-                                model: apiConfig.model,
-                                messages: [{ role: 'system', content: '把以下内容翻译成中文。只输出翻译结果，不要任何解释。' }, { role: 'user', content: spokenText }],
-                                temperature: 0.3,
-                            }),
-                        });
-                        const transData = await transRes.json();
-                        const chineseText = transData?.choices?.[0]?.message?.content?.trim();
-                        if (chineseText) originalText = chineseText;
-                    } catch { /* keep originalText empty */ }
+                    originalText = await llmTranslate('把以下内容翻译成中文。只输出翻译结果，不要任何解释。', spokenText);
                 }
             } else {
                 // Manual TTS (long-press): no <语音> tag.
@@ -391,20 +405,8 @@ const Chat: React.FC = () => {
                     }
                     if (voiceLang) {
                         const langLabel = VOICE_LANG_LABELS[voiceLang] || voiceLang;
-                        try {
-                            const transRes = await fetch(`${apiConfig.baseUrl}/chat/completions`, {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiConfig.apiKey}` },
-                                body: JSON.stringify({
-                                    model: apiConfig.model,
-                                    messages: [{ role: 'system', content: `Translate the following text to ${langLabel}. Output ONLY the translation, nothing else.` }, { role: 'user', content: originalText }],
-                                    temperature: 0.3,
-                                }),
-                            });
-                            const transData = await transRes.json();
-                            const translated = transData?.choices?.[0]?.message?.content?.trim();
-                            if (translated) spokenText = translated;
-                        } catch { /* use original */ }
+                        const translated = await llmTranslate(`Translate the following text to ${langLabel}. Output ONLY the translation, nothing else.`, originalText);
+                        if (translated) spokenText = translated;
                     }
                 }
             }

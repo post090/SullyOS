@@ -349,7 +349,8 @@ export const ChatParser = {
         //    切分后再原样还原成一个 chunk。
         const ATOM = String.fromCharCode(2);
         const voiceBlocks: string[] = [];
-        const guardedText = text.replace(/<(语音|語音)[^>]*>[\s\S]*?<\/\1>/g, m => {
+        // 闭合标签容许空格 / 简繁互换 (normalizeVoiceTags 在 sanitize 阶段已修, 这里是保险)
+        const guardedText = text.replace(/<[语語]音[^>]*>[\s\S]*?<\/\s*[语語]音\s*>/g, m => {
             const idx = voiceBlocks.length;
             voiceBlocks.push(m);
             return `\n${ATOM}${idx}${ATOM}\n`;

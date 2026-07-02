@@ -5,6 +5,7 @@ import { CharacterProfile, APIConfig } from '../types';
 import { resolveMiniMaxApiKey } from './minimaxApiKey';
 import { minimaxFetch } from './minimaxEndpoint';
 import { hashTtsParams, getCachedTts, saveCachedTts } from './ttsCache';
+import { normalizeVoiceTags } from './sanitize';
 
 const DEFAULT_MODEL = 'speech-2.8-hd';
 
@@ -112,8 +113,10 @@ const stripParensPreservingTags = (text: string): string => {
  * Known interjection tags like (chuckle) / (sighs) are preserved.
  */
 export const cleanTextForTts = (raw: string): string => {
+  // 0. 语音标签自愈 — 历史坏数据 (未闭合/孤儿闭合/全角符号) 也要能解析出来
+  raw = normalizeVoiceTags(raw);
   // 1. If <语音> tag exists (with or without emotion attribute), extract & use its content only
-  const voiceTagMatch = raw.match(/<[语語]音[^>]*>([\s\S]*?)<\/[语語]音>/);
+  const voiceTagMatch = raw.match(/<[语語]音[^>]*>([\s\S]*?)<\/\s*[语語]音\s*>/);
   if (voiceTagMatch) {
     return stripParensPreservingTags(voiceTagMatch[1]).replace(/\s+/g, ' ').trim();
   }
@@ -126,7 +129,7 @@ export const cleanTextForTts = (raw: string): string => {
   // 4. Strip parenthetical cues (preserving valid interjection tags only)
   text = stripParensPreservingTags(text);
   // 5. Strip <语音>...</语音> tags if they somehow remain
-  text = text.replace(/<[语語]音[^>]*>[\s\S]*?<\/[语語]音>/g, '');
+  text = text.replace(/<[语語]音[^>]*>[\s\S]*?<\/\s*[语語]音\s*>/g, '');
   // 6. Collapse whitespace
   text = text.replace(/\s+/g, ' ').trim();
   return text;
@@ -151,7 +154,8 @@ export interface ParsedVoiceOutput {
 }
 
 // <语音 emotion="happy">…</语音> — emotion attribute optional, single/double/no quotes tolerated.
-const VOICE_TAG_RE = /<[语語]音(?:\s+emotion\s*=\s*["']?([a-zA-Z]+)["']?)?\s*>([\s\S]*?)<\/[语語]音>/;
+// 属性前空格可省 (<语音emotion=…> 也认), 闭合标签容许空格 / 简繁互换。
+const VOICE_TAG_RE = /<[语語]音(?:[^>]*?emotion\s*=\s*["']?([a-zA-Z]+)["']?)?[^>]*>([\s\S]*?)<\/\s*[语語]音\s*>/;
 
 /**
  * Parse an assistant message into display text + spoken text + emotion.
@@ -161,6 +165,9 @@ const VOICE_TAG_RE = /<[语語]音(?:\s+emotion\s*=\s*["']?([a-zA-Z]+)["']?)?\s*
  */
 export const parseVoiceOutput = (raw: string): ParsedVoiceOutput => {
   if (!raw) return { display: '', speech: '', rawSpeech: '', hasVoiceTag: false };
+  // 语音标签自愈: 未闭合 / 孤儿闭合 / 全角符号 / 属性写歪, 先修再配对。
+  // 新消息落库前 sanitize 已经修过, 这里主要救历史坏数据 + 非落库调用点 (电话/见面)。
+  raw = normalizeVoiceTags(raw);
   const m = raw.match(VOICE_TAG_RE);
   if (!m) return { display: raw.trim(), speech: '', rawSpeech: '', hasVoiceTag: false };
   const rawEmotion = (m[1] || '').trim().toLowerCase();
@@ -168,7 +175,7 @@ export const parseVoiceOutput = (raw: string): ParsedVoiceOutput => {
   const speech = stripParensPreservingTags(m[2]).replace(/\s+/g, ' ').trim();
   // 不做 MiniMax 的括号/情绪标剥离，留给 cleanTextForTtsFish 按鱼声规则处理。
   const rawSpeech = m[2].replace(/\s+/g, ' ').trim();
-  const display = raw.replace(/<[语語]音[^>]*>[\s\S]*?<\/[语語]音>/g, '').trim();
+  const display = raw.replace(/<[语語]音[^>]*>[\s\S]*?<\/\s*[语語]音\s*>/g, '').trim();
   return { display, speech, rawSpeech, emotion, hasVoiceTag: true };
 };
 

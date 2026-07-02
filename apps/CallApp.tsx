@@ -6,6 +6,7 @@ import { minimaxFetch } from '../utils/minimaxEndpoint';
 import { resolveMiniMaxApiKey } from '../utils/minimaxApiKey';
 import { hashTtsParams, getCachedTts, saveCachedTts } from '../utils/ttsCache';
 import { cleanTextForTts, insertSpeechBreaks, convertHexAudioToBlob, fetchRemoteAudioBlob, VALID_EMOTIONS, stripEmotionTags, VOICE_ACTING_GUIDE, cleanVoiceMarkupForDisplay } from '../utils/minimaxTts';
+import { normalizeVoiceTags } from '../utils/sanitize';
 import { FISH_VOICE_ACTING_GUIDE, synthesizeSpeechFishDetailed, resolveFishAudioApiKey, cleanTextForTtsFish, stripFishMarkupForDisplay } from '../utils/fishAudioTts';
 import { resolveTtsProvider, getTtsProvider, getVoicePromptOverride } from '../utils/ttsProvider';
 import { startStt, isSttSupported, type SttSession } from '../utils/speechToText';
@@ -83,14 +84,17 @@ const VOICE_LANG_OPTIONS = [
   { value: 'de', label: 'Deutsch' },
   { value: 'ru', label: 'Русский' },
 ];
-/** 从 AI 回复中提取 <语音 emotion="…">…</语音> 标签内容 + emotion（兼容繁体 語音、无属性） */
+/** 从 AI 回复中提取 <语音 emotion="…">…</语音> 标签内容 + emotion（兼容繁体 語音、无属性）
+ *  先跑 normalizeVoiceTags 自愈（未闭合/孤儿闭合/全角符号/属性写歪）——通话是 LLM 原文直达，
+ *  没有落库 sanitize 兜底，掉格式的标签会直接被念出来。 */
 const extractVoiceTag = (text: string): { display: string; speech: string; voiceText: string; emotion?: string } => {
-  const match = text.match(/<[语語]音(?:\s+emotion\s*=\s*["']?([a-zA-Z]+)["']?)?\s*>([\s\S]*?)<\/[语語]音>/);
+  text = normalizeVoiceTags(text);
+  const match = text.match(/<[语語]音(?:[^>]*?emotion\s*=\s*["']?([a-zA-Z]+)["']?)?[^>]*>([\s\S]*?)<\/\s*[语語]音\s*>/);
   if (!match) return { display: text, speech: '', voiceText: '', emotion: undefined };
   const rawEmotion = (match[1] || '').trim().toLowerCase();
   const emotion = VALID_EMOTIONS.has(rawEmotion) ? rawEmotion : undefined;
   const voiceText = match[2].trim();
-  const display = text.replace(/<[语語]音[^>]*>[\s\S]*?<\/[语語]音>/g, '').trim();
+  const display = text.replace(/<[语語]音[^>]*>[\s\S]*?<\/\s*[语語]音\s*>/g, '').trim();
   return { display, speech: voiceText, voiceText, emotion };
 };
 // Derive the shared TTS cache key from the MiniMax payload. Must match the

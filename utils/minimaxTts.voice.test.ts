@@ -40,6 +40,42 @@ describe('parseVoiceOutput', () => {
     expect(r.hasVoiceTag).toBe(false);
     expect(r.display).toBe('就是一句话');
   });
+
+  // ─── 掉格式自愈 (normalizeVoiceTags 集成) ───
+  it('salvages an unclosed <语音> tag (model forgot the close)', () => {
+    const r = parseVoiceOutput('外面的话\n<语音 emotion="calm">うん、そのままでいい。');
+    expect(r.hasVoiceTag).toBe(true);
+    expect(r.display).toBe('外面的话');
+    expect(r.speech).toBe('うん、そのままでいい。');
+    expect(r.emotion).toBe('calm');
+  });
+  it('tolerates missing space before emotion attribute', () => {
+    const r = parseVoiceOutput('<语音emotion="happy">hi there</语音>');
+    expect(r.hasVoiceTag).toBe(true);
+    expect(r.speech).toBe('hi there');
+    expect(r.emotion).toBe('happy');
+  });
+  it('tolerates full-width quotes in the emotion attribute', () => {
+    const r = parseVoiceOutput('<语音 emotion=“sad”>ごめんね</语音>');
+    expect(r.hasVoiceTag).toBe(true);
+    expect(r.emotion).toBe('sad');
+    expect(r.speech).toBe('ごめんね');
+  });
+  it('tolerates spaced / cross-variant closing tags', () => {
+    expect(parseVoiceOutput('<语音>你好</ 语音 >').speech).toBe('你好');
+    expect(parseVoiceOutput('<语音>你好</語音>').speech).toBe('你好');
+  });
+  it('tolerates full-width angle brackets', () => {
+    const r = parseVoiceOutput('＜语音 emotion="calm"＞落ち着いて＜/语音＞');
+    expect(r.hasVoiceTag).toBe(true);
+    expect(r.speech).toBe('落ち着いて');
+    expect(r.emotion).toBe('calm');
+  });
+  it('strips an orphan closing tag instead of leaking it', () => {
+    const r = parseVoiceOutput('前半句话</语音>后半句话');
+    expect(r.hasVoiceTag).toBe(false);
+    expect(r.display).toBe('前半句话后半句话');
+  });
 });
 
 describe('cleanVoiceMarkupForDisplay', () => {
