@@ -18,14 +18,19 @@ function isRealHomeWorld(world: WorldProfile): boolean {
     return (world.timeMode ?? 'real') !== 'sim' && world.injectToChat !== false;
 }
 
+/** 列出角色所在的全部 real 家园（主家园候选）。选择器 UI（阶段C）与判定共用。 */
+export async function listRealHomeWorldsFor(charId: string): Promise<WorldProfile[]> {
+    const worlds = await DB.getWorlds().catch(() => [] as WorldProfile[]);
+    return worlds.filter(w => isRealHomeWorld(w) && (w.memberIds || []).includes(charId));
+}
+
 /**
  * 解析角色的主家园。
  * 1. char.primaryHomeId 已设且世界仍是 real 家园 → 直接用（用户手动指定优先）。
  * 2. 未设：恰好只在 1 个 real 世界 → 视为主家园；0 个或多个 → null（含糊不猜，等用户指定）。
  */
 export async function resolveHomeWorld(char: CharacterProfile): Promise<WorldProfile | null> {
-    const worlds = await DB.getWorlds().catch(() => [] as WorldProfile[]);
-    const realHomes = worlds.filter(w => isRealHomeWorld(w) && (w.memberIds || []).includes(char.id));
+    const realHomes = await listRealHomeWorldsFor(char.id);
     if (realHomes.length === 0) return null;
     if (char.primaryHomeId) {
         const designated = realHomes.find(w => w.id === char.primaryHomeId);

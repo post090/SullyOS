@@ -1,9 +1,80 @@
 
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import Modal from '../os/Modal';
-import { CharacterProfile, Message, EmojiCategory, DailySchedule, ScheduleSlot, ApiPreset, APIConfig } from '../../types';
+import { CharacterProfile, Message, EmojiCategory, DailySchedule, ScheduleSlot, ApiPreset, APIConfig, WorldProfile } from '../../types';
 import ScheduleCard from '../schedule/ScheduleCard';
 import EmotionSettingsPanel from './EmotionSettingsPanel';
+import { listRealHomeWorldsFor } from '../../utils/worldHome/homeFacts';
+
+/**
+ * 主家园选择器（生活三层派生链 · 阶段C，docs/life-layers-design.md）。
+ * 一个角色只能有一个「对齐真实时间、注入记忆」的主家园——它是日程生成的上游事实源。
+ * - 不在任何 real 家园：不渲染（不打扰）。
+ * - 恰好 1 个：展示"自动采用"，无需操作。
+ * - 多个：必须手动指定，未指定时日程不注入家园事实（含糊不猜）。
+ */
+const HomeWorldPickerSection: React.FC<{
+    char: CharacterProfile;
+    isOpen: boolean;
+    onSetPrimaryHome: (worldId: string | null) => void;
+}> = ({ char, isOpen, onSetPrimaryHome }) => {
+    const [realWorlds, setRealWorlds] = useState<WorldProfile[] | null>(null);
+
+    useEffect(() => {
+        if (!isOpen) return;
+        let cancelled = false;
+        listRealHomeWorldsFor(char.id).then(ws => { if (!cancelled) setRealWorlds(ws); });
+        return () => { cancelled = true; };
+    }, [isOpen, char.id]);
+
+    if (!realWorlds || realWorlds.length === 0) return null;
+
+    if (realWorlds.length === 1) {
+        return (
+            <div className="mb-4 bg-slate-50 border border-slate-200 rounded-2xl p-3">
+                <p className="text-xs font-bold text-slate-700">主家园</p>
+                <p className="text-[10px] text-slate-500 leading-relaxed mt-0.5">
+                    「{realWorlds[0].name}」是 ta 唯一的真实时间家园，日程会自动对齐那里的住所与同住人。
+                </p>
+            </div>
+        );
+    }
+
+    const designated = realWorlds.find(w => w.id === char.primaryHomeId);
+    return (
+        <div className="mb-4 bg-slate-50 border border-slate-200 rounded-2xl p-3">
+            <p className="text-xs font-bold text-slate-700">主家园</p>
+            {!designated && (
+                <p className="text-[10px] text-amber-600 leading-relaxed mt-0.5">
+                    ta 同时在 {realWorlds.length} 个真实时间家园里——日程只认一个主家园。未指定时日程不会对齐任何家园。
+                </p>
+            )}
+            <div className="flex flex-wrap gap-2 mt-2">
+                {realWorlds.map(w => {
+                    const active = w.id === char.primaryHomeId;
+                    return (
+                        <button
+                            key={w.id}
+                            onClick={() => onSetPrimaryHome(active ? null : w.id)}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all border ${
+                                active
+                                    ? 'bg-violet-100 border-violet-300 text-violet-700'
+                                    : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-100'
+                            }`}
+                        >
+                            {active ? '🏠 ' : ''}{w.name}
+                        </button>
+                    );
+                })}
+            </div>
+            {designated && (
+                <p className="text-[10px] text-slate-400 leading-relaxed mt-2">
+                    日程会对齐「{designated.name}」的住所与同住人。再点一次可取消指定。
+                </p>
+            )}
+        </div>
+    );
+};
 
 interface ChatModalsProps {
     modalType: string;
@@ -113,6 +184,7 @@ interface ChatModalsProps {
     // Schedule master toggle
     isScheduleFeatureEnabled?: boolean;
     onToggleScheduleFeature?: () => void;
+    onSetPrimaryHome?: (worldId: string | null) => void;
     // Memory Palace force vectorize
     isMemoryPalaceEnabled?: boolean;
     isVectorizing?: boolean;
@@ -151,7 +223,7 @@ const ChatModals: React.FC<ChatModalsProps> = ({
     onGenerateVoice, voiceAvailable, onDownloadVoice, voiceDownloadable,
     scheduleData, isScheduleGenerating, onScheduleEdit, onScheduleDelete, onScheduleReroll, onScheduleCoverChange,
     onScheduleStyleChange, onPlayTheater,
-    isScheduleFeatureEnabled, onToggleScheduleFeature,
+    isScheduleFeatureEnabled, onToggleScheduleFeature, onSetPrimaryHome,
     isMemoryPalaceEnabled, isVectorizing, onForceVectorize,
     apiPresets, onAddApiPreset, onSaveEmotion, onClearBuffs,
 }) => {
@@ -946,6 +1018,15 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                                         </button>
                                     </div>
                                 </div>
+                            )}
+
+                            {/* 主家园选择器：多个 real 家园时必须手动指定（对齐轴①的事实源） */}
+                            {onSetPrimaryHome && activeCharacter && (
+                                <HomeWorldPickerSection
+                                    char={activeCharacter}
+                                    isOpen={modalType === 'schedule'}
+                                    onSetPrimaryHome={onSetPrimaryHome}
+                                />
                             )}
 
                             <ScheduleCard

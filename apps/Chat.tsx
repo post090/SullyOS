@@ -2652,6 +2652,14 @@ const Chat: React.FC = () => {
                 onPlayTheater={handlePlayTheater}
                 isScheduleFeatureEnabled={isScheduleFeatureOn(char)}
                 onToggleScheduleFeature={handleToggleScheduleFeature}
+                onSetPrimaryHome={(worldId: string | null) => {
+                    // 主家园变了 = 日程的上游事实变了：立即用新事实重生成今日日程
+                    updateCharacter(char.id, { primaryHomeId: worldId ?? undefined });
+                    addToast(worldId ? '主家园已指定，正在按新家园重排今日日程' : '已取消主家园指定', 'info');
+                    if (isScheduleFeatureOn(char) && char.scheduleStyle) {
+                        generateDailySchedule({ ...char, primaryHomeId: worldId ?? undefined }, true);
+                    }
+                }}
                 isMemoryPalaceEnabled={!!char.memoryPalaceEnabled}
                 isVectorizing={isVectorizing}
                 onForceVectorize={handleForceVectorize}
