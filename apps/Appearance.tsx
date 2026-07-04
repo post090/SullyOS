@@ -140,6 +140,8 @@ const CHAT_LAYOUT_COMBOS: { name: string; desc: string; config: Partial<OSTheme>
 const ACNH_WALLPAPER = 'linear-gradient(180deg, #F8F4E8 0%, #F3EFDD 58%, #E6EECE 100%)';
 // 手游主题壁纸：近白底 + 极淡薰衣草/粉光晕（照搬原创参考图，整体偏白不发紫）。
 const MOBILEGAME_WALLPAPER = 'radial-gradient(95% 55% at 85% 0%, #fdeef7 0%, transparent 50%), radial-gradient(85% 55% at 6% 10%, #f6f2fc 0%, transparent 55%), linear-gradient(180deg, #fdfbff 0%, #f9f6fd 55%, #f4f0fa 100%)';
+// 电子宠物主题壁纸：90 年代玩具感——奶油底 + 薄荷/糖果橙光晕（衬托小屋舞台，与手游风的粉紫拉开距离）。
+const TAMAGOTCHI_WALLPAPER = 'radial-gradient(90% 55% at 82% 0%, #fdeed6 0%, transparent 52%), radial-gradient(80% 50% at 8% 12%, #e0f4e6 0%, transparent 55%), linear-gradient(180deg, #fbf6ea 0%, #f3f5ea 55%, #ecf2e6 100%)';
 
 const DESKTOP_SKINS: { id: string; name: string; desc: string; swatch: string; config: Partial<OSTheme> }[] = [
   {
@@ -172,6 +174,23 @@ const DESKTOP_SKINS: { id: string; name: string; desc: string; swatch: string; c
       chatAvatarShape: 'circle', chatAvatarSize: 'medium',
       chatBubbleStyle: 'modern', chatMessageSpacing: 'default',
       chatHeaderStyle: 'gradient', chatInputStyle: 'rounded',
+      chatChromeStyle: 'soft', chatBackgroundStyle: 'paper',
+      chatShowTimestamp: 'hover',
+    },
+  },
+  {
+    id: 'tamagotchi',
+    name: '电子宠物 · 小小窝',
+    desc: '桌面就是一台养成机 · 角色住在自己的小屋里',
+    swatch: 'linear-gradient(135deg,#fdeed6 0%,#c9ecd4 52%,#ffcdb5 100%)',
+    config: {
+      skin: 'tamagotchi',
+      hue: 150, saturation: 38, lightness: 62,
+      contentColor: '#4a4238',
+      wallpaper: TAMAGOTCHI_WALLPAPER,
+      chatAvatarShape: 'rounded', chatAvatarSize: 'medium',
+      chatBubbleStyle: 'modern', chatMessageSpacing: 'default',
+      chatHeaderStyle: 'default', chatInputStyle: 'rounded',
       chatChromeStyle: 'soft', chatBackgroundStyle: 'paper',
       chatShowTimestamp: 'hover',
     },
