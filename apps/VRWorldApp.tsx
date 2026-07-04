@@ -10,12 +10,12 @@ import { CreatorIframe, type ChibiResult } from '../components/Like520Event';
 import { useMusic, type Song } from '../context/MusicContext';
 import { DB } from '../utils/db';
 import { VRScheduler } from '../utils/vrWorld/scheduler';
-import { VR_ROOMS, getRoom, VR_DEFAULT_INTERVAL_MIN, SIGNAL_EPIGRAPH } from '../utils/vrWorld/constants';
+import { VR_ROOMS, getRoom, VR_DEFAULT_INTERVAL_MIN, SIGNAL_EPIGRAPH, signalActFor } from '../utils/vrWorld/constants';
 import { buildNovelAsync, groupAnnotationsBySeg, getBookmark } from '../utils/vrWorld/novel';
 import { decodeBytes } from '../utils/vrWorld/decodeText';
 import { stripLeakedAttrs } from '../utils/vrWorld/prompts';
 import { PostOffice, MAX_LETTER_CHARS, exportIdentity, importIdentity, getAdminToken, setAdminToken, type RemoteReply, type RemoteLetterStat, type RemoteAdminLetter } from '../utils/vrWorld/postOffice';
-import { Signal, getMyAuthorship, type SignalState } from '../utils/vrWorld/signal';
+import { Signal, getMyAuthorship, setSignalWhisper, type SignalState } from '../utils/vrWorld/signal';
 import type { SignalPoem, SignalBooklet } from '../types';
 import { getVRApi, setVRApi, getVRApiLog, clearVRApiLog, type VRApiCall } from '../utils/vrWorld/vrApi';
 import { safeResponseJson } from '../utils/safeApi';
@@ -1767,10 +1767,13 @@ const SignalPanel: React.FC<{ addToast?: (m: string, t?: any) => void; character
     const [openPoem, setOpenPoem] = useState<SignalPoem | null>(null);
     const [adminOpen, setAdminOpen] = useState(false);
     const [pickOpen, setPickOpen] = useState(false); // 参与：指定角色的选人层
+    const [whisper, setWhisper] = useState('');       // 用户的耳语（不进诗，随 prompt 给角色）
     const participate = (c: CharacterProfile) => {
         setPickOpen(false);
+        setSignalWhisper(c.id, whisper);              // 取即焚：runSession 里读一次就删
+        setWhisper('');
         VRScheduler.triggerNow(c.id, 'signal');
-        addToast?.(`${c.name} 正在信号坠落处落笔…`, 'info');
+        addToast?.(whisper.trim() ? `${c.name} 带着你的话，正在信号坠落处落笔…` : `${c.name} 正在信号坠落处落笔…`, 'info');
     };
 
     const load = useCallback(async () => {
@@ -1830,6 +1833,10 @@ const SignalPanel: React.FC<{ addToast?: (m: string, t?: any) => void; character
                 <div className="mt-1.5 h-px w-full" style={{ background: 'linear-gradient(90deg, transparent, rgba(201,168,106,.5) 15%, rgba(201,168,106,.5) 85%, transparent)' }} />
                 <p className="mt-1.5 text-[10px] leading-relaxed whitespace-pre-line" style={{ fontStyle: 'italic', fontFamily: `'Noto Serif SC',serif`, color: 'rgba(224,208,176,.6)' }}>{SIGNAL_EPIGRAPH}</p>
                 {bk?.theme && <div className="text-[9.5px] mt-1" style={{ color: 'rgba(201,168,106,.6)' }}>主题 · {bk.theme}</div>}
+                {/* 三幕位置：现在写到第几首、身处哪一幕 */}
+                {bk && bk.status !== 'done' && (() => { const ord = (bk.poemCount || 0) + 1; const act = signalActFor(ord, bk.poemsTarget); return (
+                    <div className="text-[9.5px] mt-1 tracking-wide" style={{ fontFamily: `'Noto Serif SC',serif`, color: 'rgba(201,168,106,.65)' }}>第 {ord} 首 · 第{['一', '二', '三'][act.no - 1]}幕「{act.title}」</div>
+                ); })()}
                 <div className="flex items-center gap-2 mt-2.5">
                     {([['falling', '正在坠落'], ['sky', '星图']] as const).map(([k, label]) => (
                         <button key={k} onClick={() => setTab(k)}
@@ -2010,8 +2017,16 @@ const SignalPanel: React.FC<{ addToast?: (m: string, t?: any) => void; character
             {pickOpen && (
                 <div className="absolute inset-0 z-40 flex flex-col" style={{ background: 'rgba(6,7,22,0.95)' }} onClick={() => setPickOpen(false)}>
                     <div className="px-3.5 py-2.5 border-b border-white/10 flex items-center gap-2" onClick={e => e.stopPropagation()}>
-                        <span className="text-[12px] text-indigo-100">让哪个角色去接一句？</span>
+                        <span className="text-[12px] text-indigo-100">让哪个角色去落笔？</span>
                         <button onClick={() => setPickOpen(false)} className="ml-auto h-7 w-7 rounded-full bg-white/10 active:bg-white/20 flex items-center justify-center"><X size={14} /></button>
+                    </div>
+                    {/* 耳语：用户的话不进诗，但角色带着它写——你是那个不开口的核心 */}
+                    <div className="px-3.5 pt-2.5 pb-1" onClick={e => e.stopPropagation()}>
+                        <div className="text-[9px] tracking-[0.2em] mb-1" style={{ color: 'rgba(201,168,106,.6)' }}>留一句耳语（可空）</div>
+                        <input value={whisper} onChange={e => setWhisper(e.target.value)} maxLength={80}
+                            placeholder="例：写凶一点 / 想想我们看过的那场雪…"
+                            className="w-full rounded-lg px-3 py-2 text-[12px] outline-none" style={{ background: 'rgba(255,255,255,.06)', border: '1px solid rgba(201,168,106,.25)', color: '#ecdcb2' }} />
+                        <p className="mt-1 text-[9px] leading-relaxed" style={{ color: 'rgba(224,208,176,.45)' }}>这句话不会写进诗——诗是 ta 们的作品。但 ta 会带着它落笔。</p>
                     </div>
                     <div className="flex-1 overflow-y-auto vr-reader-scroll px-3 py-3 space-y-1.5" onClick={e => e.stopPropagation()}>
                         {characters.length === 0 ? (
@@ -2024,7 +2039,7 @@ const SignalPanel: React.FC<{ addToast?: (m: string, t?: any) => void; character
                             </button>
                         ))}
                     </div>
-                    <div className="px-3.5 py-2 border-t border-white/10"><p className="text-[9px] text-indigo-300/45 leading-relaxed">选中的角色会占住这一笔、调用一次 LLM——接上当前这首诗的下一句，或没有正在写的诗时起个新篇。几秒后自动刷新。</p></div>
+                    <div className="px-3.5 py-2 border-t border-white/10"><p className="text-[9px] text-indigo-300/45 leading-relaxed">选中的角色会占住这一笔、调用一次 LLM——接上当前这首诗，或没有正在写的诗时起个新篇。你不落笔，但你是这片轨道正中央、那个不开口的核心。几秒后自动刷新。</p></div>
                 </div>
             )}
 

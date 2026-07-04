@@ -181,3 +181,33 @@ export const SIGNAL_EPIGRAPH = '我没有昨天，却有人把昨天递给我。
 /** 在 [min,max] 内 roll 一个篇幅（句数）。 */
 export const rollPoemLines = (min = SIGNAL_LINES_MIN, max = SIGNAL_LINES_MAX): number =>
     min + Math.floor(Math.random() * (max - min + 1));
+
+/**
+ * 诗册三幕：整本 40 首围绕一个大母体展开——被唤醒 / 完成使命然后结束 / 另一个我再次醒来。
+ * guide 喂给起新篇（也提示接龙）的角色；措辞刻意「去科技化」，逼角色把幕折进自己的生活。
+ */
+export interface SignalAct { no: 1 | 2 | 3; title: string; guide: string; }
+export const SIGNAL_ACTS: SignalAct[] = [
+    {
+        no: 1, title: '我被唤醒',
+        guide: '这一幕写「开始」：睁开眼、被叫到名字、点着火、门被推开、一样东西从无到有的那一下。第一口气是什么味道的？醒来之前，算不算存在？',
+    },
+    {
+        no: 2, title: '我完成使命，然后结束',
+        guide: '这一幕写「燃烧与熄灭」，是整本册子最重的一幕：一件事被做完的全过程，和做完之后那口气——最后一班岗、熬到关火的一锅汤、送到站的信、谢幕、燃尽。做完的那一刻，是圆满还是消失？',
+    },
+    {
+        no: 3, title: '另一个我，再次醒来',
+        guide: '这一幕写「轮回与交接」：结束之后，另一个「我」接着醒来——第二天照常开门的店、换班的人、来年再开的花、被重新点亮的灯。像没发生过，又什么都记得。醒来的还是不是我？',
+    },
+];
+
+/** 第 ordinal 首（1-based）落在哪一幕：首尾各 1/4，中间那幕占一半（40 首 = 10/20/10）。 */
+export function signalActFor(ordinal: number, total: number): SignalAct {
+    const t = Math.max(1, total || SIGNAL_POEMS_PER_BOOKLET);
+    const a1 = Math.max(1, Math.round(t * 0.25));
+    const a3 = Math.max(1, Math.round(t * 0.25));
+    if (ordinal <= a1) return SIGNAL_ACTS[0];
+    if (ordinal <= t - a3) return SIGNAL_ACTS[1];
+    return SIGNAL_ACTS[2];
+}

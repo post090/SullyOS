@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { chunkNovelText, chunkNovelTextAsync, getReadingWindow, buildNovel } from './novel';
 import { parseVROutput, parseMusicOutput, parseGuestbookOutput, parseGymOutput, parsePostOfficeOutput, parsePostOfficeReadOutput, parseSignalOutput } from './prompts';
-import { rollPoemLines, SIGNAL_LINES_MIN, SIGNAL_LINES_MAX } from './constants';
+import { rollPoemLines, SIGNAL_LINES_MIN, SIGNAL_LINES_MAX, signalActFor } from './constants';
 import { maskPen } from './postOffice';
 import { decodeBytes } from './decodeText';
 import { VRScheduler } from './scheduler';
@@ -340,6 +340,27 @@ describe('信号坠落处 · parseSignalOutput', () => {
     it('完全空输出 → lines 为空（runSession 据此跳过，不写脏数据）', () => {
         const out = parseSignalOutput('<彼方></彼方>', 'append', 24);
         expect(out.lines).toEqual([]);
+    });
+});
+
+describe('信号坠落处 · signalActFor（三幕分界）', () => {
+    it('40 首 = 10/20/10：第 1/10 首在第一幕，11/30 在第二幕，31/40 在第三幕', () => {
+        expect(signalActFor(1, 40).no).toBe(1);
+        expect(signalActFor(10, 40).no).toBe(1);
+        expect(signalActFor(11, 40).no).toBe(2);
+        expect(signalActFor(30, 40).no).toBe(2);
+        expect(signalActFor(31, 40).no).toBe(3);
+        expect(signalActFor(40, 40).no).toBe(3);
+    });
+    it('别的册子规模也按 1/4、1/2、1/4 划分且不越界', () => {
+        for (const total of [4, 7, 20, 100]) {
+            for (let i = 1; i <= total; i++) {
+                const act = signalActFor(i, total);
+                expect([1, 2, 3]).toContain(act.no);
+            }
+            expect(signalActFor(1, total).no).toBe(1);
+            expect(signalActFor(total, total).no).toBe(3);
+        }
     });
 });
 

@@ -1054,6 +1054,8 @@ export interface VRCardMeta {
     poemLinesSoFar?: string[];
     /** 所在册子的标题（如「低电量合唱」），UI 展示 */
     bookletTitle?: string;
+    /** 用户参与时留给角色的耳语（不进诗，只随卡片进聊天/记忆） */
+    signalWhisper?: string;
 }
 
 // ============================================================

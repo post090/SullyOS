@@ -26,7 +26,7 @@ export interface SignalState {
 // 只对自己有意义、也只该自己知道，故纯本地存 (poemId → seq → charName)。换设备不带走。
 const AUTHOR_KEY = 'signal_my_authorship';
 type AuthorMap = Record<string, Record<string, string>>;
-export function recordMyLine(poemId: string, seq: number, charName: string): void {
+export function recordMyLine(poemId: string, seq: number, charName: string, content?: string): void {
     try {
         const m: AuthorMap = JSON.parse(localStorage.getItem(AUTHOR_KEY) || '{}');
         (m[poemId] ||= {})[String(seq)] = charName;
@@ -34,11 +34,45 @@ export function recordMyLine(poemId: string, seq: number, charName: string): voi
         if (keys.length > 80) for (const k of keys.slice(0, keys.length - 80)) delete m[k]; // 防膨胀，留最近 80 首
         localStorage.setItem(AUTHOR_KEY, JSON.stringify(m));
     } catch { /* ignore */ }
+    // 顺手记「这个 char 写过什么」——写诗时喂回去禁止复用意象（治「胃痛角色句句是胃药」）
+    if (content) {
+        try {
+            const l: Record<string, string[]> = JSON.parse(localStorage.getItem(MY_LINES_KEY) || '{}');
+            l[charName] = [...(l[charName] || []), content].slice(-24); // 每 char 留最近 24 句
+            localStorage.setItem(MY_LINES_KEY, JSON.stringify(l));
+        } catch { /* ignore */ }
+    }
 }
 /** 取某首诗里「我这台机器写的句子」→ {seq: charName}。 */
 export function getMyAuthorship(poemId: string): Record<string, string> {
     try { return (JSON.parse(localStorage.getItem(AUTHOR_KEY) || '{}') as AuthorMap)[poemId] || {}; }
     catch { return {}; }
+}
+const MY_LINES_KEY = 'signal_my_lines';
+/** 某个 char 在诗册里写过的句子（本地，最近 24）——注入 prompt 防它反复用同一批意象。 */
+export function getMyRecentLines(charName: string): string[] {
+    try { return (JSON.parse(localStorage.getItem(MY_LINES_KEY) || '{}') as Record<string, string[]>)[charName] || []; }
+    catch { return []; }
+}
+
+// ── 用户的「耳语」：参与时留给角色的一句话。不进诗、不上后端，只注入这一次 prompt。
+// 用 localStorage 走一趟（participate → triggerNow → runSession），取即焚。
+const WHISPER_KEY = 'signal_whisper';
+export function setSignalWhisper(charId: string, text: string): void {
+    try {
+        const m: Record<string, string> = JSON.parse(localStorage.getItem(WHISPER_KEY) || '{}');
+        if (text.trim()) m[charId] = text.trim().slice(0, 80); else delete m[charId];
+        localStorage.setItem(WHISPER_KEY, JSON.stringify(m));
+    } catch { /* ignore */ }
+}
+/** 取走该 char 的耳语（取即删，只用一次）。 */
+export function takeSignalWhisper(charId: string): string {
+    try {
+        const m: Record<string, string> = JSON.parse(localStorage.getItem(WHISPER_KEY) || '{}');
+        const t = m[charId] || '';
+        if (t) { delete m[charId]; localStorage.setItem(WHISPER_KEY, JSON.stringify(m)); }
+        return t;
+    } catch { return ''; }
 }
 
 async function call<T>(path: string, opts: RequestInit & { query?: Record<string, string> } = {}): Promise<T> {

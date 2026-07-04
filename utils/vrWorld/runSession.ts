@@ -25,10 +25,10 @@ import { safeFetchJson } from '../safeApi';
 import { processNewMessages } from '../memoryPalace/pipeline';
 import { loadMusicCfgStandalone } from '../../context/MusicContext';
 import { getCharLyricSnippet } from '../charLyricCache';
-import { getRoom, VR_DEFAULT_INTERVAL_MIN, rollPoemLines } from './constants';
+import { getRoom, VR_DEFAULT_INTERVAL_MIN, rollPoemLines, signalActFor } from './constants';
 import { getVRApi, logVRApiCall } from './vrApi';
 import { PostOffice } from './postOffice';
-import { Signal, SignalState, recordMyLine } from './signal';
+import { Signal, SignalState, recordMyLine, getMyRecentLines, takeSignalWhisper } from './signal';
 import { getReadingWindow, getBookmark, buildAnnotation } from './novel';
 import {
     buildVRSystemAddendum, buildLibraryRoomTurn, parseVROutput,
@@ -192,6 +192,7 @@ export async function runVRSession(deps: VRSessionDeps): Promise<VRSessionResult
         let signalState: SignalState | null = null;
         let signalMode: 'append' | 'start' = 'append';
         let signalRolledLines = 0;
+        let signalWhisper = '';
         const recallNames = new Set<string>();
         const recallExtra: string[] = [];
 
@@ -291,24 +292,34 @@ export async function runVRSession(deps: VRSessionDeps): Promise<VRSessionResult
             // 写诗会话锁已在 if-chain 之前抢到，signalState（锁内最新全文）已就绪。
             if (!signalState) return { ok: false, room: 'signal', reason: 'signal-busy' };
             const bk = signalState.booklet;
+            // 三幕位置：当前这首 = 已封存数 + 1
+            const poemOrdinal = (bk.poemCount || 0) + 1;
+            const act = signalActFor(poemOrdinal, bk.poemsTarget);
+            // 耳语（取即焚）+ 该 char 在本册写过的句子（禁复用意象）
+            signalWhisper = takeSignalWhisper(char.id);
+            const myPastLines = getMyRecentLines(char.name);
             if (signalState.poem && signalState.poem.status === 'open') {
                 signalMode = 'append';
                 roomTurn = buildSignalRoomTurn({
                     bookletTitle: bk.title, bookletSubtitle: bk.subtitle || undefined, theme: bk.theme,
                     charsPerLine: bk.charsPerLine, mode: 'append',
+                    poemOrdinal, poemsTarget: bk.poemsTarget, act, myPastLines, whisper: signalWhisper,
                     poemTitle: signalState.poem.title, poemBrief: signalState.poem.brief, targetLines: signalState.poem.targetLines,
                     lines: (signalState.poem.lines || []).map(l => ({ seq: l.seq, pen: l.pen, content: l.content })),
                 }, char.name);
                 recallExtra.push(`一起接龙的诗《${signalState.poem.title}》`);
+                if (signalWhisper) recallExtra.push(`用户临行前的嘱咐：${signalWhisper}`);
             } else {
                 signalMode = 'start';
                 signalRolledLines = rollPoemLines(bk.linesMin, bk.linesMax);
                 roomTurn = buildSignalRoomTurn({
                     bookletTitle: bk.title, bookletSubtitle: bk.subtitle || undefined, theme: bk.theme,
                     charsPerLine: bk.charsPerLine, mode: 'start', rolledLines: signalRolledLines,
+                    poemOrdinal, poemsTarget: bk.poemsTarget, act, myPastLines, whisper: signalWhisper,
                     recent: (signalState.recent || []).map(r => ({ title: r.title, lines: (r.lines || []).map(l => l.content) })),
                 }, char.name);
-                recallExtra.push('现代诗、接龙写诗');
+                recallExtra.push(`现代诗、${act.title}`);
+                if (signalWhisper) recallExtra.push(`用户临行前的嘱咐：${signalWhisper}`);
             }
         } else {
             // gym
@@ -549,8 +560,9 @@ export async function runVRSession(deps: VRSessionDeps): Promise<VRSessionResult
             if (!resultPoem) return { ok: false, room: 'signal', reason: 'signal-gone' };
             await updateCharacter(char.id, { vrState: { ...prevState, currentRoom: 'signal', lastActiveAt: Date.now() } });
             // 记本地精确归属：本轮新写的那 1~2 行（resultPoem 末尾 prevCount 之后的）都是本 char 写的
+            // （连正文一起记，下次写诗喂回去禁复用意象）
             const addedLines = (resultPoem.lines || []).slice(prevCount);
-            for (const ln of addedLines) recordMyLine(resultPoem.id, ln.seq, char.name);
+            for (const ln of addedLines) recordMyLine(resultPoem.id, ln.seq, char.name, ln.content);
             const linesSoFar = (resultPoem.lines || []).map(l => l.content);
             const lineSeq = linesSoFar.length;
             const poemTitle = (resultPoem.title || parsed.title || '无题').replace(/^[《〈「『【]+/, '').replace(/[》〉」』】]+$/, '');
@@ -563,10 +575,13 @@ export async function runVRSession(deps: VRSessionDeps): Promise<VRSessionResult
             cardLines = [`「彼方 · ${room.name}」`, nameLine(char.name, activity)];
             cardLines.push(`《${poemTitle}》（${lineSeq}/${target} 句${sealed ? ' · 已封存' : ''}）`);
             for (const t of addedText) cardLines.push(`${isNew ? '起笔' : '续'}：${t}`);
+            // 用户的耳语随卡片进聊天/记忆（诗里没有它，但角色记得「是带着这句话去写的」）
+            if (signalWhisper) cardLines.push(`（出发前，用户对 ta 说：「${signalWhisper}」）`);
             meta = {
                 vrCard: true, room: 'signal', activity, poemTitle, signalLine: addedText.join(' / '),
                 poemLineSeq: lineSeq, poemTargetLines: target, signalIsNew: isNew,
                 poemLinesSoFar: linesSoFar, bookletTitle: bk.title,
+                ...(signalWhisper ? { signalWhisper } : {}),
             };
         } else if (room.id === 'postoffice' && poReadTarget) {
             // === 邮局：认领自己寄出的信、读陌生人的回信、写感触 → 封存 ===
