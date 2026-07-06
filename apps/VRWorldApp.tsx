@@ -2029,15 +2029,15 @@ const SignalPanel: React.FC<{ addToast?: (m: string, t?: any) => void; character
                         <p className="mt-1 text-[9px] leading-relaxed" style={{ color: 'rgba(224,208,176,.45)' }}>这句话不会写进诗——诗是 ta 们的作品。但 ta 会带着它落笔。</p>
                     </div>
                     <div className="flex-1 overflow-y-auto vr-reader-scroll px-3 py-3 space-y-1.5" onClick={e => e.stopPropagation()}>
-                        {characters.length === 0 ? (
-                            <p className="text-[11px] text-white/40 text-center py-8">还没有角色。</p>
-                        ) : characters.map(c => (
+                        {(() => { const joined = characters.filter(c => c.vrState?.enabled); return joined.length === 0 ? (
+                            <p className="text-[11px] text-white/40 text-center py-8 leading-relaxed">还没有角色接入彼方。<br />先去「接入」页给 ta 开启自主登入。</p>
+                        ) : joined.map(c => (
                             <button key={c.id} onClick={() => participate(c)} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl active:bg-white/5" style={{ background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.06)' }}>
                                 {c.avatar ? <img src={c.avatar} className="h-8 w-8 rounded-full object-cover shrink-0" alt="" /> : <div className="h-8 w-8 rounded-full bg-indigo-400/40 shrink-0 flex items-center justify-center text-[12px] text-white/90">{c.name.slice(0, 1)}</div>}
                                 <span className="text-[12.5px] text-white/90 truncate">{c.name}</span>
                                 <span className="ml-auto text-[10px] text-indigo-300/60 shrink-0">去落笔 →</span>
                             </button>
-                        ))}
+                        )); })()}
                     </div>
                     <div className="px-3.5 py-2 border-t border-white/10"><p className="text-[9px] text-indigo-300/45 leading-relaxed">选中的角色会占住这一笔、调用一次 LLM——接上当前这首诗，或没有正在写的诗时起个新篇。你不落笔，但你是这片轨道正中央、那个不开口的核心。几秒后自动刷新。</p></div>
                 </div>
