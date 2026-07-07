@@ -272,7 +272,7 @@ const DateSession: React.FC<DateSessionProps> = ({
             setGalVoiceLoading(true);
             url = await translateAndSpeak(dialogueText, currentLineEmotionRef.current) || '';
             setGalVoiceLoading(false);
-            if (!url) return;
+            if (!url) { addToast('语音合成失败，请稍后重试', 'error'); return; }
             voiceCacheRef.current[cacheKey] = url;
         }
         if (!dateAudioRef.current) dateAudioRef.current = new Audio();
@@ -283,7 +283,10 @@ const DateSession: React.FC<DateSessionProps> = ({
     };
 
     // Novel/Reading mode: play a specific dialogue line (shares voiceCacheRef with GAL mode)
-    const handleNovelLinePlay = async (lineKey: string, dialogueText: string) => {
+    // voiceEmotion（[v:xxx]）跟立绘模式保持一致地传给 TTS：这样两种模式合成的音频完全相同，
+    // 且命中同一条持久缓存（ttsCache/IndexedDB）——退出见面再进来点旧台词也能从本地缓存秒取，
+    // 不必按不同的 key 重新联网合成。
+    const handleNovelLinePlay = async (lineKey: string, dialogueText: string, voiceEmotion?: string) => {
         const cachedUrl = voiceCacheRef.current[dialogueText];
         if (cachedUrl) {
             // Already have URL (from GAL or previous novel play), just play/pause
@@ -300,9 +303,9 @@ const DateSession: React.FC<DateSessionProps> = ({
             return;
         }
         setNovelVoiceLoading(prev => new Set(prev).add(lineKey));
-        const url = await translateAndSpeak(dialogueText);
+        const url = await translateAndSpeak(dialogueText, voiceEmotion);
         setNovelVoiceLoading(prev => { const n = new Set(prev); n.delete(lineKey); return n; });
-        if (!url) return;
+        if (!url) { addToast('语音合成失败，请稍后重试', 'error'); return; }
         voiceCacheRef.current[dialogueText] = url;
         if (!dateAudioRef.current) dateAudioRef.current = new Audio();
         dateAudioRef.current.src = url;
@@ -458,6 +461,29 @@ const DateSession: React.FC<DateSessionProps> = ({
         }
         setDialogueQueue(remaining);
     };
+
+    // 立绘引擎（dialogueQueue / currentText / dialogueBatch）默认只在进会话或收到新回复时解析一次。
+    // 若用户在阅读模式里编辑 / 重新生成了「最后一条 AI 回复」，messages 会更新、阅读模式即时反映，
+    // 但立绘引擎不会自动重解析 —— 于是立绘停在旧文字、旧语音，感觉「没同步」。这里监听最后一条
+    // assistant 消息的内容，变了就把当前批次重解析同步过来。首帧跳过（含 initialState 恢复的播放
+    // 位置），isTyping 时也跳过（新回复交给 handleSend / handleRerollClick 处理，避免重复解析）。
+    const lastAssistantContent = React.useMemo(() => {
+        for (let i = messages.length - 1; i >= 0; i--) {
+            if (messages[i]?.role === 'assistant') return messages[i].content || '';
+        }
+        return '';
+    }, [messages]);
+    const dialogueSyncMountRef = useRef(false);
+    useEffect(() => {
+        if (!dialogueSyncMountRef.current) { dialogueSyncMountRef.current = true; return; }
+        if (isTyping || !lastAssistantContent) return;
+        const { rest } = extractObservation(lastAssistantContent, { lenient: observeEnabled, custom: char.dateObserve?.custom });
+        const items = parseDialogue(rest, 'normal');
+        if (items.length === 0) return;
+        setDialogueBatch(items);
+        processNextDialogue(items[0], items.slice(1));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [lastAssistantContent]);
 
     const handleScreenClick = (e: React.MouseEvent) => {
         if ((e.target as HTMLElement).closest('button, input, textarea, .control-panel')) return;
@@ -870,7 +896,7 @@ const DateSession: React.FC<DateSessionProps> = ({
                                                         {/* Voice button: only for dialogue lines, not opening */}
                                                         {voiceEnabled && lineIsDialogue && !isOpeningMsg && (
                                                             <button
-                                                                onClick={(e) => { e.stopPropagation(); handleNovelLinePlay(lineKey, extractDialogueText(line)); }}
+                                                                onClick={(e) => { e.stopPropagation(); const { voiceEmotion: lineVoiceEmotion, rest: lineRest } = extractVoiceEmotionTag(line); handleNovelLinePlay(lineKey, extractDialogueText(lineRest), lineVoiceEmotion); }}
                                                                 className={`shrink-0 mt-2 w-7 h-7 rounded-full flex items-center justify-center transition-all active:scale-90 select-none ${
                                                                     novelPlayingId === lineKey
                                                                         ? (char.dateLightReading ? 'bg-emerald-100 text-emerald-600' : 'bg-emerald-500/20 text-emerald-300')
