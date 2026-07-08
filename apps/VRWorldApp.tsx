@@ -72,6 +72,7 @@ import type { CharacterProfile, UserProfile, VRWorldNovel, VRNovelAnnotation, VR
 
 // ============ chibi 形象解析（vrState.chibi → 立绘 → 头像） ============
 import { getChibi } from '../utils/vrWorld/chibi';
+import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
 
 type Tab = 'world' | 'library' | 'settings' | 'api';
 
@@ -3021,6 +3022,9 @@ const SettingsView: React.FC<{
     onEditChibi: (char: CharacterProfile) => void;
 }> = ({ characters, updateCharacter, addToast, novelCount, onReload, onRequestEnable, onEditChibi }) => {
     const [pickFor, setPickFor] = useState<CharacterProfile | null>(null);
+    // 接入列表的分组筛选（characters 由 props 传入，这里单独取 characterGroups 即可）
+    const { characterGroups } = useOS();
+    const [settingsGroupId, setSettingsGroupId] = useState<string>(GROUP_FILTER_ALL);
     const go = (room?: VRRoomId) => {
         if (!pickFor) return;
         VRScheduler.triggerNow(pickFor.id, room);
@@ -3045,7 +3049,12 @@ const SettingsView: React.FC<{
                 {novelCount === 0 && <span className="text-amber-300/80"> 书库还空着，先去「书库」上传一本。</span>}
             </p>
             {characters.length === 0 && <p className="text-[11px] text-indigo-300/50 py-4 text-center">还没有角色。</p>}
-            {characters.map(char => {
+            {/* 分组筛选（没建分组时不渲染）：深色底 */}
+            <CharacterGroupFilterBar characters={characters} groups={characterGroups} dark
+                value={settingsGroupId} onChange={setSettingsGroupId} />
+            {characters.length > 0 && filterCharactersByGroup(characters, characterGroups, settingsGroupId).length === 0 &&
+                <p className="text-[11px] text-indigo-300/50 py-4 text-center">该分组下没有角色</p>}
+            {filterCharactersByGroup(characters, characterGroups, settingsGroupId).map(char => {
                 const st = char.vrState;
                 const enabled = !!st?.enabled;
                 const interval = st?.intervalMinutes || VR_DEFAULT_INTERVAL_MIN;

@@ -35,6 +35,7 @@ import {
     HeartStraight,
 } from '@phosphor-icons/react';
 import { useMusic, type Song as MusicSong } from '../context/MusicContext';
+import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
 
 // --- Helper Components ---
 
@@ -76,7 +77,7 @@ function mkPendingItem(l: SongLine): TimelineItem { return { kind: 'pending', da
 // --- Main App ---
 
 const SongwritingApp: React.FC = () => {
-    const { closeApp, openApp, songs, addSong, updateSong, deleteSong, characters, apiConfig, addToast, userProfile } = useOS();
+    const { closeApp, openApp, songs, addSong, updateSong, deleteSong, characters, apiConfig, addToast, userProfile, characterGroups } = useOS();
     const { addLocalSong, removeLocalSong, localAlbumSongs, playSong, current: currentMusicSong, markRegenerating } = useMusic();
 
     // Navigation
@@ -89,6 +90,7 @@ const SongwritingApp: React.FC = () => {
     const [tempGenre, setTempGenre] = useState<SongGenre>('pop');
     const [tempMood, setTempMood] = useState<SongMood>('happy');
     const [tempCollaboratorId, setTempCollaboratorId] = useState('');
+    const [partnerGroupId, setPartnerGroupId] = useState(GROUP_FILTER_ALL); // 创作伙伴页的分组筛选
     const [tempCoverStyle, setTempCoverStyle] = useState(COVER_STYLES[0]?.id || 'dawn-blush');
     const [tempTemplate, setTempTemplate] = useState<string>('free');
     const [showStructureBanner, setShowStructureBanner] = useState(true);
@@ -113,6 +115,7 @@ const SongwritingApp: React.FC = () => {
     const [completionReview, setCompletionReview] = useState('');
     const [isCompleting, setIsCompleting] = useState(false);
     const [showShareModal, setShowShareModal] = useState(false);
+    const [shareGroupId, setShareGroupId] = useState(GROUP_FILTER_ALL); // 分享乐谱弹窗的分组筛选（书架/预览两处共用同一弹窗语义）
     const [shareTargetCharId, setShareTargetCharId] = useState('');
 
     // ACE-Step audio synth (preview view)
@@ -1416,7 +1419,10 @@ const SongwritingApp: React.FC = () => {
                 <Modal isOpen={showShareModal} title="分享乐谱" onClose={() => setShowShareModal(false)}>
                     <div className="space-y-2 max-h-[50vh] overflow-y-auto">
                         <p className="text-xs text-stone-500 mb-3">选择一个角色，以卡片形式把乐谱分享到聊天</p>
-                        {characters.map(c => (
+                        {/* 分组筛选（没建分组时不渲染），白底 Modal 走浅色 */}
+                        <CharacterGroupFilterBar characters={characters} groups={characterGroups}
+                            value={shareGroupId} onChange={setShareGroupId} className="mb-2" />
+                        {filterCharactersByGroup(characters, characterGroups, shareGroupId).map(c => (
                             <button key={c.id} onClick={() => handleShareToChat(c.id)} className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-stone-50 border border-stone-100 transition-colors">
                                 <img src={c.avatar} className="w-10 h-10 rounded-full object-cover" />
                                 <span className="font-medium text-sm text-stone-700">{c.name}</span>
@@ -1661,6 +1667,8 @@ const SongwritingApp: React.FC = () => {
 
     // --- Partner View (Step 2 of create flow) ---
     if (view === 'partner') {
+        // 按分组筛出的伙伴候选（筛选只影响显示，已选中的 tempCollaboratorId 不受影响）
+        const partnerChars = filterCharactersByGroup(characters, characterGroups, partnerGroupId);
         return (
             <div
                 className="h-full w-full flex flex-col font-sans relative overflow-hidden"
@@ -1694,9 +1702,12 @@ const SongwritingApp: React.FC = () => {
                 <p className="text-[11px] text-center pb-3 px-6 z-10 relative" style={{ color: MusicC.muted }}>选一个伙伴，陪你一起创作吧</p>
 
                 <div className="flex-1 overflow-y-auto px-5 pb-32 space-y-5 no-scrollbar relative z-10">
+                    {/* 分组筛选（没建分组时不渲染），浅色梦幻底 */}
+                    <CharacterGroupFilterBar characters={characters} groups={characterGroups}
+                        value={partnerGroupId} onChange={setPartnerGroupId} />
                     {/* Collaborator list */}
                     <div className="space-y-2">
-                        {characters.map(c => {
+                        {partnerChars.map(c => {
                             const active = tempCollaboratorId === c.id;
                             return (
                                 <button
@@ -1732,6 +1743,12 @@ const SongwritingApp: React.FC = () => {
                         {characters.length === 0 && (
                             <div className="rounded-2xl p-5 text-center" style={{ background: 'rgba(255,255,255,0.6)', border: `1px dashed ${MusicC.faint}80` }}>
                                 <p className="text-[12px]" style={{ color: MusicC.muted }}>还没有可选角色 — 先去创建一个</p>
+                            </div>
+                        )}
+                        {/* 有角色但当前分组筛后为空 */}
+                        {characters.length > 0 && partnerChars.length === 0 && (
+                            <div className="rounded-2xl p-5 text-center" style={{ background: 'rgba(255,255,255,0.6)', border: `1px dashed ${MusicC.faint}80` }}>
+                                <p className="text-[12px]" style={{ color: MusicC.muted }}>该分组下没有角色</p>
                             </div>
                         )}
                     </div>
@@ -2172,7 +2189,10 @@ const SongwritingApp: React.FC = () => {
                 <Modal isOpen={showShareModal} title="分享乐谱" onClose={() => setShowShareModal(false)}>
                     <div className="space-y-2 max-h-[50vh] overflow-y-auto">
                         <p className="text-xs text-stone-500 mb-3">选择一个角色，把乐谱卡片发送到聊天</p>
-                        {characters.map(c => (
+                        {/* 分组筛选（没建分组时不渲染），白底 Modal 走浅色 */}
+                        <CharacterGroupFilterBar characters={characters} groups={characterGroups}
+                            value={shareGroupId} onChange={setShareGroupId} className="mb-2" />
+                        {filterCharactersByGroup(characters, characterGroups, shareGroupId).map(c => (
                             <button key={c.id} onClick={() => handleShareToChat(c.id)} className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-stone-50 border border-stone-100 transition-colors">
                                 <img src={c.avatar} className="w-10 h-10 rounded-full object-cover" />
                                 <span className="font-medium text-sm text-stone-700">{c.name}</span>

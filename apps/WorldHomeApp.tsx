@@ -29,6 +29,7 @@ import { SIM_CHAPTER_DAYS, SIM_CHAPTER_CLOCKS } from '../utils/worldHome/chapter
 import { dmThreadsOf, groupThreadOf } from '../utils/worldHome/threads';
 import { safeFetchJson } from '../utils/safeApi';
 import { WORLD_API_KEY, WORLD_CUSTOM_STYLE_KEY } from '../utils/worldHome/localBackup';
+import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
 import type { WorldProfile, WorldEpisode, WorldHomeMode, WorldTimeMode, WorldHouse, WorldThread, WorldChatMessage, WorldNarrativeStyle, CharacterProfile, WorldCharBeat, APIConfig, ApiPreset } from '../types';
 
 /**
@@ -581,6 +582,9 @@ const WorldEditor: React.FC<{
 }> = ({ draft, characters, apiConfig, addToast, onSave, onCancel, onDelete }) => {
     const [w, setW] = useState<WorldProfile>(draft);
     const upd = (updates: Partial<WorldProfile>) => setW(prev => ({ ...prev, ...updates }));
+    // 「住进这个世界的角色」多选的分组筛选（只影响显示哪些可选项，已选成员不受影响）
+    const { characterGroups } = useOS();
+    const [memberGroupId, setMemberGroupId] = useState<string>(GROUP_FILTER_ALL);
     const members = useMemo(() => w.memberIds.map(id => characters.find(c => c.id === id)).filter(Boolean) as CharacterProfile[], [w.memberIds, characters]);
 
     // AI roll NPC
@@ -810,8 +814,11 @@ const WorldEditor: React.FC<{
 
             <div className={sectionCls}>
                 <div className={labelCls}>住进这个世界的角色（同一世界观的放一起）</div>
+                {/* 分组筛选只影响下方显示哪些可选项，已选成员不会因为切组被移除 */}
+                <CharacterGroupFilterBar characters={characters} groups={characterGroups}
+                    value={memberGroupId} onChange={setMemberGroupId} />
                 <div className="flex flex-wrap gap-2">
-                    {characters.map(c => (
+                    {filterCharactersByGroup(characters, characterGroups, memberGroupId).map(c => (
                         <button key={c.id} onClick={() => toggleMember(c.id)}
                             className={`flex items-center gap-1.5 pl-1 pr-2.5 py-1 rounded-full border transition-all ${w.memberIds.includes(c.id) ? 'bg-stone-900 border-stone-900 text-white shadow-md' : 'bg-white border-stone-200 text-stone-700'}`}>
                             <img src={c.avatar} className="w-6 h-6 rounded-full object-cover" alt="" />
@@ -820,6 +827,8 @@ const WorldEditor: React.FC<{
                     ))}
                 </div>
                 {characters.length === 0 && <div className="text-[11px] text-stone-400">还没有角色，先去「神经链接」创建</div>}
+                {characters.length > 0 && filterCharactersByGroup(characters, characterGroups, memberGroupId).length === 0 &&
+                    <div className="text-[11px] text-stone-400">该分组下没有角色</div>}
             </div>
 
             <div className={sectionCls}>

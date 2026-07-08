@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { ApiPreset, APIConfig, CharacterProfile } from '../../types';
 import { CheckSquare, FloppyDisk, Gear, Square, X } from '@phosphor-icons/react';
+import { useOS } from '../../context/OSContext';
+import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../../components/character/CharacterGroupFilter';
 
 type LifeSimApiDraft = Pick<APIConfig, 'baseUrl' | 'apiKey' | 'model'>;
 
@@ -36,6 +38,9 @@ const LifeSimSettingsPanel: React.FC<{
     const [useIndependentApi, setUseIndependentApi] = useState(useIndependentApiConfig);
     const [draft, setDraft] = useState<LifeSimApiDraft>(EMPTY_API_DRAFT);
     const [isSaving, setIsSaving] = useState(false);
+    // 参与角色多选的分组筛选（characters 由 props 传入，这里单独取 characterGroups）
+    const { characterGroups } = useOS();
+    const [charGroupId, setCharGroupId] = useState<string>(GROUP_FILTER_ALL);
 
     useEffect(() => {
         setUseIndependentApi(useIndependentApiConfig);
@@ -135,8 +140,11 @@ const LifeSimSettingsPanel: React.FC<{
                         </button>
                     </div>
 
+                    {/* 分组筛选（没建分组时不渲染）：只影响显示哪些可选项，已勾选参与者不受影响 */}
+                    <CharacterGroupFilterBar characters={characters} groups={characterGroups}
+                        value={charGroupId} onChange={setCharGroupId} className="mb-2" />
                     <div className="space-y-1.5">
-                        {characters.map(char => {
+                        {filterCharactersByGroup(characters, characterGroups, charGroupId).map(char => {
                             const active = selectedCharIds.includes(char.id);
                             return (
                                 <button

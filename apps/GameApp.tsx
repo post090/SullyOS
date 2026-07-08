@@ -7,6 +7,7 @@ import { ContextBuilder } from '../utils/context';
 import { extractContent, extractJson } from '../utils/safeApi';
 import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
 import Modal from '../components/os/Modal';
+import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
 import { Planet, RocketLaunch, Lightning, LockSimple, DiceFive, Toolbox, FloppyDisk, ArrowsClockwise, DoorOpen } from '@phosphor-icons/react';
 
 // --- Themes Configuration (Enhanced) ---
@@ -195,7 +196,7 @@ const GameMarkdown: React.FC<{ content: string, theme: any, customStyle?: { font
 };
 
 const GameApp: React.FC = () => {
-    const { closeApp, characters, userProfile, apiConfig, addToast, updateCharacter } = useOS();
+    const { closeApp, characters, userProfile, apiConfig, addToast, updateCharacter, characterGroups } = useOS();
     const [view, setView] = useState<'lobby' | 'create' | 'play'>('lobby');
     const [games, setGames] = useState<GameSession[]>([]);
     const [activeGame, setActiveGame] = useState<GameSession | null>(null);
@@ -206,6 +207,7 @@ const GameApp: React.FC = () => {
     const [newWorld, setNewWorld] = useState('');
     const [newTheme, setNewTheme] = useState<GameTheme>('fantasy');
     const [selectedPlayers, setSelectedPlayers] = useState<Set<string>>(new Set());
+    const [playerGroupId, setPlayerGroupId] = useState(GROUP_FILTER_ALL); // 邀请队友的分组筛选
     const [isCreating, setIsCreating] = useState(false);
     // 世界观 AI 辅助生成
     const [worldStyle, setWorldStyle] = useState<string>('高奇幻');
@@ -1303,6 +1305,7 @@ Output: A concise summary in Chinese (e.g. "探索了地牢并击败了史莱姆
             modern: { label: '现代', en: 'MODERN', gradient: 'from-sky-500 to-slate-700' },
         };
         const canStart = newTitle.trim() && newWorld.trim() && selectedPlayers.size > 0;
+        const playerChars = filterCharactersByGroup(characters, characterGroups, playerGroupId); // 邀请队友：按分组筛选后的候选
         return (
             <div className="h-full w-full bg-[#0a0a0a] text-white flex flex-col font-sans relative overflow-hidden">
                 {/* Ambient Background */}
@@ -1445,8 +1448,14 @@ Output: A concise summary in Chinese (e.g. "探索了地牢并击败了史莱姆
                         {characters.length === 0 ? (
                             <p className="text-xs text-white/30 py-4 text-center bg-white/5 rounded-xl border border-white/10">还没有角色，先去创建角色吧</p>
                         ) : (
+                            <>
+                            {/* 分组筛选（没建分组时不渲染）：只影响可选项的显示，不影响已勾选队友 */}
+                            <CharacterGroupFilterBar characters={characters} groups={characterGroups} dark value={playerGroupId} onChange={setPlayerGroupId} className="mb-2.5" />
+                            {playerChars.length === 0 ? (
+                                <p className="text-xs text-white/30 py-4 text-center bg-white/5 rounded-xl border border-white/10">该分组下没有角色</p>
+                            ) : (
                             <div className="grid grid-cols-4 gap-3">
-                                {characters.map(c => {
+                                {playerChars.map(c => {
                                     const sel = selectedPlayers.has(c.id);
                                     return (
                                         <div key={c.id} onClick={() => { const s = new Set(selectedPlayers); if(s.has(c.id)) s.delete(c.id); else s.add(c.id); setSelectedPlayers(s); }} className={`flex flex-col items-center p-2 rounded-2xl border cursor-pointer transition-all active:scale-95 ${sel ? 'border-purple-400 bg-purple-500/15' : 'border-white/5 hover:bg-white/5'}`}>
@@ -1459,6 +1468,8 @@ Output: A concise summary in Chinese (e.g. "探索了地牢并击败了史莱姆
                                     );
                                 })}
                             </div>
+                            )}
+                            </>
                         )}
                     </div>
                 </div>

@@ -11,6 +11,7 @@ import { processGroupNewMessages, deleteGroupMemoriesByGroupId } from '../utils/
 import { processImage } from '../utils/file';
 import { stickerNameFromUrl } from '../utils/messageFormat';
 import { DEFAULT_ARCHIVE_PROMPTS } from '../components/chat/ChatConstants';
+import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
 import { UsersThree } from '@phosphor-icons/react';
 
 const TWEMOJI_BASE = 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72';
@@ -177,7 +178,7 @@ const GroupMessageItem = React.memo(({
 // --- Main Component ---
 
 const GroupChat: React.FC = () => {
-    const { closeApp, groups, createGroup, updateGroup, deleteGroup, characters, updateCharacter, apiConfig, addToast, userProfile, virtualTime } = useOS();
+    const { closeApp, groups, createGroup, updateGroup, deleteGroup, characters, updateCharacter, apiConfig, addToast, userProfile, virtualTime, characterGroups } = useOS();
     const [view, setView] = useState<'list' | 'chat'>('list');
     const [activeGroup, setActiveGroup] = useState<GroupProfile | null>(null);
     const [messages, setMessages] = useState<Message[]>([]);
@@ -228,6 +229,7 @@ const GroupChat: React.FC = () => {
     const [tempGroupName, setTempGroupName] = useState('');
     const [tempPrivateContextCap, setTempPrivateContextCap] = useState<number>(80);
     const [selectedMembers, setSelectedMembers] = useState<Set<string>>(new Set());
+    const [memberGroupId, setMemberGroupId] = useState(GROUP_FILTER_ALL); // 建群选成员的分组筛选
     const [transferAmount, setTransferAmount] = useState('');
     
     // Refs
@@ -1105,7 +1107,7 @@ ${attachedImagesNote}
                     </button>
                     <span className="font-medium text-slate-700 text-lg tracking-wide pl-2">群聊列表</span>
                     <div className="flex-1"></div>
-                    <button onClick={() => { setModalType('create'); setSelectedMembers(new Set()); setTempGroupName(''); }} className="p-2 -mr-2 text-violet-500 bg-violet-50 hover:bg-violet-100 rounded-full transition-colors">
+                    <button onClick={() => { setModalType('create'); setSelectedMembers(new Set()); setTempGroupName(''); setMemberGroupId(GROUP_FILTER_ALL); }} className="p-2 -mr-2 text-violet-500 bg-violet-50 hover:bg-violet-100 rounded-full transition-colors">
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
                     </button>
                     </div>
@@ -1150,8 +1152,10 @@ ${attachedImagesNote}
                         <input value={tempGroupName} onChange={e => setTempGroupName(e.target.value)} placeholder="群聊名称" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-violet-500/20 transition-all" />
                         <div>
                             <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 block">选择成员</label>
+                            {/* 分组筛选（没建分组时不渲染）：只影响可选项的显示，不影响已勾选成员 */}
+                            <CharacterGroupFilterBar characters={characters} groups={characterGroups} value={memberGroupId} onChange={setMemberGroupId} className="mb-2" />
                             <div className="grid grid-cols-4 gap-2 max-h-48 overflow-y-auto pr-1">
-                                {characters.map(c => (
+                                {filterCharactersByGroup(characters, characterGroups, memberGroupId).map(c => (
                                     <div key={c.id} onClick={() => toggleMemberSelection(c.id)} className={`flex flex-col items-center gap-1 p-2 rounded-xl border transition-all cursor-pointer ${selectedMembers.has(c.id) ? 'border-violet-500 bg-violet-50 ring-1 ring-violet-500' : 'border-slate-100 bg-white hover:border-slate-300'}`}>
                                         <img src={c.avatar} className="w-10 h-10 rounded-full object-cover" />
                                         <span className="text-[9px] text-slate-600 truncate w-full text-center font-medium">{c.name}</span>

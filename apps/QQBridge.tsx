@@ -4,6 +4,7 @@ import { useChatAI } from '../hooks/useChatAI';
 import { DB } from '../utils/db';
 import { Message } from '../types';
 import { Plugs, Power, Trash, Plug } from '@phosphor-icons/react';
+import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
 
 const LS = {
   wsUrl: 'qqBridge:wsUrl',
@@ -41,6 +42,7 @@ const formatTs = (ts: number) => {
 const QQBridge: React.FC = () => {
   const {
     characters,
+    characterGroups,
     apiConfig,
     userProfile,
     groups,
@@ -49,6 +51,7 @@ const QQBridge: React.FC = () => {
     updateCharacter,
     closeApp,
   } = useOS();
+  const [pickerGroupId, setPickerGroupId] = useState<string>(GROUP_FILTER_ALL); // 回复角色的分组筛选
 
   const [wsUrl, setWsUrl] = useState(() => localStorage.getItem(LS.wsUrl) || 'ws://127.0.0.1:3001');
   const [token, setToken] = useState(() => localStorage.getItem(LS.token) || '');
@@ -360,8 +363,12 @@ const QQBridge: React.FC = () => {
           {characters.length === 0 ? (
             <div className="text-xs text-slate-500">还没有角色，请先去「神经链接」创建一个。</div>
           ) : (
+            <>
+            {/* 分组筛选（没建分组时不渲染）：只影响显示，已选角色不受影响 */}
+            <CharacterGroupFilterBar characters={characters} groups={characterGroups}
+              value={pickerGroupId} onChange={setPickerGroupId} className="mb-2" />
             <div className="grid grid-cols-2 gap-2">
-              {characters.map(c => {
+              {filterCharactersByGroup(characters, characterGroups, pickerGroupId).map(c => {
                 const selected = c.id === charId;
                 return (
                   <button
@@ -383,6 +390,7 @@ const QQBridge: React.FC = () => {
                 );
               })}
             </div>
+            </>
           )}
         </section>
 

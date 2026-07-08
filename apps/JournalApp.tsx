@@ -11,6 +11,7 @@ import { normalizeMessageContent } from '../utils/messageFormat';
 import { injectMemoryPalace, ingestDiaryToPalace, type DiaryIngestResult } from '../utils/memoryPalace/pipeline';
 import { getRoomLabel } from '../utils/memoryPalace/types';
 import { Sparkle, Archive } from '@phosphor-icons/react';
+import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
 
 const INTRO_SEEN_KEY = 'journal_app_intro_seen_v4';
 
@@ -45,10 +46,11 @@ const getLocalDateStr = () => {
 };
 
 const JournalApp: React.FC = () => {
-    const { closeApp, characters, activeCharacterId, apiConfig, addToast, userProfile, updateCharacter, memoryPalaceConfig } = useOS();
+    const { closeApp, characters, activeCharacterId, apiConfig, addToast, userProfile, updateCharacter, memoryPalaceConfig, characterGroups } = useOS();
 
     const [mode, setMode] = useState<'select' | 'calendar' | 'write'>('select');
     const [selectedChar, setSelectedChar] = useState<CharacterProfile | null>(null);
+    const [journalGroupId, setJournalGroupId] = useState<string>(GROUP_FILTER_ALL); // 选日记本页的分组筛选
     const [diaries, setDiaries] = useState<DiaryEntry[]>([]);
     const [currentEntry, setCurrentEntry] = useState<DiaryEntry | null>(null);
     const [selectedDate, setSelectedDate] = useState<string>(getLocalDateStr());
@@ -889,8 +891,11 @@ ${charPart}
                     </div>
                 </div>
                 
+                {/* 分组筛选（没建分组时不渲染），浅色米黄底 */}
+                <CharacterGroupFilterBar characters={characters} groups={characterGroups}
+                    value={journalGroupId} onChange={setJournalGroupId} className="px-6 pt-4 shrink-0" />
                 <div className="p-6 grid grid-cols-2 gap-5 overflow-y-auto pb-20 no-scrollbar">
-                    {characters.map(c => (
+                    {filterCharactersByGroup(characters, characterGroups, journalGroupId).map(c => (
                         <div key={c.id} onClick={() => handleCharSelect(c)} className="aspect-[3/4] bg-white rounded-r-2xl rounded-l-md border-l-4 border-l-amber-800 shadow-[2px_4px_12px_rgba(0,0,0,0.08)] p-4 flex flex-col items-center justify-center gap-3 cursor-pointer active:scale-95 transition-all relative overflow-hidden group">
                             <div className="absolute inset-y-0 left-0 w-2 bg-gradient-to-r from-black/10 to-transparent"></div>
                             <div className="w-16 h-16 rounded-full p-[2px] border border-amber-100 bg-amber-50">

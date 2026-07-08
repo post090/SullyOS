@@ -7,10 +7,11 @@ import ConfirmDialog from '../components/os/ConfirmDialog';
 import { processImage } from '../utils/file';
 import { NOVEL_THEMES, analyzeWriterPersonaSimple } from '../utils/novelUtils';
 import NovelWriter from '../components/novel/NovelWriter';
+import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
 import { Robot, MaskHappy, PenNib, Books, FolderOpen } from '@phosphor-icons/react';
 
 const NovelApp: React.FC = () => {
-    const { closeApp, novels, addNovel, updateNovel, deleteNovel, characters, updateCharacter, apiConfig, addToast, userProfile, worldbooks } = useOS();
+    const { closeApp, novels, addNovel, updateNovel, deleteNovel, characters, updateCharacter, apiConfig, addToast, userProfile, worldbooks, characterGroups } = useOS();
     
     // Navigation State
     const [view, setView] = useState<'shelf' | 'create' | 'write' | 'settings' | 'library'>('shelf');
@@ -23,6 +24,7 @@ const NovelApp: React.FC = () => {
     const [tempSummary, setTempSummary] = useState('');
     const [tempWorld, setTempWorld] = useState('');
     const [selectedCollaborators, setSelectedCollaborators] = useState<Set<string>>(new Set());
+    const [collabGroupId, setCollabGroupId] = useState(GROUP_FILTER_ALL); // 共创者选择的分组筛选
     const [tempProtagonists, setTempProtagonists] = useState<NovelProtagonist[]>([]);
     
     // Cover Image State
@@ -44,6 +46,7 @@ const NovelApp: React.FC = () => {
     // Persona View Modal State
     const [showPersonaModal, setShowPersonaModal] = useState(false);
     const [libraryPersonaChar, setLibraryPersonaChar] = useState<CharacterProfile | null>(null);
+    const [libraryGroupId, setLibraryGroupId] = useState(GROUP_FILTER_ALL); // 角色库的分组筛选
 
     // Dialog
     const [confirmDialog, setConfirmDialog] = useState<{ isOpen: boolean; title: string; message: string; variant: 'danger' | 'warning' | 'info'; confirmText?: string; onConfirm: () => void; } | null>(null);
@@ -211,8 +214,10 @@ const NovelApp: React.FC = () => {
                 <div className="flex-1 overflow-y-auto p-6 space-y-8 no-scrollbar">
                     <section>
                         <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2"><Robot size={14} /> 系统角色 (AI Collaborators)</h3>
+                        {/* 分组筛选（没建分组时不渲染） */}
+                        <CharacterGroupFilterBar characters={characters} groups={characterGroups} value={libraryGroupId} onChange={setLibraryGroupId} className="mb-4" />
                         <div className="grid grid-cols-2 gap-4">
-                            {characters.map(c => (
+                            {filterCharactersByGroup(characters, characterGroups, libraryGroupId).map(c => (
                                 <div key={c.id} onClick={() => { setLibraryPersonaChar(c); setShowPersonaModal(true); }} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex flex-col items-center gap-3 cursor-pointer hover:shadow-md transition-all active:scale-95">
                                     <img src={c.avatar} className="w-16 h-16 rounded-full object-cover border-2 border-slate-50" />
                                     <div className="text-center"><div className="font-bold text-slate-700 text-sm">{c.name}</div><div className="text-[10px] text-slate-400 mt-1 px-2 py-0.5 bg-slate-50 rounded-full">共创者</div></div>
@@ -310,7 +315,9 @@ const NovelApp: React.FC = () => {
                     </section>
                     <section className="space-y-4">
                         <label className="text-xs font-bold text-slate-400 uppercase block">共创者</label>
-                        <div className="flex gap-3 overflow-x-auto pb-2 no-scrollbar">{characters.map(c => (<div key={c.id} onClick={() => { const s = new Set(selectedCollaborators); if(s.has(c.id)) s.delete(c.id); else s.add(c.id); setSelectedCollaborators(s); }} className={`flex flex-col items-center gap-2 cursor-pointer transition-opacity ${selectedCollaborators.has(c.id) ? 'opacity-100' : 'opacity-50 grayscale'}`}><img src={c.avatar} className="w-12 h-12 rounded-full object-cover shadow-sm" /><span className="text-[10px] font-bold text-slate-600">{c.name}</span></div>))}</div>
+                        {/* 分组筛选（没建分组时不渲染）：只影响可选项的显示，不影响已勾选共创者 */}
+                        <CharacterGroupFilterBar characters={characters} groups={characterGroups} value={collabGroupId} onChange={setCollabGroupId} />
+                        <div className="flex gap-3 overflow-x-auto pb-2 no-scrollbar">{filterCharactersByGroup(characters, characterGroups, collabGroupId).map(c => (<div key={c.id} onClick={() => { const s = new Set(selectedCollaborators); if(s.has(c.id)) s.delete(c.id); else s.add(c.id); setSelectedCollaborators(s); }} className={`flex flex-col items-center gap-2 cursor-pointer transition-opacity ${selectedCollaborators.has(c.id) ? 'opacity-100' : 'opacity-50 grayscale'}`}><img src={c.avatar} className="w-12 h-12 rounded-full object-cover shadow-sm" /><span className="text-[10px] font-bold text-slate-600">{c.name}</span></div>))}</div>
                     </section>
                     <section className="space-y-4">
                         <div className="flex justify-between items-center"><label className="text-xs font-bold text-slate-400 uppercase">剧中人</label><div className="flex gap-2"><button onClick={() => setIsProtoImportOpen(true)} className="text-[10px] bg-indigo-50 text-indigo-600 px-2 py-1 rounded font-bold hover:bg-indigo-100 border border-indigo-100 flex items-center gap-1"><FolderOpen size={12} /> 导入</button><button onClick={() => openProtagonistEdit()} className="text-[10px] bg-slate-100 px-2 py-1 rounded text-slate-600 hover:bg-slate-200 transition-colors">+ 添加</button></div></div>

@@ -7,6 +7,7 @@ import { XhsFreeRoamEngine, FreeRoamCallbacks } from '../utils/xhsFreeRoam';
 import { XhsMcpClient } from '../utils/xhsMcpClient';
 import ConfirmDialog from '../components/os/ConfirmDialog';
 import { Book, PencilSimple, MagnifyingGlass, DeviceMobileCamera, ChatCircleDots, PushPin, Moon, House } from '@phosphor-icons/react';
+import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
 
 const TwemojiImg: React.FC<{ code: string; alt?: string; className?: string }> = ({ code, alt, className = 'w-4 h-4 inline-block' }) => (
   <img src={`https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/${code}.png`} alt={alt || ''} className={className} draggable={false} />
@@ -42,11 +43,12 @@ const RESULT_COLORS: Record<string, string> = {
 };
 
 const XhsFreeRoamApp: React.FC = () => {
-    const { closeApp, addToast, characters, activeCharacterId, apiConfig, realtimeConfig, userProfile } = useOS();
+    const { closeApp, addToast, characters, activeCharacterId, apiConfig, realtimeConfig, userProfile, characterGroups } = useOS();
 
     // Character selector — default to activeCharacterId, but user can switch
     const [selectedCharId, setSelectedCharId] = useState<string>(activeCharacterId || characters[0]?.id || '');
     const [showCharPicker, setShowCharPicker] = useState(false);
+    const [pickerGroupId, setPickerGroupId] = useState<string>(GROUP_FILTER_ALL); // 角色下拉选择器的分组筛选（须在组件顶层，勿移入 renderCharPicker）
 
     const char = characters.find(c => c.id === selectedCharId) || null;
 
@@ -173,9 +175,12 @@ const XhsFreeRoamApp: React.FC = () => {
                 <div className="absolute top-14 left-4 right-4 bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden animate-fade-in" onClick={e => e.stopPropagation()}>
                     <div className="p-3 border-b border-slate-50">
                         <p className="text-xs font-bold text-slate-400">选择角色</p>
+                        {/* 分组筛选（没建分组时不渲染），白底下拉走浅色 */}
+                        <CharacterGroupFilterBar characters={characters} groups={characterGroups}
+                            value={pickerGroupId} onChange={setPickerGroupId} className="mt-2" />
                     </div>
                     <div className="max-h-60 overflow-y-auto">
-                        {characters.map(c => (
+                        {filterCharactersByGroup(characters, characterGroups, pickerGroupId).map(c => (
                             <button
                                 key={c.id}
                                 onClick={() => { setSelectedCharId(c.id); setShowCharPicker(false); }}

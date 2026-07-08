@@ -7,6 +7,7 @@ import { ContextBuilder } from '../utils/context';
 import { processImage } from '../utils/file';
 import Modal from '../components/os/Modal';
 import { safeResponseJson } from '../utils/safeApi';
+import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
 import { House, User, Package, Warning } from '@phosphor-icons/react';
 
 const TWEMOJI_BASE = 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72';
@@ -133,7 +134,7 @@ const Icons = {
 // --- Main App ---
 
 const SocialApp: React.FC = () => {
-    const { closeApp, characters, updateCharacter, apiConfig, addToast, userProfile, groups } = useOS();
+    const { closeApp, characters, updateCharacter, apiConfig, addToast, userProfile, groups, characterGroups } = useOS();
     const [feed, setFeed] = useState<SocialPost[]>([]);
     // Modes: 'home' (Feed) | 'me' (Profile) | 'create' (Modal Overlay)
     const [activeTab, setActiveTab] = useState<'home' | 'me'>('home');
@@ -155,9 +156,11 @@ const SocialApp: React.FC = () => {
     // Settings / Handle Management
     const [showSettings, setShowSettings] = useState(false);
     const [characterHandles, setCharacterHandles] = useState<Record<string, SubAccount[]>>({});
+    const [identityGroupId, setIdentityGroupId] = useState(GROUP_FILTER_ALL); // 身份管理弹窗的角色分组筛选
 
     // Sharing State
     const [showShareModal, setShowShareModal] = useState(false);
+    const [shareGroupId, setShareGroupId] = useState(GROUP_FILTER_ALL); // 分享帖子弹窗的角色分组筛选
 
     // Profile Sub-tab
     const [profileTab, setProfileTab] = useState<'notes' | 'collects'>('notes');
@@ -891,7 +894,9 @@ ${identityMap}
                         <p className="text-xs text-slate-400 bg-slate-50 p-2 rounded-lg">
                             为角色添加“马甲”(Sub-Accounts)。AI 发帖时会根据内容选择合适的身份。
                         </p>
-                        {characters.map(c => (
+                        {/* 分组筛选（没建分组时不渲染） */}
+                        <CharacterGroupFilterBar characters={characters} groups={characterGroups} value={identityGroupId} onChange={setIdentityGroupId} className="!mt-3 -mx-1 px-1" />
+                        {filterCharactersByGroup(characters, characterGroups, identityGroupId).map(c => (
                             <div key={c.id} className="space-y-3 pb-4 border-b border-slate-50">
                                 <div className="flex items-center gap-2">
                                     <img src={c.avatar} className="w-6 h-6 rounded-full object-cover" />
@@ -945,8 +950,10 @@ ${identityMap}
             </Modal>
 
             <Modal isOpen={showShareModal} title="分享帖子" onClose={() => setShowShareModal(false)}>
+                {/* 分组筛选（没建分组时不渲染） */}
+                <CharacterGroupFilterBar characters={characters} groups={characterGroups} value={shareGroupId} onChange={setShareGroupId} className="mb-1 px-2" />
                 <div className="grid grid-cols-4 gap-4 p-2">
-                    {characters.map(c => (
+                    {filterCharactersByGroup(characters, characterGroups, shareGroupId).map(c => (
                         <button key={c.id} onClick={() => handleShare(c.id, false)} className="flex flex-col items-center gap-2 group">
                             <img src={c.avatar} className="w-12 h-12 rounded-full object-cover border border-slate-100 group-active:scale-90 transition-transform" />
                             <span className="text-[10px] text-slate-600 truncate w-full text-center">{c.name}</span>

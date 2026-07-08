@@ -8,6 +8,7 @@ import Modal from '../components/os/Modal';
 import { safeResponseJson } from '../utils/safeApi';
 import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
 import { Notepad, Check, X, CheckCircle, XCircle, Hand } from '@phosphor-icons/react';
+import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
 
 type PdfJsLike = {
     getDocument: (src: { data: ArrayBuffer }) => { promise: Promise<any> };
@@ -321,11 +322,12 @@ const BlackboardRenderer: React.FC<{ text: string, isTyping?: boolean, katexRend
 };
 
 const StudyApp: React.FC = () => {
-    const { closeApp, characters, activeCharacterId, apiConfig, addToast, userProfile, updateCharacter } = useOS();
+    const { closeApp, characters, activeCharacterId, apiConfig, addToast, userProfile, updateCharacter, characterGroups } = useOS();
     const [mode, setMode] = useState<'bookshelf' | 'classroom' | 'quiz' | 'quiz_review' | 'practice_book'>('bookshelf');
     const [courses, setCourses] = useState<StudyCourse[]>([]);
     const [activeCourse, setActiveCourse] = useState<StudyCourse | null>(null);
     const [selectedChar, setSelectedChar] = useState<CharacterProfile | null>(null);
+    const [tutorGroupId, setTutorGroupId] = useState<string>(GROUP_FILTER_ALL); // 书架页「当前助教」的分组筛选
     
     // Classroom State
     const [classroomState, setClassroomState] = useState<'idle' | 'teaching' | 'q_and_a' | 'finished'>('idle');
@@ -1609,8 +1611,11 @@ Answer in character. Be helpful and clear. If they're confused about a concept, 
                     {/* Character Selector */}
                     <div className="mb-8">
                         <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">当前助教</h3>
+                        {/* 分组筛选（没建分组时不渲染），横向头像列表太挤，单独放一行 */}
+                        <CharacterGroupFilterBar characters={characters} groups={characterGroups}
+                            value={tutorGroupId} onChange={setTutorGroupId} className="mb-3" />
                         <div className="flex gap-4 overflow-x-auto pb-2 no-scrollbar">
-                            {characters.map(c => (
+                            {filterCharactersByGroup(characters, characterGroups, tutorGroupId).map(c => (
                                 <div key={c.id} onClick={() => setSelectedChar(c)} className={`flex flex-col items-center gap-2 cursor-pointer transition-opacity ${selectedChar?.id === c.id ? 'opacity-100' : 'opacity-50'}`}>
                                     <div className={`w-14 h-14 rounded-full p-[2px] ${selectedChar?.id === c.id ? 'border-2 border-emerald-500' : 'border border-slate-200'}`}>
                                         <img src={c.avatar} className="w-full h-full rounded-full object-cover" />
