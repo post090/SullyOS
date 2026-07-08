@@ -34,12 +34,14 @@ import { sortCharacterGroups, GROUP_FILTER_UNGROUPED } from '../components/chara
 /** 尖顶六边形（顶栏功能钮用） */
 const HEX_CLIP = 'polygon(50% 0%, 100% 26%, 100% 74%, 50% 100%, 0% 74%, 0% 26%)';
 
-/** 背景星光（固定坐标，避免重渲染时抖动） */
-const LINK_SPARKLES: { top: string; left: string; s: number; o: number }[] = [
-    { top: '5%', left: '6%', s: 13, o: 0.85 }, { top: '11%', left: '86%', s: 9, o: 0.6 },
-    { top: '22%', left: '3%', s: 8, o: 0.5 }, { top: '30%', left: '92%', s: 12, o: 0.7 },
-    { top: '46%', left: '7%', s: 9, o: 0.45 }, { top: '55%', left: '88%', s: 8, o: 0.55 },
-    { top: '68%', left: '4%', s: 11, o: 0.5 }, { top: '78%', left: '91%', s: 9, o: 0.6 },
+/** 背景星光（固定坐标，避免重渲染时抖动）。
+ *  twinkle=true 的才做呼吸动画——全员无限 pulse 会让低端机每帧重绘背景，
+ *  只挑 4 颗动、其余静止，观感几乎一样但省掉大半持续重绘。 */
+const LINK_SPARKLES: { top: string; left: string; s: number; o: number; twinkle?: boolean }[] = [
+    { top: '5%', left: '6%', s: 13, o: 0.85, twinkle: true }, { top: '11%', left: '86%', s: 9, o: 0.6 },
+    { top: '22%', left: '3%', s: 8, o: 0.5 }, { top: '30%', left: '92%', s: 12, o: 0.7, twinkle: true },
+    { top: '46%', left: '7%', s: 9, o: 0.45 }, { top: '55%', left: '88%', s: 8, o: 0.55, twinkle: true },
+    { top: '68%', left: '4%', s: 11, o: 0.5 }, { top: '78%', left: '91%', s: 9, o: 0.6, twinkle: true },
     { top: '90%', left: '10%', s: 8, o: 0.45 }, { top: '17%', left: '46%', s: 7, o: 0.35 },
 ];
 
@@ -72,10 +74,10 @@ const CharacterCard: React.FC<{
 }> = ({ char, active, onClick, onDelete }) => (
     <div
         onClick={onClick}
-        className={`relative p-4 rounded-[26px] border transition-all duration-300 cursor-pointer group shrink-0 overflow-hidden hover:scale-[1.01] ${
+        className={`relative p-4 rounded-[26px] border transition-transform duration-200 cursor-pointer group shrink-0 overflow-hidden hover:scale-[1.01] ${
             active
-                ? 'border-pink-200/90 shadow-[0_8px_24px_rgba(244,163,202,0.30)]'
-                : 'border-white/70 shadow-[0_6px_18px_rgba(140,120,200,0.14)]'
+                ? 'border-pink-200/90 shadow-[0_5px_14px_rgba(244,163,202,0.25)]'
+                : 'border-white/70 shadow-[0_4px_10px_rgba(140,120,200,0.12)]'
         }`}
         style={{
             background: active
@@ -1056,14 +1058,16 @@ ${isInitialGeneration ? `
        {view === 'list' ? (
            <div className="flex flex-col h-full animate-fade-in relative overflow-hidden"
                 style={{ background: 'linear-gradient(160deg, #efeaf9 0%, #e6def5 45%, #ddd3f0 100%)' }}>
-               {/* 氛围装饰层：柔光 + 星点 + 蝶影，纯装饰不挡点击 */}
-               <div className="absolute inset-0 pointer-events-none overflow-hidden">
+               {/* 氛围装饰层：柔光 + 星点 + 蝶影，纯装饰不挡点击。
+                   translateZ(0) 把整层提成独立合成层，滚动列表时这层不参与重绘 */}
+               <div className="absolute inset-0 pointer-events-none overflow-hidden" style={{ transform: 'translateZ(0)' }}>
                    <div className="absolute -top-24 -left-20 w-72 h-72 rounded-full" style={{ background: 'radial-gradient(circle, rgba(255,255,255,0.6), transparent 70%)' }} />
                    <div className="absolute top-1/3 -right-16 w-56 h-56 rounded-full" style={{ background: 'radial-gradient(circle, rgba(196,181,253,0.35), transparent 70%)' }} />
                    <div className="absolute bottom-0 -left-10 w-64 h-64 rounded-full" style={{ background: 'radial-gradient(circle, rgba(244,214,237,0.4), transparent 70%)' }} />
                    {LINK_SPARKLES.map((p, i) => (
-                       <span key={i} className="absolute text-white animate-pulse select-none"
-                             style={{ top: p.top, left: p.left, fontSize: p.s, opacity: p.o, animationDelay: `${i * 0.6}s`, textShadow: '0 0 8px rgba(255,255,255,0.9)' }}>✦</span>
+                       <span key={i} className={`absolute text-white select-none ${p.twinkle ? 'animate-pulse' : ''}`}
+                             style={{ top: p.top, left: p.left, fontSize: p.s, opacity: p.o, textShadow: '0 0 8px rgba(255,255,255,0.9)',
+                                      ...(p.twinkle ? { animationDelay: `${i * 0.6}s`, willChange: 'opacity' } : {}) }}>✦</span>
                    ))}
                    <span className="absolute top-[3%] left-[30%] text-2xl select-none" style={{ filter: 'grayscale(1) brightness(1.9)', opacity: 0.35, transform: 'rotate(-18deg)' }}>🦋</span>
                    <span className="absolute top-[58%] right-[6%] text-lg select-none" style={{ filter: 'grayscale(1) brightness(1.9)', opacity: 0.22, transform: 'rotate(14deg)' }}>🦋</span>
@@ -1120,10 +1124,11 @@ ${isInitialGeneration ? `
                                        const expanded = expandedGroups.includes(section.id);
                                        return (
                                            <div key={section.id} className="shrink-0">
-                                               {/* 饰带式分组条：斜切角玻璃条 + 菱形闪光 + 数量胶囊（clip-path 会裁掉阴影，故用外层 drop-shadow） */}
-                                               <button onClick={() => toggleGroupExpanded(section.id)} className="relative w-full h-11 flex items-center gap-2.5 px-6 text-left active:scale-[0.99] transition-transform"
-                                                       style={{ filter: 'drop-shadow(0 3px 8px rgba(130,110,190,0.16))' }}>
-                                                   <span className="absolute inset-0" style={{ clipPath: 'polygon(16px 0, calc(100% - 16px) 0, 100% 100%, 0 100%)', background: 'linear-gradient(180deg, rgba(255,255,255,0.94), rgba(255,255,255,0.62))' }} />
+                                               {/* 饰带式分组条：斜切角玻璃条 + 菱形闪光 + 数量胶囊。
+                                                   不用 filter:drop-shadow 描边框阴影——filter 要走离屏渲染，滚动时每条饰带
+                                                   都重算会卡；改用裁剪面内部的 inset 阴影压出底边层次，观感接近、开销可忽略 */}
+                                               <button onClick={() => toggleGroupExpanded(section.id)} className="relative w-full h-11 flex items-center gap-2.5 px-6 text-left active:scale-[0.99] transition-transform">
+                                                   <span className="absolute inset-0" style={{ clipPath: 'polygon(16px 0, calc(100% - 16px) 0, 100% 100%, 0 100%)', background: 'linear-gradient(180deg, rgba(255,255,255,0.94), rgba(255,255,255,0.62))', boxShadow: 'inset 0 -2px 4px rgba(130,110,190,0.14), inset 0 1px 0 rgba(255,255,255,0.9)' }} />
                                                    <svg viewBox="0 0 12 12" className={`relative z-10 w-2.5 h-2.5 text-violet-400 transition-transform ${expanded ? '' : '-rotate-90'}`}>
                                                        <path d="M2 4l4 5 4-5z" fill="currentColor" />
                                                    </svg>
