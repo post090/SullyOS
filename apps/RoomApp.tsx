@@ -11,13 +11,14 @@ import { putImageBlob, useBlobRefUrl, isBlobRef, migrateDataUrlToRef, resolveBlo
 import TokenImg from '../components/os/TokenImg';
 import Modal from '../components/os/Modal';
 import { safeResponseJson } from '../utils/safeApi';
-import { Door, Sparkle, Image, GearSix, Camera, MoonStars, ArrowUUpLeft, ArrowUUpRight, CopySimple, Images } from '@phosphor-icons/react';
+import { Door, Sparkle, Image, GearSix, Camera, MoonStars, ArrowUUpLeft, ArrowUUpRight, CopySimple, Images, Eye, EyeSlash } from '@phosphor-icons/react';
 import { FURNITURE_ICONS } from '../utils/furnitureIcons';
 import PixelHomeView from './pixelHome/PixelHomeView';
 import WorldHomeApp from './WorldHomeApp';
 import DreamTheater from './DreamTheater';
 import { useDreamSim, dreamSimStore } from '../utils/dreamSimStore';
 import { roomLaunch } from '../utils/roomLaunch';
+import { characterLaunch } from '../utils/characterLaunch';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
 
 const TWEMOJI_BASE = 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72';
@@ -168,6 +169,36 @@ const SULLY_FURNITURE: RoomItem[] = [
 
 const FLOOR_HORIZON = 65; // Floor starts at 65% from top
 
+type BuiltInRoomTemplate = {
+    id: string;
+    label: 'A' | 'B';
+    name: string;
+    description: string;
+    templateUrl: string;
+    thumbnail: string;
+};
+
+const BUILTIN_ROOM_TEMPLATES: BuiltInRoomTemplate[] = [
+    {
+        id: 'forest-cottage',
+        label: 'A',
+        name: '森系小屋',
+        description: '绿意、木纹和柔软生活感。',
+        templateUrl: '/room-templates/forest-cottage/template.json',
+        thumbnail: '/room-templates/forest-cottage/preview.png',
+    },
+    {
+        id: 'blue-minimal',
+        label: 'B',
+        name: '蓝色系简约风',
+        description: '清爽蓝调和干净利落的布置。',
+        templateUrl: '/room-templates/blue-minimal/template.json',
+        thumbnail: '/room-templates/blue-minimal/preview.png',
+    },
+];
+
+const SAMPLE_ROOM_DISMISS_PREFIX = 'room_sample_offer_dismissed_';
+
 interface ItemInteraction {
     description: string;
     reaction: string;
@@ -309,6 +340,9 @@ const RoomApp: React.FC = () => {
     const [showSettingsModal, setShowSettingsModal] = useState(false); // New: Room Settings
     const [showDream, setShowDream] = useState(false); // 查看梦境 · Dream Theater overlay
     const [lastPrompt, setLastPrompt] = useState<string>(''); // Debug: Store last sent prompt
+    const [showSampleRoomOffer, setShowSampleRoomOffer] = useState(false);
+    const [sampleRoomLoadingId, setSampleRoomLoadingId] = useState<string | null>(null);
+    const [showActorArtModal, setShowActorArtModal] = useState(false);
     
     // Actor & Room State
     const [actorState, setActorState] = useState({ x: 50, y: 75, action: 'idle' });
@@ -327,6 +361,7 @@ const RoomApp: React.FC = () => {
     const saveDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null); // Debounce DB writes
     const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
     const [isToolbarCollapsed, setIsToolbarCollapsed] = useState(false);
+    const [hideActorInEdit, setHideActorInEdit] = useState(false);
     const roomRef = useRef<HTMLDivElement>(null);
 
     // 装修手感升级：撤销/重做栈（items 全程不可变更新，直接存数组引用即可）
@@ -494,9 +529,14 @@ const RoomApp: React.FC = () => {
                 loadedItems = SULLY_FURNITURE; 
                 // Auto-save Sully's furniture to persist it
                 updateCharacter(c.id, { roomConfig: { ...c.roomConfig, items: SULLY_FURNITURE } });
+                setShowSampleRoomOffer(false);
             } else {
-                loadedItems = DEFAULT_FURNITURE;
+                loadedItems = [];
+                const dismissed = localStorage.getItem(`${SAMPLE_ROOM_DISMISS_PREFIX}${c.id}`) === '1';
+                setShowSampleRoomOffer(!dismissed);
             }
+        } else {
+            setShowSampleRoomOffer(false);
         }
         
         setItems(loadedItems || []);
@@ -865,7 +905,7 @@ ${!shouldGenerateTodo ? `(系统: 今日待办已存在，无需生成，请忽�
     };
 
     const handlePokeActor = () => {
-        if (mode === 'edit') { actorInputRef.current?.click(); return; }
+        if (mode === 'edit') { setShowActorArtModal(true); return; }
         setActorState(prev => ({ ...prev, action: 'bounce' }));
         setTimeout(() => setActorState(prev => ({ ...prev, action: 'idle' })), 500);
         const thoughts = ["嗯？", "别闹...", "我在呢。", "盯着我看干嘛...", "(发呆)"];
@@ -1025,6 +1065,13 @@ ${!shouldGenerateTodo ? `(系统: 今日待办已存在，无需生成，请忽�
     };
     const handleWallChange = (bg: string) => { if (char) updateCharacter(char.id, { roomConfig: { ...char.roomConfig, items, wallImage: bg } }); };
     const handleFloorChange = (bg: string) => { if (char) updateCharacter(char.id, { roomConfig: { ...char.roomConfig, items, floorImage: bg } }); };
+    const openActorStudio = () => {
+        if (!char) return;
+        characterLaunch.request({ charId: char.id, openChibiStudio: true });
+        setActiveCharacterId(char.id);
+        setShowActorArtModal(false);
+        openApp(AppID.Character);
+    };
     const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, target: 'wall' | 'floor' | 'actor' | 'custom_item') => { 
         const file = e.target.files?.[0]; 
         if (file) { 
@@ -1258,8 +1305,28 @@ ${!shouldGenerateTodo ? `(系统: 今日待办已存在，无需生成，请忽�
         }
     };
 
-    const applyRoomImport = async (importMode: 'replace' | 'merge') => {
-        if (!pendingImport || !char) return;
+    const loadBuiltInRoomTemplate = async (template: BuiltInRoomTemplate) => {
+        const res = await fetch(template.templateUrl);
+        if (!res.ok) throw new Error(`无法读取样板房 ${template.name}`);
+        const data = await res.json();
+        if (!data || !Array.isArray(data.items)) throw new Error('样板房数据无效');
+        return data;
+    };
+
+    const openBuiltInRoomTemplate = async (template: BuiltInRoomTemplate) => {
+        setSampleRoomLoadingId(template.id);
+        try {
+            setPendingImport(await loadBuiltInRoomTemplate(template));
+            setShowLibrary(false);
+        } catch (err: any) {
+            addToast(`无法打开样板房: ${err?.message || err}`, 'error');
+        } finally {
+            setSampleRoomLoadingId(null);
+        }
+    };
+
+    const applyRoomTemplateData = async (templateData: any, importMode: 'replace' | 'merge') => {
+        if (!templateData || !char) return;
         setIsImportingRoom(true);
         try {
             // 内嵌的 base64 图统一转回 blobref 落库；图床/http 链接原样保留
@@ -1273,8 +1340,8 @@ ${!shouldGenerateTodo ? `(系统: 今日待办已存在，无需生成，请忽�
             };
             const stamp = Date.now();
             const importedItems: RoomItem[] = [];
-            for (let i = 0; i < pendingImport.items.length; i++) {
-                const it = pendingImport.items[i] || {};
+            for (let i = 0; i < templateData.items.length; i++) {
+                const it = templateData.items[i] || {};
                 const image = await toRef(it.image);
                 if (!image) continue;
                 const desc = typeof it.description === 'string' && it.description
@@ -1297,9 +1364,9 @@ ${!shouldGenerateTodo ? `(系统: 今日待办已存在，无需生成，请忽�
             const newItems = importMode === 'merge' ? [...items, ...importedItems] : importedItems;
             if (saveDebounceRef.current) { clearTimeout(saveDebounceRef.current); saveDebounceRef.current = null; }
             setItems(newItems);
-            if (importMode === 'replace' && pendingImport.room) {
+            if (importMode === 'replace' && templateData.room) {
                 // 替换模式连墙面/地板一起应用（合并模式只追加物品，不动背景）
-                const r = pendingImport.room;
+                const r = templateData.room;
                 const wallImage = await toRef(r.wallImage);
                 const floorImage = await toRef(r.floorImage);
                 updateCharacter(char.id, {
@@ -1313,13 +1380,42 @@ ${!shouldGenerateTodo ? `(系统: 今日待办已存在，无需生成，请忽�
             } else {
                 updateCharacter(char.id, { roomConfig: { ...char.roomConfig, items: newItems } });
             }
-            setPendingImport(null);
             addToast(`已导入 ${importedItems.length} 件物品${importMode === 'replace' ? '（替换原布局）' : ''}`, 'success');
+            return true;
         } catch (err: any) {
             addToast(`导入失败: ${err?.message || err}`, 'error');
+            return false;
         } finally {
             setIsImportingRoom(false);
         }
+    };
+
+    const applyRoomImport = async (importMode: 'replace' | 'merge') => {
+        if (!pendingImport) return;
+        const ok = await applyRoomTemplateData(pendingImport, importMode);
+        if (ok) setPendingImport(null);
+    };
+
+    const chooseSampleRoom = async (template: BuiltInRoomTemplate) => {
+        if (!char) return;
+        setSampleRoomLoadingId(template.id);
+        try {
+            const data = await loadBuiltInRoomTemplate(template);
+            const ok = await applyRoomTemplateData(data, 'replace');
+            if (ok) {
+                localStorage.setItem(`${SAMPLE_ROOM_DISMISS_PREFIX}${char.id}`, '1');
+                setShowSampleRoomOffer(false);
+            }
+        } catch (err: any) {
+            addToast(`样板房导入失败: ${err?.message || err}`, 'error');
+        } finally {
+            setSampleRoomLoadingId(null);
+        }
+    };
+
+    const dismissSampleRoomOffer = () => {
+        if (char) localStorage.setItem(`${SAMPLE_ROOM_DISMISS_PREFIX}${char.id}`, '1');
+        setShowSampleRoomOffer(false);
     };
 
     // --- PERF FIX: Direct DOM Dragging (bypasses React re-renders) ---
@@ -1695,7 +1791,7 @@ ${!shouldGenerateTodo ? `(系统: 今日待办已存在，无需生成，请忽�
     const getBgStyle = (img: string | undefined, scale: number | undefined, repeat: boolean | undefined) => {
         if (!img) return '';
         // blob: 是令牌解析出的 objectURL，也要按图片(url())处理，否则会被当成 CSS 渐变。
-        const isUrl = img.startsWith('http') || img.startsWith('data') || img.startsWith('blob:');
+        const isUrl = img.startsWith('http') || img.startsWith('data') || img.startsWith('blob:') || img.startsWith('/');
         const url = isUrl ? `url(${img})` : img; // If it's a CSS gradient, use it directly
         
         // If it's a gradient string (not URL), ignore scale params as they apply to background-size which works on gradients too, but repeat usually doesn't apply the same way.
@@ -1725,6 +1821,30 @@ ${!shouldGenerateTodo ? `(系统: 今日待办已存在，无需生成，请忽�
     // 今天的房间是否已生成（lastRoomDate 命中今日即视为已生成）——决定是否提示「更新这一天」
     const todayGenerated = !!char && char.lastRoomDate === getVirtualDay();
 
+    const renderTemplateButton = (template: BuiltInRoomTemplate, onSelect: (template: BuiltInRoomTemplate) => void, actionLabel: string) => (
+        <button
+            key={template.id}
+            onClick={() => onSelect(template)}
+            disabled={sampleRoomLoadingId === template.id}
+            className="min-w-0 text-left rounded-lg border border-slate-200 bg-white overflow-hidden active:scale-[0.98] transition-transform disabled:opacity-60"
+        >
+            <div className="relative h-28 bg-slate-100 overflow-hidden">
+                <div className="absolute inset-0 bg-center bg-cover" style={{ backgroundImage: `url(${template.thumbnail})` }} />
+                <div className="absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-black/45 to-transparent" />
+                <div className="absolute left-2 top-2 w-6 h-6 rounded-full bg-white/90 text-slate-700 text-xs font-black flex items-center justify-center shadow-sm">
+                    {template.label}
+                </div>
+                <div className="absolute left-2 right-2 bottom-2 text-white">
+                    <p className="text-xs font-black leading-tight truncate">{template.name}</p>
+                    <p className="text-[9px] leading-tight opacity-85 truncate">{actionLabel}</p>
+                </div>
+            </div>
+            <div className="p-2">
+                <p className="text-[10px] text-slate-500 leading-snug">{template.description}</p>
+            </div>
+        </button>
+    );
+
     return (
         <div className="h-full w-full bg-[#f8fafc] flex flex-col relative overflow-hidden font-sans select-none">
 
@@ -1740,6 +1860,52 @@ ${!shouldGenerateTodo ? `(系统: 今日待办已存在，无需生成，请忽�
                     </p>
                 </div>
             )}
+
+            <Modal
+                isOpen={showSampleRoomOffer && !!char}
+                title="Sully 的样板房推销"
+                onClose={dismissSampleRoomOffer}
+                footer={
+                    <button onClick={dismissSampleRoomOffer} className="w-full py-3 bg-slate-100 text-slate-500 font-bold rounded-2xl text-xs">
+                        谢谢，我不需要
+                    </button>
+                }
+            >
+                <div className="space-y-4">
+                    <div className="bg-slate-50 border border-slate-100 rounded-lg px-3 py-2.5">
+                        <p className="text-sm font-bold text-slate-700">这里看起来空空的，Sully 来给你推销两款样板房：</p>
+                        <p className="text-[10px] text-slate-400 leading-relaxed mt-1">样板房收纳在「家具超市 · 样板房」里，可以再次选择并二次调整。</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                        {BUILTIN_ROOM_TEMPLATES.map(template => renderTemplateButton(template, chooseSampleRoom, sampleRoomLoadingId === template.id ? '导入中...' : '点我套用'))}
+                    </div>
+                </div>
+            </Modal>
+
+            <Modal
+                isOpen={showActorArtModal && !!char}
+                title="更改角色立绘"
+                onClose={() => setShowActorArtModal(false)}
+            >
+                <div className="grid grid-cols-2 gap-3">
+                    <button
+                        onClick={() => { setShowActorArtModal(false); actorInputRef.current?.click(); }}
+                        className="min-w-0 rounded-lg border border-slate-200 bg-slate-50 p-4 text-left active:scale-[0.98] transition-transform"
+                    >
+                        <Image size={26} className="text-blue-500 mb-3" />
+                        <p className="text-sm font-bold text-slate-700">上传自定义图片</p>
+                        <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">从设备选择一张新的小屋立绘。</p>
+                    </button>
+                    <button
+                        onClick={openActorStudio}
+                        className="min-w-0 rounded-lg border border-purple-200 bg-purple-50 p-4 text-left active:scale-[0.98] transition-transform"
+                    >
+                        <Sparkle size={26} className="text-purple-500 mb-3" />
+                        <p className="text-sm font-bold text-slate-700">进入捏人</p>
+                        <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">前往神经链接里的手办展示。</p>
+                    </button>
+                </div>
+            </Modal>
 
             {/* Room Stage */}
             <div ref={roomRef} className="flex-1 relative overflow-hidden transition-all duration-500 touch-none" onPointerDown={handleStagePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} onClick={handleStageClick}>
@@ -1779,12 +1945,12 @@ ${!shouldGenerateTodo ? `(系统: 今日待办已存在，无需生成，请忽�
                 })}
                 
                 {/* Character Actor - Z Index Boosted to simulate standing in front */}
-                <div onClick={(e) => { e.stopPropagation(); handlePokeActor(); }} className={`absolute transition-[left,top] duration-[1000ms] ease-in-out origin-bottom-center ${stickerClass} cursor-pointer active:scale-95 group`} style={{ left: `${actorState.x}%`, top: `${actorState.y}%`, width: '120px', transform: `translate(-50%, -100%) scale(${actorState.action === 'walk' ? 1.05 : (actorState.action === 'bounce' ? 1.1 : 1)})`, zIndex: Math.floor(actorState.y) + 20 }}>
+                {!(mode === 'edit' && hideActorInEdit) && <div onClick={(e) => { e.stopPropagation(); handlePokeActor(); }} className={`absolute transition-[left,top] duration-[1000ms] ease-in-out origin-bottom-center ${stickerClass} cursor-pointer active:scale-95 group`} style={{ left: `${actorState.x}%`, top: `${actorState.y}%`, width: '120px', transform: `translate(-50%, -100%) scale(${actorState.action === 'walk' ? 1.05 : (actorState.action === 'bounce' ? 1.1 : 1)})`, zIndex: Math.floor(actorState.y) + 20 }}>
                     <img src={actorImage} className={`w-full h-full object-contain ${actorState.action === 'walk' ? 'animate-bounce' : ''}`} alt="" />
                     {mode === 'edit' && <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-black/60 text-white text-[9px] px-2 py-1 rounded backdrop-blur-sm whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1"><Camera size={12} /> 换装</div>}
                     {/* Fixed: Wider bubble width */}
                     {aiBubble.visible && <div className="absolute bottom-[105%] left-1/2 -translate-x-1/2 bg-white px-4 py-3 rounded-[20px] rounded-bl-none shadow-lg border-2 border-black/5 min-w-[120px] max-w-[300px] animate-pop-in z-50"><p className="text-xs font-bold text-slate-700 leading-tight text-center break-words">{aiBubble.text}</p><button onClick={(e) => { e.stopPropagation(); setAiBubble({ ...aiBubble, visible: false }); }} className="absolute -top-2 -right-2 bg-slate-200 text-slate-500 rounded-full w-4 h-4 flex items-center justify-center text-[8px]">×</button></div>}
-                </div>
+                </div>}
             </div>
 
             {/* 查看梦境入口 · 左中边缘的「月亮」按钮（只在浏览模式露出，与右侧「生活碎片」对称） */}
@@ -1878,6 +2044,9 @@ ${!shouldGenerateTodo ? `(系统: 今日待办已存在，无需生成，请忽�
                     {/* 装修模式：撤销 / 重做 */}
                     {mode === 'edit' && (
                         <>
+                            <button onClick={() => setHideActorInEdit(v => !v)} className={`p-2 rounded-full shadow-md active:scale-90 transition-all ${hideActorInEdit ? 'bg-blue-500 text-white' : 'bg-white/90 text-slate-500'}`} title={hideActorInEdit ? '显示角色' : '隐藏角色'} aria-label={hideActorInEdit ? '显示角色' : '隐藏角色'}>
+                                {hideActorInEdit ? <EyeSlash size={22} weight="bold" /> : <Eye size={22} weight="bold" />}
+                            </button>
                             <button onClick={undo} disabled={!history.length} className="p-2 bg-white/90 rounded-full shadow-md text-slate-500 disabled:opacity-40 active:scale-90 transition-transform" title="撤销">
                                 <ArrowUUpLeft size={22} weight="bold" />
                             </button>
@@ -1999,6 +2168,7 @@ ${!shouldGenerateTodo ? `(系统: 今日待办已存在，无需生成，请忽�
                                 <div className="flex gap-3 overflow-x-auto no-scrollbar pb-2">
                                     <button onClick={() => setShowLibrary(true)} className="flex flex-col items-center gap-1 shrink-0"><div className="w-12 h-12 bg-blue-500 rounded-xl flex items-center justify-center text-white shadow-md text-xl">+</div><span className="text-[10px] font-bold text-slate-500">家具库</span></button>
                                     <button onClick={() => setShowCustomModal(true)} className="flex flex-col items-center gap-1 shrink-0"><div className="w-12 h-12 bg-purple-500 rounded-xl flex items-center justify-center text-white shadow-md"><Sparkle size={24} /></div><span className="text-[10px] font-bold text-slate-500">自定义</span></button>
+                                    <button onClick={() => setShowActorArtModal(true)} className="flex flex-col items-center gap-1 shrink-0"><div className="w-12 h-12 bg-pink-500 rounded-xl flex items-center justify-center text-white shadow-md"><Camera size={24} /></div><span className="text-[10px] font-bold text-slate-500">角色立绘</span></button>
                                     {/* 批量导入：一次选多张图，全部入库为自定义素材 */}
                                     <button onClick={() => batchAssetInputRef.current?.click()} disabled={isBatchImporting} className="flex flex-col items-center gap-1 shrink-0 disabled:opacity-50"><div className="w-12 h-12 bg-fuchsia-500 rounded-xl flex items-center justify-center text-white shadow-md"><Images size={24} /></div><span className="text-[10px] font-bold text-slate-500">{isBatchImporting ? '导入中…' : '批量导入'}</span></button>
                                     <button onClick={() => wallInputRef.current?.click()} className="flex flex-col items-center gap-1 shrink-0"><div className="w-12 h-12 bg-slate-200 rounded-xl flex items-center justify-center text-slate-500 shadow-sm border border-slate-300"><Image size={24} /></div><span className="text-[10px] font-bold text-slate-500">换墙纸</span></button>
@@ -2036,6 +2206,16 @@ ${!shouldGenerateTodo ? `(系统: 今日待办已存在，无需生成，请忽�
                     <div className="flex items-center justify-between gap-3 mb-4 bg-purple-50 border border-purple-100 rounded-xl px-3 py-2.5">
                         <p className="text-[10px] text-purple-500 leading-relaxed flex-1">点一下就摆进房间，可以连点批量摆放；自己的图可一次选多张批量入库。</p>
                         <button onClick={() => batchAssetInputRef.current?.click()} disabled={isBatchImporting} className="shrink-0 px-3 py-2 bg-purple-500 text-white text-[10px] font-bold rounded-xl disabled:opacity-50 active:scale-95 transition-transform">{isBatchImporting ? '导入中…' : '＋批量导入'}</button>
+                    </div>
+                    <div className="mb-6">
+                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3 sticky top-0 bg-white py-2 z-10 flex justify-between">
+                            样板房
+                            <span className="text-[9px] bg-slate-100 px-2 rounded-full">{BUILTIN_ROOM_TEMPLATES.length}</span>
+                        </h4>
+                        <div className="grid grid-cols-2 gap-3">
+                            {BUILTIN_ROOM_TEMPLATES.map(template => renderTemplateButton(template, openBuiltInRoomTemplate, sampleRoomLoadingId === template.id ? '读取中...' : '打开导入'))}
+                        </div>
+                        <p className="text-[9px] text-slate-400 leading-relaxed mt-2">打开后可选择替换当前小屋，或只把样板房物品合并进来。</p>
                     </div>
                     {Object.entries(displayLibrary).map(([category, assets]) => (
                         assets && assets.length > 0 && (

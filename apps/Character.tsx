@@ -16,6 +16,7 @@ import ImpressionPanel from '../components/character/ImpressionPanel';
 import RoomPlatePanel from '../components/character/RoomPlatePanel';
 import MemoryArchivist from '../components/character/MemoryArchivist';
 import ChibiStudio, { ChibiShelfPanel } from '../components/character/ChibiStudio';
+import { characterLaunch } from '../utils/characterLaunch';
 import { safeFetchJson, extractContent } from '../utils/safeApi';
 import { fetchMiniMaxVoices, MiniMaxVoiceItem } from '../utils/minimaxVoice';
 import { resolveMiniMaxApiKey } from '../utils/minimaxApiKey';
@@ -120,7 +121,8 @@ const CharacterCard: React.FC<{
 
 const Character: React.FC = () => {
   const { closeApp, openApp, characters, activeCharacterId, setActiveCharacterId, addCharacter, updateCharacter, deleteCharacter, characterGroups, createCharacterGroup, renameCharacterGroup, deleteCharacterGroup, apiConfig, addToast, userProfile, worldbooks, addWorldbook } = useOS();
-  const [view, setView] = useState<'list' | 'detail'>('list');
+  const launchIntent = characterLaunch.peek();
+  const [view, setView] = useState<'list' | 'detail'>(() => launchIntent ? 'detail' : 'list');
   const [charPage, setCharPage] = useState(0); // 角色列表分页（每页 6 个，仅未建分组时）
   // 分组展开状态：存"已展开"的分组 id（未记录 = 收起）。跨会话记住，key 见下
   const [expandedGroups, setExpandedGroups] = useState<string[]>(() => {
@@ -140,10 +142,10 @@ const Character: React.FC = () => {
           return next;
       });
   };
-  const [detailTab, setDetailTab] = useState<'identity' | 'memory' | 'impression' | 'plates' | 'chibi'>('identity');
+  const [detailTab, setDetailTab] = useState<'identity' | 'memory' | 'impression' | 'plates' | 'chibi'>(() => launchIntent?.openChibiStudio ? 'chibi' : 'identity');
   // QQ捏人工坊（手办柜）全屏覆盖层
-  const [showChibiStudio, setShowChibiStudio] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [showChibiStudio, setShowChibiStudio] = useState(() => !!launchIntent?.openChibiStudio);
+  const [editingId, setEditingId] = useState<string | null>(() => launchIntent?.charId || null);
   const [formData, setFormData] = useState<CharacterProfile | null>(null);
   const [isCompressing, setIsCompressing] = useState(false);
   // 头像 URL 输入的 draft, 不逐字 commit 到 formData.avatar —— 否则每输入一个字符,
@@ -156,6 +158,9 @@ const Character: React.FC = () => {
       DB.getLifeRecordSettings()
           .then(s => setHiddenLifeModules(s?.hiddenModules || []))
           .catch(() => {});
+  }, []);
+  useEffect(() => {
+      characterLaunch.consume();
   }, []);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cardImportRef = useRef<HTMLInputElement>(null);

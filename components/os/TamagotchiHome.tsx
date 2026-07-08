@@ -182,7 +182,7 @@ const FALLBACK_FLOOR = 'repeating-linear-gradient(90deg, #e7e5e4 0px, #e7e5e4 20
 // 与 RoomApp.getBgStyle 同口径：url 类走 background 简写（含缩放/平铺），渐变串原样返回
 const getBgStyle = (img: string | undefined, scale: number | undefined, repeat: boolean | undefined, fallback: string): string => {
     if (!img) return fallback;
-    const isUrl = img.startsWith('http') || img.startsWith('data') || img.startsWith('blob:');
+    const isUrl = img.startsWith('http') || img.startsWith('data') || img.startsWith('blob:') || img.startsWith('/');
     if (!isUrl) return img;
     const size = scale && scale > 0 ? `${scale}%` : 'cover';
     return `url(${img}) center center / ${size} ${repeat ? 'repeat' : 'no-repeat'}`;
@@ -803,6 +803,7 @@ const FloorPhone = React.memo<{ unread: number; open: boolean; msgs: { id: numbe
 // 图标一律 currentColor：扁平手绘风里图标用描边同色，不用白色
 const DOCK_GLYPHS: Record<string, React.ReactNode> = {
     heart: <svg viewBox="0 0 24 24" className="w-full h-full" fill="currentColor"><path d="M12 21s-7.5-4.9-9.8-9.2C.7 8.9 2.4 5.4 5.7 5.1c1.9-.2 3.7.8 4.7 2.4h3.2c1-1.6 2.8-2.6 4.7-2.4 3.3.3 5 3.8 3.5 6.7C19.5 16.1 12 21 12 21z" transform="scale(0.92) translate(1,1)" /></svg>,
+    neural: <svg viewBox="0 0 24 24" className="w-full h-full" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="7" r="3" /><circle cx="5" cy="17" r="2" /><circle cx="19" cy="17" r="2" /><path d="M10 9.5 6.3 15M14 9.5l3.7 5.5M7 17h10" /></svg>,
     talk: <svg viewBox="0 0 24 24" className="w-full h-full" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-8.5 8.3c-1.4 0-2.8-.3-4-.9L3 20l1.2-4.3a8 8 0 0 1-1.2-4.2A8.4 8.4 0 0 1 11.5 3.2 8.4 8.4 0 0 1 21 11.5z" /><circle cx="8.5" cy="11.5" r="0.6" fill="currentColor" /><circle cx="12" cy="11.5" r="0.6" fill="currentColor" /><circle cx="15.5" cy="11.5" r="0.6" fill="currentColor" /></svg>,
     home: <svg viewBox="0 0 24 24" className="w-full h-full" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 11.5 12 4l9 7.5" /><path d="M5.5 10v9h13v-9" /><path d="M10 19v-5h4v5" /></svg>,
     album: <svg viewBox="0 0 24 24" className="w-full h-full" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="3.5" width="16" height="17" rx="2.5" /><path d="M8 3.5v17" /><path d="M14.2 8.4l.9 1.9 2 .3-1.5 1.4.4 2-1.8-1-1.8 1 .4-2-1.5-1.4 2-.3z" fill="currentColor" stroke="none" /></svg>,
@@ -850,6 +851,10 @@ const findCurrentSlot = (schedule: DailySchedule | null): { cur: ScheduleSlot | 
 // ─── 主组件 ───────────────────────────────────────────────────
 const TamagotchiHome: React.FC = () => {
     const { openApp, characters, activeCharacterId, setActiveCharacterId, virtualTime, unreadMessages, isDataLoaded, lastMsgTimestamp, addToast, userProfile, apiConfig } = useOS();
+    const char: CharacterProfile | null = useMemo(
+        () => characters.find(c => c.id === activeCharacterId) || characters[0] || null,
+        [characters, activeCharacterId]
+    );
 
     const [stat, setStat] = useState<{ msgCount: number; pokeLines: string[]; recent: { id: number; mine: boolean; text: string }[] }>({ msgCount: 0, pokeLines: [], recent: [] });
     const [drawerOpen, setDrawerOpen] = useState(false);
@@ -866,38 +871,36 @@ const TamagotchiHome: React.FC = () => {
     const [phoneOpen, setPhoneOpen] = useState(false);
     // 直播看板自定义图：blob 存库，localStorage 只记 blobref 令牌（全局一张，跨角色共用）
     const boardInputRef = useRef<HTMLInputElement>(null);
-    const [boardImg, setBoardImg] = useState<string>(() => {
-        try { return localStorage.getItem('tama_board_img') || ''; } catch { return ''; }
-    });
+    const [boardImg, setBoardImg] = useState('');
     const onBoardFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         e.target.value = '';
         if (!file) return;
+        const charId = char?.id;
+        if (!charId) return;
         try {
             const blob = await processImageToBlob(file, { quality: 0.92, maxWidth: 1200 });
             const ref = await putImageBlob(blob);
             setBoardImg(ref);
-            try { localStorage.setItem('tama_board_img', ref); } catch { /* 存不进也能用到刷新前 */ }
+            try { localStorage.setItem(`tama_board_img_${charId}`, ref); } catch { /* 存不进也能用到刷新前 */ }
             addToast('看板图已更新 ✦', 'success');
         } catch (err: any) {
             addToast(err?.message || '图片处理失败', 'error');
         }
-    }, [addToast]);
+    }, [addToast, char?.id]);
     const clearBoardImg = useCallback(() => {
         setBoardImg('');
-        try { localStorage.removeItem('tama_board_img'); } catch { /* ignore */ }
+        if (char) try { localStorage.removeItem(`tama_board_img_${char.id}`); } catch { /* ignore */ }
         // 旧 blob 不主动删（见 blobRef 注释的防碎图策略），交给后续 GC
-    }, []);
+    }, [char?.id]);
     // 看板排版层文字色（有自定义图时生效，默认白）：原生取色器，选完即存
     const boardColorRef = useRef<HTMLInputElement>(null);
-    const [boardFg, setBoardFg] = useState<string>(() => {
-        try { return localStorage.getItem('tama_board_fg') || ''; } catch { return ''; }  // 空=自动（暗板白字/浅板深字）
-    });
+    const [boardFg, setBoardFg] = useState(''); // 空=自动（暗板白字/浅板深字）
     const onBoardColor = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
         const v = e.target.value || '#ffffff';
         setBoardFg(v);
-        try { localStorage.setItem('tama_board_fg', v); } catch { /* ignore */ }
-    }, []);
+        if (char) try { localStorage.setItem(`tama_board_fg_${char.id}`, v); } catch { /* ignore */ }
+    }, [char?.id]);
     // 日程详细演绎（小剧场）：点纸卷里「偷看此刻」时生成并播放
     const [theater, setTheater] = useState<{ schedule: DailySchedule; slotIndex: number } | null>(null);
     const [theaterGenerating, setTheaterGenerating] = useState(false);
@@ -927,10 +930,36 @@ const TamagotchiHome: React.FC = () => {
     }, []);
     const rootVars = useMemo(() => makeVars(style), [style]);
 
-    const char: CharacterProfile | null = useMemo(
-        () => characters.find(c => c.id === activeCharacterId) || characters[0] || null,
-        [characters, activeCharacterId]
-    );
+    useEffect(() => {
+        if (!char) {
+            setBoardImg('');
+            setBoardFg('');
+            return;
+        }
+        try {
+            const imgKey = `tama_board_img_${char.id}`;
+            const fgKey = `tama_board_fg_${char.id}`;
+            let img = localStorage.getItem(imgKey);
+            let fg = localStorage.getItem(fgKey);
+
+            // 旧版是全角色共用；升级后只迁给当前角色一次。
+            if (img === null) {
+                img = localStorage.getItem('tama_board_img');
+                if (img) localStorage.setItem(imgKey, img);
+                localStorage.removeItem('tama_board_img');
+            }
+            if (fg === null) {
+                fg = localStorage.getItem('tama_board_fg');
+                if (fg) localStorage.setItem(fgKey, fg);
+                localStorage.removeItem('tama_board_fg');
+            }
+            setBoardImg(img || '');
+            setBoardFg(fg || '');
+        } catch {
+            setBoardImg('');
+            setBoardFg('');
+        }
+    }, [char?.id]);
 
     // 取数：消息数（Lv/经验条）+ ta 最近 30 条文字回复（戳一戳台词，最新在前按顺序循环）
     // + 消息卡的最近 3 条文本气泡预览（同一次查询顺手带出，不多读一次库）
@@ -1051,7 +1080,6 @@ const TamagotchiHome: React.FC = () => {
         passed: curSlot ? s.startTime <= curSlot.startTime : false,
         current: !!curSlot && s.startTime === curSlot.startTime,
     })), [schedule, curSlot?.startTime]);
-    const totalUnread = useMemo(() => Object.values(unreadMessages).reduce((a, b) => a + b, 0), [unreadMessages]);
     const charUnread = char ? (unreadMessages[char.id] || 0) : 0;
 
     const openRoom = useCallback(() => openApp(AppID.Room), [openApp]);
@@ -1264,7 +1292,7 @@ const TamagotchiHome: React.FC = () => {
                             <div className="absolute inset-[4px] rounded-[1.45rem] pointer-events-none" style={{ border: '1px solid var(--tg-frame-a22)' }} />
                             <Sparkles items={[[7, 14, 7, PAL.frame, 0.6], [93, 18, 7, PAL.frame, 0.55], [50, -8, 8, PAL.frame, 0.8, true]]} />
                             <DockBtn glyph={DOCK_GLYPHS.heart} cn="约会" en="DATE" onClick={() => openApp(AppID.Date)} />
-                            <DockBtn glyph={DOCK_GLYPHS.talk} cn="聊天" en="CHAT" badge={totalUnread} onClick={openChat} />
+                            <DockBtn glyph={DOCK_GLYPHS.neural} cn="神经链接" en="LINK" onClick={() => openApp(AppID.Character)} />
                             {/* 中央星徽：点开全部应用抽屉 */}
                             <button onClick={() => setDrawerOpen(true)} className="relative flex flex-col items-center gap-1 -mt-8 active:scale-95 transition-transform">
                                 <div className="relative w-[3.7rem] h-[3.7rem] rounded-full flex items-center justify-center"
