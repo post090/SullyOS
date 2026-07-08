@@ -15,25 +15,30 @@ const mkWorld = (overrides: Partial<WorldProfile> = {}): WorldProfile => ({
 });
 
 describe('worldTimeLabel（时间模式感知）', () => {
-    it('real 模式沿用「第N天 早/中/晚」', () => {
+    it('real 模式沿用「第N天 早/中/晚/凌晨」（凌晨按次日称呼）', () => {
         expect(worldTimeLabel(mkWorld({ timeMode: 'real', storyClock: 0 }))).toBe('第1天早上');
-        expect(worldTimeLabel(mkWorld({ timeMode: 'real', storyClock: 3 }))).toBe('第2天早上');
-        expect(worldTimeLabel(mkWorld({ timeMode: 'real', storyClock: 5 }))).toBe('第2天晚上');
+        expect(worldTimeLabel(mkWorld({ timeMode: 'real', storyClock: 3 }))).toBe('第2天凌晨');
+        expect(worldTimeLabel(mkWorld({ timeMode: 'real', storyClock: 4 }))).toBe('第2天早上');
+        expect(worldTimeLabel(mkWorld({ timeMode: 'real', storyClock: 6 }))).toBe('第2天晚上');
     });
     it('未设 timeMode 的旧世界按 real', () => {
         expect(worldTimeLabel(mkWorld({ storyClock: 2 }))).toBe('第1天晚上');
     });
-    it('sim 模式从起始日期按「天」推进（一天三段）为真实日历日期', () => {
+    it('sim 模式从起始日期按「天」推进（一天四段）为真实日历日期', () => {
         const w = mkWorld({ timeMode: 'sim', simStartDate: { year: 2024, month: 3, day: 1 } });
         expect(worldTimeLabel(w, 0)).toContain('2024年3月1日');
         expect(worldTimeLabel(w, 0)).toContain('早上');
         expect(worldTimeLabel(w, 2)).toContain('2024年3月1日'); // 同一天的晚上
         expect(worldTimeLabel(w, 2)).toContain('晚上');
-        expect(worldTimeLabel(w, 3)).toContain('2024年3月2日'); // 满三段进第二天
+        expect(worldTimeLabel(w, 3)).toContain('2024年3月2日'); // 凌晨发生在次日 0~5 点，显示次日日期
+        expect(worldTimeLabel(w, 3)).toContain('凌晨');
+        expect(worldTimeLabel(w, 4)).toContain('2024年3月2日'); // 满四段进第二天
+        expect(worldTimeLabel(w, 4)).toContain('早上');
     });
     it('sim 模式跨月进位正确', () => {
         const w = mkWorld({ timeMode: 'sim', simStartDate: { year: 2024, month: 1, day: 31 } });
-        expect(worldTimeLabel(w, 3)).toContain('2024年2月1日');
+        expect(worldTimeLabel(w, 3)).toContain('2024年2月1日'); // 1月31日的凌晨 = 2月1日 0~5 点
+        expect(worldTimeLabel(w, 4)).toContain('2024年2月1日');
     });
 });
 
@@ -41,7 +46,7 @@ describe('shouldCloseChapter（结卷边界）', () => {
     it('real 模式永不结卷', () => {
         expect(shouldCloseChapter(mkWorld({ timeMode: 'real' }), SIM_CHAPTER_CLOCKS)).toBe(false);
     });
-    it('sim 模式：满 20 天（40 个半天）整数倍才结卷', () => {
+    it('sim 模式：满 20 天（80 轮）整数倍才结卷', () => {
         const w = mkWorld({ timeMode: 'sim' });
         expect(shouldCloseChapter(w, SIM_CHAPTER_CLOCKS - 1)).toBe(false);
         expect(shouldCloseChapter(w, SIM_CHAPTER_CLOCKS)).toBe(true);

@@ -57,37 +57,71 @@ export function narrativeStyleGuide(world: WorldProfile): string {
     return NARRATIVE_STYLES[key]?.guide || NARRATIVE_STYLES.warm.guide;
 }
 
-/** 一天分三段：早/中/晚。一轮推进一段。 */
-export const SEGMENTS_PER_DAY = 3;
-const SEGMENT_LABELS = ['早上', '中午', '晚上'];
-/** 该段是否算夜晚（用于昼夜视觉） */
+/**
+ * 一天分四段：早/中/晚/凌晨。一轮推进一段。
+ * 凌晨（现实 0~5 点）在叙事上是「晚上之后的下半夜」，排在一个剧情日的末尾（seg=3）——
+ * 这样段序号的大小顺序 = 时间先后顺序，realObserveTarget 的比较逻辑不用特判。
+ * 口语上「第1天晚上」熬过午夜叫「第2天凌晨」，所以凌晨的**标签**按次日称呼/显示次日日期。
+ */
+export const SEGMENTS_PER_DAY = 4;
+const SEGMENT_LABELS = ['早上', '中午', '晚上', '凌晨'];
+const LATE_NIGHT_SEG = 3;
+/** 该段是否算夜晚（用于昼夜视觉）：晚上、凌晨都算夜。 */
 export function isNightClock(storyClock: number): boolean {
-    return ((storyClock % SEGMENTS_PER_DAY) + SEGMENTS_PER_DAY) % SEGMENTS_PER_DAY === 2;
+    return ((storyClock % SEGMENTS_PER_DAY) + SEGMENTS_PER_DAY) % SEGMENTS_PER_DAY >= 2;
 }
 
-/** 剧情时钟 → 时间标签。一轮推进一段：0=早上 1=中午 2=晚上。 */
+/** 剧情时钟 → 时间标签。一轮推进一段：0=早上 1=中午 2=晚上 3=凌晨（按次日称呼）。 */
 export function storyTimeLabel(storyClock: number): string {
-    return `第${Math.floor(storyClock / SEGMENTS_PER_DAY) + 1}天${SEGMENT_LABELS[storyClock % SEGMENTS_PER_DAY]}`;
+    const seg = storyClock % SEGMENTS_PER_DAY;
+    const day = Math.floor(storyClock / SEGMENTS_PER_DAY) + 1 + (seg === LATE_NIGHT_SEG ? 1 : 0);
+    return `第${day}天${SEGMENT_LABELS[seg]}`;
+}
+
+/**
+ * 旧存档（一天三段制）的一次性时钟迁移。
+ * sim 模式的 storyClock/simSummarizedClock 是「累计段数」，一天从 3 段变 4 段后
+ * 按「保持已过天数与段位不变」换算：新 = 天数×4 + 当天段位。real 模式的段序号
+ * 含义没变（0早/1中/2晚，凌晨是新增的 3），storyClock 只是轮次计数，无需换算。
+ * 原地修改，返回是否有改动（调用方据此决定要不要写回 DB）。
+ */
+export function migrateWorldDaySegs(world: WorldProfile): boolean {
+    if ((world.clockSegs || 3) >= SEGMENTS_PER_DAY) return false;
+    if (world.timeMode === 'sim') {
+        const to4 = (c: number) => Math.floor(c / 3) * SEGMENTS_PER_DAY + (c % 3);
+        world.storyClock = to4(world.storyClock);
+        if (world.simSummarizedClock) world.simSummarizedClock = to4(world.simSummarizedClock);
+    }
+    world.clockSegs = SEGMENTS_PER_DAY;
+    return true;
 }
 
 const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 
 const pad2 = (n: number) => (n < 10 ? `0${n}` : `${n}`);
-/** 真实时钟 → 现实段：<5点算「晚」（深夜归夜），<12 早，<18 中，否则晚。 */
+const dayKeyOf = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+/**
+ * 真实时钟 → 现实段：0~5点算「凌晨」（seg=3，归属**前一天**的剧情日，保证段序单调），
+ * <12 早，<18 中，否则晚。
+ */
 export function realNowSeg(now: Date = new Date()): { dayKey: string; seg: number } {
     const h = now.getHours();
-    const seg = h < 5 ? 2 : h < 12 ? 0 : h < 18 ? 1 : 2;
-    const dayKey = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
-    return { dayKey, seg };
+    const d = new Date(now);
+    if (h < 5) {
+        d.setDate(d.getDate() - 1);
+        return { dayKey: dayKeyOf(d), seg: LATE_NIGHT_SEG };
+    }
+    return { dayKey: dayKeyOf(d), seg: h < 12 ? 0 : h < 18 ? 1 : 2 };
 }
-/** {dayKey,seg} → 标签「YYYY年M月D日 周X 早上/中午/晚上」。 */
+/** {dayKey,seg} → 标签「YYYY年M月D日 周X 早上/中午/晚上/凌晨」。凌晨实际发生在 dayKey 次日 0~5 点，按口语显示次日日期。 */
 export function formatRealClock(rc: { dayKey: string; seg: number }): string {
     const d = new Date(`${rc.dayKey}T00:00:00`);
     if (isNaN(d.getTime())) return `${rc.dayKey} ${SEGMENT_LABELS[rc.seg] || ''}`;
+    if (rc.seg === LATE_NIGHT_SEG) d.setDate(d.getDate() + 1);
     return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${WEEKDAYS[d.getDay()]} ${SEGMENT_LABELS[rc.seg] || ''}`;
 }
 /**
- * real 模式下一次「观测」要演的现实段（早/中/晚），跟着真实时钟走：
+ * real 模式下一次「观测」要演的现实段（早/中/晚/凌晨），跟着真实时钟走：
  *   - 没演过 → 演当前这一段；
  *   - 落后于今天 → 补今天还没补的下一段（不超过现在）；
  *   - 落后于过去某天 → 直接跳到今天最早一段（过去错过的补不回来）；
@@ -110,19 +144,21 @@ export function realObserveTarget(world: WorldProfile, now: Date = new Date()): 
 export function worldTimeLabel(world: WorldProfile, storyClock: number = world.storyClock): string {
     if (world.timeMode === 'sim' && world.simStartDate) {
         const { year, month, day } = world.simStartDate;
+        const seg = storyClock % SEGMENTS_PER_DAY;
         const d = new Date(year, month - 1, day);
-        d.setDate(d.getDate() + Math.floor(storyClock / SEGMENTS_PER_DAY));
+        // 凌晨发生在该剧情日次日的 0~5 点，按口语显示次日日期
+        d.setDate(d.getDate() + Math.floor(storyClock / SEGMENTS_PER_DAY) + (seg === LATE_NIGHT_SEG ? 1 : 0));
         const wd = WEEKDAYS[d.getDay()];
-        return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${wd} ${SEGMENT_LABELS[storyClock % SEGMENTS_PER_DAY]}`;
+        return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${wd} ${SEGMENT_LABELS[seg]}`;
     }
     // real 模式：跟现实时钟同步，显示已演到的那一现实段
     if (world.timeMode !== 'sim' && world.realClock) return formatRealClock(world.realClock);
     return storyTimeLabel(storyClock);
 }
 
-/** 该世界「当前那一段」是否算夜晚（real 看 realClock，sim 看 storyClock）。 */
+/** 该世界「当前那一段」是否算夜晚（real 看 realClock，sim 看 storyClock）：晚上、凌晨都算夜。 */
 export function isNightWorld(world: WorldProfile): boolean {
-    if (world.timeMode !== 'sim' && world.realClock) return world.realClock.seg === 2;
+    if (world.timeMode !== 'sim' && world.realClock) return world.realClock.seg >= 2;
     return isNightClock(world.storyClock);
 }
 
@@ -249,6 +285,7 @@ export function buildWorldCharTurn(args: {
     userName: string;
 }): string {
     const { world, char, members, storyTime, round, lastSummary, npcScene, npcHooks, beatsSoFar, recentPosts, exposures, directive, priorChapter, userName } = args;
+    const isLateNight = storyTime.includes('凌晨');
     const others = members.filter(m => m.id !== char.id);
     const npcNames = new Map(world.npcs.map(n => [n.id, n.name]));
     const myHouse = houseOf(world, char.id);
@@ -302,6 +339,17 @@ export function buildWorldCharTurn(args: {
             : `\n## 心里的声音\n关于「${directive.impulseText}」，你内心深处有个声音越来越清晰：「${directive.text}」。这半天它会影响你的选择。`;
     }
 
+    // ── 凌晨专属：夜深了，理性打烊，情绪当班 ──
+    const lateNightSection = isLateNight ? `
+
+## 🌙 此刻是凌晨（0点~5点），深夜心境
+夜深了，理性打烊，情绪当班。这一段请比白天更**冲动、更感性**地演——但冲动的方向要长在你自己的性格上：
+- 白天压下去的心事此刻会翻上来：想念、委屈、悔意、心动、不甘……全被深夜放大，说不出口的话在凌晨会忍不住说出口。
+- 允许做白天不会做的事：深夜 emo 的动态、没忍住发出去的私聊（第二天可能想撤回的那种）、翻来覆去后一个冲动的决定或告白的念头。
+- narrative 写得更贴近潜意识：失眠、辗转、窗外的声响、手机屏幕的光、越想越清醒的循环——白描少一点，心绪浓一点。
+- impulse（冲动/待决策）在凌晨更容易冒头——此刻的冲动比白天的更真实，也更鲁莽，别帮角色理性刹车。
+- 当然要贴人设：沾枕就睡的人可以一觉到天亮，那就写梦境、半梦半醒的呓语、被什么声音吵醒的几分钟；不是人人都得在凌晨崩溃。` : '';
+
     return `【家园 · ${world.name}】剧情时间：${storyTime}
 
 ## 这个世界
@@ -330,14 +378,16 @@ ${postsSection}
 ## 这半天其他人的动静（你能看到/听说的部分）
 ${observable}
 ${spokenToMe.length > 0 ? `\n## 刚才有人当面对你说话（请在 narrative 里自然接住、给出回应）\n${spokenToMe.join('\n')}` : ''}
-${exposureSection}${directiveSection}
+${exposureSection}${directiveSection}${lateNightSection}
 
 ## 你的手机（标【刚刚】的是这半天刚收到的新消息）
 ${dmSection}
 ${groupSection}
 
 ---
-现在轮到你了。一个上午/一个夜晚能发生很多事：自由安排你这半天的行程（完全可以出门、可以和同住的人一整个半天都碰不上面），聚焦在**你自己**正在经历的事情上。
+现在轮到你了。${isLateNight
+        ? '凌晨0点到5点——大多数人睡着了，睡不着的人心事最吵：安排你这个下半夜（睡了就写梦与醒来的片刻，没睡就写夜里的动静与翻涌的情绪）'
+        : '一个上午/一个夜晚能发生很多事：自由安排你这半天的行程（完全可以出门、可以和同住的人一整个半天都碰不上面）'}，聚焦在**你自己**正在经历的事情上。
 严格输出一个 JSON 对象（建议用 \`\`\`json 代码块包裹，不要输出 JSON 之外的正文）：
 {
   "location": "这半天你主要在哪",
@@ -363,7 +413,7 @@ ${groupSection}
   "relationships": [{ "with": "成员名", "delta": -4到4的整数, "reason": "为什么", "relabel": "（仅在这段关系发生重大转折时才给）你对这段关系新的定位/称呼，例如从「死对头」变成「不打不相识的损友」；平时省略此字段" }]
 }
 规则：
-- timeline 给 3~6 条，时间要符合${storyTime.includes('早') ? '清晨到上午' : storyTime.includes('中午') ? '午间到下午' : '傍晚到深夜'}；**shared=false 表示这段你想瞒着**（别人看不到，但可能成为伏笔）。
+- timeline 给 ${isLateNight ? '2~4' : '3~6'} 条，时间要符合${isLateNight ? '凌晨0点到5点（午夜到黎明前）' : storyTime.includes('早') ? '清晨到上午' : storyTime.includes('中午') ? '午间到下午' : '傍晚到深夜'}；**shared=false 表示这段你想瞒着**（别人看不到，但可能成为伏笔）。
 - **工作日和周末的状态会不一样**（看上面剧情时间里的「周几」），但具体怎么个不一样**完全取决于你的身份设定，别 OOC**：上班族/学生工作日有上班上学通勤的固定骨架、周末才松弛；而自由职业、休学在家、无业、自律到雷打不动的人，未必按工作日/周末的节奏走——按你这个人真实的生活方式来，别硬套朝九晚五。
 - **别每天都过得一个样**：你的生活不是复读机，今天的行程、地点、在意的事要和前几天明显不同。时不时给生活来点计划外的意外——临时加班、东西坏了、偶遇旧识、突如其来的好/坏消息、心血来潮的决定、天气搅局……让每一段都有新鲜变量，而不是「晨跑→工作→回家」的固定循环。
 - 信息可见性：动态=公开；timeline(shared=true)=别人能知道；私聊=仅对方；群聊=全员；narrative 和 memo=完全私人。瞒事就让对应 timeline 条目 shared=false 并写进 secrets。
@@ -446,6 +496,9 @@ export function buildNpcTurn(args: {
     recentPosts?: { ref: string; name: string; post: string }[];
 }): string {
     const { world, members, storyTime, lastSummary, chapterAtmosphere, inboxes, recentPosts } = args;
+    const lateNightNote = storyTime.includes('凌晨')
+        ? `\n\n## 🌙 现在是凌晨（0点~5点）\n镇子基本睡着了。scene 写夜的质感：便利店的夜班灯、末班车、巡街的猫、亮着的一两扇窗；hooks 少而轻（1条就够）；groupLines 至多 1 条（只有夜猫子 NPC 才冒泡）；点赞评论克制些——深夜刷手机的人少，但深夜 emo 的动态容易引来同样失眠的人留下感性的共情评论。`
+        : '';
     const inboxSection = (inboxes && inboxes.length > 0)
         ? `\n## 📨 NPC 收到的私信（请让对应 NPC 回复）\n${inboxes.map(b => `▸ ${b.memberName} → ${b.npcName}：\n${b.recent}`).join('\n')}`
         : '';
@@ -465,7 +518,7 @@ ${members.map(m => m.name).join('、')}
 
 ## 之前发生的事
 ${lastSummary || '（这是这个世界的第一个半天）'}
-${chapterAtmosphere ? `\n## 这段日子的氛围基调\n${chapterAtmosphere}` : ''}${inboxSection}${postsSection}
+${chapterAtmosphere ? `\n## 这段日子的氛围基调\n${chapterAtmosphere}` : ''}${lateNightNote}${inboxSection}${postsSection}
 剧情时间：${storyTime}。
 一次性输出这一段所有 NPC 的群像动静。严格输出一个 JSON 对象（建议用 \`\`\`json 包裹）：
 {

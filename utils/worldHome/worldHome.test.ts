@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { extractJson, parseCharBeat, parseNpcScene, storyTimeLabel, buildModeRule, buildWorldCharTurn, parseRolledNpcs, buildNpcRollPrompt, NARRATIVE_STYLES, narrationPersonGuide, realNowSeg, realObserveTarget, worldTimeLabel } from './prompts';
+import { extractJson, parseCharBeat, parseNpcScene, storyTimeLabel, buildModeRule, buildWorldCharTurn, buildNpcTurn, parseRolledNpcs, buildNpcRollPrompt, NARRATIVE_STYLES, narrationPersonGuide, realNowSeg, realObserveTarget, worldTimeLabel, formatRealClock, migrateWorldDaySegs, SEGMENTS_PER_DAY } from './prompts';
 import { applyRelationshipDeltas, collectSeeds, buildSummary, dropDuplicatePosts } from './engine';
 import { ensureThreads, applyBeatToThreads, applyNpcGroupLines, applyNpcDms, npcInboxes, dmThreadsOf, groupThreadOf, formatThreadForPrompt, dmThreadId, GROUP_THREAD_ID } from './threads';
 import { WorldScheduler } from './scheduler';
@@ -20,12 +20,36 @@ const mkWorld = (overrides: Partial<WorldProfile> = {}): WorldProfile => ({
 });
 
 describe('storyTimeLabel', () => {
-    it('一天三段推进：早上/中午/晚上', () => {
+    it('一天四段推进：早上/中午/晚上/凌晨（凌晨按次日称呼）', () => {
         expect(storyTimeLabel(0)).toBe('第1天早上');
         expect(storyTimeLabel(1)).toBe('第1天中午');
         expect(storyTimeLabel(2)).toBe('第1天晚上');
-        expect(storyTimeLabel(3)).toBe('第2天早上');
-        expect(storyTimeLabel(5)).toBe('第2天晚上');
+        expect(storyTimeLabel(3)).toBe('第2天凌晨'); // 第1天晚上熬过午夜 = 第2天凌晨
+        expect(storyTimeLabel(4)).toBe('第2天早上');
+        expect(storyTimeLabel(6)).toBe('第2天晚上');
+    });
+});
+
+describe('migrateWorldDaySegs（三段制旧存档 → 四段制）', () => {
+    it('sim 世界按「保持天数与段位」换算 storyClock/simSummarizedClock', () => {
+        // 旧 45 = 第16天早上（45/3=15 天整）→ 新 15*4+0=60，仍是第16天早上
+        const w = mkWorld({ timeMode: 'sim', storyClock: 45, simSummarizedClock: 60 });
+        expect(migrateWorldDaySegs(w)).toBe(true);
+        expect(w.storyClock).toBe(60);
+        expect(w.simSummarizedClock).toBe(80); // 旧 60 = 20 天整 → 新 80
+        expect(w.clockSegs).toBe(SEGMENTS_PER_DAY);
+        expect(storyTimeLabel(w.storyClock)).toBe('第16天早上'); // 迁移前后天数/段位一致
+    });
+    it('real 世界不换算 storyClock（只是轮次计数），仅打标记', () => {
+        const w = mkWorld({ timeMode: 'real', storyClock: 45 });
+        expect(migrateWorldDaySegs(w)).toBe(true);
+        expect(w.storyClock).toBe(45);
+        expect(w.clockSegs).toBe(SEGMENTS_PER_DAY);
+    });
+    it('已迁移过的不重复处理', () => {
+        const w = mkWorld({ timeMode: 'sim', storyClock: 60, clockSegs: SEGMENTS_PER_DAY });
+        expect(migrateWorldDaySegs(w)).toBe(false);
+        expect(w.storyClock).toBe(60);
     });
 });
 
@@ -203,25 +227,41 @@ describe('关系看法（label）可变 + 叙述人称', () => {
     });
 });
 
-describe('真实时间（跟现实早/中/晚同步，错过当天可补、隔天不补）', () => {
+describe('真实时间（跟现实早/中/晚/凌晨同步，错过当天可补、隔天不补）', () => {
     const at = (s: string) => new Date(s);
 
-    it('realNowSeg：按小时分早/中/晚（深夜算晚）', () => {
+    it('realNowSeg：按小时分早/中/晚/凌晨（0~5点=凌晨，归属前一天的剧情日）', () => {
         expect(realNowSeg(at('2026-06-15T08:00:00')).seg).toBe(0); // 早
         expect(realNowSeg(at('2026-06-15T13:00:00')).seg).toBe(1); // 中
         expect(realNowSeg(at('2026-06-15T20:00:00')).seg).toBe(2); // 晚
-        expect(realNowSeg(at('2026-06-15T02:00:00')).seg).toBe(2); // 深夜→晚
         expect(realNowSeg(at('2026-06-15T13:00:00')).dayKey).toBe('2026-06-15');
+        // 6月15日凌晨2点 = 6月14日这个剧情日的下半夜（seg=3），保证段序单调
+        expect(realNowSeg(at('2026-06-15T02:00:00'))).toEqual({ dayKey: '2026-06-14', seg: 3 });
+        expect(realNowSeg(at('2026-06-01T01:00:00'))).toEqual({ dayKey: '2026-05-31', seg: 3 }); // 跨月
     });
 
-    it('没演过 → 演当前这一段', () => {
+    it('formatRealClock：凌晨显示次日日期', () => {
+        expect(formatRealClock({ dayKey: '2026-06-15', seg: 2 })).toBe('2026年6月15日 周一 晚上');
+        expect(formatRealClock({ dayKey: '2026-06-15', seg: 3 })).toBe('2026年6月16日 周二 凌晨');
+    });
+
+    it('没演过 → 演当前这一段（凌晨也一样）', () => {
         expect(realObserveTarget(mkWorld({ timeMode: 'real' }), at('2026-06-15T13:00:00'))).toEqual({ dayKey: '2026-06-15', seg: 1 });
+        expect(realObserveTarget(mkWorld({ timeMode: 'real' }), at('2026-06-15T02:00:00'))).toEqual({ dayKey: '2026-06-14', seg: 3 });
     });
 
     it('同一天落后 → 补下一段；已追上 → null', () => {
         const w = mkWorld({ timeMode: 'real', realClock: { dayKey: '2026-06-15', seg: 0 } });
         expect(realObserveTarget(w, at('2026-06-15T20:00:00'))).toEqual({ dayKey: '2026-06-15', seg: 1 }); // 只补一段
         expect(realObserveTarget(mkWorld({ timeMode: 'real', realClock: { dayKey: '2026-06-15', seg: 2 } }), at('2026-06-15T20:00:00'))).toBeNull();
+    });
+
+    it('凌晨接在晚上后面：演过晚上、熬到下半夜 → 补凌晨；演过凌晨 → 追平', () => {
+        const w = mkWorld({ timeMode: 'real', realClock: { dayKey: '2026-06-15', seg: 2 } });
+        expect(realObserveTarget(w, at('2026-06-16T01:30:00'))).toEqual({ dayKey: '2026-06-15', seg: 3 });
+        const w2 = mkWorld({ timeMode: 'real', realClock: { dayKey: '2026-06-15', seg: 3 } });
+        expect(realObserveTarget(w2, at('2026-06-16T03:00:00'))).toBeNull(); // 已追上
+        expect(realObserveTarget(w2, at('2026-06-16T08:00:00'))).toEqual({ dayKey: '2026-06-16', seg: 0 }); // 天亮进新一天
     });
 
     it('隔天没补的丢掉 → 直接跳到今天最早一段', () => {
@@ -333,6 +373,29 @@ describe('buildWorldCharTurn', () => {
         expect(turn).toContain('你能隐约感觉到 阿岚 对你的态度：有好感'); // 对方 30 → 有好感（只给档位）
         expect(turn).not.toContain('好感 30');    // 对方的数值是对方的内心，不泄露
         expect(turn).not.toContain('普通同事');   // 对方眼中的关系名同理
+    });
+
+    it('凌晨轮注入「深夜更冲动感性」段落，timeline 约束改为 0~5 点', () => {
+        const world = mkWorld();
+        const members = [mkChar('a', '小满'), mkChar('b', '阿岚')];
+        const turn = buildWorldCharTurn({ world, char: members[0], members, storyTime: '第2天凌晨', round: 4, beatsSoFar: [], userName: '' });
+        expect(turn).toContain('此刻是凌晨');
+        expect(turn).toContain('更**冲动、更感性**');
+        expect(turn).toContain('凌晨0点到5点');
+        // 白天轮不带凌晨段落
+        const dayTurn = buildWorldCharTurn({ world, char: members[0], members, storyTime: '第1天早上', round: 1, beatsSoFar: [], userName: '' });
+        expect(dayTurn).not.toContain('此刻是凌晨');
+        expect(dayTurn).toContain('清晨到上午');
+    });
+
+    it('NPC 世界引擎的凌晨轮带「镇子睡着了」的深夜基调', () => {
+        const world = mkWorld({ npcs: [{ id: 'n1', name: '老板娘', persona: '面包店' }] });
+        const members = [mkChar('a', '小满')];
+        const night = buildNpcTurn({ world, members, storyTime: '第2天凌晨' });
+        expect(night).toContain('现在是凌晨');
+        expect(night).toContain('镇子基本睡着了');
+        const day = buildNpcTurn({ world, members, storyTime: '第1天早上' });
+        expect(day).not.toContain('镇子基本睡着了');
     });
 
     it('独居与同居安排都体现在 prompt 里', () => {
@@ -527,13 +590,25 @@ describe('WorldScheduler', () => {
     });
 
     it('reconcile：今天已过去的时段视为已耗尽，不补火（防止配置完瞬间连烧）', () => {
-        vi.setSystemTime(new Date('2026-06-11T15:00:00')); // 15点：早/午已过
+        vi.setSystemTime(new Date('2026-06-11T15:00:00')); // 15点：凌晨/早/午已过
         const fired: string[] = [];
         WorldScheduler.onTrigger((id) => { fired.push(id); });
-        WorldScheduler.reconcile([{ worldId: 'w1', slots: ['morning', 'noon', 'evening'] }]);
+        WorldScheduler.reconcile([{ worldId: 'w1', slots: ['latenight', 'morning', 'noon', 'evening'] }]);
         const rec = JSON.parse(localStorage.getItem('world_tick_fired')!).w1;
-        expect(rec.fired).toEqual(['morning', 'noon']);
+        expect(rec.fired).toEqual(['latenight', 'morning', 'noon']);
         expect(fired).toEqual([]); // 不立即触发
+    });
+
+    it('latenight 时段：凌晨 2 点后起火', () => {
+        vi.setSystemTime(new Date('2026-06-11T01:00:00'));
+        const fired: string[] = [];
+        WorldScheduler.onTrigger((id, trigger) => { fired.push(`${id}:${trigger}`); });
+        WorldScheduler.reconcile([{ worldId: 'w1', slots: ['latenight'] }]);
+        vi.advanceTimersByTime(61_000); // 1点多：还没到
+        expect(fired).toEqual([]);
+        vi.setSystemTime(new Date('2026-06-11T02:30:00'));
+        vi.advanceTimersByTime(61_000);
+        expect(fired).toEqual(['w1:tick']);
     });
 
     it('到点触发当天未跑的时段，且每时段一天最多一次', () => {

@@ -1,8 +1,8 @@
 /**
  * 「家园 · 模拟时间」章节总结 —— 每 20 天结一卷。
  *
- * sim（模拟时间）模式不进记忆，演绎一直留在家园里慢慢攒。攒满 20 天（= 40 个半天/轮）
- * 就结一卷：
+ * sim（模拟时间）模式不进记忆，演绎一直留在家园里慢慢攒。攒满 20 天（= 80 轮，
+ * 一天四段：早/中/晚/凌晨）就结一卷：
  *   1. 用一次 LLM 调用把这 20 天的原文揉成一份**小说体梗概**（给屏幕外的用户看，图一乐），
  *      连带人物关系动态走向与评价、本卷沉淀的氛围基调；
  *   2. 同一次调用顺带产出**每个角色单方面视角**的回顾——往后单独喂回各自，避免角色开上帝视角；
@@ -14,18 +14,18 @@
 
 import type { APIConfig, CharacterProfile, WorldProfile, WorldEpisode, WorldChapter, WorldCharBeat } from '../../types';
 import { safeFetchJson } from '../safeApi';
-import { extractJson } from './prompts';
+import { extractJson, SEGMENTS_PER_DAY } from './prompts';
 
-/** 一天三段（早/中/晚），20 天结一卷。 */
-export const SEGMENTS_PER_DAY = 3;
+/** 一天四段（早/中/晚/凌晨，见 prompts.SEGMENTS_PER_DAY），20 天结一卷。 */
+export { SEGMENTS_PER_DAY };
 export const SIM_CHAPTER_DAYS = 20;
-export const SIM_CHAPTER_CLOCKS = SIM_CHAPTER_DAYS * SEGMENTS_PER_DAY; // 60
+export const SIM_CHAPTER_CLOCKS = SIM_CHAPTER_DAYS * SEGMENTS_PER_DAY; // 80
 
 const genId = (p: string) => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 
 /**
  * sim 模式下，本轮推进后是否正好结满一卷。
- * round（= 推进后的 storyClock）落在 40 的整数倍上即结卷。
+ * round（= 推进后的 storyClock）落在 SIM_CHAPTER_CLOCKS（80）的整数倍上即结卷。
  */
 export function shouldCloseChapter(world: WorldProfile, newClock: number): boolean {
     if (world.timeMode !== 'sim') return false;

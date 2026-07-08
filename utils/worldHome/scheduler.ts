@@ -2,24 +2,24 @@
  * 「家园」离线 tick 调度器。
  *
  * 与 VRScheduler 的"固定间隔"不同，家园按**每日时段**触发：
- * 早（09:00 后）/ 午（14:00 后）/ 晚（21:00 后），每个时段当天最多一轮。
+ * 凌晨（02:00 后）/ 早（09:00 后）/ 午（14:00 后）/ 晚（21:00 后），每个时段当天最多一轮。
  * 错过时段后回到前台会补火（和 VRScheduler 一样的 visibilitychange / focus /
  * 主线程轮询三重兜底），所以"早上没开 App，中午打开"会把早上那轮补上——
  * 这正是"我不看的时候世界慢慢走，我一看就加速"的体验。
  *
  * 存储（localStorage，独立键，不与 vr_schedules / proactive 挤占）：
- *   - world_tick_slots: { [worldId]: ('morning'|'noon'|'evening')[] }
+ *   - world_tick_slots: { [worldId]: ('latenight'|'morning'|'noon'|'evening')[] }
  *   - world_tick_fired: { [worldId]: { date: 'YYYY-MM-DD', fired: slot[] } }
  */
 
-export type WorldTickSlot = 'morning' | 'noon' | 'evening';
+export type WorldTickSlot = 'latenight' | 'morning' | 'noon' | 'evening';
 
 const SLOTS_KEY = 'world_tick_slots';
 const FIRED_KEY = 'world_tick_fired';
 const MAIN_THREAD_CHECK_INTERVAL = 60_000;
 
-/** 各时段的起火时刻（小时，本地时间）。 */
-const SLOT_HOUR: Record<WorldTickSlot, number> = { morning: 9, noon: 14, evening: 21 };
+/** 各时段的起火时刻（小时，本地时间）。latenight 按当天日历日的凌晨 2 点计。 */
+const SLOT_HOUR: Record<WorldTickSlot, number> = { latenight: 2, morning: 9, noon: 14, evening: 21 };
 
 type SlotsMap = Record<string, WorldTickSlot[]>;
 type FiredMap = Record<string, { date: string; fired: WorldTickSlot[] }>;

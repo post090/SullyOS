@@ -12,6 +12,7 @@ import { runVRSession } from '../utils/vrWorld/runSession';
 import { VR_DEFAULT_INTERVAL_MIN } from '../utils/vrWorld/constants';
 import { WorldScheduler } from '../utils/worldHome/scheduler';
 import { runWorldEpisode, rerollWorldCharBeat } from '../utils/worldHome/engine';
+import { migrateWorldDaySegs } from '../utils/worldHome/prompts';
 import { ChatParser } from '../utils/chatParser';
 import { safeFetchJson } from '../utils/safeApi';
 import { recordApiCall, setApiCallAmbientContext } from '../utils/apiCallLog';
@@ -1992,11 +1993,17 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       window.addEventListener('world-reroll-request', onRerollRequest as EventListener);
       // 调度表存 localStorage 不随备份迁移，按 IndexedDB 里的世界配置对账
       void DB.getWorlds()
-          .then(worlds => WorldScheduler.reconcile(
-              worlds
-                  .filter(w => (w.offlineTickSlots?.length || 0) > 0)
-                  .map(w => ({ worldId: w.id, slots: w.offlineTickSlots! }))
-          ))
+          .then(async worlds => {
+              // 旧存档（一天三段制）→ 四段制（含凌晨）一次性迁移并写回
+              for (const w of worlds) {
+                  if (migrateWorldDaySegs(w)) await DB.saveWorld(w).catch(() => {});
+              }
+              WorldScheduler.reconcile(
+                  worlds
+                      .filter(w => (w.offlineTickSlots?.length || 0) > 0)
+                      .map(w => ({ worldId: w.id, slots: w.offlineTickSlots! }))
+              );
+          })
           .catch(() => {});
 
       return () => {

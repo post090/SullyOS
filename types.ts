@@ -1133,7 +1133,7 @@ export type WorldHomeMode = 'light' | 'medium' | 'heavy';
  * - real: 真实时间——演绎进各角色的聊天与记忆（world_card），适合「真实系角色」。
  *         真实使用里中间会穿插大量真人聊天，卡片自然稀疏，不会刷屏。
  * - sim:  模拟时间——可自定义起始年月日，**不进记忆/聊天**；适合给 OC 们开小剧场图一乐。
- *         每 20 天（= 40 个半天/轮）自动结一卷：生成一份小说体总结（含人物关系动态走向
+ *         每 20 天（= 80 轮，一天四段：早/中/晚/凌晨）自动结一卷：生成一份小说体总结（含人物关系动态走向
  *         与评价），归档这 20 天原文，往后只把「该角色单方面视角的总结 + ta 最后一天 +
  *         本卷沉淀的氛围」分开喂回各角色——避免角色被迫开上帝视角。
  */
@@ -1247,7 +1247,8 @@ export interface WorldProfile {
     timeMode?: WorldTimeMode;
     /** sim 模式的起始日期（不设时按创建当天） */
     simStartDate?: WorldSimDate;
-    /** real 模式：世界已演到的「现实段」（早/中/晚跟着真实时钟走）。dayKey=YYYY-MM-DD，seg=0早/1中/2晚。
+    /** real 模式：世界已演到的「现实段」（早/中/晚/凌晨跟着真实时钟走）。dayKey=YYYY-MM-DD，
+     *  seg=0早/1中/2晚/3凌晨（凌晨发生在 dayKey **次日**的 0~5 点，排在该剧情日末尾以保证段序单调）。
      *  只能补当天错过的段，过了今天就补不了；未演过时为空。 */
     realClock?: { dayKey: string; seg: number };
     /** sim 模式：已被卷入章节总结的剧情时钟数（round ≤ 此值的原文已归档，不再喂原文） */
@@ -1273,10 +1274,13 @@ export interface WorldProfile {
     directives?: WorldDirective[];
     /** 社交动态的互动：key = `${round}_${charId}_${postIdx}`，值含点赞数 + 评论（NPC/路人）。 */
     feedReactions?: Record<string, { likes: number; comments: { from: string; text: string }[] }>;
-    /** 每天离线 tick 的时段（早/午/晚），空数组 = 仅手动观测推进 */
-    offlineTickSlots?: ('morning' | 'noon' | 'evening')[];
-    /** 剧情时钟：累计推进的半天数（0 = 第1天白天） */
+    /** 每天离线 tick 的时段（凌晨/早/午/晚），空数组 = 仅手动观测推进 */
+    offlineTickSlots?: ('latenight' | 'morning' | 'noon' | 'evening')[];
+    /** 剧情时钟：累计推进的段数（0 = 第1天早上；一天四段：早/中/晚/凌晨） */
     storyClock: number;
+    /** storyClock/simSummarizedClock 的「每天段数」版本：旧存档（无此字段）= 3 段（早中晚），
+     *  4 = 含凌晨的四段制。加载/演绎时经 migrateWorldDaySegs 自动迁移。 */
+    clockSegs?: number;
     /** 生成内容是否注入各成员的 1v1 聊天（默认 true） */
     injectToChat?: boolean;
     /** 该世界专属 API 覆盖；不设则回落全局 apiConfig */

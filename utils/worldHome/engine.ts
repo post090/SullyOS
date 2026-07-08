@@ -25,7 +25,7 @@ import { safeFetchJson } from '../safeApi';
 import { processNewMessages } from '../memoryPalace/pipeline';
 import {
     worldTimeLabel, buildWorldSystemAddendum, buildWorldCharTurn, buildNpcTurn,
-    parseCharBeat, parseNpcScene, realObserveTarget, formatRealClock,
+    parseCharBeat, parseNpcScene, realObserveTarget, formatRealClock, migrateWorldDaySegs,
 } from './prompts';
 import { ensureThreads, applyBeatToThreads, applyNpcGroupLines, applyNpcDms, npcInboxes } from './threads';
 import { shouldCloseChapter, summarizeChapter, SIM_CHAPTER_CLOCKS } from './chapters';
@@ -274,6 +274,10 @@ export async function runWorldEpisode(deps: WorldEpisodeDeps): Promise<WorldEpis
     const { world, characters, apiConfig, userProfile, groups, realtimeConfig, memoryPalaceConfig, trigger } = deps;
 
     if (running.has(world.id)) return { ok: false, reason: 'busy' };
+
+    // 旧存档（一天三段制）防御性迁移到四段制（含凌晨）：启动 sweep 可能还没跑完就被 tick 抢跑，
+    // 这里原地换算，storyClock/clockSegs 随本轮结束的 saveWorld 一并持久化。
+    migrateWorldDaySegs(world);
 
     const members = world.memberIds
         .map(id => characters.find(c => c.id === id))
