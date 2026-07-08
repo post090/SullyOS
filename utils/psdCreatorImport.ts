@@ -14,7 +14,7 @@
  * - 组名 / 图层名里的类目别名支持中文或英文 key，如 `前发`、`earhair`、`后发1`。
  *   识别不出类目的，在开发面板里手动选。
  * - 可换色标记：名字带 `#色` / `#tint` 强制可换色，带 `#原色` / `#notint`
- *   强制不可换色；不标记时头发类目默认可换色，其余默认不可。部件的自阴影/高光
+ *   强制不可换色；不标记时头发四类 + 眼睛默认可换色，其余默认不可。部件的自阴影/高光
  *   直接画在图层里即可——换色按像素明度重上色，明暗关系会保留。
  *
  * 注意：不再有"正片叠底 = 投影层"那套（简化：一个图层就是一个部件，没有单独的阴影层）。
@@ -55,7 +55,8 @@ const CATEGORY_ALIASES: [string, string[]][] = [
     ['decor', ['decor', '配饰', '饰品', '装饰']],
 ];
 
-const HAIR_KEYS = new Set(['fronthair', 'earhair', 'back1', 'back2']);
+// 不带 #色/#原色 标记时，这些类目默认「可换色」：头发四类 + 眼睛。其余默认不可换色。
+const DEFAULT_TINTABLE_KEYS = new Set(['fronthair', 'earhair', 'back1', 'back2', 'eyes']);
 
 /** 输出上限：超过就整体缩到 472（数据存 IndexedDB，别塞几千像素的 data URL） */
 const MAX_OUT = 944;
@@ -168,7 +169,7 @@ export async function parseCreatorPsd(buffer: ArrayBuffer): Promise<PsdImportRes
                 const childParsed = parseLayerName(child.name || '', false);
                 const tintable = childParsed.tintable !== null
                     ? childParsed.tintable
-                    : (groupParsed.tintable !== null ? groupParsed.tintable : HAIR_KEYS.has(catKey || ''));
+                    : (groupParsed.tintable !== null ? groupParsed.tintable : DEFAULT_TINTABLE_KEYS.has(catKey || ''));
                 parts.push({
                     categoryKey: catKey,
                     name: childParsed.name || child.name || '',
@@ -192,7 +193,7 @@ export async function parseCreatorPsd(buffer: ArrayBuffer): Promise<PsdImportRes
             parts.push({
                 categoryKey: parsed.categoryKey,
                 name: parsed.name,
-                tintable: parsed.tintable !== null ? parsed.tintable : HAIR_KEYS.has(parsed.categoryKey || ''),
+                tintable: parsed.tintable !== null ? parsed.tintable : DEFAULT_TINTABLE_KEYS.has(parsed.categoryKey || ''),
                 src: exportDataUrl(canvas, scale),
                 warnings: partWarnings,
             });

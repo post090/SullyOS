@@ -198,7 +198,7 @@ const CharCreatorDevApp: React.FC = () => {
                                 </div>
                             </div>
                             <div><b className="text-white/85">③ 图层名 = 部件显示名</b>，随便起（杏眼、云朵刘海…）。</div>
-                            <div><b className="text-white/85">④ 换色</b>：名字加 <code>#色</code> 强制可换色、<code>#原色</code> 强制不可换色；不写时<b>头发四类默认可换色</b>，其余默认不可。</div>
+                            <div><b className="text-white/85">④ 换色</b>：名字加 <code>#色</code> 强制可换色、<code>#原色</code> 强制不可换色；不写时<b>头发四类 + 眼睛默认可换色</b>，其余默认不可。</div>
                             <div><b className="text-white/85">⑤ 显示 / 隐藏</b>：要导入的图层<b>保持显示</b>（小眼睛打开）；<b>隐藏的图层会被跳过</b>——正好用来藏草稿/参考层。图层不透明度记得拉满 100%。</div>
                             <div><b className="text-white/85">⑥ 画布</b>：<b>472×472</b> 正方形（过大会自动缩，只要锚点/构图对齐即可）。</div>
                             <div className="text-white/40">认不出类目也没关系，导进来后每个部件可在下面手动选类目。</div>

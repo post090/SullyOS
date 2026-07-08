@@ -2539,6 +2539,14 @@ renderTabs();
 renderPanel();
 renderCharacter();
 
+/* 自动加载「内置素材包」：管理员在捏人器 dev 面板导出 PNG+清单，放进 like520/parts/ 即可，
+   这里启动时 fetch parts/manifest.json 合并进 PARTS——无需手改本文件的 PARTS 数组。
+   清单不存在(404)则静默跳过，所以没加过素材也完全正常。 */
+fetch('parts/manifest.json', { cache: 'no-cache' })
+  .then(r => (r.ok ? r.json() : null))
+  .then(list => { if (Array.isArray(list) && list.length) mergeExtraItems(list); })
+  .catch(() => {});
+
 /* 后台预加载所有素材，让后续切换更顺滑 */
 preloadAllAssets().then(() => {
   console.log('所有素材预加载完成');

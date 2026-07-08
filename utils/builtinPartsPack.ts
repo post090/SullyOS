@@ -6,11 +6,12 @@
 // 路径清单。PNG 比 base64 小 ~25% 且浏览器逐张缓存。
 //
 // 这个模块把「一批部件（PSD 解析结果 / 已存自定义部件）」打成一个可提交的素材包 ZIP：
+//   parts/manifest.json       —— 清单（src/shadowSrc 已写成 parts/<id>.png 相对路径）
 //   parts/<id>.png            —— 部件图（二进制）
-//   parts/<id>_shadow.png     —— 投影层（可选）
-//   parts.json                —— 清单（src/shadowSrc 已写成 parts/<id>.png 相对路径）
+//   parts/<id>_shadow.png     —— 投影层（旧数据可能有，新导入不再产出）
 //   README.txt                —— 怎么落地成内置素材的说明
-// 管理员把 parts/ 丢进 public/like520/，清单并进 creator 的 PARTS（或让 HTML fetch 加载）即可。
+// 管理员把整个 parts/ 丢进 public/like520/ 即可——character_creator.html 启动时会 fetch
+// parts/manifest.json 自动合并进 PARTS，无需手改 HTML。
 
 export interface BuiltinPackItem {
     categoryKey: string | null;
@@ -120,18 +121,21 @@ const README = `捏人器内置素材包
 （而不是每台设备各存一份 base64，也不把 base64 塞进 character_creator.html 撑大体积）。
 
 内容：
-  parts/*.png    部件图 / 投影层（二进制 PNG，比 base64 省 ~25%，浏览器逐张缓存）
-  parts.json     部件清单，src/shadowSrc 已写成 parts/<id>.png 相对路径
+  parts/manifest.json   部件清单（src 已写成 parts/<id>.png 相对路径）
+  parts/*.png           部件图（二进制 PNG，比 base64 省 ~25%，浏览器逐张缓存）
 
-怎么落地成内置素材：
-  1. 把 parts/ 整个文件夹丢进  public/like520/parts/
-  2. 把 parts.json 里的条目合并进 character_creator.html 的 PARTS 数组
-     （按 categoryKey 归到对应类目的 items，src 用清单里的相对路径），
-     或改造 HTML 在启动时 fetch('parts.json') 动态加载。
-  3. 提交即成全员内置。
+怎么落地成内置素材（无需改任何代码！）：
+  1. 解压这个 ZIP。
+  2. 把里面的整个 parts/ 文件夹，放进仓库的  public/like520/  目录下
+     （最终是  public/like520/parts/manifest.json  +  public/like520/parts/*.png）。
+     —— 若 public/like520/parts/ 已存在，用新的整个覆盖它（清单是全量的）。
+  3. 提交。character_creator.html 启动时会自动 fetch parts/manifest.json 加载，
+     不用手改它的 PARTS 数组。
 
-注意：id 需在整份 PARTS 里唯一；若与已有内置 id 冲突，改 parts.json 里的 id
-      并同步重命名对应 PNG 文件。
+说明：
+  · 清单是「你当前所有自定义部件」的全量快照，所以每次发布用新包整体覆盖即可，
+    不用手动往里加条目。
+  · 每个部件 id 由「类目_名字」生成，改名字会变 id；保持名字稳定，dedup 才稳。
 `;
 
 /**
@@ -145,7 +149,7 @@ export async function buildBuiltinPartsPackZip(items: BuiltinPackItem[]): Promis
     for (const f of plan.files) {
         zip.file(f.path, f.base64, { base64: true });
     }
-    zip.file('parts.json', JSON.stringify(plan.manifest, null, 2));
+    zip.file('parts/manifest.json', JSON.stringify(plan.manifest, null, 2));
     zip.file('README.txt', README);
     const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 9 } });
     return { blob, plan };
