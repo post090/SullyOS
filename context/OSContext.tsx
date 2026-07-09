@@ -2726,7 +2726,9 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           // 1. Define Stores to Process based on Mode
           let storesToProcess: string[] = [];
           const allStores = [
-              'characters', 'messages', 'themes', 'emojis', 'emoji_categories', 'assets', 'gallery',
+              // character_groups（角色分组定义）必须与 characters 同进退：
+              // 角色身上的 groupId 指向这张表，漏导会让导入端全员回落「未分组」
+              'characters', 'character_groups', 'messages', 'themes', 'emojis', 'emoji_categories', 'assets', 'gallery',
               'user_profile', 'diaries', 'tasks', 'anniversaries', 'room_todos',
               'room_notes', 'groups', 'journal_stickers', 'social_posts', 'courses', 'games', 'worldbooks', 'novels', 'songs',
               'bank_transactions', 'bank_data',
@@ -2971,7 +2973,8 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           // Stores that never contain base64 image data — skip recursive traversal
           const noImageStores = new Set([
               'memory_nodes', 'memory_vectors', 'memory_links', 'topic_boxes', 'anticipations', 'event_boxes',
-              'bank_transactions', 'scheduled_messages', 'memory_batches', 'hotnews_snapshots'
+              'bank_transactions', 'scheduled_messages', 'memory_batches', 'hotnews_snapshots',
+              'character_groups'
           ]);
 
           // Chunked processObject for large arrays — yields to main thread every 200 items
@@ -3087,6 +3090,8 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               // Assign to Backup Data
               switch(storeName) {
                   case 'characters': if(mode !== 'media_only') backupData.characters = processedData; break;
+                  // 角色分组定义 —— 键名须与 importFullData 读取的字段（data.characterGroups）对齐
+                  case 'character_groups': backupData.characterGroups = processedData; break;
                   case 'messages': backupData.messages = processedData; break;
                   case 'themes': backupData.customThemes = processedData; break;
                   case 'emojis': backupData.savedEmojis = processedData; break;
