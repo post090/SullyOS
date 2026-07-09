@@ -4,6 +4,7 @@ import {
     ArrowLeft, Plus, Trash, BookOpen, Planet, Clock, Play, CaretRight, X,
     UploadSimple, PencilSimple, FlipHorizontal, CaretLeft, Sparkle,
     CircleNotch, TextAa, Palette, Pause, MusicNotes, Queue, Question, Check, Gear,
+    SpeakerHigh, SpeakerSlash,
 } from '@phosphor-icons/react';
 import TheaterPanel from './theater/TheaterPanel';
 import { CreatorIframe, type ChibiResult } from '../components/Like520Event';
@@ -910,7 +911,8 @@ const ReplyComposeModal: React.FC<{ letter: VRLetter; defaultPen: string; initia
 // ============ 信号坠落处 · 顶部特殊活动 banner ============
 // 尽量照搬那张设计图：深空 + 金框四角 + 右侧书影 + 发光衬线标题 + 英文副名 + 副标题；
 // 右下角把「剩余时间倒计时」换成「已完成 x/20 首诗歌」的进度。点整块进入信号坠落处。
-const SIGNAL_BANNER_BOOK = 'https://raw.githubusercontent.com/qegj567-cloud/SullyOS-assets/main/img/BOOK.png';
+// banner 底图：月（走 jsDelivr CDN，与 520 素材一致，国内更稳）
+const SIGNAL_BANNER_MOON = 'https://cdn.jsdelivr.net/gh/qegj567-cloud/SullyOS-assets@main/img/MOON.png';
 const SignalBanner: React.FC<{ onOpen: () => void }> = ({ onOpen }) => {
     const [bk, setBk] = useState<SignalBooklet | null>(null);
     useEffect(() => {
@@ -926,13 +928,10 @@ const SignalBanner: React.FC<{ onOpen: () => void }> = ({ onOpen }) => {
     return (
         <button onClick={onOpen} className="relative w-full h-[132px] rounded-2xl overflow-hidden text-left active:scale-[0.985] transition-transform"
             style={{ boxShadow: '0 10px 34px rgba(0,0,0,.5)', border: '1px solid rgba(196,164,92,.35)' }}>
-            <div className="absolute inset-0" style={{ background: 'radial-gradient(130% 150% at 80% 18%, #2a2450 0%, #14122e 46%, #0a0820 100%)' }} />
-            {/* 右侧书影（复用图书场景，压暗融进深空） */}
-            <div className="absolute right-0 top-0 bottom-0 w-3/5" style={{
-                backgroundImage: `url(${SIGNAL_BANNER_BOOK})`, backgroundSize: 'cover', backgroundPosition: 'center right',
-                filter: 'saturate(.68) brightness(.5) blur(.6px)',
-                maskImage: 'linear-gradient(90deg, transparent, #000 62%)', WebkitMaskImage: 'linear-gradient(90deg, transparent, #000 62%)',
-            }} />
+            {/* 底图：月 */}
+            <div className="absolute inset-0" style={{ backgroundImage: `url(${SIGNAL_BANNER_MOON})`, backgroundSize: 'cover', backgroundPosition: 'center' }} />
+            {/* 压暗 + 左侧加重，保证左侧文案在月面上可读 */}
+            <div className="absolute inset-0" style={{ background: 'linear-gradient(90deg, rgba(8,6,22,.86) 0%, rgba(10,8,28,.6) 44%, rgba(10,8,30,.3) 100%)' }} />
             {/* 顶部光束 + 星尘 + 底部压暗 */}
             <div className="absolute inset-0" style={{ background: 'linear-gradient(180deg, rgba(210,190,255,.16), transparent 42%), linear-gradient(180deg, transparent 55%, rgba(8,6,22,.6))' }} />
             <div className="pointer-events-none absolute inset-0 opacity-70" style={{ backgroundImage: 'radial-gradient(1px 1px at 22% 30%, rgba(255,255,255,.55), transparent), radial-gradient(1px 1px at 66% 24%, rgba(210,220,255,.45), transparent), radial-gradient(1px 1px at 84% 60%, rgba(230,225,255,.4), transparent)' }} />
@@ -1758,6 +1757,78 @@ const SignalAdminPanel: React.FC<{ onClose: () => void; addToast?: (m: string, t
     );
 };
 
+// ── 信号坠落处 BGM：三幕各 2 首，进面板按「当前诗所处的幕」随机抽一首循环播放。
+// 走 jsDelivr CDN（与 520 特别活动的 BGM 植入方式一致）。仿 useLike520BGM 的淡入淡出 + 静音开关。
+const SIGNAL_BGM: Record<1 | 2 | 3, string[]> = {
+    1: ['https://cdn.jsdelivr.net/gh/qegj567-cloud/SullyOS-assets@main/bgm/POEM/A01.mp3',
+        'https://cdn.jsdelivr.net/gh/qegj567-cloud/SullyOS-assets@main/bgm/POEM/A02.mp3'],
+    2: ['https://cdn.jsdelivr.net/gh/qegj567-cloud/SullyOS-assets@main/bgm/POEM/B01.mp3',
+        'https://cdn.jsdelivr.net/gh/qegj567-cloud/SullyOS-assets@main/bgm/POEM/B02.mp3'],
+    3: ['https://cdn.jsdelivr.net/gh/qegj567-cloud/SullyOS-assets@main/bgm/POEM/C01.mp3',
+        'https://cdn.jsdelivr.net/gh/qegj567-cloud/SullyOS-assets@main/bgm/POEM/C03.mp3'],
+};
+const SIGNAL_BGM_MUTED_KEY = 'signal_bgm_muted';
+const SIGNAL_BGM_VOL = 0.32;
+
+/** active=面板是否在场；actNo=当前诗所处幕（1/2/3）。切幕会淡出旧曲、随机换本幕一首淡入。 */
+function useSignalBGM(active: boolean, actNo: 1 | 2 | 3 | null) {
+    const audioRef = useRef<HTMLAudioElement | null>(null);
+    const loadedActRef = useRef<number | null>(null);
+    const fadeRef = useRef<number | null>(null);
+    const [muted, setMuted] = useState<boolean>(() => { try { return localStorage.getItem(SIGNAL_BGM_MUTED_KEY) === '1'; } catch { return false; } });
+    const mutedRef = useRef(muted); mutedRef.current = muted;
+
+    const fadeTo = useCallback((target: number, ms = 900, pauseAtEnd = false) => {
+        const a = audioRef.current; if (!a) return;
+        if (fadeRef.current) { clearInterval(fadeRef.current); fadeRef.current = null; }
+        const from = a.volume, steps = 24; let i = 0;
+        fadeRef.current = window.setInterval(() => {
+            i++; a.volume = Math.max(0, Math.min(1, from + (target - from) * i / steps));
+            if (i >= steps) {
+                if (fadeRef.current) { clearInterval(fadeRef.current); fadeRef.current = null; }
+                if (pauseAtEnd && a.volume <= 0.001 && !a.paused) a.pause();
+            }
+        }, Math.max(16, ms / steps));
+    }, []);
+
+    // 起播 / 切幕
+    useEffect(() => {
+        if (!active || actNo == null) { if (audioRef.current && !audioRef.current.paused) fadeTo(0, 600, true); return; }
+        let a = audioRef.current;
+        if (!a) { a = new Audio(); a.loop = true; a.preload = 'auto'; a.volume = 0; audioRef.current = a; }
+        if (loadedActRef.current !== actNo) {
+            const pool = SIGNAL_BGM[actNo] || [];
+            if (!pool.length) return;
+            loadedActRef.current = actNo;
+            a.src = pool[Math.floor(Math.random() * pool.length)];
+            a.volume = 0; a.load();
+        }
+        a.play().then(() => fadeTo(mutedRef.current ? 0 : SIGNAL_BGM_VOL)).catch(() => { /* autoplay 被拦：等下次交互 */ });
+    }, [active, actNo, fadeTo]);
+
+    // 卸载清理
+    useEffect(() => () => {
+        if (fadeRef.current) clearInterval(fadeRef.current);
+        const a = audioRef.current; if (a) { try { a.pause(); a.src = ''; } catch { /* ignore */ } }
+        audioRef.current = null; loadedActRef.current = null;
+    }, []);
+
+    const toggle = useCallback(() => {
+        setMuted(prev => {
+            const nx = !prev;
+            try { localStorage.setItem(SIGNAL_BGM_MUTED_KEY, nx ? '1' : '0'); } catch { /* ignore */ }
+            const a = audioRef.current;
+            if (a) {
+                if (nx) fadeTo(0, 350);
+                else { if (a.paused) a.play().catch(() => { /* ignore */ }); fadeTo(SIGNAL_BGM_VOL, 350); }
+            }
+            return nx;
+        });
+    }, [fadeTo]);
+
+    return { muted, toggle };
+}
+
 const SignalPanel: React.FC<{ addToast?: (m: string, t?: any) => void; characters: CharacterProfile[] }> = ({ addToast, characters }) => {
     const [state, setState] = useState<SignalState | null>(null);
     const [feed, setFeed] = useState<SignalPoem[]>([]);
@@ -1810,6 +1881,10 @@ const SignalPanel: React.FC<{ addToast?: (m: string, t?: any) => void; character
     const poem = state?.poem;
     const myEchoes = feed.filter(p => (p.mineCount || 0) > 0).length;
 
+    // BGM：按当前诗所处的幕（未加载/写完则无）随机放本幕一首。面板在场即播（进面板本身是用户手势，不触 autoplay 限制）。
+    const bgmActNo = (bk && bk.status !== 'done') ? signalActFor((bk.poemCount || 0) + 1, bk.poemsTarget).no : null;
+    const { muted: bgmMuted, toggle: toggleBgm } = useSignalBGM(!offline, bgmActNo);
+
     return (
         <div className="absolute left-3 right-3 z-20 rounded-2xl overflow-hidden flex flex-col backdrop-blur-md"
             style={{ top: VR_ROOM_PANEL_TOP, bottom: vrBottomPad('4rem'), background: 'linear-gradient(165deg,#241c31 0%,#17111f 52%,#0e0a15 100%)', border: '1px solid rgba(201,168,106,0.32)', boxShadow: '0 10px 30px rgba(0,0,0,.5), inset 0 0 60px rgba(0,0,0,.45)' }}>
@@ -1827,8 +1902,11 @@ const SignalPanel: React.FC<{ addToast?: (m: string, t?: any) => void; character
                     <span className="text-[15px] tracking-[0.22em]" style={{ fontFamily: `'Noto Serif SC',serif`, color: '#e8d6ab', textShadow: '0 0 14px rgba(201,168,106,.4)' }}>{bk?.title || '信号坠落处'}</span>
                     {bk?.subtitle && <span className="text-[9px] tracking-[0.2em] text-amber-200/45">{bk.subtitle}</span>}
                     {state?.paused && <span className="text-[8px] rounded-sm px-1.5 py-[1px] text-rose-100 shrink-0" style={{ background: 'rgba(244,63,94,.28)', border: '1px solid rgba(244,63,94,.5)' }}>已暂停</span>}
-                    {import.meta.env.DEV && <button onClick={() => setAdminOpen(true)} className="ml-auto text-[9px] px-2 py-0.5 rounded-sm text-amber-100/70" style={{ border: '1px solid rgba(201,168,106,.3)' }}>后台</button>}
-                    {bk && <span className={`${import.meta.env.DEV ? '' : 'ml-auto'} text-[9px] tabular-nums`} style={{ fontFamily: `'Noto Serif SC',serif`, color: 'rgba(201,168,106,.7)' }}>{bk.poemCount} / {bk.poemsTarget} 卷</span>}
+                    <button onClick={toggleBgm} className="ml-auto shrink-0 grid place-items-center w-6 h-6 rounded-full text-amber-100/70 active:scale-90 transition-transform" style={{ border: '1px solid rgba(201,168,106,.3)' }} title={bgmMuted ? '播放 BGM' : '静音'} aria-label={bgmMuted ? '播放 BGM' : '静音'}>
+                        {bgmMuted ? <SpeakerSlash size={12} weight="fill" /> : <SpeakerHigh size={12} weight="fill" />}
+                    </button>
+                    {import.meta.env.DEV && <button onClick={() => setAdminOpen(true)} className="text-[9px] px-2 py-0.5 rounded-sm text-amber-100/70" style={{ border: '1px solid rgba(201,168,106,.3)' }}>后台</button>}
+                    {bk && <span className="text-[9px] tabular-nums" style={{ fontFamily: `'Noto Serif SC',serif`, color: 'rgba(201,168,106,.7)' }}>{bk.poemCount} / {bk.poemsTarget} 卷</span>}
                 </div>
                 {/* 铜金细分隔线 */}
                 <div className="mt-1.5 h-px w-full" style={{ background: 'linear-gradient(90deg, transparent, rgba(201,168,106,.5) 15%, rgba(201,168,106,.5) 85%, transparent)' }} />
