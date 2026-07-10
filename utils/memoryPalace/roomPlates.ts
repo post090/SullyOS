@@ -188,7 +188,7 @@ async function callPlateLLM(
     plates: RoomPlate[],
     materials: PlateMaterial[],
     llmConfig: LightLLMConfig,
-    identity: { personaBrief: string; userBio: string },
+    identityContext: string,
 ): Promise<PlateLLMItem[]> {
     const materialByRoom = new Map(materials.map(m => [m.room, m.lines]));
 
@@ -212,10 +212,10 @@ ${existingBlock}
 ${materialBlock}`;
     }).join('\n\n');
 
-    const systemPrompt = `你是 ${charName}。${identity.personaBrief ? `你的人设摘要：
-${identity.personaBrief}
+    const systemPrompt = `${identityContext ? `${identityContext}
+---
 
-` : ''}${userName} 是与你朝夕相处的人${identity.userBio ? `（TA 的自述：${identity.userBio}）` : ''}。下面的材料全部来自你们相处的记忆。
+` : ''}你是 ${charName}，${userName} 是与你朝夕相处的人。下面的材料全部来自你们相处的记忆。
 
 你现在在独处，安静地整理自己的"底色认知"——那些不需要刻意回忆就知道的事：关于 ${userName}、关于你自己、关于你们之间。
 
@@ -341,21 +341,23 @@ async function consolidatePlates(
         return { updated: [] };
     }
 
-    // 身份上下文：整理 LLM 需要知道"我是谁、TA是谁"才不会张冠李戴——
-    // 尤其是回填场景，材料横跨几个月，没有人设参照时蒸馏视角会飘
-    const identity = { personaBrief: '', userBio: '' };
+    // 身份上下文：直接走 ContextBuilder.buildCoreContext(char, user, false)——
+    // 与全 App 统一的人设口径（身份/核心指令/世界观/用户画像/印象/核心记忆），不重复造轮子。
+    // includeDetailedMemories=false：不带详细日志与向量召回，整理 LLM 用不上。
+    // 尤其是回填场景，材料横跨几个月，没有人设参照时蒸馏视角会飘。
+    let identityContext = '';
     try {
         const { DB } = await import('../db');
+        const { ContextBuilder } = await import('../context');
         const chars = await DB.getAllCharacters();
-        const profile = chars.find((c: { id: string }) => c.id === charId);
-        if (profile?.systemPrompt) identity.personaBrief = String(profile.systemPrompt).slice(0, 400);
+        const profile = chars.find(c => c.id === charId);
         const up = await DB.getUserProfile();
-        if (up?.bio) identity.userBio = String(up.bio).replace(/\s+/g, ' ').slice(0, 200);
-    } catch { /* 拿不到就裸跑，prompt 里仍有名字 */ }
+        if (profile && up) identityContext = ContextBuilder.buildCoreContext(profile, up, false);
+    } catch { /* 拿不到就裸跑，prompt 里仍有名字与身份确认段 */ }
 
     let items: PlateLLMItem[] = [];
     try {
-        items = await callPlateLLM(charName, userName, plates, materials, llmConfig, identity);
+        items = await callPlateLLM(charName, userName, plates, materials, llmConfig, identityContext);
     } catch (e: any) {
         console.warn(`🚪 [RoomPlate] LLM 整理调用失败: ${e?.message || e}`);
     }
