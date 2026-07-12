@@ -461,6 +461,8 @@ const ThemeMaker: React.FC = () => {
     const [showApplySheet, setShowApplySheet] = useState(false);
     const [applySelection, setApplySelection] = useState<Set<string>>(new Set());
     const [assetUrlDraft, setAssetUrlDraft] = useState<Record<'bg' | 'deco' | 'avatarDeco', string>>({ bg: '', deco: '', avatarDeco: '' });
+    const [isThemeLibraryOpen, setIsThemeLibraryOpen] = useState(false);
+    const [themeLibrarySearch, setThemeLibrarySearch] = useState('');
     
     // Local state for sliders
     const [paddingVal, setPaddingVal] = useState(12);
@@ -919,11 +921,15 @@ const ThemeMaker: React.FC = () => {
     };
 
     const parsedBgColor = parseColorValue(activeStyle.backgroundColor);
+    const visibleSavedThemes = useMemo(() => {
+        const query = themeLibrarySearch.trim().toLowerCase();
+        return query ? customThemes.filter(theme => (theme.name || '').toLowerCase().includes(query)) : customThemes;
+    }, [customThemes, themeLibrarySearch]);
 
     return (
         <div className="h-full w-full bg-slate-50 flex flex-col font-light relative">
             {/* Header */}
-            <div className="bg-white/70 backdrop-blur-md border-b border-white/40 shrink-0 z-20" style={{ paddingTop: 'var(--safe-top)' }}>
+            <div className="bg-white/70 backdrop-blur-md border-b border-white/40 shrink-0 z-20 sticky top-0" style={{ paddingTop: 'max(var(--safe-top, 0px), env(safe-area-inset-top, 0px))' }}>
             <div className="flex items-center px-4 py-3 justify-between">
                 <div className="flex items-center gap-2">
                     <button onClick={requestClose} className="p-2 -ml-2 rounded-full hover:bg-black/5 active:scale-90 transition-transform">
@@ -949,17 +955,24 @@ const ThemeMaker: React.FC = () => {
 
             {/* 用户作品区：保存后的气泡可回到工坊继续编辑，也可单独导出分享。 */}
             <section className="shrink-0 bg-white/80 border-b border-slate-100 px-4 py-3">
-                <div className="flex items-center justify-between mb-2">
+                <button type="button" onClick={() => setIsThemeLibraryOpen(prev => !prev)} aria-expanded={isThemeLibraryOpen} className="w-full flex items-center justify-between text-left">
                     <div>
                         <h2 className="text-xs font-bold text-slate-600">我的自定义气泡</h2>
-                        <p className="text-[10px] text-slate-400 mt-0.5">导出作品，或载入后再次修改</p>
+                        <p className="text-[10px] text-slate-400 mt-0.5">点击{isThemeLibraryOpen ? '收起' : '展开并选择'} · 可搜索、修改或导出</p>
                     </div>
-                    <span className="text-[10px] text-slate-400">{customThemes.length} 套</span>
-                </div>
-                {customThemes.length > 0 ? (
-                    <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
-                        {customThemes.map((theme: ChatTheme) => (
-                            <div key={theme.id} className={`min-w-[176px] rounded-2xl border p-2.5 ${editingTheme.id === theme.id ? 'border-indigo-300 bg-indigo-50/70' : 'border-slate-200 bg-white'}`}>
+                    <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-slate-400">{customThemes.length} 套</span>
+                        <span className={`text-slate-400 transition-transform ${isThemeLibraryOpen ? 'rotate-180' : ''}`} aria-hidden>⌄</span>
+                    </div>
+                </button>
+                {isThemeLibraryOpen && (customThemes.length > 0 ? (
+                    <div className="mt-3">
+                        {customThemes.length > 6 && (
+                            <input value={themeLibrarySearch} onChange={e => setThemeLibrarySearch(e.target.value)} placeholder="搜索我的气泡…" className="w-full mb-2.5 px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs outline-none focus:border-indigo-300" />
+                        )}
+                        <div className="grid grid-cols-2 gap-2 max-h-[42vh] overflow-y-auto no-scrollbar pb-1">
+                        {visibleSavedThemes.map((theme: ChatTheme) => (
+                            <div key={theme.id} className={`min-w-0 rounded-2xl border p-2.5 ${editingTheme.id === theme.id ? 'border-indigo-300 bg-indigo-50/70' : 'border-slate-200 bg-white'}`}>
                                 <div className="flex items-center gap-2 min-w-0">
                                     <span className="flex -space-x-1 shrink-0">
                                         <span className="w-5 h-5 rounded-full border-2 border-white shadow-sm" style={{ background: theme.user?.backgroundColor || '#6366f1' }} />
@@ -968,17 +981,19 @@ const ThemeMaker: React.FC = () => {
                                     <span className="text-xs font-bold text-slate-700 truncate">{theme.name}</span>
                                 </div>
                                 <div className="grid grid-cols-2 gap-1.5 mt-2.5">
-                                    <button onClick={() => editSavedTheme(theme)} className="py-1.5 rounded-xl bg-indigo-50 text-indigo-600 text-[11px] font-bold">再次修改</button>
+                                    <button onClick={() => editSavedTheme(theme)} className="py-1.5 rounded-xl bg-indigo-50 text-indigo-600 text-[11px] font-bold">选择载入</button>
                                     <button onClick={() => exportSavedTheme(theme)} className="py-1.5 rounded-xl bg-slate-100 text-slate-600 text-[11px] font-bold">导出</button>
                                 </div>
                             </div>
                         ))}
+                        </div>
+                        {visibleSavedThemes.length === 0 && <div className="py-4 text-center text-[10px] text-slate-400">没有找到「{themeLibrarySearch.trim()}」</div>}
                     </div>
                 ) : (
-                    <div className="rounded-2xl border border-dashed border-slate-200 px-3 py-2.5 text-[11px] text-slate-400">
+                    <div className="mt-3 rounded-2xl border border-dashed border-slate-200 px-3 py-2.5 text-[11px] text-slate-400">
                         还没有作品。完成设计并保存后，会陈列在这里。
                     </div>
-                )}
+                ))}
             </section>
 
             {/* Preview Area (Realistic Chat Row) */}
