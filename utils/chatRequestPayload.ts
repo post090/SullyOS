@@ -21,6 +21,8 @@ import { buildMcdMiniAppContextBlock } from './mcdToolBridge';
 import type { McdMiniAppSnapshot } from './mcdToolBridge';
 import { buildLuckinMiniAppContextBlock, buildLuckinChatSystemBlock } from './luckinToolBridge';
 import type { LuckinMiniAppSnapshot, LuckinChatState } from './luckinToolBridge';
+import { isMcpChatAvailable } from './mcpClient';
+import { buildMcpSystemBlock, MCP_TAIL_REMINDER } from './mcpToolBridge';
 import type { MusicCfg, Song, LyricLine, MusicPlaybackSnapshot } from '../context/MusicContext';
 import { isPromptBuildSkipped } from './devDebug';
 import { injectWorldbookDepthEntries, resolveWorldbookEntries } from './worldbook';
@@ -89,6 +91,7 @@ export interface BuildChatPayloadResult {
         mcdActive: boolean;
         luckinActive: boolean;
         luckinChatActive: boolean;
+        mcpChatActive: boolean;
         htmlActive: boolean;
         thinkingActive: boolean;
         promptBuildSkipped: boolean;
@@ -188,6 +191,7 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
                 mcdActive: false,
                 luckinActive: false,
                 luckinChatActive: false,
+                mcpChatActive: false,
                 htmlActive: false,
                 thinkingActive: false,
                 promptBuildSkipped: true,
@@ -308,6 +312,16 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
         }
     }
 
+    // ── 9d. 通用 MCP 工具模式 (用户自配的远程 MCP 服务器, 见 docs/mcp-client.md) ──
+    // 只要有启用且已发现工具的服务器就常开，不像瑞幸靠关键词激活。
+    const mcpChatActive = isMcpChatAvailable(char.id);
+    if (mcpChatActive) {
+        const block = buildMcpSystemBlock(userProfile?.name || '用户', char.id);
+        if (block) {
+            systemPrompt += block;
+        }
+    }
+
     // ── 10. 组装 fullMessages + 末尾双语 reminder ─────────
     const fullMessages: Array<{ role: string; content: any }> = [
         { role: 'system', content: systemPrompt },
@@ -319,11 +333,14 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
             content: `[Reminder: 每句话必须用 <翻译><原文>...</原文><译文>...</译文></翻译> 标签包裹。一句一个标签。绝对不能省略。]`,
         });
     }
+    if (mcpChatActive) {
+        fullMessages.push({ role: 'system', content: MCP_TAIL_REMINDER });
+    }
 
     return {
         systemPrompt,
         cleanedApiMessages: messagesWithWorldbookDepth,
         fullMessages,
-        flags: { bilingualActive, mcdActive, luckinActive, luckinChatActive, htmlActive, thinkingActive, promptBuildSkipped: false },
+        flags: { bilingualActive, mcdActive, luckinActive, luckinChatActive, mcpChatActive, htmlActive, thinkingActive, promptBuildSkipped: false },
     };
 }

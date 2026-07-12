@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { detectFirstUrl, isXhsUrl, parseWebpageHtml } from './webpageExtractor';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { detectFirstUrl, isXhsUrl, parseWebpageHtml, extractWebpageContent } from './webpageExtractor';
 
 describe('detectFirstUrl', () => {
   it('从一句话里揪出 http(s) 链接', () => {
@@ -60,5 +60,86 @@ describe('parseWebpageHtml', () => {
     const longBody = '<p>' + '内容'.repeat(500) + '</p>';
     const r = parseWebpageHtml(longBody, 'https://x.com');
     expect(r.excerpt.length).toBeLessThanOrEqual(141); // 140 + 省略号
+  });
+});
+
+describe('extractWebpageContent 提取链路（apizero 主 → sfworker/Jina 降级）', () => {
+  // 长到能过 MIN_EXTRACT_CHARS(80) 的正文样例。
+  const LONG_BODY = 'curl 是常用的命令行工具，用来请求 Web 服务器。'.repeat(10);
+
+  // apizero content-extract 的真实响应结构（阮一峰博客实测裁剪版）。
+  const apizeroOk = {
+    code: 0,
+    msg: '成功',
+    data: {
+      url: 'https://www.ruanyifeng.com/blog/2019/09/curl-reference.html',
+      title: 'curl 的用法指南',
+      publish_time: '',
+      content: LONG_BODY,
+      word_count: LONG_BODY.length,
+      reading_time: '2 分钟',
+      image_count: 1,
+      images: ['https://www.ruanyifeng.com/blog/images/cover.png'],
+    },
+  };
+
+  // 按 URL 分流的 fetch stub：apizero 端点一份响应，sfworker /fetch-webpage 一份响应。
+  const stubFetch = (apizeroBody: any, workerBody?: any) => {
+    const fn = vi.fn(async (input: any) => {
+      const target = String(input);
+      const body = target.includes('apizero.cn') ? apizeroBody : workerBody;
+      if (body === undefined) throw new Error(`unexpected fetch: ${target}`);
+      return { ok: true, status: 200, text: async () => JSON.stringify(body) };
+    });
+    vi.stubGlobal('fetch', fn);
+    return fn;
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('主路径：apizero 成功 → 直接用其结果，不再碰 sfworker', async () => {
+    const fn = stubFetch(apizeroOk);
+    const wp = await extractWebpageContent('https://www.ruanyifeng.com/blog/2019/09/curl-reference.html');
+    expect(wp.title).toBe('curl 的用法指南');
+    expect(wp.content).toBe(LONG_BODY);
+    expect(wp.siteName).toBe('ruanyifeng.com');
+    expect(wp.image).toBe('https://www.ruanyifeng.com/blog/images/cover.png');
+    expect(wp.excerpt.length).toBeGreaterThan(0);
+    expect(wp.video).toBeUndefined();
+    // 只调了 apizero 一次，没走 worker
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(String(fn.mock.calls[0][0])).toContain('apizero.cn/api/content-extract');
+    expect(String(fn.mock.calls[0][0])).toContain('key=sk_live_'); // 内置 key 带上了
+  });
+
+  it('apizero 业务失败（code≠0）→ 降级 sfworker/Jina 老链路', async () => {
+    const fn = stubFetch(
+      { code: 5020, msg: '目标网页无法访问' },
+      { success: true, data: { mode: 'reader', title: 'Jina 抓到的标题', content: LONG_BODY } },
+    );
+    const wp = await extractWebpageContent('https://example.com/a');
+    expect(wp.title).toBe('Jina 抓到的标题');
+    expect(wp.content).toBe(LONG_BODY);
+    expect(fn).toHaveBeenCalledTimes(2); // apizero 一次 + worker 一次
+  });
+
+  it('apizero 正文过短（SPA 壳 / 登录墙 / 文档站）→ 降级 Jina 拿正文，不拿壳当正文', async () => {
+    const fn = stubFetch(
+      { code: 0, data: { title: '标题', content: '请开启 JavaScript', images: [] } },
+      { success: true, data: { mode: 'reader', title: '渲染后的真标题', content: LONG_BODY } },
+    );
+    const wp = await extractWebpageContent('https://spa.example.com/page');
+    expect(wp.title).toBe('渲染后的真标题');
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it('超长正文截断到 8000 字并标记 truncated', async () => {
+    const huge = 'x'.repeat(9000);
+    stubFetch({ code: 0, data: { title: '长文', content: huge, images: [] } });
+    const wp = await extractWebpageContent('https://example.com/long');
+    expect(wp.content.length).toBe(8000);
+    expect(wp.truncated).toBe(true);
   });
 });

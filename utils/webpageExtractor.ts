@@ -5,17 +5,42 @@
 //  2) 卡片在聊天里渲染成标题 + 摘要的小卡（components/chat/MessageItem.tsx）；
 //  3) 上下文 / 归档只看到剥离 HTML 后的纯文字正文（utils/messageFormat.ts），角色就「读到」了网页内容。
 //
-// CORS：浏览器直接 fetch 别人家网页绝大多数会被跨域挡掉。主路径走项目的 sfworker 代理
-// （worker/index.js 的 /fetch-webpage 端点，跟小红书签名 / weapi / Brave 搜索同一个 worker）；
-// 代理不可用时兜底尝试前端直连（多数会失败，失败就抛错让调用方提示用户）。
+// 提取链路（extractWebpageContent，逐层降级）：
+//  1. apizero content-extract（主）：服务端文本密度算法，浏览器直连（CORS 全开），
+//     正文干净、配额充裕（匿名 5000 次/天/IP，带 key 10000 次/天，key 与 videoParser 共用）。
+//     疑似 SPA 壳（正文过短）/ 服务挂了 → 降级下一层。
+//  2. sfworker /fetch-webpage（Jina Reader 无头渲染，SPA 也能读）→ 失败退裸 HTML。
+//  3. 前端直连抓裸 HTML + DOMParser 启发式提取（多数站点会被 CORS 挡掉，纯末路兜底）。
 
 import { htmlToText } from './htmlPrompt';
 import { getProxyWorkerUrl } from './proxyWorker';
+import { getVideoParseKey } from './videoParser';
 
 // sfworker：项目自带的通用代理 Worker（小红书签名 / 网易云 weapi / Brave 搜索 / WebDAV /
 // 网页抓取都走它，代码见 worker/index.js）。地址走中心配置 utils/proxyWorker.ts，
 // 用户可在「设置 → 网络代理 (Worker)」里换成自部署实例。
 const sfworkerUrl = (): string => getProxyWorkerUrl();
+
+/** 视频平台分享的附加信息（utils/videoParser.ts 解析产出，webpage_card 复用展示）。 */
+export interface VideoShareInfo {
+  /** 平台标识（bilibili / douyin / …）。 */
+  platform: string;
+  /** 平台中文名（哔哩哔哩 / 抖音），卡片角标用。 */
+  platformLabel?: string;
+  /** 视频还是图集。 */
+  contentType?: 'video' | 'image';
+  authorName?: string;
+  authorAvatar?: string;
+  playCount?: number;
+  likeCount?: number;
+  commentCount?: number;
+  shareCount?: number;
+  collectCount?: number;
+  /** 原平台发布时间（字符串原样保留）。 */
+  publishTime?: string;
+  /** 图集张数（contentType === 'image' 时）。 */
+  imageCount?: number;
+}
 
 /** 抓取并解析后的网页结构。卡片 metadata 存这一份。 */
 export interface ExtractedWebpage {
@@ -37,12 +62,20 @@ export interface ExtractedWebpage {
   truncated: boolean;
   /** 抓取时间戳。 */
   fetchedAt: number;
+  /** 视频平台分享时的附加信息（走 videoParser 解析路径才有）。 */
+  video?: VideoShareInfo;
 }
 
 /** 卡片 metadata 里正文的存储上限：太长既占 IndexedDB 也没必要全留。 */
 const MAX_CONTENT_CHARS = 8000;
 /** 摘要长度。 */
 const EXCERPT_CHARS = 140;
+
+/** apizero content-extract 端点（与 videoParser 的 video-parse 同一服务商、同一 key）。 */
+const APIZERO_EXTRACT_ENDPOINT = 'https://v1.apizero.cn/api/content-extract';
+/** 提取正文短于这个就当失败：多半是 SPA 壳 / 反爬占位页，让 Jina（无头渲染）接手。 */
+const MIN_EXTRACT_CHARS = 80;
+const APIZERO_TIMEOUT_MS = 20000;
 
 /**
  * 从一段文本里揪出第一个 http(s) 链接。返回 null 表示没有可抓的链接。
@@ -70,6 +103,9 @@ export async function expandShortUrl(url: string): Promise<string> {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url }),
+    // 小红书短链在部分网络/代理组合下会一直挂起。及时失败，交给聊天页给出
+    // 可操作的网络提示，避免用户看到“发送后什么都没发生”。
+    signal: AbortSignal.timeout(12_000),
   });
   const text = await res.text().catch(() => '');
   let parsed: any = null;
@@ -216,10 +252,67 @@ function firstImageFromMarkdown(md: string): string | undefined {
 }
 
 /**
+ * 主路径：apizero content-extract 服务端正文提取（浏览器直连）。
+ * 业务失败 / 正文过短（疑似 SPA 壳）抛错，由 extractWebpageContent 降级到 Jina 链路。
+ */
+async function extractViaApizero(url: string): Promise<ExtractedWebpage> {
+  const params = new URLSearchParams({ url });
+  const key = getVideoParseKey(); // apizero 的 key 是账号级的，视频解析 / 正文提取通用
+  if (key) params.set('key', key);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), APIZERO_TIMEOUT_MS);
+  let parsed: any = null;
+  try {
+    const res = await fetch(`${APIZERO_EXTRACT_ENDPOINT}?${params.toString()}`, { signal: controller.signal });
+    const text = await res.text().catch(() => '');
+    try { parsed = text ? JSON.parse(text) : null; } catch { /* non-json */ }
+    if (!parsed) throw new Error(`正文提取服务无响应 (HTTP ${res.status})`);
+  } catch (e: any) {
+    if (e?.name === 'AbortError') throw new Error('正文提取超时');
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (Number(parsed.code) !== 0) {
+    throw new Error(String(parsed.msg || `正文提取失败 (code ${parsed.code})`));
+  }
+  const d: any = parsed.data || {};
+  const rawContent = String(d.content || '').trim();
+  if (rawContent.length < MIN_EXTRACT_CHARS) throw new Error('提取到的正文过短');
+
+  const content = rawContent.length > MAX_CONTENT_CHARS ? rawContent.slice(0, MAX_CONTENT_CHARS) : rawContent;
+  const finalUrl = String(d.url || '') || undefined;
+  const siteName = siteNameFromUrl(finalUrl || url);
+  const images: string[] = Array.isArray(d.images)
+    ? d.images.filter((u: any) => typeof u === 'string' && /^https?:\/\//i.test(u))
+    : [];
+  return {
+    url,
+    finalUrl,
+    title: String(d.title || '').trim() || siteName || '网页',
+    siteName,
+    content,
+    excerpt: makeExcerpt(content),
+    image: images[0],
+    truncated: rawContent.length > MAX_CONTENT_CHARS,
+    fetchedAt: Date.now(),
+  };
+}
+
+/**
  * 抓取 + 解析一个网页，返回可直接塞进 webpage_card metadata 的结构。
  * 抓取失败（CORS / worker 报错 / 网络）时抛错，调用方负责给用户 toast。
  */
 export async function extractWebpageContent(url: string): Promise<ExtractedWebpage> {
+  // 主路径：apizero 正文提取。失败（服务挂 / SPA 壳 / 配额）降级到 sfworker/Jina 老链路。
+  const viaApizero = await extractViaApizero(url).catch((e) => {
+    console.warn('[webpageExtractor] apizero extract failed, fallback to worker/Jina:', e);
+    return null;
+  });
+  if (viaApizero) return viaApizero;
+
   const viaWorker = await fetchViaWorker(url).catch((e) => {
     // sfworker 抓取报错：记录后让直连兜底再试一把。
     console.warn('[webpageExtractor] sfworker fetch failed, will try direct:', e);

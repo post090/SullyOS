@@ -18,15 +18,18 @@ interface ChatInputAreaProps {
     onForwardSelected?: () => void;
     selectedCount: number;
     emojis: Emoji[];
-    characters: CharacterProfile[];
-    activeCharacterId: string;
-    onCharSelect: (id: string) => void;
+    /** 以下会话切换/主题 props 仅私聊使用；群聊等复用方不传（'chars' 面板不会被打开） */
+    characters?: CharacterProfile[];
+    activeCharacterId?: string;
+    onCharSelect?: (id: string) => void;
     /** 每个角色的未读消息数，用于在「切换会话」头像上显示红点 */
     unreadMessages?: Record<string, number>;
-    customThemes: ChatTheme[];
-    onUpdateTheme: (id: string) => void;
-    onRemoveTheme: (id: string) => void;
-    activeThemeId: string;
+    customThemes?: ChatTheme[];
+    onUpdateTheme?: (id: string) => void;
+    onRemoveTheme?: (id: string) => void;
+    activeThemeId?: string;
+    /** 提供时整体替换内置 actions 双页网格——群聊传自己的功能格。不传 = 原行为 */
+    actionsContent?: React.ReactNode;
     onPanelAction: (type: string, payload?: any) => void;
     onImageSelect: (file: File) => void;
     isSummarizing: boolean;
@@ -59,9 +62,10 @@ interface ChatInputAreaProps {
 const ChatInputArea: React.FC<ChatInputAreaProps> = ({
     input, setInput, isTyping, selectionMode,
     showPanel, setShowPanel, onSend, onDeleteSelected, onForwardSelected, selectedCount,
-    emojis, characters, activeCharacterId, onCharSelect,
+    emojis, characters = [], activeCharacterId = '', onCharSelect = () => {},
     unreadMessages = {},
-    customThemes, onUpdateTheme, onRemoveTheme, activeThemeId,
+    customThemes = [], onUpdateTheme = () => {}, onRemoveTheme = () => {}, activeThemeId = '',
+    actionsContent,
     onPanelAction, onImageSelect, isSummarizing,
     categories = [], activeCategory = 'default',
     onReroll, canReroll,
@@ -80,6 +84,9 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
     const chatImageInputRef = useRef<HTMLInputElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const [actionsPage, setActionsPage] = useState<0 | 1>(0);
+    // 气泡样式面板：搜索 + 两步确认删除（防止 hover 小 × 误删）
+    const [bubbleSearch, setBubbleSearch] = useState('');
+    const [pendingDeleteThemeId, setPendingDeleteThemeId] = useState<string | null>(null);
     const [emojiSelectionMode, setEmojiSelectionMode] = useState(false);
     const [selectedEmojis, setSelectedEmojis] = useState<any[]>([]);
     // 分组太多时横向拖不动：提供「展开全部分组」网格总览
@@ -607,8 +614,14 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                         </>
                     )}
 
+                    {/* Actions Panel：外部提供 actionsContent 时整体替换内置双页网格 */}
+                    {showPanel === 'actions' && actionsContent && (
+                        <div className="overflow-y-auto no-scrollbar">
+                            {actionsContent}
+                        </div>
+                    )}
                     {/* Actions Panel (paginated: page 0 = 内置功能, page 1 = 外部服务) */}
-                    {showPanel === 'actions' && (
+                    {showPanel === 'actions' && !actionsContent && (
                         <div
                             className="overflow-y-auto no-scrollbar"
                             onTouchStart={handleActionsSwipeStart}
@@ -813,19 +826,74 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                      {showPanel === 'chars' && (
                         <div className="p-5 space-y-6 overflow-y-auto no-scrollbar">
                             <div>
-                                <h3 className="text-xs font-bold text-slate-400 px-1 tracking-wider uppercase mb-3">气泡样式</h3>
-                                <div className="flex gap-3 px-1 overflow-x-auto no-scrollbar pb-2">
-                                    {Object.values(PRESET_THEMES).map(t => (
-                                        <button key={t.id} onClick={() => onUpdateTheme(t.id)} className={`px-6 py-3 rounded-2xl text-xs font-bold border shrink-0 transition-all ${activeThemeId === t.id ? 'bg-primary text-white border-primary' : 'bg-white border-slate-200 text-slate-600'}`}>{t.name}</button>
+                                <div className="flex items-baseline justify-between px-1 mb-3">
+                                    <h3 className="text-xs font-bold text-slate-400 tracking-wider uppercase">气泡样式 · 当前角色</h3>
+                                    <span className="text-[10px] text-slate-400">新气泡去「气泡工坊」App 制作</span>
+                                </div>
+                                {customThemes.length > 6 && (
+                                    <input
+                                        value={bubbleSearch}
+                                        onChange={e => setBubbleSearch(e.target.value)}
+                                        placeholder="搜索我的气泡…"
+                                        className="w-full mb-2.5 px-3 py-2 rounded-xl bg-white/70 border border-slate-200 text-xs focus:outline-none focus:border-indigo-300"
+                                    />
+                                )}
+                                <div className="flex flex-wrap gap-2 px-1 max-h-48 overflow-y-auto no-scrollbar pb-1">
+                                    {(bubbleSearch.trim() ? [] : Object.values(PRESET_THEMES)).map(t => (
+                                        <button key={t.id} onClick={() => onUpdateTheme(t.id)} className={`flex items-center gap-1.5 px-3.5 py-2 rounded-2xl text-xs font-bold border transition-all ${activeThemeId === t.id ? 'bg-primary text-white border-primary shadow-md' : 'bg-white border-slate-200 text-slate-600'}`}>
+                                            <span className="flex -space-x-1">
+                                                <span className="w-3 h-3 rounded-full border border-white/80 shadow-sm" style={{ background: t.user?.backgroundColor || '#6366f1' }} />
+                                                <span className="w-3 h-3 rounded-full border border-white/80 shadow-sm" style={{ background: t.ai?.backgroundColor || '#ffffff' }} />
+                                            </span>
+                                            {t.name}
+                                            {activeThemeId === t.id && <span aria-hidden>✓</span>}
+                                        </button>
                                     ))}
-                                    {customThemes.map(t => (
-                                        <div key={t.id} className="relative group shrink-0">
-                                            <button onClick={() => onUpdateTheme(t.id)} className={`px-6 py-3 rounded-2xl text-xs font-bold border transition-all ${activeThemeId === t.id ? 'bg-indigo-500 text-white border-indigo-500' : 'bg-indigo-50 border-indigo-100 text-indigo-600'}`}>
-                                                {t.name} (DIY)
-                                            </button>
-                                            <button onClick={(e) => { e.stopPropagation(); onRemoveTheme(t.id); }} className="absolute -top-2 -right-2 bg-red-400 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs shadow-md opacity-0 group-hover:opacity-100 transition-opacity">×</button>
-                                        </div>
-                                    ))}
+                                    {customThemes
+                                        .filter(t => !bubbleSearch.trim() || (t.name || '').toLowerCase().includes(bubbleSearch.trim().toLowerCase()))
+                                        .map(t => {
+                                            const inUseCount = characters.filter(c => (c as any).bubbleStyle === t.id).length;
+                                            const pendingDelete = pendingDeleteThemeId === t.id;
+                                            return (
+                                                <div key={t.id} className={`flex items-center rounded-2xl border transition-all overflow-hidden ${activeThemeId === t.id ? 'bg-indigo-500 border-indigo-500 text-white shadow-md' : 'bg-indigo-50 border-indigo-100 text-indigo-600'}`}>
+                                                    <button onClick={() => onUpdateTheme(t.id)} className="flex items-center gap-1.5 pl-3.5 pr-1.5 py-2 text-xs font-bold active:scale-95 transition-transform">
+                                                        <span className="flex -space-x-1">
+                                                            <span className="w-3 h-3 rounded-full border border-white/80 shadow-sm" style={{ background: t.user?.backgroundColor || '#6366f1' }} />
+                                                            <span className="w-3 h-3 rounded-full border border-white/80 shadow-sm" style={{ background: t.ai?.backgroundColor || '#ffffff' }} />
+                                                        </span>
+                                                        {t.name}
+                                                        {activeThemeId === t.id && <span aria-hidden>✓</span>}
+                                                        {inUseCount > 0 && activeThemeId !== t.id && (
+                                                            <span className="text-[9px] font-normal opacity-70">{inUseCount}人在用</span>
+                                                        )}
+                                                    </button>
+                                                    {/* 删除两步确认：第一下变红色「确删」，3 秒不点自动还原 */}
+                                                    {pendingDelete ? (
+                                                        <button
+                                                            onClick={(e) => { e.stopPropagation(); setPendingDeleteThemeId(null); onRemoveTheme(t.id); }}
+                                                            className="px-2 py-2 text-[10px] font-bold bg-red-500 text-white self-stretch"
+                                                        >
+                                                            确删
+                                                        </button>
+                                                    ) : (
+                                                        <button
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                setPendingDeleteThemeId(t.id);
+                                                                setTimeout(() => setPendingDeleteThemeId(cur => (cur === t.id ? null : cur)), 3000);
+                                                            }}
+                                                            aria-label={`删除气泡 ${t.name}`}
+                                                            className={`pr-2.5 pl-1 py-2 text-sm leading-none opacity-45 hover:opacity-100 transition-opacity ${activeThemeId === t.id ? 'text-white' : 'text-indigo-400'}`}
+                                                        >
+                                                            ×
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
+                                    {bubbleSearch.trim() && customThemes.every(t => !(t.name || '').toLowerCase().includes(bubbleSearch.trim().toLowerCase())) && (
+                                        <div className="text-[11px] text-slate-400 px-1 py-2">没有叫「{bubbleSearch.trim()}」的气泡～</div>
+                                    )}
                                 </div>
                             </div>
                             <div>

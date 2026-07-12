@@ -26,7 +26,8 @@ import { isMessageSemanticallyRelevant } from '../messageFormat';
 
 // ─── 群聊水位线：私聊用 200/100，群聊更宽松 300/200 ─────────────────
 const HOT_ZONE_SIZE_GROUP = 300;
-const BUFFER_THRESHOLD_GROUP = 200;
+// export：群设置的成员记忆状态面板文案里引用「满 N 条自动触发」，不硬编码
+export const BUFFER_THRESHOLD_GROUP = 200;
 const PROCESS_RATIO = 0.85;
 const DEDUP_THRESHOLD = 0.9;
 
@@ -41,6 +42,11 @@ function getLastProcessedGroupId(groupId: string): number {
 
 function setLastProcessedGroupId(groupId: string, msgId: number): void {
     try { localStorage.setItem(LAST_MSG_KEY_GROUP(groupId), String(msgId)); } catch {}
+}
+
+/** 对外只读包装：群记忆宫殿处理到的最后一条消息 id（成员记忆状态面板展示进度用） */
+export function getGroupMemoryPalaceHighWaterMark(groupId: string): number {
+    return getLastProcessedGroupId(groupId);
 }
 
 /** 全局记忆宫殿配置（自己读 localStorage，不调 pipeline.ts 的私有 getter） */

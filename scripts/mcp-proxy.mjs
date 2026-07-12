@@ -20,9 +20,15 @@
  *   node scripts/mcp-proxy.mjs --no-prewarm              # 禁用 SPA 预热
  *
  * 然后在应用设置里把 MCP URL 改为: http://localhost:18061/mcp
+ *
+ * 通用 MCP 模式（配合设置里的「代理 URL」）:
+ *   请求带 ?target=<url-encoded MCP URL> 时，转发到该地址而不是 --target，
+ *   与 worker/mcp-proxy 的 Cloudflare Worker 采用同一套约定。
+ *   例: http://localhost:18061/?target=https%3A%2F%2Fmcp.example.com%2Fmcp
  */
 
 import { createServer, request as httpRequest } from 'http';
+import { request as httpsRequest } from 'https';
 
 const args = process.argv.slice(2);
 const getArg = (name, fallback) => {
@@ -37,7 +43,7 @@ const PREWARM_ENABLED = !args.includes('--no-prewarm');
 const CORS_HEADERS = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'POST, GET, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Accept, Mcp-Session-Id',
+    'Access-Control-Allow-Headers': 'Content-Type, Accept, Mcp-Session-Id, Authorization, MCP-Protocol-Version, Last-Event-ID',
     'Access-Control-Expose-Headers': 'Mcp-Session-Id',
     'Access-Control-Max-Age': '86400',
 };
@@ -135,13 +141,30 @@ createServer((req, res) => {
     req.on('data', (c) => chunks.push(c));
     req.on('end', async () => {
         const body = Buffer.concat(chunks);
-        const targetUrl = new URL(req.url, TARGET);
 
-        // Forward headers (keep Mcp-Session-Id, Content-Type, Accept)
+        // 通用模式: ?target=<绝对URL> 优先于 --target（与 worker/mcp-proxy 约定一致）
+        const incomingUrl = new URL(req.url, TARGET);
+        const targetOverride = incomingUrl.searchParams.get('target');
+        let targetUrl;
+        if (targetOverride) {
+            try {
+                targetUrl = new URL(targetOverride);
+            } catch {
+                res.writeHead(400, { ...CORS_HEADERS, 'Content-Type': 'text/plain' });
+                res.end('Invalid ?target= URL');
+                return;
+            }
+        } else {
+            targetUrl = incomingUrl;
+        }
+
+        // Forward headers (keep Mcp-Session-Id, Content-Type, Accept, Authorization)
         const fwdHeaders = {};
         if (req.headers['content-type']) fwdHeaders['Content-Type'] = req.headers['content-type'];
         if (req.headers['accept']) fwdHeaders['Accept'] = req.headers['accept'];
         if (req.headers['mcp-session-id']) fwdHeaders['Mcp-Session-Id'] = req.headers['mcp-session-id'];
+        if (req.headers['authorization']) fwdHeaders['Authorization'] = req.headers['authorization'];
+        if (req.headers['mcp-protocol-version']) fwdHeaders['MCP-Protocol-Version'] = req.headers['mcp-protocol-version'];
 
         // 检测是否需要 SPA 预热
         if (PREWARM_ENABLED && body.length > 0) {
@@ -156,11 +179,12 @@ createServer((req, res) => {
             }
         }
 
-        // Forward to MCP server
-        const proxyReq = httpRequest(
+        // Forward to MCP server（https 目标走 https 模块）
+        const requestFn = targetUrl.protocol === 'https:' ? httpsRequest : httpRequest;
+        const proxyReq = requestFn(
             {
                 hostname: targetUrl.hostname,
-                port: targetUrl.port,
+                port: targetUrl.port || (targetUrl.protocol === 'https:' ? 443 : 80),
                 path: targetUrl.pathname + targetUrl.search,
                 method: req.method,
                 headers: fwdHeaders,

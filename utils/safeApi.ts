@@ -75,6 +75,9 @@ function parseSseToCompletion(raw: string): any | null {
     let firstChunk: any = null;
     let usage: any = undefined;
     let gotAnyChunk = false;
+    // tool_calls 流式分片: OpenAI 约定按 index 分组, id/name 在首片, arguments 逐片拼接。
+    // 不拼的话开了 stream 的工具模式(瑞幸/MCP)会静默丢掉全部工具调用。
+    const toolCalls: any[] = [];
 
     // 按行切，逐行找 "data: " 开头（允许 \r\n、空行分隔）
     const lines = raw.split(/\r?\n/);
@@ -95,6 +98,16 @@ function parseSseToCompletion(raw: string): any | null {
         if (choice.delta) {
             if (typeof choice.delta.content === 'string') assembled += choice.delta.content;
             if (choice.delta.role) role = choice.delta.role;
+            if (Array.isArray(choice.delta.tool_calls)) {
+                for (const frag of choice.delta.tool_calls) {
+                    const idx = frag.index ?? 0;
+                    if (!toolCalls[idx]) toolCalls[idx] = { id: '', type: 'function', function: { name: '', arguments: '' } };
+                    if (frag.id) toolCalls[idx].id = frag.id;
+                    if (frag.type) toolCalls[idx].type = frag.type;
+                    if (frag.function?.name) toolCalls[idx].function.name += frag.function.name;
+                    if (frag.function?.arguments) toolCalls[idx].function.arguments += frag.function.arguments;
+                }
+            }
         }
         // message 路径（一次性 SSE，不常见但兼容）
         else if (choice.message) {
@@ -102,6 +115,7 @@ function parseSseToCompletion(raw: string): any | null {
                 assembled += choice.message.content;
             }
             if (choice.message.role) role = choice.message.role;
+            if (Array.isArray(choice.message.tool_calls)) toolCalls.push(...choice.message.tool_calls);
         }
         if (choice.finish_reason) finishReason = choice.finish_reason;
     }
@@ -116,7 +130,13 @@ function parseSseToCompletion(raw: string): any | null {
         model: firstChunk?.model || '',
         choices: [{
             index: 0,
-            message: { role, content: assembled },
+            message: {
+                role,
+                content: assembled,
+                ...(toolCalls.length ? {
+                    tool_calls: toolCalls.filter(Boolean).map((tc, i) => ({ ...tc, id: tc.id || `call_sse_${i}` })),
+                } : {}),
+            },
             finish_reason: finishReason,
         }],
         usage: usage || firstChunk?.usage,

@@ -7,6 +7,7 @@ import { safeFetchJson, safeResponseJson } from '../utils/safeApi';
 import { KeepAlive } from '../utils/keepAlive';
 import { ProactiveChat } from '../utils/proactiveChat';
 import { ContextBuilder } from '../utils/context';
+import { ChatParser } from '../utils/chatParser';
 // 思考链 / HTML / MCD / memoryPalace 注入已下沉到 chatRequestPayload；这里不再直接调用
 import { useMusic, loadMusicHooks } from '../context/MusicContext';
 import { processNewMessages, mergePalaceFragmentsIntoMemories, getMemoryPalaceHighWaterMark } from '../utils/memoryPalace/pipeline';
@@ -22,6 +23,8 @@ import { MCD_PROPOSE_TOOL, autoFixProposalCodesByName } from '../utils/mcdToolBr
 // 瑞幸: 与麦当劳同构, 只读 LuckinMiniApp 快照注入 + propose_cart_items UI 钩子工具
 import { LUCKIN_PROPOSE_TOOL, autoFixProposalCodesByName as autoFixLuckinProposalCodesByName, fetchOpenAIToolsForLuckin, inferCardKind as inferLuckinCardKind } from '../utils/luckinToolBridge';
 import { callLuckinTool } from '../utils/luckinMcpClient';
+import { callMcpTool, getMcpUseNativeTools } from '../utils/mcpClient';
+import { buildMcpOpenAITools, buildMcpRejectedToolsFallbackBody, buildMcpTextFallbackBody, extractTextFakedMcpCalls, formatMcpToolResult, sanitizeMcpLeadInText, shouldRetryMcpWithoutTools, stripTextFakedMcpCalls, type FakedMcpCall } from '../utils/mcpToolBridge';
 import { buildChatRequestPayload } from '../utils/chatRequestPayload';
 import {
     isInstantConfigReady,
@@ -811,7 +814,7 @@ export const useChatAI = ({
             // ⚠️ 工具模式(瑞幸点单/麦当劳)下绝不带 thinking/reasoning 参数: "thinking + tools" 同发
             //    Gemini 等会直接 400 INVALID_ARGUMENT —— 表现就是"开了思考链的角色一点单就报错,
             //    换个没开思考链的角色就好"。工具循环优先, 思考链这一轮让步。
-            const toolModeActive = payload.flags.luckinChatActive || payload.flags.mcdActive || payload.flags.luckinActive;
+            const toolModeActive = payload.flags.luckinChatActive || payload.flags.mcdActive || payload.flags.luckinActive || payload.flags.mcpChatActive;
             if (payload.flags.thinkingActive && !toolModeActive) {
                 const m: string = baseReqBody.model || '';
                 if (/^claude-/i.test(m) && !/-thinking$/i.test(m)) {
@@ -847,6 +850,28 @@ export const useChatAI = ({
                     baseReqBody.tool_choice = 'auto';
                 }
             }
+            // 通用 MCP: 用户自配服务器的已发现工具, 追加而不覆盖(可与瑞幸/麦当劳共存)。
+            // 工具清单读的是设置里持久化的发现结果, 不发网络请求。
+            let mcpToolResolve: ReturnType<typeof buildMcpOpenAITools>['resolve'] | null = null;
+            if (payload.flags.mcpChatActive) {
+                const { tools: mcpTools, resolve } = buildMcpOpenAITools(char.id);
+                if (mcpTools.length) {
+                    mcpToolResolve = resolve;
+                    const mcpOnly = !payload.flags.luckinChatActive && !payload.flags.mcdActive && !payload.flags.luckinActive;
+                    if (!getMcpUseNativeTools() && mcpOnly) {
+                        // 用户已明确判断当前模型/中转不支持 tools：首轮直接走正文兼容模式。
+                        const compatibilityBody = buildMcpRejectedToolsFallbackBody({
+                            ...baseReqBody,
+                            tools: mcpTools,
+                            tool_choice: 'auto',
+                        });
+                        baseReqBody.messages = compatibilityBody.messages;
+                    } else {
+                        baseReqBody.tools = [...(baseReqBody.tools || []), ...mcpTools];
+                        if (!baseReqBody.tool_choice) baseReqBody.tool_choice = 'auto';
+                    }
+                }
+            }
 
             // ─── Instant Push 分支 ───
             // 与本地 fetch 对称：sendInstantPushAndAwaitReply 内部完成 sub 获取 / push 监听 /
@@ -856,7 +881,7 @@ export const useChatAI = ({
             // 瑞幸聊天点单 / 麦当劳 / 瑞幸小程序 这些"客户端工具循环"模式必须走本地 fetch:
             // instant push 会把请求交给 worker 并在这里提前 return, 工具循环(callLuckinTool 等)根本跑不到,
             // 表现就是"选了城市也没用 / 角色不下单"。这些模式下跳过 instant push, 用本地 fetch 跑工具循环。
-            if (isInstantConfigReady() && !payload.flags.luckinChatActive && !payload.flags.mcdActive && !payload.flags.luckinActive) {
+            if (isInstantConfigReady() && !payload.flags.luckinChatActive && !payload.flags.mcdActive && !payload.flags.luckinActive && !payload.flags.mcpChatActive) {
                 const instantResult = await sendInstantPushAndAwaitReply({
                     contactName: char.name,
                     messages: fullMessages as InstantPushPayload['messages'],
@@ -901,12 +926,51 @@ export const useChatAI = ({
                 return;
             }
 
-            let data = await safeFetchJson(`${baseUrl}/chat/completions`, {
-                method: 'POST', headers,
-                body: JSON.stringify(baseReqBody)
-            }, 2, 0, { appName: '消息', charId: char.id, charName: char.name, purpose: '聊天回复' });
+            let data: any;
+            try {
+                data = await safeFetchJson(`${baseUrl}/chat/completions`, {
+                    method: 'POST', headers,
+                    body: JSON.stringify(baseReqBody)
+                }, 2, 0, { appName: '消息', charId: char.id, charName: char.name, purpose: '聊天回复' });
+            } catch (e) {
+                // 仅通用 MCP、且没有和其他工具模式混用时降级。部分 OpenAI 兼容中转
+                // 会对携带 tools 的请求直接回 4xx，而不是忽略参数；去掉 tools 后让
+                // 现有正文假调用容错接手。真实鉴权失败会在这次重试中再次抛出原样错误。
+                const mcpOnly = payload.flags.mcpChatActive
+                    && !payload.flags.luckinChatActive && !payload.flags.mcdActive && !payload.flags.luckinActive;
+                if (!mcpOnly || !baseReqBody.tools?.length || !shouldRetryMcpWithoutTools(e)) throw e;
+                console.warn('🔌 [MCP] 当前中转拒绝 tools 请求，降级为正文工具调用兼容模式');
+                const fallbackBody = buildMcpRejectedToolsFallbackBody(baseReqBody);
+                data = await safeFetchJson(`${baseUrl}/chat/completions`, {
+                    method: 'POST', headers,
+                    body: JSON.stringify(fallbackBody)
+                }, 0, 0, { appName: '消息', charId: char.id, charName: char.name, purpose: 'MCP tools 兼容重试' });
+            }
             console.log(`⏱ [API call] ${Math.round(performance.now() - apiT0)}ms`);
             updateTokenUsage(data, historyMsgCount, 'initial');
+
+            // MCP 多阶段展示：工具前的角色文字先落库，最终工具结果回复仍走统一后处理。
+            const displayedMcpLeadIns = new Set<string>();
+            const persistMcpLeadIn = async (raw: string, fakedCalls: FakedMcpCall[] = []): Promise<void> => {
+                if (!mcpToolResolve || !raw.trim()) return;
+                const withoutCalls = fakedCalls.length ? stripTextFakedMcpCalls(raw, fakedCalls) : raw.trim();
+                const display = ChatParser.sanitize(sanitizeMcpLeadInText(withoutCalls), { keepCitations: true }).trim();
+                if (!display || !ChatParser.hasDisplayContent(display) || displayedMcpLeadIns.has(display)) return;
+                displayedMcpLeadIns.add(display);
+                const chunks = ChatParser.chunkText(display).filter(chunk => ChatParser.hasDisplayContent(chunk));
+                for (const chunk of chunks) {
+                    const cleanChunk = ChatParser.sanitize(chunk, { keepCitations: true }).trim();
+                    if (!cleanChunk) continue;
+                    await DB.saveMessage({
+                        charId: char.id,
+                        role: 'assistant',
+                        type: 'text',
+                        content: cleanChunk,
+                        metadata: { mcpLeadIn: true },
+                    } as any);
+                    setMessages(await DB.getRecentMessagesByCharId(char.id, 200));
+                }
+            };
 
             // 3.4 麦当劳小程序 propose_cart_items UI 钩子工具循环
             //     不调 MCP, 只把模型的 args 作为 mcd_card kind=proposal 落库, 让小程序聊天面板渲染
@@ -1106,16 +1170,22 @@ export const useChatAI = ({
                 }
             }
 
-            // 3.6 瑞幸聊天点单: 角色直接调真实 8 工具 (queryShopList → searchProductForMcp →
-            //     switchProduct → previewOrder)。结果落 luckin_card; previewOrder 落"结账卡"(可改量+扫码付);
-            //     createOrder 被拦截 —— 下单付款必须用户在结账卡上点。
-            if (payload.flags.luckinChatActive && data.choices?.[0]?.message?.tool_calls?.length) {
+            // 3.6 客户端工具循环 —— 两类共用一个循环骨架:
+            //     · 瑞幸聊天点单: 真实 8 工具 (queryShopList → searchProductForMcp →
+            //       switchProduct → previewOrder)。结果落 luckin_card; previewOrder 落"结账卡"(可改量+扫码付);
+            //       createOrder 被拦截 —— 下单付款必须用户在结账卡上点。
+            //     · 通用 MCP: 工具名命中 mcpToolResolve 映射就分发给对应服务器 (utils/mcpClient),
+            //       结果只回填循环不落卡片。两类工具可同时在场, 按名字各走各的。
+            if ((payload.flags.luckinChatActive || mcpToolResolve) && data.choices?.[0]?.message?.tool_calls?.length) {
                 const MAX_LOOPS = 6;
                 let loopMessages = [...fullMessages];
                 const loc = luckinChatRef?.current;
                 for (let it = 0; it < MAX_LOOPS; it++) {
                     const toolCalls = data.choices?.[0]?.message?.tool_calls;
                     if (!toolCalls || !toolCalls.length) break;
+                    if (mcpToolResolve && toolCalls.some((tc: any) => mcpToolResolve?.has(tc.function?.name || ''))) {
+                        await persistMcpLeadIn(data.choices?.[0]?.message?.content || '');
+                    }
                     loopMessages.push({
                         role: 'assistant',
                         // 空 content + tool_calls 在 Gemini 兼容层会被判 INVALID_ARGUMENT, 给个占位
@@ -1130,6 +1200,24 @@ export const useChatAI = ({
                             args = typeof raw === 'string' ? (raw ? JSON.parse(raw) : {}) : (raw || {});
                         } catch (e) {
                             console.warn('☕ [Luckin-Chat] 工具参数解析失败:', e);
+                        }
+                        // 通用 MCP 工具: 命中映射直接分发, 不走下面的瑞幸逻辑
+                        const mcpHit = mcpToolResolve?.get(fname);
+                        if (mcpHit) {
+                            setSearchStatus(`正在调用 MCP 工具：${fname}...`);
+                            let mcpResult: any;
+                            try { mcpResult = await callMcpTool(mcpHit.server, mcpHit.toolName, args); }
+                            catch (e: any) { mcpResult = { success: false, error: e?.message || String(e) }; }
+                            const mcpMsg = mcpResult.success
+                                ? `工具 ${fname} 成功。结果: ${formatMcpToolResult(mcpResult.data)}`
+                                : `工具 ${fname} 失败: ${mcpResult.error}`;
+                            loopMessages.push({ role: 'tool', tool_call_id: tc.id, content: mcpMsg } as any);
+                            continue;
+                        }
+                        // 只开了 MCP 没开瑞幸时, 幻觉出的未知工具名直接回错误让模型自我纠正
+                        if (!payload.flags.luckinChatActive) {
+                            loopMessages.push({ role: 'tool', tool_call_id: tc.id, content: `未知工具 ${fname}, 只能使用系统提供的工具。` } as any);
+                            continue;
                         }
                         // 经纬度兜底: 角色漏传就用激活时抓到的定位补上
                         if (/queryShopList|createOrder/i.test(fname) && loc) {
@@ -1175,13 +1263,60 @@ export const useChatAI = ({
                         loopMessages.push({ role: 'tool', tool_call_id: tc.id, content: toolMsg } as any);
                     }
                     // 继续让角色多步推进 (保留 tools, 允许 query→search→preview 连续走)
+                    if (mcpToolResolve) setSearchStatus('正在整理 MCP 工具结果...');
                     const followBody = { ...baseReqBody, messages: loopMessages };
                     data = await safeFetchJson(`${baseUrl}/chat/completions`, {
                         method: 'POST', headers,
                         body: JSON.stringify(followBody)
                     });
-                    updateTokenUsage(data, historyMsgCount, `luckin-chat-${it + 1}`);
+                    updateTokenUsage(data, historyMsgCount, `${payload.flags.luckinChatActive ? 'luckin-chat' : 'mcp-chat'}-${it + 1}`);
                 }
+                if (mcpToolResolve) setSearchStatus('');
+            }
+
+            // 3.6b MCP 掉格式容错（第二层, 对标见面观测协议的两层容错）:
+            //     不支持 function calling 的模型会把工具调用写成正文文字, 如
+            //     ask_question("SullyOS") / ask_question: SullyOS。这里检测出来
+            //     系统代为执行, 把结果喂回去让角色重新组织语言, 用户就看不到乱码了。
+            //     executedSig 防止模型复读同一调用导致副作用工具重复执行。
+            if (mcpToolResolve) {
+                const MAX_TEXT_LOOPS = 3;
+                const executedSig = new Set<string>();
+                let textLoopMessages: any[] | null = null;
+                for (let it = 0; it < MAX_TEXT_LOOPS; it++) {
+                    const contentNow: string = data.choices?.[0]?.message?.content || '';
+                    const faked = extractTextFakedMcpCalls(contentNow, mcpToolResolve)
+                        .filter(c => { try { return !executedSig.has(`${c.exposedName}|${JSON.stringify(c.args)}`); } catch { return true; } })
+                        .slice(0, 3);
+                    if (!faked.length) break;
+                    console.warn(`🔌 [MCP] 检测到 ${faked.length} 个正文假工具调用, 代为执行:`, faked.map(c => c.exposedName).join(', '));
+                    await persistMcpLeadIn(contentNow, faked);
+                    setSearchStatus(`正在调用 MCP 工具：${faked.map(c => c.exposedName).join('、')}...`);
+                    const results: string[] = [];
+                    for (const call of faked) {
+                        try { executedSig.add(`${call.exposedName}|${JSON.stringify(call.args)}`); } catch { /* ignore */ }
+                        let r: any;
+                        try { r = await callMcpTool(call.server, call.toolName, call.args); }
+                        catch (e: any) { r = { success: false, error: e?.message || String(e) }; }
+                        results.push(r.success
+                            ? `工具 ${call.exposedName} 执行成功, 结果: ${formatMcpToolResult(r.data)}`
+                            : `工具 ${call.exposedName} 执行失败: ${r.error}`);
+                    }
+                    if (!textLoopMessages) textLoopMessages = [...fullMessages];
+                    textLoopMessages.push({ role: 'assistant', content: contentNow });
+                    textLoopMessages.push({
+                        role: 'user',
+                        content: `[系统消息: 你把工具调用写成了聊天文字, 系统已代为执行:\n${results.join('\n')}\n请基于结果继续用角色语气正常回复, 禁止再输出任何工具调用格式的文字, 也不要提及这条系统消息]`,
+                    });
+                    setSearchStatus('正在整理 MCP 工具结果...');
+                    const followBody = buildMcpTextFallbackBody(baseReqBody, textLoopMessages);
+                    data = await safeFetchJson(`${baseUrl}/chat/completions`, {
+                        method: 'POST', headers,
+                        body: JSON.stringify(followBody)
+                    });
+                    updateTokenUsage(data, historyMsgCount, `mcp-text-${it + 1}`);
+                }
+                setSearchStatus('');
             }
 
             // DEBUG: Log full API response details for troubleshooting truncation issues

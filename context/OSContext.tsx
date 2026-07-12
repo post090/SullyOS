@@ -2398,13 +2398,12 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   const updateGroup = async (id: string, updates: Partial<GroupProfile>) => {
       // 先更新内存中的 groups（列表渲染、再次进群都读这里），再持久化到 DB。
       // 不更新 context 会导致改了群头像/群名退出后又读回旧值（恢复默认）。
-      let target: GroupProfile | undefined;
-      setGroups(prev => {
-          const updated = prev.map(g => g.id === id ? { ...g, ...updates } : g);
-          target = updated.find(g => g.id === id);
-          return updated;
-      });
-      if (target) await DB.saveGroup(target);
+      setGroups(prev => prev.map(g => g.id === id ? { ...g, ...updates } : g));
+      // 持久化对象基于当前已提交的 groups 合成，不在 setGroups 的 updater 里捕获——
+      // React 不保证 updater 同步执行（eager 求值只是优化），旧写法会时而拿到旧值、
+      // 时而整个跳过 saveGroup，表现为"内存已更新、退出重进设置丢失"。
+      const base = groups.find(g => g.id === id);
+      if (base) await DB.saveGroup({ ...base, ...updates });
   };
 
   const deleteGroup = async (id: string) => {

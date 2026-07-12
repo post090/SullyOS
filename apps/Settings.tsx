@@ -15,7 +15,8 @@ import { getProxyWorkerUrl, setProxyWorkerUrl, DEFAULT_PROXY_WORKER } from '../u
 import { VOICE_ACTING_GUIDE } from '../utils/minimaxTts';
 import { FISH_VOICE_ACTING_GUIDE } from '../utils/fishAudioTts';
 import { DATE_VOICE_GUIDE } from '../utils/datePrompts';
-import { Sun, Newspaper, NotePencil, Notebook, Book, ForkKnife, Coffee } from '@phosphor-icons/react';
+import { Sun, Newspaper, NotePencil, Notebook, Book, ForkKnife, Coffee, PlugsConnected } from '@phosphor-icons/react';
+import { loadMcpServers, saveMcpServers, createMcpServer, testMcpConnection, resetMcpSession, getMcpUseNativeTools, setMcpUseNativeTools, type McpServerConfig } from '../utils/mcpClient';
 import { loadPushConfig, savePushConfig, registerScheduleOnWorker, startHeartbeat, stopHeartbeat, isPushConfigAvailable, ensureSubscribed, sendTestPush, getPushDiagnostics, resetSubscription, deepResetSubscription, type PushDiagnostics } from '../utils/proactivePushConfig';
 import { ProactiveChat } from '../utils/proactiveChat';
 import { InstantPushSettingsModal } from '../components/settings/InstantPushSettingsModal';
@@ -59,6 +60,226 @@ const DiagRow: React.FC<{ label: string; value: string; bad?: boolean }> = ({ la
         <span className={`text-right ${bad ? 'text-rose-600 font-medium' : 'text-slate-700'}`}>{value}</span>
     </div>
 );
+
+// 用户版 MCP 教程（自包含，写给用户和他们的 AI 助手看的）。静态部署的站点
+// 看不到仓库内文档，所以帮助弹窗只能跳 GitHub 的 blob 页。
+const MCP_USER_GUIDE_URL = 'https://github.com/qegj567-cloud/SullyOS/blob/master/docs/mcp-user-guide.md';
+
+/**
+ * 设置大板块的折叠外壳：默认收起，标题行常显、点击开合；
+ * actions 放右侧动作（配置按钮 / 状态 chip / 问号），点击不触发开合。
+ */
+const SettingsSection: React.FC<{
+    icon: React.ReactNode;
+    title: string;
+    badge?: React.ReactNode;
+    actions?: React.ReactNode;
+    sectionProps?: Record<string, any>;
+    children: React.ReactNode;
+}> = ({ icon, title, badge, actions, sectionProps, children }) => {
+    const [open, setOpen] = useState(false);
+    return (
+        <section {...sectionProps} className="bg-white/80 rounded-3xl p-5 shadow-sm border border-white/50">
+            <div className={`flex items-center justify-between gap-2 ${open ? 'mb-4' : ''}`}>
+                <button type="button" onClick={() => setOpen(v => !v)} className="flex items-center gap-2 flex-1 min-w-0 text-left">
+                    {icon}
+                    <h2 className="text-sm font-semibold text-slate-600 tracking-wider">{title}</h2>
+                    {badge}
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className={`w-3 h-3 text-slate-300 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+                    </svg>
+                </button>
+                {actions && <div className="flex items-center gap-2 shrink-0">{actions}</div>}
+            </div>
+            {open && children}
+        </section>
+    );
+};
+
+/**
+ * 通用 MCP 工具服务器管理卡片（对标麦当劳/瑞幸卡片的样式，但服务器是用户自配的列表）。
+ * 配置存 localStorage（utils/mcpClient），启用且发现过工具的服务器会在聊天里
+ * 以 function-calling 注入，详见 docs/mcp-client.md。
+ */
+const McpServersCard: React.FC<{ addToast: (msg: string, type?: any) => void }> = ({ addToast }) => {
+    const { characters } = useOS();
+    const [servers, setServers] = useState<McpServerConfig[]>(() => loadMcpServers());
+    const [expandedId, setExpandedId] = useState<string | null>(null);
+    const [testingId, setTestingId] = useState<string | null>(null);
+    const [testStatus, setTestStatus] = useState<Record<string, string>>({});
+    const [useNativeTools, setUseNativeToolsState] = useState<boolean>(() => getMcpUseNativeTools());
+
+    const persist = (next: McpServerConfig[]) => {
+        setServers(next);
+        saveMcpServers(next);
+    };
+
+    const update = (id: string, patch: Partial<McpServerConfig>) => {
+        persist(servers.map(s => s.id === id ? { ...s, ...patch, updatedAt: Date.now() } : s));
+        // URL / token / 代理变了，旧 session 不能再用
+        if (patch.url !== undefined || patch.token !== undefined || patch.proxyUrl !== undefined || patch.proxyKey !== undefined) {
+            resetMcpSession(id);
+        }
+    };
+
+    const addServer = () => {
+        const s = createMcpServer(`MCP 服务器 ${servers.length + 1}`, '');
+        persist([...servers, s]);
+        setExpandedId(s.id);
+    };
+
+    const removeServer = (id: string) => {
+        resetMcpSession(id);
+        persist(servers.filter(s => s.id !== id));
+    };
+
+    const discover = async (server: McpServerConfig) => {
+        if (!server.url.trim()) { addToast('请先填写服务器 URL', 'error'); return; }
+        setTestingId(server.id);
+        setTestStatus(prev => ({ ...prev, [server.id]: '' }));
+        try {
+            const r = await testMcpConnection(server);
+            setTestStatus(prev => ({ ...prev, [server.id]: r.ok ? `✅ ${r.message}` : `❌ ${r.message}` }));
+            if (r.ok && r.tools) {
+                update(server.id, { tools: r.tools });
+            }
+        } finally {
+            setTestingId(null);
+        }
+    };
+
+    return (
+        <div className="bg-violet-50/60 p-4 rounded-2xl space-y-3">
+            <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                    <PlugsConnected size={20} weight="fill" className="text-violet-600" />
+                    <span className="text-sm font-bold text-violet-700">MCP 工具服务器</span>
+                    <span className="text-[9px] bg-violet-100 text-violet-700 px-1.5 py-0.5 rounded-full">通用</span>
+                </div>
+                <button onClick={addServer} className="text-[11px] font-bold text-violet-600 bg-violet-100 px-2.5 py-1 rounded-lg active:scale-95 transition-transform">+ 添加</button>
+            </div>
+            <p className="text-[10px] text-violet-700/70 leading-relaxed">
+                接入任意标准 MCP 服务器（Streamable HTTP）：填 URL → 测试连接 → 打开开关，角色就能在聊天里调用这些工具。
+                被浏览器 CORS 拦住时配「代理 URL」：本地跑 <code className="bg-violet-100/80 px-1 rounded">node scripts/mcp-proxy.mjs</code>，或把 <code className="bg-violet-100/80 px-1 rounded">worker/mcp-proxy</code> 部署到你自己的 Cloudflare 账号。配置只存本机，详见 docs/mcp-client.md。
+            </p>
+            <div className="flex items-center justify-between gap-3 bg-white/70 border border-violet-100 rounded-xl px-3 py-2.5">
+                <div className="min-w-0">
+                    <div className="text-xs font-bold text-slate-700">聊天模型支持工具调用</div>
+                    <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">
+                        开启会发送正规 tools；模型或中转不支持时请关闭，直接走文字兼容模式，不再先试探一次。
+                    </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                    <input type="checkbox" checked={useNativeTools} onChange={e => {
+                        const next = e.target.checked;
+                        setUseNativeToolsState(next);
+                        setMcpUseNativeTools(next);
+                    }} className="sr-only peer" />
+                    <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-violet-500"></div>
+                </label>
+            </div>
+            {servers.map(server => (
+                <div key={server.id} className="bg-white/70 border border-violet-100 rounded-xl p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                        <button className="flex-1 text-left min-w-0" onClick={() => setExpandedId(expandedId === server.id ? null : server.id)}>
+                            <div className="text-xs font-bold text-slate-700 truncate">{server.name || '(未命名)'}</div>
+                            <div className="text-[10px] text-slate-400 truncate">
+                                {server.url || '未填 URL'}{server.tools?.length ? ` · ${server.tools.length} 个工具` : ' · 未获取工具'}{server.charIds?.length ? ` · 绑定 ${server.charIds.length} 角色` : ''}
+                            </div>
+                        </button>
+                        <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                            <input type="checkbox" checked={server.enabled} onChange={e => {
+                                if (e.target.checked && !(server.tools?.length)) {
+                                    addToast('先点「测试连接」拿到工具清单再启用', 'error');
+                                    return;
+                                }
+                                update(server.id, { enabled: e.target.checked });
+                            }} className="sr-only peer" />
+                            <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-violet-500"></div>
+                        </label>
+                    </div>
+                    {expandedId === server.id && (
+                        <div className="space-y-2 pt-1">
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">名称</label>
+                                <input type="text" value={server.name} onChange={e => update(server.id, { name: e.target.value })} className="w-full bg-white/80 border border-violet-200 rounded-xl px-3 py-2 text-sm" placeholder="例如：Notion" />
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">服务器 URL</label>
+                                <input type="text" value={server.url} onChange={e => update(server.id, { url: e.target.value.trim() })} className="w-full bg-white/80 border border-violet-200 rounded-xl px-3 py-2 text-sm font-mono" placeholder="https://mcp.example.com/mcp" />
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Bearer Token（可选）</label>
+                                <input type="password" value={server.token || ''} onChange={e => update(server.id, { token: e.target.value.trim() })} className="w-full bg-white/80 border border-violet-200 rounded-xl px-3 py-2 text-sm font-mono" placeholder="服务器要求鉴权时填" />
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">代理 URL（可选，留空 = 直连）</label>
+                                <input type="text" value={server.proxyUrl || ''} onChange={e => update(server.id, { proxyUrl: e.target.value.trim() })} className="w-full bg-white/80 border border-violet-200 rounded-xl px-3 py-2 text-sm font-mono" placeholder="http://localhost:18061 或你的 Worker 地址" />
+                            </div>
+                            {(server.proxyUrl || '').trim() && (
+                                <div>
+                                    <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">代理密钥（可选，自部署 Worker 的 PROXY_KEY）</label>
+                                    <input type="password" value={server.proxyKey || ''} onChange={e => update(server.id, { proxyKey: e.target.value.trim() })} className="w-full bg-white/80 border border-violet-200 rounded-xl px-3 py-2 text-sm font-mono" placeholder="没设就留空" />
+                                </div>
+                            )}
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">可用角色</label>
+                                <div className="flex flex-wrap gap-1.5">
+                                    <button
+                                        type="button"
+                                        onClick={() => update(server.id, { charIds: [] })}
+                                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors ${!server.charIds?.length ? 'bg-violet-500 text-white' : 'bg-white/80 border border-violet-200 text-slate-500'}`}
+                                    >通用（所有角色）</button>
+                                    {characters.map(c => {
+                                        const bound = !!server.charIds?.includes(c.id);
+                                        return (
+                                            <button
+                                                key={c.id}
+                                                type="button"
+                                                onClick={() => {
+                                                    const cur = server.charIds || [];
+                                                    update(server.id, { charIds: bound ? cur.filter(id => id !== c.id) : [...cur, c.id] });
+                                                }}
+                                                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors ${bound ? 'bg-violet-500 text-white' : 'bg-white/80 border border-violet-200 text-slate-500'}`}
+                                            >{c.name}</button>
+                                        );
+                                    })}
+                                </div>
+                                <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">
+                                    通用 = 所有角色都能用；点角色名切换绑定，绑定后只有选中的角色能看到这批工具（比如记忆库只交给某一个角色）。
+                                </p>
+                                {!!server.charIds?.length && server.charIds.some(id => !characters.some(c => c.id === id)) && (
+                                    <p className="text-[10px] text-amber-600 mt-1">
+                                        ⚠️ 绑定里有已删除的角色，对应绑定不再生效，可重新点选清理。
+                                    </p>
+                                )}
+                            </div>
+                            <div className="flex gap-2">
+                                <button onClick={() => discover(server)} disabled={testingId === server.id} className="flex-1 py-2 bg-violet-100 text-violet-700 text-xs font-bold rounded-xl active:scale-95 transition-transform disabled:opacity-60">
+                                    {testingId === server.id ? '测试中…' : '测试连接'}
+                                </button>
+                                <button onClick={() => removeServer(server.id)} className="px-4 py-2 bg-red-50 text-red-500 text-xs font-bold rounded-xl active:scale-95 transition-transform">删除</button>
+                            </div>
+                            {testStatus[server.id] && (
+                                <div className={`p-2 rounded-lg text-[11px] whitespace-pre-line leading-relaxed ${testStatus[server.id].startsWith('✅') ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}`}>
+                                    {testStatus[server.id]}
+                                </div>
+                            )}
+                            {!!server.tools?.length && (
+                                <p className="text-[10px] text-slate-400 leading-relaxed">
+                                    工具：{server.tools.map(t => t.name).join('、')}
+                                </p>
+                            )}
+                        </div>
+                    )}
+                </div>
+            ))}
+            <p className="text-[10px] text-violet-700/60 leading-relaxed bg-violet-100/40 rounded-lg px-2 py-1.5">
+                ⚠️ 开启 MCP 工具后聊天会走本地请求（跳过 Instant Push），且本轮思考链会让位给工具调用；涉及真实副作用的工具（发布/下单/删除）角色会先跟你确认。Token 与配置<b>只存本机、不上传</b>；走代理时请求会经过你自己配置的代理。
+            </p>
+        </div>
+    );
+};
 
 const Settings: React.FC = () => {
   const {
@@ -109,6 +330,8 @@ const Settings: React.FC = () => {
   const [showPresetModal, setShowPresetModal] = useState(false);
   const [showApiCallLog, setShowApiCallLog] = useState(false);
   const [showRealtimeModal, setShowRealtimeModal] = useState(false);
+  const [showMcpModal, setShowMcpModal] = useState(false);
+  const [showMcpHelp, setShowMcpHelp] = useState(false);
   const [showCloudModal, setShowCloudModal] = useState(false);
   const [showGithubModal, setShowGithubModal] = useState(false);
   const [showCloudRestoreModal, setShowCloudRestoreModal] = useState(false);
@@ -998,14 +1221,14 @@ const Settings: React.FC = () => {
       <div className="flex-1 overflow-y-auto p-5 space-y-6 no-scrollbar pb-20">
         
         {/* 数据备份区域 */}
-        <section className="bg-white/80 rounded-3xl p-5 shadow-sm border border-white/50">
-            <div className="flex items-center gap-2 mb-4">
+        <SettingsSection
+            title="备份与恢复 (ZIP)"
+            icon={
                 <div className="p-2 bg-blue-100 rounded-xl text-blue-600">
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" /></svg>
                 </div>
-                <h2 className="text-sm font-semibold text-slate-600 tracking-wider">备份与恢复 (ZIP)</h2>
-            </div>
-            
+            }
+        >
             <div className="mb-3">
                 <button onClick={() => handleExport('full')} className="w-full py-4 bg-gradient-to-r from-violet-500 to-purple-600 border border-violet-300 rounded-xl text-xs font-bold text-white shadow-sm active:scale-95 transition-all flex flex-col items-center gap-2 relative overflow-hidden mb-3">
                     <div className="absolute top-0 right-0 px-1.5 py-0.5 bg-white/20 text-[9px] text-white rounded-bl-lg font-bold">完整</div>
@@ -1052,17 +1275,17 @@ const Settings: React.FC = () => {
             <button onClick={() => setShowResetConfirm(true)} className="w-full py-3 bg-red-50 border border-red-100 text-red-500 rounded-xl text-xs font-bold flex items-center justify-center gap-2">
                 格式化系统 (出厂设置)
             </button>
-        </section>
+        </SettingsSection>
 
         {/* 云端备份区域 */}
-        <section className="bg-white/80 rounded-3xl p-5 shadow-sm border border-white/50">
-            <div className="flex items-center gap-2 mb-4">
+        <SettingsSection
+            title="云端备份"
+            icon={
                 <div className="p-2 bg-sky-100 rounded-xl text-sky-600">
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15a4.5 4.5 0 004.5 4.5H18a3.75 3.75 0 001.332-7.257 3 3 0 00-3.758-3.848 5.25 5.25 0 00-10.233 2.33A4.502 4.502 0 002.25 15z" /></svg>
                 </div>
-                <h2 className="text-sm font-semibold text-slate-600 tracking-wider">云端备份</h2>
-            </div>
-
+            }
+        >
             {!cloudBackupConfig.enabled ? (
                 <div className="space-y-3 py-2">
                     <p className="text-[11px] text-slate-400 leading-relaxed text-center">
@@ -1186,24 +1409,24 @@ const Settings: React.FC = () => {
             <p className="text-[10px] text-slate-400 px-1 mt-3 leading-relaxed">
                 数据存储在你自己的账号下，我们不保存任何凭据到服务器。
             </p>
-        </section>
+        </SettingsSection>
 
         {/* AI 连接设置区域 */}
-        <section className="bg-white/80 rounded-3xl p-5 shadow-sm border border-white/50">
-             <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2">
-                    <div className="p-2 bg-emerald-100/50 rounded-xl text-emerald-600">
-                       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244" />
-                        </svg>
-                    </div>
-                    <h2 className="text-sm font-semibold text-slate-600 tracking-wider">API 配置</h2>
+        <SettingsSection
+            title="API 配置"
+            icon={
+                <div className="p-2 bg-emerald-100/50 rounded-xl text-emerald-600">
+                   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244" />
+                    </svg>
                 </div>
+            }
+            actions={
                 <button onClick={() => setShowPresetModal(true)} className="text-[10px] bg-slate-100 text-slate-600 px-3 py-1.5 rounded-full font-bold shadow-sm active:scale-95 transition-transform">
                     保存为预设
                 </button>
-            </div>
-
+            }
+        >
             {/* Presets List */}
             {apiPresets.length > 0 && (
                 <div className="mb-4">
@@ -1356,7 +1579,7 @@ const Settings: React.FC = () => {
                     </div>
                 )}
             </div>
-        </section>
+        </SettingsSection>
 
         {/* API 调用记录入口 — 点开看最近 5 天各 App / 角色 / 用途的调用明细 */}
         <button
@@ -1379,15 +1602,16 @@ const Settings: React.FC = () => {
         </button>
 
         {/* 其他 API 区域 — 非 LLM 类（语音、写歌等），不会跟随预设切换 */}
-        <section className="bg-white/80 rounded-3xl p-5 shadow-sm border border-white/50">
-            <div className="flex items-center gap-2 mb-4">
+        <SettingsSection
+            title="其他 API"
+            icon={
                 <div className="p-2 bg-amber-100/50 rounded-xl text-amber-600">
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
                         <path strokeLinecap="round" strokeLinejoin="round" d="M9 9V4.5M9 9H4.5M9 9 3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5 5.25 5.25" />
                     </svg>
                 </div>
-                <h2 className="text-sm font-semibold text-slate-600 tracking-wider">其他 API</h2>
-            </div>
+            }
+        >
             <p className="text-[11px] text-slate-400 mb-4 leading-relaxed pl-1">
                 语音 / 写歌等非 LLM 类 API。这些设置 <span className="font-semibold text-slate-500">不会随预设切换</span>，通常只配置一次。
             </p>
@@ -1642,24 +1866,24 @@ const Settings: React.FC = () => {
                     {otherStatusMsg || '保存其他 API'}
                 </button>
             </div>
-        </section>
+        </SettingsSection>
 
         {/* 实时感知配置区域 */}
-        <section className="bg-white/80 rounded-3xl p-5 shadow-sm border border-white/50">
-            <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2">
-                    <div className="p-2 bg-violet-100/50 rounded-xl text-violet-600">
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 0 0 8.716-6.747M12 21a9.004 9.004 0 0 1-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 0 1 7.843 4.582M12 3a8.997 8.997 0 0 0-7.843 4.582m15.686 0A11.953 11.953 0 0 1 12 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0 1 21 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0 1 12 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 0 1 3 12c0-1.605.42-3.113 1.157-4.418" />
-                        </svg>
-                    </div>
-                    <h2 className="text-sm font-semibold text-slate-600 tracking-wider">实时感知</h2>
+        <SettingsSection
+            title="实时感知"
+            icon={
+                <div className="p-2 bg-violet-100/50 rounded-xl text-violet-600">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 0 0 8.716-6.747M12 21a9.004 9.004 0 0 1-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 0 1 7.843 4.582M12 3a8.997 8.997 0 0 0-7.843 4.582m15.686 0A11.953 11.953 0 0 1 12 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0 1 21 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0 1 12 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 0 1 3 12c0-1.605.42-3.113 1.157-4.418" />
+                    </svg>
                 </div>
+            }
+            actions={
                 <button onClick={() => setShowRealtimeModal(true)} className="text-[10px] bg-violet-100 text-violet-600 px-3 py-1.5 rounded-full font-bold shadow-sm active:scale-95 transition-transform">
                     配置
                 </button>
-            </div>
-
+            }
+        >
             <p className="text-xs text-slate-500 mb-3 leading-relaxed">
                 让AI角色感知真实世界：天气、新闻热点、当前时间。角色可以根据天气关心你、聊聊最近的热点话题。
             </p>
@@ -1686,26 +1910,70 @@ const Settings: React.FC = () => {
                     小红书
                 </div>
             </div>
-        </section>
+        </SettingsSection>
+
+        {/* MCP 工具服务器（高级玩法）—— 通用外接工具，独立于实时感知 */}
+        <SettingsSection
+            title="MCP 工具服务器"
+            badge={<span className="text-[9px] bg-violet-100 text-violet-600 px-1.5 py-0.5 rounded-full font-bold shrink-0">高级玩法</span>}
+            icon={
+                <div className="p-2 bg-violet-100/50 rounded-xl text-violet-600">
+                    <PlugsConnected size={16} weight="fill" />
+                </div>
+            }
+            actions={
+                <>
+                    <button
+                        onClick={() => setShowMcpHelp(true)}
+                        aria-label="MCP 是什么？"
+                        className="w-7 h-7 rounded-full border border-slate-200 bg-white text-[12px] font-bold text-slate-400 active:scale-90 transition-all"
+                    >?</button>
+                    <button onClick={() => setShowMcpModal(true)} className="text-[10px] bg-violet-100 text-violet-600 px-3 py-1.5 rounded-full font-bold shadow-sm active:scale-95 transition-transform">
+                        配置
+                    </button>
+                </>
+            }
+        >
+            <p className="text-xs text-slate-500 leading-relaxed">
+                给角色外接任意标准 MCP 工具服务器：记忆库、联网搜索、笔记、智能家居……接上什么，角色就多什么本事。
+            </p>
+            <p className="text-[10px] text-amber-600 mt-2 leading-relaxed bg-amber-50/80 border border-amber-100 rounded-lg px-2 py-1.5">
+                💡 这个板块推荐<b>本身就在用 MCP</b> 的玩家：你需要自己准备并维护工具服务器。
+                完全没听说过 MCP 的话，跳过这里不影响任何其他功能；真想入坑就先点「?」看说明。
+            </p>
+            {(() => {
+                const list = loadMcpServers();
+                if (!list.length) return null;
+                const on = list.filter(s => s.enabled && s.tools?.length);
+                const toolCount = on.reduce((n, s) => n + (s.tools?.length || 0), 0);
+                return (
+                    <p className="text-[10px] text-slate-400 mt-2">
+                        已配置 {list.length} 个服务器 · {on.length} 个启用中{toolCount ? ` · 共 ${toolCount} 个工具` : ''}
+                    </p>
+                );
+            })()}
+        </SettingsSection>
 
         {/* ───────── 推送凭据 (VAPID) ───────── */}
         {/* VAPID 公私钥, 与 Proactive / Instant Push 共用一份 — 独立成块, 避免再被当成 */}
         {/* Instant Push 的子配置, 也避免两边 key 不一致互相抢同一个 pushManager 订阅. */}
         {/* vapidReadyTick: VAPID 弹窗关闭后 +1, 让本节点 re-render 重读 isPushVapidReady(). */}
-        <section data-vapid-tick={vapidReadyTick} className="bg-white/80 rounded-3xl p-5 shadow-sm border border-white/50">
-            <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                    <div className="p-2 bg-violet-100/60 rounded-xl text-violet-600">
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 5.25a3 3 0 0 1 3 3m3 0a6 6 0 0 1-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1 1 21.75 8.25Z" />
-                        </svg>
-                    </div>
-                    <h2 className="text-sm font-semibold text-slate-600 tracking-wider">推送凭据 (VAPID)</h2>
+        <SettingsSection
+            title="推送凭据 (VAPID)"
+            sectionProps={{ 'data-vapid-tick': vapidReadyTick }}
+            icon={
+                <div className="p-2 bg-violet-100/60 rounded-xl text-violet-600">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 5.25a3 3 0 0 1 3 3m3 0a6 6 0 0 1-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1 1 21.75 8.25Z" />
+                    </svg>
                 </div>
+            }
+            actions={
                 <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${isPushVapidReady() ? 'bg-violet-100 text-violet-600' : 'bg-rose-100 text-rose-600'}`}>
                     {isPushVapidReady() ? '已配置' : '未配置'}
                 </span>
-            </div>
+            }
+        >
             <p className="text-xs text-slate-500 mb-3 leading-relaxed">
                 Proactive Push 和 Instant Push <b>共用同一份 VAPID 密钥对</b>。重新生成会让已开的推送失效，需要重新开启。
             </p>
@@ -1716,25 +1984,25 @@ const Settings: React.FC = () => {
             >
                 {isPushVapidReady() ? '查看 / 重新生成' : '生成 VAPID 密钥对 →'}
             </button>
-        </section>
+        </SettingsSection>
 
         {/* ───────── 主动消息 Push 加速器（开关） ───────── */}
         {SHOW_PROACTIVE_PUSH_ACCEL_UI && ppAvailable && (
-        <section className="bg-white/80 rounded-3xl p-5 shadow-sm border border-white/50">
-            <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                    <div className="p-2 bg-teal-100/60 rounded-xl text-teal-600">
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0" />
-                        </svg>
-                    </div>
-                    <h2 className="text-sm font-semibold text-slate-600 tracking-wider">主动消息 Push 加速</h2>
+        <SettingsSection
+            title="主动消息 Push 加速"
+            icon={
+                <div className="p-2 bg-teal-100/60 rounded-xl text-teal-600">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0" />
+                    </svg>
                 </div>
+            }
+            actions={
                 <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${ppEnabled ? 'bg-teal-100 text-teal-600' : 'bg-slate-100 text-slate-400'}`}>
                     {ppEnabled ? '已启用' : '未启用'}
                 </span>
-            </div>
-
+            }
+        >
             <p className="text-xs text-slate-500 mb-3 leading-relaxed">
                 让主动消息在浏览器后台标签里也能准点触发。AI 仍在本地生成，云端只管"到点喊醒浏览器"。
                 浏览器进程被完全关闭时无法唤醒——下次打开 app 会自动补跑漏掉的主动消息，
@@ -1891,31 +2159,32 @@ const Settings: React.FC = () => {
                     {ppZombieStreak >= 3 && <><br/>连续几次都没成，已切到"深度重置"——点一下做一次更彻底的清理。</>}
                 </p>
             </div>
-        </section>
+        </SettingsSection>
         )}
 
         {/* ───────── Instant Push ───────── */}
-        <section className="bg-white/80 rounded-3xl p-5 shadow-sm border border-white/50">
-            <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                    <div className="p-2 bg-indigo-100/60 rounded-xl text-indigo-600">
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M9.348 14.651a3.75 3.75 0 0 1 0-5.303m5.304 0a3.75 3.75 0 0 1 0 5.303m-7.425 2.122a6.75 6.75 0 0 1 0-9.546m9.546 0a6.75 6.75 0 0 1 0 9.546M5.106 18.894c-3.808-3.808-3.808-9.98 0-13.789m13.788 0c3.808 3.808 3.808 9.981 0 13.789M12 12h.008v.008H12V12Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
-                        </svg>
-                    </div>
-                    <h2 className="text-sm font-semibold text-slate-600 tracking-wider">Instant Push</h2>
+        <SettingsSection
+            title="Instant Push"
+            icon={
+                <div className="p-2 bg-indigo-100/60 rounded-xl text-indigo-600">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9.348 14.651a3.75 3.75 0 0 1 0-5.303m5.304 0a3.75 3.75 0 0 1 0 5.303m-7.425 2.122a6.75 6.75 0 0 1 0-9.546m9.546 0a6.75 6.75 0 0 1 0 9.546M5.106 18.894c-3.808-3.808-3.808-9.98 0-13.789m13.788 0c3.808 3.808 3.808 9.981 0 13.789M12 12h.008v.008H12V12Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
+                    </svg>
                 </div>
+            }
+            actions={
                 <button
                     onClick={() => setShowInstantModal(true)}
                     className="text-[10px] bg-indigo-100 text-indigo-600 px-3 py-1.5 rounded-full font-bold shadow-sm active:scale-95 transition-transform"
                 >
                     配置
                 </button>
-            </div>
+            }
+        >
             <p className="text-xs text-slate-500 leading-relaxed">
                 与上方 Push 加速器不同：前端发 prompt 到你自部署的 Worker，Worker 调你自己的 LLM 生成回复后分句逐条 Web Push。零数据库、零 cron。
             </p>
-        </section>
+        </SettingsSection>
 
         {/* 自定义网络代理 — 刻意低调的高级入口。默认折叠，不主动指引基本发现不了。
             普通用户无需配置：默认走作者部署的公共 Worker，所有功能开箱即用。 */}
@@ -2689,6 +2958,67 @@ const Settings: React.FC = () => {
                       {rtTestStatus}
                   </div>
               )}
+          </div>
+      </Modal>
+
+      {/* MCP 工具服务器配置 Modal（高级玩法, 从实时感知里独立出来） */}
+      <Modal isOpen={showMcpModal} title="MCP 工具服务器" onClose={() => setShowMcpModal(false)}>
+          <div className="space-y-4">
+              <McpServersCard addToast={addToast} />
+          </div>
+      </Modal>
+
+      {/* MCP 帮助 Modal —— 面向完全不懂 MCP 的用户, 讲清"是什么/为什么要自备服务器/三条路" */}
+      <Modal isOpen={showMcpHelp} title="MCP 是什么？" onClose={() => setShowMcpHelp(false)}>
+          <div className="space-y-3 text-xs text-slate-600 leading-relaxed">
+              <div className="bg-violet-50/60 rounded-xl p-3 space-y-1.5">
+                  <p className="font-bold text-violet-700">🔌 给 AI 用的通用工具接口</p>
+                  <p>
+                      MCP（Model Context Protocol）是一套开放协议，相当于给角色开了个「外接技能插槽」：
+                      任何按这个标准做的工具服务器——记忆库、联网搜索、笔记、智能家居——插上就能用，
+                      角色会在聊天里自己决定什么时候调用。
+                  </p>
+              </div>
+              <div className="bg-sky-50/60 rounded-xl p-3 space-y-1.5">
+                  <p className="font-bold text-sky-700">🏠 为什么服务器要自己准备？</p>
+                  <p>
+                      本应用是<b>纯静态网页</b>——没有自己的后端服务器，所有请求都由你的浏览器直接发出，
+                      数据也全存在你本机。好处是隐私和自由都在你手里；代价是工具服务器没人替你跑，
+                      需要你自己准备，三选一：
+                  </p>
+                  <p>
+                      ☁️ <b>用现成的云端 MCP 服务</b>：对方给你一个公网 https 地址（可能还有 Token），直接填进配置即可。<br/>
+                      🖥️ <b>跑在自己电脑上</b>：电脑上的浏览器直接填 <code className="bg-white/80 px-1 rounded">http://localhost:端口</code>；
+                      想在手机上也能用，再配个内网穿透（如 Cloudflare Tunnel）。<br/>
+                      🚀 <b>自己部署到云上</b>：VPS / Cloudflare / Zeabur 等，任何设备随时可用。
+                  </p>
+              </div>
+              <div className="bg-amber-50/60 rounded-xl p-3 space-y-1.5">
+                  <p className="font-bold text-amber-700">🚧 测试连接报「Failed to fetch」？</p>
+                  <p>
+                      八成是浏览器的 CORS 跨域拦截（静态网页的另一个代价）。能改服务器就在服务器端配好 CORS；
+                      改不了就在配置里填「代理 URL」——本地跑一个小代理，或把仓库里的 Worker 代理部署到你自己的
+                      Cloudflare 账号，教程里都有现成步骤。
+                  </p>
+              </div>
+              <div className="space-y-2">
+                  <a
+                      href={MCP_USER_GUIDE_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block w-full py-2.5 bg-violet-500 text-white text-center text-xs font-bold rounded-xl active:scale-95 transition-transform"
+                  >📖 打开完整教程（含部署示例）</a>
+                  <button
+                      type="button"
+                      onClick={async () => {
+                          const text = `请阅读这份教程，然后一步一步教我把 MCP 工具服务器接入 SullyOS。先问清楚我想接什么工具、准备部署在哪（云端/本地电脑/本地+内网穿透），再给对应路线的步骤：\n${MCP_USER_GUIDE_URL}`;
+                          try { await navigator.clipboard.writeText(text); addToast('已复制，去粘贴给你的 AI 吧', 'success'); }
+                          catch { addToast('复制失败，请手动复制教程链接', 'error'); }
+                      }}
+                      className="w-full py-2.5 bg-violet-100 text-violet-700 text-xs font-bold rounded-xl active:scale-95 transition-transform"
+                  >🤖 复制链接给你的 AI，让它带你部署</button>
+                  <p className="text-[10px] text-slate-400 text-center">教程是自包含的，任何 AI 助手读完都能带你走完全程。</p>
+              </div>
           </div>
       </Modal>
 

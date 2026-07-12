@@ -1,12 +1,32 @@
-import React, { useEffect, useState } from 'react';
-import { THINKING_CHAIN_PRESETS, resolveThinkingChainStyle, ThinkingChainStyleId } from './MessageItem';
+import React, { useEffect, useMemo, useState } from 'react';
+import { THINKING_CHAIN_PRESETS, resolveThinkingChainStyle, PsycheDecor, ThinkingChainStyleId } from './MessageItem';
+import { validateScopedCss } from '../../utils/scopedCss';
 
 interface ThinkingChainSettingsValue {
     enabled: boolean;
     styleId: ThinkingChainStyleId;
     customColors: { bg: string; accent: string; text: string };
     customPrompt: string;
+    /** 叠加在任意风格之上的自定义 CSS，选择器限定 .sully-psyche 开头 */
+    customCss: string;
 }
+
+// 心象卡片自定义 CSS 的作用域白名单（.sully-psyche 及其 -card/-title/-preview/-body 子类）
+const PSYCHE_SELECTOR_REGEX = /^\.sully-psyche\b/;
+const PSYCHE_SCOPE_HINT = '.sully-psyche / .sully-psyche-card / -title / -preview / -body';
+
+const PSYCHE_CSS_EXAMPLE = `.sully-psyche-card {
+  background: linear-gradient(135deg, #1a1a2e, #16213e) !important;
+  border: 1px solid rgba(233, 69, 96, 0.5) !important;
+  border-radius: 16px !important;
+}
+.sully-psyche-title {
+  color: #e94560 !important;
+  letter-spacing: 0.6em !important;
+}
+.sully-psyche-body {
+  color: #f0f0f0 !important;
+}`;
 
 interface Props {
     isOpen: boolean;
@@ -18,10 +38,18 @@ interface Props {
 const SAMPLE_CHAIN = '又叫乖乖猫咪……烦死了。算了也没那么烦，比起这个——午饭吃没吃？她又拿力学所当借口，呵，老一套。算了，先骂一句再问。';
 
 const STYLE_LIST: Array<{ id: ThinkingChainStyleId; name: string; sub: string }> = [
-    { id: 'echo',    name: '心象',  sub: '暗紫 × 暖金，二次元卡牌' },
-    { id: 'whisper', name: '心声',  sub: '羊皮纸暖色，私密日记' },
-    { id: 'minimal', name: '极简',  sub: '纯白单色，OOC 调试视图' },
-    { id: 'custom',  name: '自定',  sub: '三色调教，配你自己的味' },
+    { id: 'echo',     name: '心象',  sub: '暗紫 × 暖金，二次元卡牌' },
+    { id: 'whisper',  name: '心声',  sub: '羊皮纸暖色，私密日记' },
+    { id: 'minimal',  name: '极简',  sub: '纯白单色，OOC 调试视图' },
+    { id: 'ink',      name: '墨迹',  sub: '宣纸朱印，水墨卷轴' },
+    { id: 'neon',     name: '脑域',  sub: '赛博青光，神经接驳' },
+    { id: 'terminal', name: '内核',  sub: '黑底绿字，终端日志' },
+    { id: 'stellar',  name: '星语',  sub: '深空夜蓝，缀星独白' },
+    { id: 'tama',     name: '心宠',  sub: '拓麻歌子，液晶点阵屏' },
+    { id: 'pixel',    name: '像素',  sub: 'JRPG 对话框，硬影粗框' },
+    { id: 'muji',     name: '素净',  sub: '性冷淡暖灰，大片留白' },
+    { id: 'ins',      name: 'ins',   sub: '白卡软影，feed 碎碎念' },
+    { id: 'custom',   name: '自定',  sub: '三色调教，配你自己的味' },
 ];
 
 const ColorField: React.FC<{ label: string; value: string; onChange: (v: string) => void }> = ({ label, value, onChange }) => (
@@ -47,12 +75,14 @@ const ColorField: React.FC<{ label: string; value: string; onChange: (v: string)
 const StylePreview: React.FC<{ styleId: ThinkingChainStyleId; customColors: ThinkingChainSettingsValue['customColors']; compact?: boolean }> = ({ styleId, customColors, compact }) => {
     const spec = resolveThinkingChainStyle(styleId, customColors);
     return (
+        <div className="sully-psyche relative">
         <div
-            className="relative overflow-hidden"
+            className="sully-psyche-card relative overflow-hidden"
             style={{
                 background: spec.bg,
-                border: `1px solid ${spec.border}`,
+                border: `${spec.borderWidth || '1px'} solid ${spec.border}`,
                 borderRadius: spec.radius,
+                boxShadow: spec.cardShadow,
                 padding: compact ? '6px 8px' : '10px 12px',
             }}
         >
@@ -65,7 +95,7 @@ const StylePreview: React.FC<{ styleId: ThinkingChainStyleId; customColors: Thin
                 </>
             )}
             <div className="relative flex items-center gap-1.5">
-                <span style={{ color: spec.accent, fontSize: compact ? 9 : 11, letterSpacing: '0.3em', fontFamily: spec.fontFamily, fontWeight: 600 }}>
+                <span className="sully-psyche-title" style={{ color: spec.accent, fontSize: compact ? 9 : 11, letterSpacing: '0.3em', fontFamily: spec.fontFamily, fontWeight: 600 }}>
                     {spec.titleZh}
                 </span>
                 <span style={{ color: spec.text, opacity: 0.6, fontSize: compact ? 6 : 7, letterSpacing: '0.25em' }}>
@@ -74,24 +104,50 @@ const StylePreview: React.FC<{ styleId: ThinkingChainStyleId; customColors: Thin
             </div>
             {!compact && (
                 <div
-                    className={`mt-1 truncate ${spec.italic ? 'italic' : ''}`}
+                    className={`sully-psyche-preview mt-1 truncate ${spec.italic ? 'italic' : ''}`}
                     style={{ color: spec.text, fontFamily: spec.fontFamily, fontSize: 10.5 }}
                 >
                     <span style={{ color: spec.accent }}>{spec.quoteLeft}</span>
                     {SAMPLE_CHAIN.slice(0, 24)}…
                     <span style={{ color: spec.accent }}>{spec.quoteRight}</span>
+                    {spec.decoKind === 'termHud' && <span className="animate-pulse" style={{ color: spec.accent, marginLeft: 2 }}>▊</span>}
                 </div>
             )}
+            {spec.overlay === 'scanlines' && (
+                <div
+                    aria-hidden
+                    className="absolute inset-0 pointer-events-none opacity-[0.13]"
+                    style={{ background: 'repeating-linear-gradient(to bottom, transparent 0px, transparent 2px, rgba(94, 234, 212, 0.6) 3px, transparent 4px)' }}
+                />
+            )}
+            {spec.overlay === 'dotMatrix' && (
+                <div
+                    aria-hidden
+                    className="absolute inset-0 pointer-events-none opacity-[0.18]"
+                    style={{ background: 'radial-gradient(rgba(60, 80, 40, 0.55) 0.5px, transparent 0.6px)', backgroundSize: '3px 3px' }}
+                />
+            )}
+        </div>
+        {/* 破格装饰：渲染在卡片外层，跟聊天里的真实结构一致 */}
+        <PsycheDecor spec={spec} compact={compact} />
         </div>
     );
 };
 
 const ThinkingChainSettingsModal: React.FC<Props> = ({ isOpen, onClose, value, onChange }) => {
     const [draftPrompt, setDraftPrompt] = useState(value.customPrompt || '');
+    const [draftCss, setDraftCss] = useState(value.customCss || '');
     useEffect(() => { if (isOpen) setDraftPrompt(value.customPrompt || ''); }, [isOpen, value.customPrompt]);
+    useEffect(() => { if (isOpen) setDraftCss(value.customCss || ''); }, [isOpen, value.customCss]);
+    const cssValidation = useMemo(
+        () => validateScopedCss(draftCss, PSYCHE_SELECTOR_REGEX, PSYCHE_SCOPE_HINT),
+        [draftCss],
+    );
     if (!isOpen) return null;
 
     const commitPrompt = () => onChange({ customPrompt: draftPrompt });
+    // 有语法/作用域问题的 CSS 不落库（避免坏样式外溢到聊天页），但草稿保留在输入框里
+    const commitCss = () => { if (cssValidation.isValid) onChange({ customCss: draftCss }); };
 
     return (
         <div
@@ -110,7 +166,7 @@ const ThinkingChainSettingsModal: React.FC<Props> = ({ isOpen, onClose, value, o
                             <p className="text-[11px] text-slate-400 mt-0.5">关于「心象」卡片的所有调教都在这里</p>
                         </div>
                         <button
-                            onClick={() => { commitPrompt(); onClose(); }}
+                            onClick={() => { commitPrompt(); commitCss(); onClose(); }}
                             className="text-[12px] font-bold text-indigo-500 active:scale-95 transition"
                         >
                             完成
@@ -215,10 +271,57 @@ const ThinkingChainSettingsModal: React.FC<Props> = ({ isOpen, onClose, value, o
                             </div>
                         )}
 
-                        {/* 实时大预览 */}
+                        {/* 实时大预览（自定义 CSS 合法时同步作用到预览上） */}
+                        {cssValidation.isValid && draftCss.trim() && <style>{draftCss}</style>}
                         <div className="mt-3 px-1">
                             <div className="text-[9.5px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">实时预览</div>
                             <StylePreview styleId={value.styleId} customColors={value.customColors} />
+                        </div>
+                    </section>
+
+                    {/* 2.5 CSS 美化 —— 叠加在任意风格之上，机制同气泡工坊 */}
+                    <section>
+                        <h3 className="text-[10.5px] font-bold text-slate-400 uppercase tracking-wider mb-2">CSS 美化（进阶）</h3>
+                        <p className="text-[10.5px] text-slate-400 mb-2 leading-relaxed">
+                            在上面选好的风格基础上，再用 CSS 精修心象卡片。可用类名：
+                            <code className="text-indigo-400">.sully-psyche-card</code>（卡片）、
+                            <code className="text-indigo-400">.sully-psyche-title</code>（标题）、
+                            <code className="text-indigo-400">.sully-psyche-preview</code>（折叠首句）、
+                            <code className="text-indigo-400">.sully-psyche-body</code>（展开正文）。
+                            想覆盖风格自带的颜色时记得加 <code className="text-indigo-400">!important</code>。
+                        </p>
+                        <textarea
+                            value={draftCss}
+                            onChange={e => setDraftCss(e.target.value)}
+                            onBlur={commitCss}
+                            spellCheck={false}
+                            placeholder={'.sully-psyche-card {\n  border-radius: 16px !important;\n}'}
+                            className={`w-full h-32 bg-slate-50 rounded-xl p-3 text-[11px] font-mono resize-none border focus:outline-none ${cssValidation.isValid ? 'border-slate-200 focus:border-indigo-300' : 'border-red-300 focus:border-red-400'}`}
+                        />
+                        {!cssValidation.isValid && (
+                            <div className="mt-1 space-y-0.5">
+                                {cssValidation.errors.slice(0, 3).map((err, i) => (
+                                    <div key={i} className="text-[9.5px] text-red-400 leading-relaxed">{err}</div>
+                                ))}
+                                <div className="text-[9px] text-slate-400">有错误时不会保存，修好后自动生效。</div>
+                            </div>
+                        )}
+                        <div className="mt-1.5 flex items-center gap-2">
+                            <button
+                                onClick={() => setDraftCss(PSYCHE_CSS_EXAMPLE)}
+                                className="text-[10px] px-2 py-1 rounded-lg bg-slate-100 text-slate-500 active:scale-95 transition"
+                            >
+                                填入示例
+                            </button>
+                            {value.customCss && (
+                                <button
+                                    onClick={() => { setDraftCss(''); onChange({ customCss: '' }); }}
+                                    className="text-[10px] px-2 py-1 rounded-lg bg-slate-100 text-slate-500 active:scale-95 transition"
+                                >
+                                    清空还原
+                                </button>
+                            )}
+                            <span className="text-[9px] text-slate-300 ml-auto">留空 = 不做额外美化</span>
                         </div>
                     </section>
 

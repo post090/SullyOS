@@ -13,6 +13,7 @@
 
 import type { Message, Emoji } from '../types';
 import { formatLifeSimResetCardForContext } from './lifeSimChatCard';
+import { formatStatCount } from './videoParser';
 
 /**
  * 表情包消息的 content 存的是图床 URL，本身不带名字。拼上下文时要靠这个反查出
@@ -241,6 +242,31 @@ export function normalizeMessageContent(
         const title = meta.title || msg.content || '网页';
         const site = meta.siteName ? `（来自 ${meta.siteName}）` : '';
         const url = meta.finalUrl || meta.url || '';
+        // 视频平台分享（videoParser 解析路径）：没有可读正文，喂给角色的是
+        // 「标题 + 作者 + 热度数据」，并明确告知看不到画面内容，防止对着标题瞎编剧情。
+        if (meta.video) {
+            const v: any = meta.video;
+            const plat = v.platformLabel || v.platform || '视频平台';
+            const isImage = v.contentType === 'image';
+            const kindLabel = isImage ? `图文${v.imageCount ? `（${v.imageCount} 张图）` : ''}` : '视频';
+            const author = v.authorName ? `（作者：${v.authorName}）` : '';
+            const head = `[视频分享] ${userName}分享了一个${plat}${kindLabel}${title ? `《${title}》` : ''}${author}${url ? `\n链接：${url}` : ''}`;
+            const stats = [
+                v.playCount ? `播放 ${formatStatCount(v.playCount)}` : '',
+                v.likeCount ? `点赞 ${formatStatCount(v.likeCount)}` : '',
+                v.commentCount ? `评论 ${formatStatCount(v.commentCount)}` : '',
+                v.collectCount ? `收藏 ${formatStatCount(v.collectCount)}` : '',
+            ].filter(Boolean);
+            const note = isImage
+                ? '（注：你能看到的是这个图文的标题、作者和热度数据，看不到图片内容本身，别假装看过图。）'
+                : '（注：你能看到的是这个视频的标题、作者和热度数据，看不到视频画面和声音，别假装看过视频内容。）';
+            return [
+                head,
+                stats.length ? `热度：${stats.join(' · ')}` : '',
+                v.publishTime ? `发布时间：${v.publishTime}` : '',
+                note,
+            ].filter(Boolean).join('\n');
+        }
         const bodyRaw = (typeof meta.content === 'string' && meta.content.trim())
             ? meta.content.trim()
             : (typeof meta.excerpt === 'string' ? meta.excerpt.trim() : '');

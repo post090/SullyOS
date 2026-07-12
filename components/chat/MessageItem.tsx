@@ -6,12 +6,14 @@ import { Message, ChatTheme } from '../../types';
 import { tryParseLifeSimResetCard } from '../../utils/lifeSimChatCard';
 import { VALID_INTERJECTION_TAGS, cleanVoiceMarkupForDisplay } from '../../utils/minimaxTts';
 import { stripFishCuesForDisplay } from '../../utils/fishAudioTts';
+import { formatStatCount } from '../../utils/videoParser';
 import McdCard from './McdCard';
+import HtmlCard from './HtmlCard';
 import LuckinCard from './LuckinCard';
 import LuckinCheckoutCard from './LuckinCheckoutCard';
 
-// 思考链卡片支持的 4 种风格预设 — 同时被 MessageItem 与 ThinkingChainSettingsModal 复用
-export type ThinkingChainStyleId = 'echo' | 'whisper' | 'minimal' | 'custom';
+// 思考链卡片支持的 12 种风格预设 — 同时被 MessageItem 与 ThinkingChainSettingsModal 复用
+export type ThinkingChainStyleId = 'echo' | 'whisper' | 'minimal' | 'ink' | 'neon' | 'terminal' | 'stellar' | 'tama' | 'pixel' | 'muji' | 'ins' | 'custom';
 export interface ThinkingChainStyleSpec {
     bg: string;            // 卡片背景（可以是 CSS gradient）
     border: string;        // 边框色
@@ -31,10 +33,20 @@ export interface ThinkingChainStyleSpec {
     quoteRight: string;    // 折叠态首句右引号
     italic: boolean;       // 是否斜体
     radius: string;        // 圆角
+    /** 边框宽度（默认 1px）——像素框/电子鸡壳等拟态风格用粗框 */
+    borderWidth?: string;
+    /** 卡片投影完全覆盖（不设则走 glow 默认逻辑）——硬像素影/ins 软影/机壳圈 */
+    cardShadow?: string;
+    /** 卡片内部整面覆盖层：扫描线（CRT）/ 点阵（液晶屏） */
+    overlay?: 'scanlines' | 'dotMatrix';
+    /** 破格装饰：溢出卡片边框的风格化元素（印章/霓虹括角/终端红绿灯/星子/机壳按钮…），由 PsycheDecor 渲染 */
+    decoKind?: 'inkSeal' | 'neonGlitch' | 'termHud' | 'starScatter' | 'tamaShell' | 'pixelArrow' | 'insHeart';
 }
 
 const SERIF = '"Noto Serif SC", "Source Han Serif SC", "Songti SC", "STKaiti", "KaiTi", serif';
 const SANS = '"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif';
+const MONO = '"JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, "Courier New", monospace';
+const PIXEL = '"Zpix", "Fusion Pixel 12px", "DotGothic16", "Silver", "Courier New", monospace';
 
 export const THINKING_CHAIN_PRESETS: Record<Exclude<ThinkingChainStyleId, 'custom'>, ThinkingChainStyleSpec> = {
     echo: {
@@ -96,6 +108,179 @@ export const THINKING_CHAIN_PRESETS: Record<Exclude<ThinkingChainStyleId, 'custo
         italic: false,
         radius: '10px',
     },
+    ink: {
+        bg: 'linear-gradient(160deg, #f9f6ee 0%, #f2ecdf 60%, #ece4d4 100%)',
+        border: 'rgba(70, 60, 48, 0.28)',
+        accent: '#4a4238',
+        text: '#3d3830',
+        subtext: 'rgba(74, 66, 56, 0.55)',
+        fadeColor: '#f4efe3',
+        fontFamily: SERIF,
+        showCorners: false,
+        showDivider: true,
+        titleZh: '墨迹',
+        titleEn: 'INK',
+        listenLabel: '展卷',
+        silenceLabel: '收卷',
+        quoteLeft: '「',
+        quoteRight: '」',
+        italic: false,
+        radius: '2px',
+        decoKind: 'inkSeal',
+    },
+    neon: {
+        bg: 'linear-gradient(135deg, #0b1026 0%, #10173a 55%, #1a0f2e 100%)',
+        border: 'rgba(94, 234, 212, 0.4)',
+        accent: '#5eead4',
+        text: '#c8f4ff',
+        subtext: 'rgba(94, 234, 212, 0.6)',
+        glow: 'rgba(94, 234, 212, 0.32)',
+        fadeColor: '#10173a',
+        fontFamily: SANS,
+        showCorners: true,
+        showDivider: false,
+        titleZh: '脑域',
+        titleEn: 'NEURO-LINK',
+        listenLabel: '接入',
+        silenceLabel: '断开',
+        quoteLeft: '⟨',
+        quoteRight: '⟩',
+        italic: false,
+        radius: '8px',
+        overlay: 'scanlines',
+        decoKind: 'neonGlitch',
+    },
+    terminal: {
+        bg: '#0b120d',
+        border: 'rgba(74, 222, 128, 0.35)',
+        accent: '#4ade80',
+        text: '#a7e8b4',
+        subtext: 'rgba(74, 222, 128, 0.55)',
+        glow: 'rgba(74, 222, 128, 0.18)',
+        fadeColor: '#0b120d',
+        fontFamily: MONO,
+        showCorners: false,
+        showDivider: true,
+        titleZh: '内核',
+        titleEn: 'KERNEL.LOG',
+        listenLabel: 'tail -f',
+        silenceLabel: '^C',
+        quoteLeft: '$ ',
+        quoteRight: '',
+        italic: false,
+        radius: '6px',
+        decoKind: 'termHud',
+    },
+    stellar: {
+        bg: 'linear-gradient(180deg, #0d1b2a 0%, #16263c 60%, #22344e 100%)',
+        border: 'rgba(168, 199, 250, 0.35)',
+        accent: '#a8c7fa',
+        text: '#dce8ff',
+        subtext: 'rgba(168, 199, 250, 0.62)',
+        glow: 'rgba(168, 199, 250, 0.3)',
+        fadeColor: '#16263c',
+        fontFamily: SERIF,
+        showCorners: false,
+        showDivider: true,
+        titleZh: '星语',
+        titleEn: 'STELLAR',
+        listenLabel: '仰望',
+        silenceLabel: '垂眸',
+        quoteLeft: '「',
+        quoteRight: '」',
+        italic: true,
+        radius: '12px',
+        decoKind: 'starScatter',
+    },
+    // 拓麻歌子：粉壳 + 液晶点阵屏，框本身拟态成电子宠物机
+    tama: {
+        bg: 'linear-gradient(180deg, #d6e2c2 0%, #c8d6b0 100%)',
+        border: '#f2a5c4',
+        accent: '#44562f',
+        text: '#3f5230',
+        subtext: 'rgba(68, 86, 47, 0.6)',
+        fadeColor: '#cfdbb9',
+        fontFamily: PIXEL,
+        showCorners: false,
+        showDivider: true,
+        titleZh: '心宠',
+        titleEn: 'TMGC-LOG',
+        listenLabel: '喂食',
+        silenceLabel: '哄睡',
+        quoteLeft: '▶',
+        quoteRight: '',
+        italic: false,
+        radius: '16px',
+        borderWidth: '3px',
+        cardShadow: '0 0 0 3px rgba(242, 165, 196, 0.35), 0 3px 8px rgba(120, 80, 100, 0.18)',
+        overlay: 'dotMatrix',
+        decoKind: 'tamaShell',
+    },
+    // 像素：JRPG 对话框，白粗框 + 硬像素投影
+    pixel: {
+        bg: '#23255e',
+        border: '#ffffff',
+        accent: '#ffd75e',
+        text: '#f2f3ff',
+        subtext: 'rgba(242, 243, 255, 0.65)',
+        fadeColor: '#23255e',
+        fontFamily: PIXEL,
+        showCorners: false,
+        showDivider: false,
+        titleZh: '任务',
+        titleEn: 'QUEST.LOG',
+        listenLabel: '继续',
+        silenceLabel: '合上',
+        quoteLeft: '『',
+        quoteRight: '』',
+        italic: false,
+        radius: '2px',
+        borderWidth: '3px',
+        cardShadow: '4px 4px 0 rgba(0, 0, 0, 0.4)',
+        decoKind: 'pixelArrow',
+    },
+    // 性冷淡：暖灰米白、细线、留白，什么装饰都不要
+    muji: {
+        bg: '#f7f6f3',
+        border: 'rgba(60, 60, 54, 0.14)',
+        accent: '#8a8a84',
+        text: '#4d4d48',
+        subtext: 'rgba(90, 90, 84, 0.5)',
+        fadeColor: '#f7f6f3',
+        fontFamily: SANS,
+        showCorners: false,
+        showDivider: true,
+        titleZh: '独白',
+        titleEn: 'MONOLOGUE',
+        listenLabel: '展开',
+        silenceLabel: '收起',
+        quoteLeft: '',
+        quoteRight: '',
+        italic: false,
+        radius: '6px',
+    },
+    // ins：白卡软影 feed 风，右上一颗小红心
+    ins: {
+        bg: '#ffffff',
+        border: 'rgba(0, 0, 0, 0.07)',
+        accent: '#e1306c',
+        text: '#262626',
+        subtext: '#8e8e8e',
+        fadeColor: '#ffffff',
+        fontFamily: SANS,
+        showCorners: false,
+        showDivider: false,
+        titleZh: '碎碎念',
+        titleEn: 'STORIES',
+        listenLabel: '查看',
+        silenceLabel: '收起',
+        quoteLeft: '“',
+        quoteRight: '”',
+        italic: false,
+        radius: '16px',
+        cardShadow: '0 4px 16px rgba(0, 0, 0, 0.07)',
+        decoKind: 'insHeart',
+    },
 };
 
 export function resolveThinkingChainStyle(
@@ -124,6 +309,106 @@ export function resolveThinkingChainStyle(
     return THINKING_CHAIN_PRESETS[styleId || 'echo'] || THINKING_CHAIN_PRESETS.echo;
 }
 
+// 心象卡片的「破格」装饰：溢出卡片边框的风格化元素。
+// 必须渲染在卡片（overflow-hidden）的兄弟层、且父容器 relative + 不裁剪，才能真的探出边框。
+// 被 ThinkingChainBlock 与设置弹窗的 StylePreview 共用；compact 用于迷你预览缩小尺寸。
+export const PsycheDecor: React.FC<{ spec: ThinkingChainStyleSpec; compact?: boolean }> = ({ spec, compact }) => {
+    switch (spec.decoKind) {
+        case 'inkSeal': // 右下角压出边框的朱文印
+            return (
+                <span
+                    aria-hidden
+                    className="absolute z-10 pointer-events-none flex items-center justify-center font-bold"
+                    style={{
+                        bottom: compact ? -4 : -7,
+                        right: compact ? -2 : -4,
+                        width: compact ? 15 : 23,
+                        height: compact ? 15 : 23,
+                        background: '#b3382c',
+                        color: '#f7ede0',
+                        fontSize: compact ? 8 : 12,
+                        fontFamily: SERIF,
+                        borderRadius: 3,
+                        transform: 'rotate(9deg)',
+                        boxShadow: '0 1px 3px rgba(80, 20, 10, 0.4)',
+                        opacity: 0.92,
+                    }}
+                >心</span>
+            );
+        case 'neonGlitch': // 探出四角的霓虹括角（青 × 品红错位残影）
+            return (
+                <>
+                    <span aria-hidden className={`absolute z-10 pointer-events-none border-t-2 border-l-2 ${compact ? '-top-0.5 -left-0.5 w-2 h-2' : '-top-1 -left-1 w-3 h-3'}`} style={{ borderColor: spec.accent, filter: `drop-shadow(0 0 3px ${spec.accent})` }} />
+                    <span aria-hidden className={`absolute z-10 pointer-events-none border-b-2 border-r-2 ${compact ? '-bottom-0.5 -right-0.5 w-2 h-2' : '-bottom-1 -right-1 w-3 h-3'}`} style={{ borderColor: '#f0abfc', filter: 'drop-shadow(0 0 3px #f0abfc)' }} />
+                </>
+            );
+        case 'termHud': // 顶出上边框的窗口红绿灯
+            return (
+                <span aria-hidden className="absolute z-10 pointer-events-none flex gap-1" style={{ top: compact ? -2 : -3, right: compact ? 8 : 12 }}>
+                    {['#ff5f56', '#ffbd2e', '#27c93f'].map(c => (
+                        <span key={c} className="rounded-full" style={{ width: compact ? 4 : 6, height: compact ? 4 : 6, background: c, boxShadow: `0 0 4px ${c}88` }} />
+                    ))}
+                </span>
+            );
+        case 'starScatter': // 缀在边框内外的星子
+            return (
+                <>
+                    <span aria-hidden className="absolute z-10 pointer-events-none animate-pulse" style={{ top: compact ? -5 : -8, right: compact ? 10 : 16, color: spec.accent, fontSize: compact ? 8 : 12, textShadow: spec.glow ? `0 0 6px ${spec.glow}` : undefined }}>✦</span>
+                    <span aria-hidden className="absolute z-10 pointer-events-none" style={{ top: compact ? 6 : 10, right: compact ? -4 : -6, color: spec.accent, fontSize: compact ? 6 : 8, opacity: 0.75 }}>✧</span>
+                    <span aria-hidden className="absolute z-10 pointer-events-none animate-pulse" style={{ bottom: compact ? -3 : -5, left: compact ? 12 : 20, color: spec.accent, fontSize: compact ? 5 : 7, opacity: 0.6, animationDelay: '0.8s' }}>✦</span>
+                </>
+            );
+        case 'tamaShell': // 底边探出的机壳三按钮（电子宠物机的 A/B/C 键）
+            return (
+                <span aria-hidden className="absolute z-10 pointer-events-none flex" style={{ bottom: compact ? -5 : -8, left: '50%', transform: 'translateX(-50%)', gap: compact ? 5 : 8 }}>
+                    {[0, 1, 2].map(i => (
+                        <span
+                            key={i}
+                            className="rounded-full"
+                            style={{
+                                width: compact ? 5 : 8,
+                                height: compact ? 5 : 8,
+                                background: 'radial-gradient(circle at 35% 30%, #fbc9dd, #ee8fb6)',
+                                boxShadow: '0 1px 2px rgba(150, 80, 110, 0.45), inset 0 0.5px 1px rgba(255,255,255,0.7)',
+                            }}
+                        />
+                    ))}
+                </span>
+            );
+        case 'pixelArrow': // JRPG「还有下文」的闪烁小三角，压在右下边框上
+            return (
+                <span
+                    aria-hidden
+                    className="absolute z-10 pointer-events-none animate-pulse"
+                    style={{
+                        bottom: compact ? -4 : -7,
+                        right: compact ? 8 : 14,
+                        color: spec.accent,
+                        fontSize: compact ? 8 : 12,
+                        textShadow: '1px 1px 0 rgba(0,0,0,0.5)',
+                    }}
+                >▼</span>
+            );
+        case 'insHeart': // 右上角一颗小红心，feed 点赞感
+            return (
+                <span
+                    aria-hidden
+                    className="absolute z-10 pointer-events-none"
+                    style={{
+                        top: compact ? -5 : -7,
+                        right: compact ? 8 : 14,
+                        color: spec.accent,
+                        fontSize: compact ? 9 : 13,
+                        transform: 'rotate(10deg)',
+                        filter: 'drop-shadow(0 1px 2px rgba(225, 48, 108, 0.35))',
+                    }}
+                >♥</span>
+            );
+        default:
+            return null;
+    }
+};
+
 // 思考链卡片：可视化 metadata.thinkingChain。
 // 内容来源：useChatAI 抽取的 LLM reasoning_content + <think>/<thinking>/<thought>。
 // 多风格通过 resolveThinkingChainStyle() 统一渲染；齿轮触发 onOpenSettings 进入设置弹窗。
@@ -141,18 +426,20 @@ const ThinkingChainBlock: React.FC<{
     const hasMore = trimmed.length > 38;
     return (
         <div
-            className="mb-2 w-full max-w-full select-text cursor-pointer group"
+            className="sully-psyche relative mb-2 w-full max-w-full select-text cursor-pointer group"
             onClick={(e) => { e.stopPropagation(); setExpanded(v => !v); }}
         >
             <div
-                className="relative overflow-hidden px-4 py-2.5 transition-all duration-300"
+                className="sully-psyche-card relative overflow-hidden px-4 py-2.5 transition-all duration-300"
                 style={{
                     background: spec.bg,
-                    border: `1px solid ${spec.border}`,
+                    border: `${spec.borderWidth || '1px'} solid ${spec.border}`,
                     borderRadius: spec.radius,
-                    boxShadow: spec.glow
-                        ? `0 2px 8px rgba(20, 10, 30, 0.18), inset 0 0 24px ${spec.glow.replace(/[\d.]+\)$/, '0.06)')}`
-                        : '0 1px 3px rgba(15, 23, 42, 0.08)',
+                    boxShadow: spec.cardShadow
+                        ? spec.cardShadow
+                        : spec.glow
+                            ? `0 2px 8px rgba(20, 10, 30, 0.18), inset 0 0 24px ${spec.glow.replace(/[\d.]+\)$/, '0.06)')}`
+                            : '0 1px 3px rgba(15, 23, 42, 0.08)',
                 }}
             >
                 {/* 四角装饰括号 */}
@@ -172,11 +459,26 @@ const ThinkingChainBlock: React.FC<{
                         style={{ background: `radial-gradient(circle, ${spec.glow} 0%, transparent 70%)` }}
                     />
                 )}
+                {/* 内部整面覆盖层：CRT 扫描线 / 液晶点阵 */}
+                {spec.overlay === 'scanlines' && (
+                    <div
+                        aria-hidden
+                        className="absolute inset-0 pointer-events-none opacity-[0.13]"
+                        style={{ background: 'repeating-linear-gradient(to bottom, transparent 0px, transparent 2px, rgba(94, 234, 212, 0.6) 3px, transparent 4px)' }}
+                    />
+                )}
+                {spec.overlay === 'dotMatrix' && (
+                    <div
+                        aria-hidden
+                        className="absolute inset-0 pointer-events-none opacity-[0.18]"
+                        style={{ background: 'radial-gradient(rgba(60, 80, 40, 0.55) 0.5px, transparent 0.6px)', backgroundSize: '3px 3px' }}
+                    />
+                )}
 
                 {/* 标题行 */}
                 <div className="relative flex items-center gap-2">
                     <span
-                        className="text-[13px] font-semibold tracking-[0.4em]"
+                        className="sully-psyche-title text-[13px] font-semibold tracking-[0.4em]"
                         style={{
                             color: spec.accent,
                             fontFamily: spec.fontFamily,
@@ -210,17 +512,18 @@ const ThinkingChainBlock: React.FC<{
 
                 {!expanded && (
                     <div
-                        className={`relative mt-1.5 text-[12px] leading-snug truncate ${spec.italic ? 'italic' : ''}`}
+                        className={`sully-psyche-preview relative mt-1.5 text-[12px] leading-snug truncate ${spec.italic ? 'italic' : ''}`}
                         style={{ color: spec.text, fontFamily: spec.fontFamily }}
                     >
                         <span style={{ color: spec.accent, marginRight: 2 }}>{spec.quoteLeft}</span>
                         {firstLine}{hasMore ? '…' : ''}
                         <span style={{ color: spec.accent, marginLeft: 2 }}>{spec.quoteRight}</span>
+                        {spec.decoKind === 'termHud' && <span className="animate-pulse" style={{ color: spec.accent, marginLeft: 3 }}>▊</span>}
                     </div>
                 )}
                 {expanded && (
                     <div className="relative mt-1.5">
-                        {/* 上下软渐变盖掉系统滚动条；fadeColor 跟卡片背景一致 */}
+                        {/* 上下软渐变盖掉系统滚动条; fadeColor 跟卡片背景一致 */}
                         {spec.fadeColor && (
                             <>
                                 <div aria-hidden className="absolute top-0 left-0 right-0 h-3 pointer-events-none z-10" style={{ background: `linear-gradient(to bottom, ${spec.fadeColor} 0%, transparent 100%)` }} />
@@ -228,7 +531,7 @@ const ThinkingChainBlock: React.FC<{
                             </>
                         )}
                         <div
-                            className={`no-scrollbar relative pl-3 pr-1 py-2 text-[12.5px] leading-[1.85] whitespace-pre-wrap break-words max-h-72 overflow-auto ${spec.italic ? 'italic' : ''}`}
+                            className={`sully-psyche-body no-scrollbar relative pl-3 pr-1 py-2 text-[12.5px] leading-[1.85] whitespace-pre-wrap break-words max-h-72 overflow-auto ${spec.italic ? 'italic' : ''}`}
                             style={{
                                 color: spec.text,
                                 fontFamily: spec.fontFamily,
@@ -242,6 +545,8 @@ const ThinkingChainBlock: React.FC<{
                     </div>
                 )}
             </div>
+            {/* 破格装饰渲染在卡片外层（卡片自身 overflow-hidden 裁不掉它） */}
+            <PsycheDecor spec={spec} />
         </div>
     );
 };
@@ -1725,9 +2030,10 @@ const MessageItem = React.memo(({
         );
     }
 
-    // --- Webpage Share Card (用户分享的网页) ---
+    // --- Webpage Share Card (用户分享的网页 / 视频平台链接) ---
     if (m.type === 'webpage_card' && m.metadata?.webpage) {
         const wp = m.metadata.webpage;
+        const vd = wp.video; // videoParser 解析路径才有：平台/作者/热度
         let host = (wp.siteName || '').trim();
         try { host = new URL(wp.finalUrl || wp.url).hostname.replace(/^www\./, ''); } catch { /* 用 siteName 兜底 */ }
         const openPage = () => {
@@ -1735,13 +2041,18 @@ const MessageItem = React.memo(({
             if (u) window.open(u, '_blank', 'noopener,noreferrer');
         };
         const excerpt = (wp.excerpt || '').trim();
+        const vdStats = vd ? [
+            vd.playCount ? `▶ ${formatStatCount(vd.playCount)}` : '',
+            vd.likeCount ? `♥ ${formatStatCount(vd.likeCount)}` : '',
+            vd.commentCount ? `💬 ${formatStatCount(vd.commentCount)}` : '',
+        ].filter(Boolean) : [];
         return commonLayout(
             <div
                 onClick={openPage}
                 className="w-64 bg-white rounded-2xl overflow-hidden border border-slate-200/80 shadow-[0_2px_10px_rgba(0,0,0,0.05)] cursor-pointer active:opacity-90 transition-opacity">
-                {/* 封面图（og:image / 正文首图），加载失败自动隐藏 */}
+                {/* 封面图（og:image / 正文首图 / 视频封面），加载失败自动隐藏 */}
                 {wp.image && (
-                    <div className="w-full h-32 bg-slate-100 overflow-hidden">
+                    <div className="relative w-full h-32 bg-slate-100 overflow-hidden">
                         <img
                             src={wp.image}
                             alt=""
@@ -1750,10 +2061,23 @@ const MessageItem = React.memo(({
                             referrerPolicy="no-referrer"
                             onError={(e: any) => { const c = e.target?.parentElement; if (c) c.style.display = 'none'; }}
                         />
+                        {/* 视频分享：封面加播放角标；图集显示张数 */}
+                        {vd && vd.contentType !== 'image' && (
+                            <span className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                                <span className="w-10 h-10 rounded-full bg-black/40 backdrop-blur-[2px] flex items-center justify-center">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-5 h-5 text-white translate-x-[1px]"><path d="M6.3 2.84A1.5 1.5 0 0 0 4 4.11v11.78a1.5 1.5 0 0 0 2.3 1.27l9.34-5.89a1.5 1.5 0 0 0 0-2.54L6.3 2.84Z" /></svg>
+                                </span>
+                            </span>
+                        )}
+                        {vd && vd.contentType === 'image' && !!vd.imageCount && (
+                            <span className="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 rounded-md bg-black/45 text-white text-[9px] font-medium pointer-events-none">
+                                图集 · {vd.imageCount}张
+                            </span>
+                        )}
                     </div>
                 )}
                 <div className="p-3.5">
-                    {/* 域名行 */}
+                    {/* 域名 / 平台行 */}
                     <div className="flex items-center gap-1.5 mb-2">
                         <span className="w-4 h-4 rounded-full bg-slate-100 flex items-center justify-center shrink-0">
                             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-2.5 h-2.5 text-slate-400">
@@ -1761,12 +2085,19 @@ const MessageItem = React.memo(({
                                 <path fillRule="evenodd" d="M11.603 7.963a.75.75 0 0 0-.977 1.138 2.5 2.5 0 0 1 .142 3.667l-3 3a2.5 2.5 0 0 1-3.536-3.536l1.225-1.224a.75.75 0 0 0-1.061-1.06l-1.224 1.224a4 4 0 1 0 5.656 5.656l3-3a4 4 0 0 0-.225-5.865Z" clipRule="evenodd" />
                             </svg>
                         </span>
-                        <span className="text-[11px] text-slate-400 font-medium truncate">{host || '网页'}</span>
+                        <span className="text-[11px] text-slate-400 font-medium truncate">{vd?.platformLabel || host || '网页'}</span>
                     </div>
                     {/* 标题 */}
                     <div className="font-semibold text-[15px] text-slate-800 line-clamp-2 leading-snug">{wp.title || host || '网页'}</div>
-                    {/* 摘要 / 抓空占位 */}
-                    {excerpt ? (
+                    {/* 视频分享：作者 + 热度行 */}
+                    {vd ? (
+                        <div className="flex items-center justify-between mt-1.5 gap-2">
+                            <span className="text-[10px] text-slate-500 truncate">{vd.authorName ? `@${vd.authorName}` : ''}</span>
+                            {vdStats.length > 0 && (
+                                <span className="text-[10px] text-slate-400 shrink-0">{vdStats.join(' · ')}</span>
+                            )}
+                        </div>
+                    ) : excerpt ? (
                         <p className="text-xs text-slate-500 line-clamp-3 leading-relaxed mt-1.5">{excerpt}</p>
                     ) : (
                         <p className="text-[11px] text-slate-300 mt-1.5">未能提取到正文预览，点开看原网页</p>
@@ -2427,59 +2758,8 @@ const MessageItem = React.memo(({
                 </div>
             );
         }
-        // 沙盒 iframe：禁用脚本 / 同源 / 表单提交，避免任意 HTML 越权访问父页面。
-        // srcDoc 用一个全宽中心化的 wrapper, 让 270px 的卡片在 iframe 里居中、背景透明。
-        // body>* 强制清掉最外层元素的 box-shadow/filter: 模型经常给卡片外层加柔和阴影,
-        // 但 iframe 只比卡片宽一点 + 外层 overflow-hidden, 阴影会被裁成一圈"若隐若现的
-        // 假边框"贴在卡片周围 —— 聊天里卡片约定是直接贴在聊天背景上、无背景无边框,
-        // 这里在渲染端兜底 (对已落库的旧卡片同样生效), 提示词端同步不再教模型加外层阴影。
-        const srcDoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;padding:0;background:transparent;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#334155;}body{display:flex;justify-content:center;padding:0;}*{box-sizing:border-box;}img{max-width:100%;}body>*{box-shadow:none!important;filter:none!important;}</style></head><body>${html}</body></html>`;
-        return commonLayout(
-            <div className="rounded-[18px] overflow-hidden bg-transparent max-w-[280px]">
-                <iframe
-                    title="html-card"
-                    srcDoc={srcDoc}
-                    // allow-same-origin: 让父页面能读 contentDocument 自动调高度
-                    // 故意不给 allow-scripts / allow-forms / allow-popups —
-                    // AI 输出里的 <script> 不会执行, 表单 / 弹窗 / 顶层跳转 也都被拦。
-                    sandbox="allow-same-origin"
-                    referrerPolicy="no-referrer"
-                    className="block w-[280px] min-h-[120px] border-0 bg-transparent"
-                    style={{ height: 200 }}
-                    onLoad={(e) => {
-                        try {
-                            const f = e.currentTarget as HTMLIFrameElement & { __htmlCardRO?: ResizeObserver };
-                            const doc = f.contentDocument;
-                            if (!doc || !doc.body) return;
-                            // 量内容真实高度并把 iframe 调成等高，避免内部滚动。
-                            // 上限放宽到 2400，足够长卡片完整展开；真正超长的才会兜底滚动。
-                            const fit = () => {
-                                try {
-                                    const root = doc.documentElement;
-                                    const body = doc.body;
-                                    const natural = Math.max(
-                                        body.scrollHeight, body.offsetHeight,
-                                        root ? root.scrollHeight : 0,
-                                    );
-                                    const h = Math.min(2400, Math.max(60, natural + 4));
-                                    f.style.height = h + 'px';
-                                } catch { /* 同源读不到时静默 */ }
-                            };
-                            fit();
-                            // 交互卡片（:checked 展开 / 折叠）、动画、字体晚到都会改变高度，
-                            // 用 ResizeObserver 持续跟随，让高度始终自适应而不是只量一次。
-                            f.__htmlCardRO?.disconnect();
-                            if (typeof ResizeObserver !== 'undefined') {
-                                const ro = new ResizeObserver(() => fit());
-                                ro.observe(doc.body);
-                                if (doc.documentElement) ro.observe(doc.documentElement);
-                                f.__htmlCardRO = ro;
-                            }
-                        } catch { /* 同源也读不到时静默 */ }
-                    }}
-                />
-            </div>
-        );
+        // 渲染逻辑抽到共享组件 components/chat/HtmlCard.tsx（群聊共用），行为不变
+        return commonLayout(<HtmlCard html={html} />);
     }
 
     if (m.type === 'social_card' && m.metadata?.post) {
@@ -2976,17 +3256,16 @@ const MessageItem = React.memo(({
             </div>
             )}
 
-            {/* Layer 5: Per-bubble Translate Toggle (AI bilingual messages only) */}
+            {/* Layer 5: 双语「翻译/原文」切换 —— 气泡内右下角，细分隔线压层级，小灰字克制易找 */}
             {showTranslateButton && displayContent && !isForeignVoiceMsg && (
-                <div className="relative z-10 mt-2 flex justify-end">
+                <div
+                    className="relative z-10 mt-2 pt-1.5 flex justify-end"
+                    style={{ borderTop: '1px solid rgba(127, 127, 127, 0.16)' }}
+                >
                     <button
                         onClick={(e) => { e.stopPropagation(); e.preventDefault(); onTranslateToggle?.(m.id); }}
-                        className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-medium transition-all active:scale-95 select-none"
-                        style={{
-                            color: styleConfig.textColor,
-                            opacity: 0.45,
-                            backgroundColor: isShowingTarget ? 'rgba(0,0,0,0.06)' : 'transparent',
-                        }}
+                        className="flex items-center gap-1 text-[10px] font-medium transition-opacity active:opacity-80 select-none"
+                        style={{ color: styleConfig.textColor, opacity: 0.45 }}
                     >
                         {isShowingTarget ? (
                             <>
@@ -2996,7 +3275,7 @@ const MessageItem = React.memo(({
                         ) : (
                             <>
                                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3 h-3"><path d="M7.75 2.75a.75.75 0 0 0-1.5 0v1.258a32.987 32.987 0 0 0-3.599.278.75.75 0 1 0 .198 1.487A31.545 31.545 0 0 1 8.7 5.545 19.381 19.381 0 0 1 7.257 9.04a19.391 19.391 0 0 1-1.727-2.29.75.75 0 1 0-1.29.77 20.9 20.9 0 0 0 2.023 2.684 19.549 19.549 0 0 1-3.158 2.57.75.75 0 1 0 .86 1.229A21.056 21.056 0 0 0 7.5 11.03c1.1.95 2.3 1.79 3.593 2.49a.75.75 0 1 0 .69-1.331A19.545 19.545 0 0 1 8.46 9.89a20.893 20.893 0 0 0 1.91-4.644h2.38a.75.75 0 0 0 0-1.5h-3v-1a.75.75 0 0 0-.75-.75Z" /><path d="M12.75 10a.75.75 0 0 1 .692.462l2.5 6a.75.75 0 1 1-1.384.576l-.532-1.278h-3.052l-.532 1.278a.75.75 0 1 1-1.384-.576l2.5-6A.75.75 0 0 1 12.75 10Zm-1.018 4.26h2.036L12.75 11.6l-1.018 2.66Z" /></svg>
-                                <span>译</span>
+                                <span>翻译</span>
                             </>
                         )}
                     </button>

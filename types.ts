@@ -2279,9 +2279,17 @@ export interface CharacterProfile {
    * - 'echo' (default)：暗紫底 + 暖金描边「回响」二次元卡牌
    * - 'whisper'：米色羊皮纸「心声」轻盈版
    * - 'minimal'：无装饰单色简洁版
+   * - 'ink'：宣纸底墨色 + 朱印「墨迹」水墨卷轴
+   * - 'neon'：深蓝紫底 + 青光扫描线「脑域」赛博终端
+   * - 'terminal'：黑底绿字等宽「内核」日志
+   * - 'stellar'：深空蓝缀星「星语」夜航
+   * - 'tama'：粉壳液晶点阵「心宠」拓麻歌子
+   * - 'pixel'：JRPG 白粗框硬影「任务」像素对话框
+   * - 'muji'：暖灰米白「独白」性冷淡留白
+   * - 'ins'：白卡软影「碎碎念」feed 风
    * - 'custom'：使用 thinkingChainCustomColors 给的配色
    */
-  thinkingChainStyle?: 'echo' | 'whisper' | 'minimal' | 'custom';
+  thinkingChainStyle?: 'echo' | 'whisper' | 'minimal' | 'ink' | 'neon' | 'terminal' | 'stellar' | 'tama' | 'pixel' | 'muji' | 'ins' | 'custom';
   /** 自定义风格用的配色组（仅 thinkingChainStyle === 'custom' 生效） */
   thinkingChainCustomColors?: {
     bg?: string;       // 卡片背景
@@ -2290,6 +2298,12 @@ export interface CharacterProfile {
   };
   /** 用户追加的思考提示词（不替换原生，只在最后追加一段「用户额外要求」） */
   thinkingChainCustomPrompt?: string;
+  /**
+   * 心象卡片的自定义 CSS（叠加在任意风格之上，机制同气泡工坊 customCss）。
+   * 选择器限定以 .sully-psyche 开头（子元素类：-card / -title / -preview / -body），
+   * 由 Chat.tsx 原样 <style> 注入。
+   */
+  thinkingChainCustomCss?: string;
 
   /**
    * 虚拟世界「彼方」的个人状态：是否自主登入、登入间隔、各本小说的独立书签等。
@@ -2322,6 +2336,33 @@ export interface GroupProfile {
      * 不设默认 80。设大点能让活跃群更完整，设小点节省 token、避免某个活跃群把其他群挤掉。
      */
     privateContextCap?: number;
+    /**
+     * 群提示词里每个成员"私聊+群聊合并时间线"的条数上限（合并排序后取末 N 条）。
+     * 不设默认 40。这条时间线是角色群聊表现与私聊感情衔接的关键上下文。
+     */
+    memberTimelineCap?: number;
+    /**
+     * 群回复生成模式：director = 一次调用生成整轮（默认，快、省 token）；
+     * roundRobin = 每位成员单独调用一次 API，按成员顺序逐个发言（更真实、防串号，token ≈ 成员数倍）。
+     */
+    replyMode?: 'director' | 'roundRobin';
+    /**
+     * 成员独立气泡：true = 每位成员的气泡用其私聊 bubbleStyle 主题的 AI 侧；
+     * false/undefined = 全员统一（现状白色）。
+     */
+    memberBubbleIndependent?: boolean;
+    /** 用户在本群的气泡主题 id（预设或 customThemes，取 user 侧）；undefined = 现状紫色 */
+    userBubbleThemeId?: string;
+    /** 群聊白框自定义 CSS（.sully-chat-* 钩子），与私聊 char.chromeCustomCss 同机制 */
+    chromeCustomCss?: string;
+    /** 群提示音（未绑定白框时的独立存储）；绑定时以 chromeCustomCss 里的 @sully-sound 注释为准 */
+    chatSound?: { src: string; volume?: number };
+    /** 提示音是否绑定进白框 CSS（跟着白框分享码走） */
+    chatSoundBound?: boolean;
+    /** HTML 模块模式：开启后角色可输出 [html] 卡片 */
+    htmlModeEnabled?: boolean;
+    /** HTML 模式自定义提示词（追加在内置提示词之后） */
+    htmlModeCustomPrompt?: string;
 }
 
 export interface CharacterExportData extends Omit<CharacterProfile, 'id' | 'memories' | 'refinedMemories' | 'activeMemoryMonths' | 'impression' | 'groupId'> {
@@ -3003,6 +3044,7 @@ export interface FullBackupData {
     worldHomeLocal?: Record<string, string>;   // 家园本机配置：全局 API + 文风收藏（存 localStorage）
     luckinLocal?: Record<string, string>;      // 瑞幸：token + 启用状态（存 localStorage）
     mcdLocal?: Record<string, string>;         // 麦当劳：token + 启用状态（存 localStorage）
+    mcpLocal?: Record<string, string>;         // 通用 MCP：用户自配的服务器列表（存 localStorage）
     desktopSkinLocal?: Record<string, string>; // 桌面皮肤偏好：电子宠物/手游风的界面配色 + 看板 banner（存 localStorage；看板图令牌导出时解析为 data URL）
     songs?: SongSheet[]; // Songwriting app data
     
