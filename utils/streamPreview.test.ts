@@ -1,17 +1,28 @@
 import { describe, it, expect } from 'vitest';
-import { computeStreamPreviewBubbles } from './streamPreview';
+import {
+    computeStreamPreviewBubbles,
+    extractStreamingEmbeddedThinking,
+    findNewStreamPreviewHandoverIds,
+} from './streamPreview';
+import type { Message } from '../types';
 
-// 流式预览气泡的过滤策略：宁缺毋滥 —— 指令/语音/翻译/日记/HTML 块一律不预览，
-// 半截行不上屏。预览只影响体感，最终渲染仍由 applyAssistantPostProcessing 负责。
+// 流式预览气泡的过滤策略：普通尾句持续增长；遇到指令/语音/翻译/日记/HTML 块时
+// 只展示控制标记前的安全正文。最终渲染仍由 applyAssistantPostProcessing 负责。
 
 describe('computeStreamPreviewBubbles', () => {
-    it('半截行（无换行）不展示', () => {
-        expect(computeStreamPreviewBubbles('今天天气真好')).toEqual([]);
+    it('无换行的当前尾句也实时展示', () => {
+        expect(computeStreamPreviewBubbles('今天天气真好')).toEqual(['今天天气真好']);
     });
 
-    it('已完成的行逐条成为气泡，最后的半截行被扣住', () => {
+    it('已完成的行逐条成为气泡，最后的尾句持续增长', () => {
         const bubbles = computeStreamPreviewBubbles('今天天气真好\n要不要出去走走\n我在想');
-        expect(bubbles).toEqual(['今天天气真好', '要不要出去走走']);
+        expect(bubbles).toEqual(['今天天气真好', '要不要出去走走', '我在想']);
+    });
+
+    it('未完成尾句只显示控制标记前的安全正文', () => {
+        expect(computeStreamPreviewBubbles('先说一句，然后[[SEARCH: 半截')).toEqual(['先说一句，然后']);
+        expect(computeStreamPreviewBubbles('<think>不能漏')).toEqual([]);
+        expect(computeStreamPreviewBubbles('[html')).toEqual([]);
     });
 
     it('含 [[...]] 指令的行不预览（表情/动作/召回等）', () => {
@@ -29,6 +40,12 @@ describe('computeStreamPreviewBubbles', () => {
         expect(computeStreamPreviewBubbles(text)).toEqual(['先打个字', '再打一行']);
     });
 
+    it('尚未换行、仍在增长的语音/字幕标签不会漏出内容', () => {
+        expect(computeStreamPreviewBubbles('<语')).toEqual([]);
+        expect(computeStreamPreviewBubbles('<语音 emotion="happy">你猜猜')).toEqual([]);
+        expect(computeStreamPreviewBubbles('<语音>Hello</语音><字幕>你好')).toEqual([]);
+    });
+
     it('跨行语音块（未闭合时全部扣住，闭合后仍不预览块内容）', () => {
         const open = '好\n<语音 emotion="sad">I do not wanna\n';
         expect(computeStreamPreviewBubbles(open)).toEqual(['好']);
@@ -39,6 +56,11 @@ describe('computeStreamPreviewBubbles', () => {
     it('日记多行块不泄漏为聊天气泡', () => {
         const text = '我写篇日记去\n[[DIARY_START: 今天 | 开心]]\n# 大标题\n正文絮絮叨叨\n[[DIARY_END]]\n写完了\n';
         expect(computeStreamPreviewBubbles(text)).toEqual(['我写篇日记去', '写完了']);
+    });
+
+    it('飞书/Notion 同构日记块同样不泄漏', () => {
+        const text = '稍等\n[[FS_DIARY_START: 今天 | 平静]]\n不该成为聊天气泡\n[[FS_DIARY_END]]\n好了\n';
+        expect(computeStreamPreviewBubbles(text)).toEqual(['稍等', '好了']);
     });
 
     it('HTML 卡片块不泄漏', () => {
@@ -64,5 +86,51 @@ describe('computeStreamPreviewBubbles', () => {
     it('空文本 / 纯空行返回空数组', () => {
         expect(computeStreamPreviewBubbles('')).toEqual([]);
         expect(computeStreamPreviewBubbles('\n\n')).toEqual([]);
+    });
+});
+
+describe('extractStreamingEmbeddedThinking', () => {
+    it('实时提取仍未闭合的 think 尾块', () => {
+        expect(extractStreamingEmbeddedThinking('<think>刚想到这里')).toBe('刚想到这里');
+    });
+
+    it('合并已闭合块与后续仍在增长的块', () => {
+        expect(extractStreamingEmbeddedThinking(
+            '<think>第一段</think>正文<thinking>第二段还没写完',
+        )).toBe('第一段\n\n第二段还没写完');
+    });
+});
+
+describe('findNewStreamPreviewHandoverIds', () => {
+    const message = (id: number, content: string, type: Message['type'] = 'text'): Message => ({
+        id,
+        charId: 'char-1',
+        role: 'assistant',
+        type,
+        content,
+        timestamp: id,
+    });
+
+    it('只匹配基线后确实展示过的文本，不误伤二次回复和卡片', () => {
+        const messages = [
+            message(10, '旧消息'),
+            message(11, '第一句'),
+            message(12, '表情', 'emoji'),
+            message(13, '第二句'),
+            message(14, '二次调用的新回复'),
+        ];
+
+        expect(findNewStreamPreviewHandoverIds(messages, ['第一句', '第二句'], 10, new Set()))
+            .toEqual([11, 13]);
+    });
+
+    it('多次刷新消息列表时只返回尚未登记的接棒消息', () => {
+        const claimed = new Set([11]);
+        expect(findNewStreamPreviewHandoverIds(
+            [message(10, '旧消息'), message(11, '第一句'), message(12, '第二句')],
+            ['第一句', '第二句'],
+            10,
+            claimed,
+        )).toEqual([12]);
     });
 });

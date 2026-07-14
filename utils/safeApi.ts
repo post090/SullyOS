@@ -81,10 +81,15 @@ export function parseSseToCompletion(raw: string): any | null {
 
 /**
  * OpenAI 兼容 SSE 流的增量拼装器。
- * feedLine 逐行喂入（返回本行带来的正文增量），finish 合成完整 completion 对象。
+ * feedLine 逐行喂入（分别返回本行的正文与思考增量），finish 合成完整 completion 对象。
  * parseSseToCompletion（整包路径）和 readBodyWithStreaming（真流式路径）共用这一份，
  * 保证两条路对 delta / message / tool_calls 分片的处理完全一致。
  */
+interface SseFeedDelta {
+    content: string;
+    reasoning: string;
+}
+
 class SseAssembler {
     content = '';
     private role = 'assistant';
@@ -105,25 +110,26 @@ class SseAssembler {
     // 与其一轮一轮猜, 不如把名单打出来(finish() 附带 + 控制台一行)一次看清。
     private deltaKeys = new Set<string>();
 
-    /** 喂一行 SSE 文本，返回本行带来的正文增量（无正文则空串） */
-    feedLine(line: string): string {
-        if (!line.startsWith('data:')) return '';
+    /** 喂一行 SSE 文本，分别返回正文与思考增量（没有则为空串）。 */
+    feedLine(line: string): SseFeedDelta {
+        if (!line.startsWith('data:')) return { content: '', reasoning: '' };
         const payload = line.slice(5).trim();
-        if (!payload || payload === '[DONE]') return '';
+        if (!payload || payload === '[DONE]') return { content: '', reasoning: '' };
         let chunk: any;
-        try { chunk = JSON.parse(payload); } catch { return ''; }
+        try { chunk = JSON.parse(payload); } catch { return { content: '', reasoning: '' }; }
         return this.feedChunk(chunk);
     }
 
-    feedChunk(chunk: any): string {
+    feedChunk(chunk: any): SseFeedDelta {
         this.gotAnyChunk = true;
         if (!this.firstChunk) this.firstChunk = chunk;
         // OpenAI 流式 usage 在最后一个 chunk（include_usage=true 时），也可能出现在中途；
         // 始终取最后一个非空的 usage，兼容各家代理。
         if (chunk.usage) this.usage = chunk.usage;
         const choice = chunk.choices?.[0];
-        if (!choice) return '';
+        if (!choice) return { content: '', reasoning: '' };
         let delta = '';
+        let reasoningDelta = '';
         // delta 路径（OpenAI 流式常见）
         if (choice.delta) {
             for (const k of Object.keys(choice.delta)) this.deltaKeys.add(k);
@@ -139,11 +145,15 @@ class SseAssembler {
                         this.content += block.text;
                     } else if (block?.type === 'thinking' && typeof block.thinking === 'string') {
                         this.reasoning += block.thinking;
+                        reasoningDelta += block.thinking;
                     }
                 }
             }
             const dr = choice.delta.reasoning_content ?? choice.delta.reasoning ?? choice.delta.thinking;
-            if (typeof dr === 'string') this.reasoning += dr;
+            if (typeof dr === 'string') {
+                this.reasoning += dr;
+                reasoningDelta += dr;
+            }
             if (choice.delta.role) this.role = choice.delta.role;
             if (Array.isArray(choice.delta.tool_calls)) {
                 for (const frag of choice.delta.tool_calls) {
@@ -163,12 +173,19 @@ class SseAssembler {
                 this.content += delta;
             }
             const mr = choice.message.reasoning_content ?? choice.message.reasoning ?? choice.message.thinking;
-            if (typeof mr === 'string') this.reasoning += mr;
+            if (typeof mr === 'string') {
+                this.reasoning += mr;
+                reasoningDelta += mr;
+            }
             if (choice.message.role) this.role = choice.message.role;
             if (Array.isArray(choice.message.tool_calls)) this.toolCalls.push(...choice.message.tool_calls);
         }
         if (choice.finish_reason) this.finishReason = choice.finish_reason;
-        return delta;
+        return { content: delta, reasoning: reasoningDelta };
+    }
+
+    get reasoningContent(): string {
+        return this.reasoning;
     }
 
     finish(): any | null {
@@ -209,6 +226,8 @@ export interface StreamHooks {
      * 调用方每次都应基于 fullText 全量重算（天然处理重试重置）。
      */
     onDelta?: (delta: string, fullText: string) => void;
+    /** 每收到一段原生 reasoning 增量时回调；渠道不发送 reasoning 时不会触发。 */
+    onReasoningDelta?: (delta: string, fullReasoning: string) => void;
     /** 收到第一个正文增量时回调一次（TTFT 参考点） */
     onFirstDelta?: () => void;
 }
@@ -233,14 +252,18 @@ async function readBodyWithStreaming(
     let mode: 'undecided' | 'sse' | 'raw' = 'undecided';
     let sawFirstDelta = false;
 
-    const emit = (delta: string) => {
-        if (!delta) return;
-        if (!sawFirstDelta) {
-            sawFirstDelta = true;
-            if (timing && startedAt) timing.firstDeltaMs = Date.now() - startedAt;
-            try { hooks.onFirstDelta?.(); } catch { /* 回调异常不拦截流 */ }
+    const emit = (delta: SseFeedDelta) => {
+        if (delta.content) {
+            if (!sawFirstDelta) {
+                sawFirstDelta = true;
+                if (timing && startedAt) timing.firstDeltaMs = Date.now() - startedAt;
+                try { hooks.onFirstDelta?.(); } catch { /* 回调异常不拦截流 */ }
+            }
+            try { hooks.onDelta?.(delta.content, asm.content); } catch { /* 回调异常不拦截流 */ }
         }
-        try { hooks.onDelta?.(delta, asm.content); } catch { /* 回调异常不拦截流 */ }
+        if (delta.reasoning) {
+            try { hooks.onReasoningDelta?.(delta.reasoning, asm.reasoningContent); } catch { /* 回调异常不拦截流 */ }
+        }
     };
 
     const consumeLines = () => {

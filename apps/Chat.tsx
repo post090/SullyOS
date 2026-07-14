@@ -22,7 +22,7 @@ import { isMcdConfigured } from '../utils/mcdMcpClient';
 import { isMcdActivatedInMessages, MCD_ACTIVATE_TRIGGER, MCD_DEACTIVATE_TRIGGER } from '../utils/mcdToolBridge';
 import { isLuckinConfigured } from '../utils/luckinMcpClient';
 import { isLuckinActivatedInMessages, LUCKIN_ACTIVATE_TRIGGER, LUCKIN_DEACTIVATE_TRIGGER } from '../utils/luckinToolBridge';
-import MessageItem from '../components/chat/MessageItem';
+import MessageItem, { ThinkingChainBlock } from '../components/chat/MessageItem';
 import McdMiniApp from '../components/mcd/McdMiniApp';
 import LuckinMiniApp from '../components/luckin/LuckinMiniApp';
 import LuckinLocationModal from '../components/luckin/LuckinLocationModal';
@@ -99,6 +99,12 @@ const Chat: React.FC = () => {
     const scrollThrottleRef = useRef(0);
     const visibleCountRef = useRef(30);
     const activeCharIdRef = useRef(activeCharacterId);
+    // 流式预览接棒过的正式消息在当前会话内始终跳过入场动画，避免后续 DB 刷新时动画类又被加回来。
+    const streamPreviewHandoverIdsRef = useRef<Set<number>>(new Set());
+    const registerStreamPreviewHandover = useCallback((charId: string, messageIds: number[]) => {
+        if (activeCharIdRef.current !== charId) return;
+        messageIds.forEach(id => streamPreviewHandoverIdsRef.current.add(id));
+    }, []);
     const charRef = useRef<typeof char>(null as any);
     // 白框提示音：记录当前角色"见过的最大消息 ID" + "上一条气泡到达时刻"，一轮回复只在首条气泡响一次。
     // 用 max-id 基线天然免疫：切角色/进入(先记基线不播)、翻旧历史(末尾 ID 变小不响)、自己发消息(role≠assistant 不响)。
@@ -204,7 +210,7 @@ const Chat: React.FC = () => {
     const luckinChatRef = useRef<import('../utils/luckinToolBridge').LuckinChatState | undefined>(undefined);
 
     // --- Initialize Hook ---
-    const { isTyping, streamingBubbles, recallStatus, searchStatus, diaryStatus, emotionStatus, memoryPalaceStatus, memoryPalaceResult, setMemoryPalaceResult, lastDigestResult, setLastDigestResult, lastTokenUsage, tokenBreakdown, setLastTokenUsage, triggerAI, startProactiveChat, stopProactiveChat, isProactiveActive } = useChatAI({
+    const { isTyping, streamingBubbles, streamingThinking, recallStatus, searchStatus, diaryStatus, emotionStatus, memoryPalaceStatus, memoryPalaceResult, setMemoryPalaceResult, lastDigestResult, setLastDigestResult, lastTokenUsage, tokenBreakdown, setLastTokenUsage, triggerAI, startProactiveChat, stopProactiveChat, isProactiveActive } = useChatAI({
         char,
         userProfile,
         apiConfig,
@@ -214,6 +220,7 @@ const Chat: React.FC = () => {
         addToast,
         showError,
         setMessages,
+        onStreamPreviewHandover: registerStreamPreviewHandover,
         realtimeConfig,
         translationConfig: translationEnabled
             ? { enabled: true, sourceLang: translateSourceLang, targetLang: translateTargetLang }
@@ -822,7 +829,7 @@ const Chat: React.FC = () => {
                 scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
             }
         }
-    }, [messages, isTyping, streamingBubbles, recallStatus, searchStatus, diaryStatus, selectionMode, windowedFocusMsgId]);
+    }, [messages, isTyping, streamingBubbles, streamingThinking, recallStatus, searchStatus, diaryStatus, selectionMode, windowedFocusMsgId]);
 
     // 白框提示音：当 char 新发的消息成为会话最后一条时播放一次（用户自己/历史/翻旧消息都不响）。
     // 声音配置编码在白框 CSS 注释里（角色 chromeCustomCss 覆盖全局 chatChromeCustomCss），随白框分享一起走。
@@ -2412,6 +2419,7 @@ const Chat: React.FC = () => {
     // 切角色 / 首次进入：清基线，下一轮 detect 只记录不播
     useEffect(() => {
         animSeenMaxIdRef.current = null;
+        streamPreviewHandoverIdsRef.current.clear();
         setAnimatingIds(new Set());
     }, [activeCharacterId]);
     // 检测新增：id 超过基线的才淡入；首帧只记基线不播
@@ -2421,7 +2429,9 @@ const Chat: React.FC = () => {
         for (const m of displayMessages) if (typeof m.id === 'number' && m.id > maxId) maxId = m.id;
         if (animSeenMaxIdRef.current === null) { animSeenMaxIdRef.current = maxId; return; }
         const baseline = animSeenMaxIdRef.current;
-        const fresh = displayMessages.filter(m => typeof m.id === 'number' && m.id > baseline).map(m => m.id);
+        const fresh = displayMessages
+            .filter(m => typeof m.id === 'number' && m.id > baseline && !streamPreviewHandoverIdsRef.current.has(m.id))
+            .map(m => m.id);
         if (fresh.length > 0) {
             setAnimatingIds(prev => { const next = new Set(prev); fresh.forEach(id => next.add(id)); return next; });
             animSeenMaxIdRef.current = maxId;
@@ -3020,13 +3030,14 @@ const Chat: React.FC = () => {
                         !nextMessage ||
                         nextMessage.role !== m.role ||
                         Math.abs(nextMessage.timestamp - m.timestamp) > messageGroupGapMs;
+                    const suppressEntranceAnimation = streamPreviewHandoverIdsRef.current.has(m.id);
                     return (
                         <div
                             key={m.id || i}
                             id={`chat-msg-${m.id}`}
                             className={[
                                 flashMsgId === m.id ? 'ring-2 ring-yellow-300 bg-yellow-50/40 rounded-2xl mx-2' : '',
-                                animatingIds.has(m.id) ? 'animate-fade-in' : '',
+                                animatingIds.has(m.id) && !suppressEntranceAnimation ? 'animate-fade-in' : '',
                                 'transition-all duration-300',
                             ].filter(Boolean).join(' ')}
                             onAnimationEnd={(e) => {
@@ -3062,6 +3073,7 @@ const Chat: React.FC = () => {
                             bubbleVariant={osTheme.chatBubbleStyle}
                             messageSpacing={osTheme.chatMessageSpacing}
                             showTimestamp={osTheme.chatShowTimestamp}
+                            suppressEntranceAnimation={suppressEntranceAnimation}
                             isPending={false}
                             pendingIndicator={osTheme.chatPendingIndicator !== false}
                             onMcdSendCart={handleMcdSendCart}
@@ -3112,38 +3124,58 @@ const Chat: React.FC = () => {
                     </div>
                 )}
 
-                {/* 流式预览气泡：stream 开启时已完成的回复行先上屏（临时展示，第一条真实消息
-                    落库时无缝交棒——见 useChatAI 的 setMessages 包装）。
-                    DOM 与真实消息同构（.group.justify-start > .absolute.z-0 头像 + .max-w-[72%].ml-12
-                    + .sully-bubble-ai > .select-text）——聊天细节微调（隐藏头像/贴边/字号行距）和
-                    气泡主题的颜色/圆角对预览一并生效，不再出现"预览不吃美化方案"的错位感。 */}
+                {/* 渠道确实发送 reasoning 增量时，先用正式心象卡实时展示；落库后同帧交给正式消息。 */}
+                {streamingThinking && !selectionMode && (
+                    <div className="group flex items-end justify-start relative px-3 mb-1.5 animate-fade-in">
+                        <div className="relative max-w-[72%] min-w-0 ml-12">
+                            <ThinkingChainBlock
+                                chain={streamingThinking}
+                                styleId={thinkingChainOptions.styleId}
+                                customColors={thinkingChainOptions.customColors}
+                                onOpenSettings={thinkingChainOptions.onOpenSettings}
+                            />
+                        </div>
+                    </div>
+                )}
+
+                {/* 流式预览直接复用正式 MessageItem：气泡变体、主题背景图/装饰、头像框、
+                    grouped/every_message、消息间距、时间戳、Markdown 与所有自定义 CSS 天然一致。
+                    落库时 useChatAI 会登记接棒 id，正式消息首帧不再重播 fade-in。 */}
                 {streamingBubbles.length > 0 && !selectionMode && (
-                    <div className="space-y-1.5 mb-2">
+                    <>
                         {streamingBubbles.map((bubble, i) => (
-                            <div key={i} className="group w-full flex justify-start relative px-3 animate-fade-in">
-                                {/* 头像只挂在最后一条上，贴合 grouped 折叠模式的观感；
-                                    absolute+z-0 结构让「隐藏头像」等微调 CSS 自动命中 */}
-                                {i === streamingBubbles.length - 1 && (
-                                    <div className="absolute left-3 bottom-0 z-0">
-                                        <img src={char.avatar} className={chatPendingAvatarClass} />
-                                    </div>
-                                )}
-                                <div className="relative max-w-[72%] min-w-0 ml-12">
-                                    <div
-                                        className="relative px-5 py-3 shadow-sm border border-black/5 overflow-visible sully-bubble-ai"
-                                        style={{
-                                            backgroundColor: activeTheme.ai.backgroundColor,
-                                            color: activeTheme.ai.textColor,
-                                            borderRadius: activeTheme.ai.borderRadius,
-                                            opacity: activeTheme.ai.opacity,
-                                        }}
-                                    >
-                                        <div className="select-text text-[15px] leading-relaxed whitespace-pre-wrap break-words">{bubble}</div>
-                                    </div>
-                                </div>
+                            <div key={`stream-preview-${i}`} className="transition-all duration-300">
+                                <MessageItem
+                                    msg={{
+                                        id: -(i + 1),
+                                        charId: char.id,
+                                        role: 'assistant',
+                                        type: 'text',
+                                        content: bubble,
+                                        timestamp: Date.now(),
+                                    }}
+                                    isFirstInGroup={i === 0}
+                                    isLastInGroup={i === streamingBubbles.length - 1}
+                                    activeTheme={activeTheme}
+                                    charAvatar={char.avatar}
+                                    charName={char.name}
+                                    userAvatar={userProfile.perCharAvatars?.[char.id] || userProfile.avatar}
+                                    onLongPress={() => {}}
+                                    onReply={() => {}}
+                                    selectionMode={false}
+                                    isSelected={false}
+                                    onToggleSelect={() => {}}
+                                    avatarShape={osTheme.chatAvatarShape}
+                                    avatarSize={osTheme.chatAvatarSize}
+                                    avatarMode={osTheme.chatAvatarMode}
+                                    bubbleVariant={osTheme.chatBubbleStyle}
+                                    messageSpacing={osTheme.chatMessageSpacing}
+                                    showTimestamp={osTheme.chatShowTimestamp}
+                                    thinkingChainOptions={thinkingChainOptions}
+                                />
                             </div>
                         ))}
-                    </div>
+                    </>
                 )}
                 {(isTyping || recallStatus || searchStatus || diaryStatus || isProactiveComposing) && !selectionMode && (
                     <div className="flex items-end gap-3 px-3 mb-6 animate-fade-in">

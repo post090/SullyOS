@@ -1,7 +1,7 @@
 /**
  * 流式回复的「预览气泡」计算 —— 纯函数，无副作用。
  *
- * 主聊天路径开启 stream 后，边收流边把**已完成的行**渲染成临时预览气泡
+ * 主聊天路径开启 stream 后，边收流边把已完成行和安全的未完成尾句渲染成临时预览气泡
  * （utils/safeApi.ts StreamHooks.onDelta → hooks/useChatAI.ts → apps/Chat.tsx）。
  * 流结束后仍由既有后处理管线 (applyAssistantPostProcessing) 负责真正的解析、
  * 落库与渲染，预览气泡随即被清掉 —— 预览只影响体感延迟，不改变任何持久化行为。
@@ -15,6 +15,7 @@
  */
 
 import { ChatParser } from './chatParser';
+import type { Message } from '../types';
 
 /** 跨行块规则：open 命中进入抑制态，直到 close 命中（含闭合行本身）。 */
 const BLOCK_RULES: Array<{ open: RegExp; close: RegExp }> = [
@@ -43,14 +44,14 @@ function isLinePreviewable(line: string): boolean {
 /**
  * 从「累计到目前为止的原始流文本」计算当前可展示的预览气泡。
  *
- * 只处理**已完成的行**（最后一个 \n 之前）：半截行不展示，既避免指令标记
- * 打一半就弹出来，也让气泡「一条一条蹦出来」的节奏更像真人打字。
+ * 已完成行按既有规则过滤；未完成尾句也会持续增长，但在 `[`, `<`, `%%`
+ * 这类控制标记前截断，避免半截指令或标签泄漏到聊天气泡。
  */
 export function computeStreamPreviewBubbles(fullText: string): string[] {
     if (!fullText) return [];
     const lastNl = fullText.lastIndexOf('\n');
-    if (lastNl < 0) return [];
-    const completed = fullText.slice(0, lastNl);
+    const completed = lastNl < 0 ? '' : fullText.slice(0, lastNl);
+    const trailing = lastNl < 0 ? fullText : fullText.slice(lastNl + 1);
 
     const kept: string[] = [];
     let inBlockClose: RegExp | null = null;
@@ -72,6 +73,16 @@ export function computeStreamPreviewBubbles(fullText: string): string[] {
         if (!isLinePreviewable(line)) continue;
         kept.push(line);
     }
+
+    // Stream the unfinished tail too, but stop before a possible control/tag prefix.
+    // This keeps ordinary one-paragraph replies live without flashing partial directives.
+    if (!inBlockClose && trailing.trim()) {
+        const markerIndexes = [trailing.indexOf('['), trailing.indexOf('<'), trailing.indexOf('%%')]
+            .filter(index => index >= 0);
+        const safeEnd = markerIndexes.length > 0 ? Math.min(...markerIndexes) : trailing.length;
+        const safeTrailing = trailing.slice(0, safeEnd).trim();
+        if (safeTrailing && isLinePreviewable(safeTrailing)) kept.push(safeTrailing);
+    }
     if (kept.length === 0) return [];
 
     // 与最终管线同一套气泡切分（CJK 空格切点等），再逐条 sanitize + 有效内容校验，
@@ -82,4 +93,57 @@ export function computeStreamPreviewBubbles(fullText: string): string[] {
         if (clean && ChatParser.hasDisplayContent(clean)) bubbles.push(clean);
     }
     return bubbles;
+}
+
+/** 提取普通 content 通道里已闭合或仍在增长的内嵌思考块。 */
+export function extractStreamingEmbeddedThinking(fullText: string): string {
+    if (!fullText) return '';
+    const blocks: string[] = [];
+    const closed = /<(think|thinking|thought)>([\s\S]*?)<\/\1>/gi;
+    let match: RegExpExecArray | null;
+    let lastClosedEnd = 0;
+    while ((match = closed.exec(fullText)) !== null) {
+        const text = match[2].trim();
+        if (text) blocks.push(text);
+        lastClosedEnd = closed.lastIndex;
+    }
+
+    const tail = fullText.slice(lastClosedEnd);
+    const open = tail.match(/<(?:think|thinking|thought)>([\s\S]*)$/i);
+    if (open?.[1].trim()) blocks.push(open[1].trim());
+    return blocks.join('\n\n').trim();
+}
+
+/**
+ * 找出本轮真正由流式预览展示过、随后才落库的消息。
+ *
+ * 后处理可能还会追加二次 LLM 回复、表情或功能卡片；这些内容没有在预览里出现，
+ * 不能一并禁用入场动画。因此按「基线后的 assistant 文本 + 预览正文顺序」精确匹配。
+ * claimedIds 让多次 setMessages（A -> A+B -> A+B+C）只上报新接棒的 id。
+ */
+export function findNewStreamPreviewHandoverIds(
+    messages: Message[],
+    previewBubbles: readonly string[],
+    baselineMaxId: number,
+    claimedIds: ReadonlySet<number>,
+): number[] {
+    if (previewBubbles.length === 0) return [];
+
+    const found: number[] = [];
+    let previewIndex = 0;
+    for (const message of messages) {
+        if (
+            message.id <= baselineMaxId
+            || message.role !== 'assistant'
+            || message.type !== 'text'
+        ) continue;
+
+        if (previewIndex >= previewBubbles.length) break;
+        const persistedText = ChatParser.sanitize(message.content).trim();
+        if (persistedText !== previewBubbles[previewIndex]) continue;
+
+        if (!claimedIds.has(message.id)) found.push(message.id);
+        previewIndex++;
+    }
+    return found;
 }

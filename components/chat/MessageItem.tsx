@@ -412,7 +412,7 @@ export const PsycheDecor: React.FC<{ spec: ThinkingChainStyleSpec; compact?: boo
 // 思考链卡片：可视化 metadata.thinkingChain。
 // 内容来源：useChatAI 抽取的 LLM reasoning_content + <think>/<thinking>/<thought>。
 // 多风格通过 resolveThinkingChainStyle() 统一渲染；齿轮触发 onOpenSettings 进入设置弹窗。
-const ThinkingChainBlock: React.FC<{
+export const ThinkingChainBlock: React.FC<{
     chain: string;
     styleId?: ThinkingChainStyleId;
     customColors?: { bg?: string; accent?: string; text?: string };
@@ -1228,6 +1228,8 @@ interface MessageItemProps {
     bubbleVariant?: 'modern' | 'flat' | 'outline' | 'shadow' | 'wechat' | 'ios';
     messageSpacing?: 'compact' | 'default' | 'spacious';
     showTimestamp?: 'always' | 'hover' | 'never';
+    /** 流式预览无缝接棒时，正式消息首帧已经可见，不应再次从透明态淡入。 */
+    suppressEntranceAnimation?: boolean;
     /** Instant Push 准备中：在用户气泡左侧渲染 dot pulse */
     isPending?: boolean;
     /** 是否开启 dot pulse 指示。关掉则 pending 期间不显示任何视觉 */
@@ -1278,6 +1280,7 @@ const MessageItem = React.memo(({
     bubbleVariant = 'modern',
     messageSpacing = 'default',
     showTimestamp = 'always',
+    suppressEntranceAnimation = false,
     isPending = false,
     pendingIndicator = true,
     onMcdSendCart,
@@ -3233,8 +3236,8 @@ const MessageItem = React.memo(({
 
     return commonLayout(
         <div className={isVoiceOnlyMsg
-            ? 'relative animate-fade-in'
-            : `relative ${bubbleVariant === 'flat' || bubbleVariant === 'outline' || bubbleVariant === 'wechat' ? '' : 'shadow-sm '}px-5 py-3 animate-fade-in ${bubbleVariant === 'outline' ? '' : 'border border-black/5 '}active:scale-[0.98] transition-transform overflow-visible ${isUser ? 'sully-bubble-user' : 'sully-bubble-ai'}`}
+            ? `relative ${suppressEntranceAnimation ? '' : 'animate-fade-in'}`
+            : `relative ${bubbleVariant === 'flat' || bubbleVariant === 'outline' || bubbleVariant === 'wechat' ? '' : 'shadow-sm '}px-5 py-3 ${suppressEntranceAnimation ? '' : 'animate-fade-in'} ${bubbleVariant === 'outline' ? '' : 'border border-black/5 '}active:scale-[0.98] transition-transform overflow-visible ${isUser ? 'sully-bubble-user' : 'sully-bubble-ai'}`}
             style={isVoiceOnlyMsg ? undefined : containerStyle}>
 
             {/* Layer 1: Background Image with Independent Opacity */}
@@ -3512,6 +3515,7 @@ const MessageItem = React.memo(({
            prev.bubbleVariant === next.bubbleVariant &&
            prev.messageSpacing === next.messageSpacing &&
            prev.showTimestamp === next.showTimestamp &&
+           prev.suppressEntranceAnimation === next.suppressEntranceAnimation &&
            prev.voiceData?.url === next.voiceData?.url &&
            prev.voiceLoading === next.voiceLoading &&
            prev.isVoicePlaying === next.isVoicePlaying;

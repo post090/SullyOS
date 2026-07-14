@@ -95,12 +95,19 @@ describe('SSE 拼装保留思考通道 (reasoning_content)', () => {
             'data: [DONE]\n',
         ];
         vi.stubGlobal('fetch', vi.fn(async () => sseResponse(events)));
-        const data = await safeFetchJson('https://api.test/v1/chat/completions', { method: 'POST', body: '{}' }, 0, 0, undefined, { onDelta: () => {} });
+        const reasoningDeltas: string[] = [];
+        let fullReasoning = '';
+        const data = await safeFetchJson('https://api.test/v1/chat/completions', { method: 'POST', body: '{}' }, 0, 0, undefined, {
+            onDelta: () => {},
+            onReasoningDelta: (delta, full) => { reasoningDeltas.push(delta); fullReasoning = full; },
+        });
         expect(data.choices[0].message.reasoning_content).toBe('她这句是在逗我玩…');
         expect(data.choices[0].message.content).toBe('哼，看穿你了');
+        expect(reasoningDeltas.join('')).toBe('她这句是在逗我玩…');
+        expect(fullReasoning).toBe('她这句是在逗我玩…');
     });
 
-    it('OpenRouter 形态 delta.reasoning 同样保留；onDelta 只吐正文不吐思考', async () => {
+    it('OpenRouter 形态 delta.reasoning 同样保留，并通过独立回调实时吐出思考', async () => {
         const events = [
             'data: {"choices":[{"delta":{"reasoning":"thinking..."}}]}\n\n',
             'data: {"choices":[{"delta":{"content":"回复正文"}}]}\n\n',
@@ -108,9 +115,16 @@ describe('SSE 拼装保留思考通道 (reasoning_content)', () => {
         ];
         vi.stubGlobal('fetch', vi.fn(async () => sseResponse(events)));
         const deltas: string[] = [];
-        const data = await safeFetchJson('https://api.test/v1/chat/completions', { method: 'POST', body: '{}' }, 0, 0, undefined, { onDelta: (d) => { deltas.push(d); } });
+        const reasoningDeltas: string[] = [];
+        let fullReasoning = '';
+        const data = await safeFetchJson('https://api.test/v1/chat/completions', { method: 'POST', body: '{}' }, 0, 0, undefined, {
+            onDelta: (d) => { deltas.push(d); },
+            onReasoningDelta: (d, full) => { reasoningDeltas.push(d); fullReasoning = full; },
+        });
         expect(data.choices[0].message.reasoning_content).toBe('thinking...');
         expect(deltas.join('')).toBe('回复正文');
+        expect(reasoningDeltas.join('')).toBe('thinking...');
+        expect(fullReasoning).toBe('thinking...');
     });
 
     it('没有思考通道时不产生空的 reasoning_content 字段', async () => {
@@ -142,9 +156,14 @@ describe('SSE 思考通道的更多字段形状（Claude 官转/CC 渠道）', (
         ];
         vi.stubGlobal('fetch', vi.fn(async () => sseResponse(events)));
         const deltas: string[] = [];
-        const data = await safeFetchJson('https://api.test/v1/chat/completions', { method: 'POST', body: '{}' }, 0, 0, undefined, { onDelta: (d) => { deltas.push(d); } });
+        const reasoningDeltas: string[] = [];
+        const data = await safeFetchJson('https://api.test/v1/chat/completions', { method: 'POST', body: '{}' }, 0, 0, undefined, {
+            onDelta: (d) => { deltas.push(d); },
+            onReasoningDelta: (d) => { reasoningDeltas.push(d); },
+        });
         expect(data.choices[0].message.content).toBe('你好呀');
         expect(data.choices[0].message.reasoning_content).toBe('想一下…');
         expect(deltas.join('')).toBe('你好呀');
+        expect(reasoningDeltas.join('')).toBe('想一下…');
     });
 });
