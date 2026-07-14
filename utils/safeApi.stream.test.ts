@@ -120,3 +120,31 @@ describe('SSE 拼装保留思考通道 (reasoning_content)', () => {
         expect(data.choices[0].message).not.toHaveProperty('reasoning_content');
     });
 });
+
+describe('SSE 思考通道的更多字段形状（Claude 官转/CC 渠道）', () => {
+    it('delta.thinking 字符串形态保留', async () => {
+        const events = [
+            'data: {"choices":[{"delta":{"thinking":"内心 os…"}}]}\n\n',
+            'data: {"choices":[{"delta":{"content":"正文"}}]}\n\n',
+            'data: [DONE]\n',
+        ];
+        vi.stubGlobal('fetch', vi.fn(async () => sseResponse(events)));
+        const data = await safeFetchJson('https://api.test/v1/chat/completions', { method: 'POST', body: '{}' }, 0, 0, undefined, { onDelta: () => {} });
+        expect(data.choices[0].message.reasoning_content).toBe('内心 os…');
+        expect(data.choices[0].message.content).toBe('正文');
+    });
+
+    it('Anthropic 透传分块 content：text 进正文、thinking 进思考', async () => {
+        const events = [
+            'data: {"choices":[{"delta":{"content":[{"type":"thinking","thinking":"想一下…"},{"type":"text","text":"你好"}]}}]}\n\n',
+            'data: {"choices":[{"delta":{"content":[{"type":"text","text":"呀"}]}}]}\n\n',
+            'data: [DONE]\n',
+        ];
+        vi.stubGlobal('fetch', vi.fn(async () => sseResponse(events)));
+        const deltas: string[] = [];
+        const data = await safeFetchJson('https://api.test/v1/chat/completions', { method: 'POST', body: '{}' }, 0, 0, undefined, { onDelta: (d) => { deltas.push(d); } });
+        expect(data.choices[0].message.content).toBe('你好呀');
+        expect(data.choices[0].message.reasoning_content).toBe('想一下…');
+        expect(deltas.join('')).toBe('你好呀');
+    });
+});

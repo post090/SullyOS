@@ -95,11 +95,15 @@ class SseAssembler {
     // tool_calls 流式分片: OpenAI 约定按 index 分组, id/name 在首片, arguments 逐片拼接。
     // 不拼的话开了 stream 的工具模式(瑞幸/MCP)会静默丢掉全部工具调用。
     private toolCalls: any[] = [];
-    // 思考通道: DeepSeek/Gemini 系走 delta.reasoning_content, OpenRouter 走 delta.reasoning。
+    // 思考通道: DeepSeek/Gemini 系走 delta.reasoning_content, OpenRouter 走 delta.reasoning,
+    // 部分 Claude 官转(CC 渠道)走 delta.thinking 或分块 content(数组里 type:'thinking')。
     // 丢掉它 = 开思考链的角色"不出思维链"(后处理从 message.reasoning_content 抽取),
     // 且 extractContent / extractAssistantText 的 reasoning 兜底全部失效(思考模型把全部
     // 输出塞进 reasoning 时表现为空回复→重试→巨慢)。2026-07 全局流式上线后被放大成必现。
     private reasoning = '';
+    // 取证探针: 记录本条流里 delta 出现过的字段名。渠道的思考字段形状五花八门,
+    // 与其一轮一轮猜, 不如把名单打出来(finish() 附带 + 控制台一行)一次看清。
+    private deltaKeys = new Set<string>();
 
     /** 喂一行 SSE 文本，返回本行带来的正文增量（无正文则空串） */
     feedLine(line: string): string {
@@ -122,11 +126,23 @@ class SseAssembler {
         let delta = '';
         // delta 路径（OpenAI 流式常见）
         if (choice.delta) {
+            for (const k of Object.keys(choice.delta)) this.deltaKeys.add(k);
             if (typeof choice.delta.content === 'string') {
                 delta = choice.delta.content;
                 this.content += delta;
             }
-            const dr = choice.delta.reasoning_content ?? choice.delta.reasoning;
+            // Anthropic 透传形态: delta.content 是分块数组 [{type:'text',text}|{type:'thinking',thinking}]
+            else if (Array.isArray(choice.delta.content)) {
+                for (const block of choice.delta.content) {
+                    if (block?.type === 'text' && typeof block.text === 'string') {
+                        delta += block.text;
+                        this.content += block.text;
+                    } else if (block?.type === 'thinking' && typeof block.thinking === 'string') {
+                        this.reasoning += block.thinking;
+                    }
+                }
+            }
+            const dr = choice.delta.reasoning_content ?? choice.delta.reasoning ?? choice.delta.thinking;
             if (typeof dr === 'string') this.reasoning += dr;
             if (choice.delta.role) this.role = choice.delta.role;
             if (Array.isArray(choice.delta.tool_calls)) {
@@ -146,7 +162,7 @@ class SseAssembler {
                 delta = choice.message.content;
                 this.content += delta;
             }
-            const mr = choice.message.reasoning_content ?? choice.message.reasoning;
+            const mr = choice.message.reasoning_content ?? choice.message.reasoning ?? choice.message.thinking;
             if (typeof mr === 'string') this.reasoning += mr;
             if (choice.message.role) this.role = choice.message.role;
             if (Array.isArray(choice.message.tool_calls)) this.toolCalls.push(...choice.message.tool_calls);
@@ -157,6 +173,11 @@ class SseAssembler {
 
     finish(): any | null {
         if (!this.gotAnyChunk) return null;
+        // 取证探针: 思考没抓到时把渠道实际用的 delta 字段名单打出来, 下一轮排查直接看名单。
+        // (开思考的请求思考却为空 = 大概率又是没见过的字段形状)
+        if (!this.reasoning && this.deltaKeys.size > 0) {
+            console.log(`🔎 [SSE] 本条流的 delta 字段: ${[...this.deltaKeys].join(', ')}${this.content ? '' : ' (且正文为空!)'}`);
+        }
         // 合成兼容结构
         return {
             id: this.firstChunk?.id || 'sse-assembled',
