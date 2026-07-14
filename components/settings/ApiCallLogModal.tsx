@@ -144,6 +144,24 @@ const ApiCallLogModal: React.FC<ApiCallLogModalProps> = ({ isOpen, onClose }) =>
                                     <div className="col-span-2">
                                         <Field label="模型" value={e.model} mono />
                                     </div>
+                                    {/* 后端自报身份（response.model）：字符串不同就展示；但只有剥掉「[渠道]」
+                                        前缀后核心模型名也对不上时才琥珀高亮——请求「[千岛-自营]X」自报「X」是
+                                        中转正常剥前缀（灰色），自报「[逆-V]X-c」才是真被换了后端（琥珀）。 */}
+                                    {e.backendModel && e.backendModel !== e.model && (() => {
+                                        const core = (m: string) => m.replace(/\[[^\]]*\]/g, '').trim();
+                                        const swapped = core(e.backendModel) !== core(e.model);
+                                        return (
+                                            <div className="col-span-2 flex items-baseline gap-1.5 min-w-0">
+                                                <span className={`text-[10px] shrink-0 ${swapped ? 'text-amber-500' : 'text-slate-400'}`}>实际后端</span>
+                                                <span
+                                                    className={`truncate font-mono ${swapped ? 'font-semibold text-amber-600' : 'text-slate-500'}`}
+                                                    title={e.backendModel}
+                                                >
+                                                    {e.backendModel}{swapped ? ' ⚠️' : ''}
+                                                </span>
+                                            </div>
+                                        );
+                                    })()}
                                     {e.durationMs != null && (
                                         <Field label="耗时" value={e.durationMs >= 1000 ? `${(e.durationMs / 1000).toFixed(1)}s` : `${e.durationMs}ms`} />
                                     )}

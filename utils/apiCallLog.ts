@@ -40,6 +40,13 @@ export interface ApiCallLogEntry extends ApiCallMeta {
     presetName: string;
     baseUrl: string;
     model: string;
+    /**
+     * 响应侧自报的模型（response.model）——实际服务这次请求的后端身份。
+     * 中转的渠道名（如 `[千岛-自营]xxx`）只锁"店面"，上游内部降级/轮询时对外模型名
+     * 不变，但后端会在响应里自报真身（如 `[逆-V]xxx-c`）。请求名 ≠ 自报名时，
+     * 这个字段就是"被换后端了"的直接证据。拿不到（响应无 model 字段）则空。
+     */
+    backendModel?: string;
     /** HTTP 状态码（成功 / 失败均记，失败时可能是最后一次的状态） */
     status?: number;
     /** 请求是否成功拿到 JSON */
@@ -143,12 +150,35 @@ function extractUsage(response: unknown): { prompt?: number; completion?: number
     };
 }
 
+/**
+ * SSE 流式响应文本的兜底解析：扫 `data: {...}` 行，抠后端自报 model（首个非空）
+ * 和 usage（取最后一个非空，OpenAI 约定 usage 在末尾 chunk）。
+ * 拦截器 clone 出的流式响应 JSON.parse 必然失败，之前流式调用在记录里
+ * 既没有 token 数也没有后端身份——这里补上。
+ */
+export function scanSseForLog(text: string): { model?: string; usage?: unknown } {
+    let model: string | undefined;
+    let usage: unknown;
+    for (const line of text.split(/\r?\n/)) {
+        if (!line.startsWith('data:')) continue;
+        const payload = line.slice(5).trim();
+        if (!payload || payload === '[DONE]') continue;
+        let chunk: any;
+        try { chunk = JSON.parse(payload); } catch { continue; }
+        if (!model && typeof chunk?.model === 'string' && chunk.model) model = chunk.model;
+        if (chunk?.usage && typeof chunk.usage === 'object') usage = chunk.usage;
+    }
+    return { model, usage };
+}
+
 export function recordApiCall(input: {
     url: string;
     body?: unknown;
     status?: number;
     ok: boolean;
     response?: unknown;
+    /** 响应原始文本（JSON.parse 失败时传入，供 SSE 兜底解析 model / usage） */
+    responseText?: string;
     meta?: ApiCallMeta;
     durationMs?: number;
 }): void {
@@ -157,13 +187,24 @@ export function recordApiCall(input: {
         const model = extractModel(input.body);
         // 显式 meta 优先（safeFetchJson 各调用点传的精确信息）；没有就用环境兜底（裸 fetch）。
         const meta = hasMeta(input.meta) ? input.meta! : ambientMeta;
-        const usage = extractUsage(input.response);
+        // 整包 JSON 直接读；流式响应（response 为空但有原始文本）走 SSE 兜底扫描
+        let responseForExtract: unknown = input.response;
+        let backendModel: string | undefined =
+            typeof (input.response as any)?.model === 'string' && (input.response as any).model
+                ? (input.response as any).model : undefined;
+        if (input.response === undefined && typeof input.responseText === 'string' && input.responseText.trimStart().startsWith('data:')) {
+            const scanned = scanSseForLog(input.responseText);
+            backendModel = scanned.model;
+            if (scanned.usage) responseForExtract = { usage: scanned.usage };
+        }
+        const usage = extractUsage(responseForExtract);
         const entry: ApiCallLogEntry = {
             id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             timestamp: Date.now(),
             presetName: resolvePresetName(baseUrl, model),
             baseUrl,
             model,
+            backendModel,
             status: input.status,
             ok: input.ok,
             promptTokens: usage.prompt,

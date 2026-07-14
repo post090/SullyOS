@@ -866,8 +866,8 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                   if (usageClone) {
                       usageClone.text().then((t) => {
                           let parsed: any = undefined;
-                          try { parsed = JSON.parse(t); } catch { /* 流式/非 JSON：无 usage，照样记 */ }
-                          recordApiCall({ url: urlStr, body, status, ok, response: parsed, meta, durationMs });
+                          try { parsed = JSON.parse(t); } catch { /* 流式/非 JSON：把原始文本交给 recordApiCall 的 SSE 兜底解析 */ }
+                          recordApiCall({ url: urlStr, body, status, ok, response: parsed, responseText: parsed === undefined ? t : undefined, meta, durationMs });
                       }).catch(() => recordApiCall({ url: urlStr, body, status, ok, meta, durationMs }));
                   } else {
                       recordApiCall({ url: urlStr, body, status, ok, meta, durationMs });
