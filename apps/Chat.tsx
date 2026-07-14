@@ -3041,7 +3041,7 @@ const Chat: React.FC = () => {
                             activeTheme={activeTheme}
                             charAvatar={char.avatar}
                             charName={char.name}
-                            userAvatar={userProfile.avatar}
+                            userAvatar={userProfile.perCharAvatars?.[char.id] || userProfile.avatar}
                             onLongPress={handleMessageLongPress}
                             onReply={handleQuickReply}
                             selectionMode={selectionMode}

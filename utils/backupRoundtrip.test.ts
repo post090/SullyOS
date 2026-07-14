@@ -119,6 +119,27 @@ describe('v2 真实链路：分片 → 组装 → importFullData', () => {
         expect((await DB.getRawStoreData('user_profile')).map((u: any) => u.name)).toEqual(['OldUser']); // 省略 → 保留
     });
 
+    it('聊天装扮随备份走：角色 chatFineTune 与主题微调字段 v2 往返不丢', async () => {
+        // 收官回归钉子：全局微调（OSTheme 七字段 + 表情包大小）走 metadata.json 的 theme 整包，
+        // 角色级覆盖（char.chatFineTune）随 characters store 整对象 clear-and-add——两头都不许丢。
+        const char = {
+            id: 'ft1', name: '小调', avatar: '',
+            chatFineTune: { enabled: true, chatBubbleFontSize: 15, chatAvatarVisibility: 'hide_ai' },
+        };
+        const theme = { chatAvatarVisibility: 'hide_both', chatSnapToEdge: true, chatBubbleLineHeight: 1.5, chatEmojiSize: 'large' };
+
+        const zip = new FakeZip();
+        const manifest = await writeV2Backup(zip, { characters: [char], theme } as any, {});
+        const data: any = await assembleV2Backup(zip, manifest);
+
+        // theme 是非数组字段 → 原样拼回（导入端 OSContext 直接拿它 updateTheme）
+        expect(data.theme).toEqual(theme);
+
+        await DB.importFullData(data);
+        const restored = (await DB.getRawStoreData('characters')).find((c: any) => c.id === 'ft1');
+        expect(restored.chatFineTune).toEqual(char.chatFineTune);
+    });
+
     it('formatVersion 3 在组装阶段 abort，DB 未发生任何写（test 12）', async () => {
         await seedStore('gallery', [{ id: 'keep', url: 'x' }]);
         const zip = new FakeZip();

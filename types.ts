@@ -2431,6 +2431,10 @@ export interface UserProfile {
     name: string;
     avatar: string;
     bio: string;
+    /** 分角色聊天头像（档案 App 设置）：charId → 头像（http(s) URL 或 data:image）。
+     *  私聊里「你」的头像取 perCharAvatars[charId] || avatar（上面的整体头像作宏观默认）；
+     *  群聊/其他场合仍用整体头像。删角色留下的孤儿键无害，读取端永远按当前 charId 取。 */
+    perCharAvatars?: Record<string, string>;
     /**
      * 用户本人接入「彼方」的状态：捏的 chibi、此刻所在房间、在干嘛。可随时改。
      * enabled=false（登出）时，聊天里给角色的"用户在彼方"提示词随之消失。

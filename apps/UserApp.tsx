@@ -3,6 +3,7 @@ import React, { useRef, useState } from 'react';
 import { useOS } from '../context/OSContext';
 import { processImage } from '../utils/file';
 import LifeRecordPanel from '../components/lifeRecord/LifeRecordPanel';
+import PerCharAvatarPicker from '../components/user/PerCharAvatarPicker';
 
 const UserApp: React.FC = () => {
     const { closeApp, userProfile, updateUserProfile, addToast } = useOS();
@@ -81,6 +82,7 @@ const UserApp: React.FC = () => {
                             </div>
                         </div>
                         <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleAvatarChange} />
+                        <p className="mt-2 text-center text-[10px] text-slate-400">整体头像：所有聊天的默认。想在某个角色那儿换一副面孔？下面「分角色聊天头像」里设。</p>
 
                         {/* Name field */}
                         <div className="mt-4">
@@ -96,6 +98,9 @@ const UserApp: React.FC = () => {
                         </div>
                     </div>
                 </div>
+
+                {/* 分角色聊天头像：上面的整体头像是宏观默认，这里可给每个角色的私聊单独换「你」的头像 */}
+                <PerCharAvatarPicker />
 
                 {/* About / setting card */}
                 <div className="bg-white rounded-[1.75rem] shadow-[0_10px_30px_-12px_rgba(80,70,120,0.18)] border border-slate-100 p-5">
