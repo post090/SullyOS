@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import Modal from '../os/Modal';
 import { DB } from '../../utils/db';
-import { coreModelName } from '../../utils/apiCallLog';
+import { isSameCoreModel } from '../../utils/apiCallLog';
 import type { ApiCallLogEntry } from '../../utils/apiCallLog';
 
 interface ApiCallLogModalProps {
@@ -105,7 +105,7 @@ const ApiCallLogModal: React.FC<ApiCallLogModalProps> = ({ isOpen, onClose }) =>
                         <span className="font-semibold">有可能</span>被换了便宜模型，但也可能只是站子标签没写整齐——别只凭这一行去定罪。
                     </p>
                     <p>
-                        <span className="font-semibold">⚪ 灰色</span>：名字基本一致，只是格式不同（比如少了 [渠道]、(按次) 这类标签）。正常。
+                        <span className="font-semibold">⚪ 灰色</span>：名字基本一致，只是格式不同（比如少了 [渠道]、(按次)、gcli- 这类标签前缀）。正常。
                     </p>
                     <p>
                         <span className="font-semibold">🫥 没有这一行</span>：最常见的情况。要么对面把你请求的名字<span className="font-semibold">原样抄了回来</span>（等于什么都没说），要么干脆没报。
@@ -183,12 +183,11 @@ const ApiCallLogModal: React.FC<ApiCallLogModalProps> = ({ isOpen, onClose }) =>
                                             关键差异（后缀 -c、渠道标签）藏进省略号里，用户看着两行一样却标黄一头雾水 */}
                                         <Field label="模型" value={e.model} mono wrap />
                                     </div>
-                                    {/* 后端自报身份（response.model）：字符串不同就展示；但只有剥掉渠道标签
-                                        （[方括号]/（圆括号），见 coreModelName）后核心名也对不上时才琥珀高亮——
-                                        请求「(按次)X」自报「X」是中转正常剥标签（灰色），自报「[逆-V]X-c」
-                                        才是真被换了后端（琥珀）。 */}
+                                    {/* 后端自报身份（response.model）：字符串不同就展示；琥珀判定见
+                                        isSameCoreModel——渠道标签/前缀（[渠道]、(按次)、gcli-、models/）算同名
+                                        （灰色），尾巴长出变体（X-c / X-lite）才是真被换了后端（琥珀）。 */}
                                     {e.backendModel && e.backendModel !== e.model && (() => {
-                                        const swapped = coreModelName(e.backendModel) !== coreModelName(e.model);
+                                        const swapped = !isSameCoreModel(e.model, e.backendModel);
                                         return (
                                             <div className="col-span-2 flex items-baseline gap-1.5 min-w-0">
                                                 <span className={`text-[10px] shrink-0 ${swapped ? 'text-amber-500' : 'text-slate-400'}`}>实际后端</span>

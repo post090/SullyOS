@@ -110,6 +110,29 @@ export function coreModelName(m: string): string {
         .toLowerCase();
 }
 
+/**
+ * 「请求的模型」和「后端自报的模型」是否应视为同一个（＝不该报琥珀 ⚠️）。
+ *
+ * 贩子的渠道标签格式穷举不完（[方括号]、(按次)、gcli- 裸前缀…），所以不枚举格式，
+ * 改用方向性判定——核心名归一后：
+ *   - 完全相等 → 同一个
+ *   - 一方是另一方**去掉开头一截**的结果（endsWith）→ 同一个。
+ *     覆盖两个方向：请求带渠道前缀（gcli-X ↔ X）、后端带路径/前缀（X ↔ models/X）。
+ *     「开头多一截」只是运营商贴标签，不改变模型本体。
+ *   - 其余（尤其**尾巴多一截**：X ↔ X-c / X-lite）→ 不同。缩水变体都长在尾巴上，
+ *     这正是要抓的降级信号，绝不放行。
+ * 短名（<8 字符）不做 endsWith 宽容，防止病态短串误匹配。
+ */
+export function isSameCoreModel(requested: string, backend: string): boolean {
+    const a = coreModelName(requested);
+    const b = coreModelName(backend);
+    if (!a || !b) return true;   // 有一方空：无从比较，不报警
+    if (a === b) return true;
+    const shorter = a.length < b.length ? a : b;
+    if (shorter.length < 8) return false;
+    return a.endsWith(b) || b.endsWith(a);
+}
+
 /** 从请求体里抠出 model 字段（body 可能是 JSON 字符串或对象）。 */
 function extractModel(body: unknown): string {
     if (!body) return '';

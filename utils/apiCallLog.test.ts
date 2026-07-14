@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { scanSseForLog, coreModelName } from './apiCallLog';
+import { scanSseForLog, coreModelName, isSameCoreModel } from './apiCallLog';
 
 // 锁住 API 调用记录的 SSE 兜底解析：流式响应 JSON.parse 必然失败，
 // 后端自报 model（首个非空）与 usage（末个非空）从 data: 行里扫出来。
@@ -44,5 +44,25 @@ describe('coreModelName 核心名归一化（实际后端琥珀判定用）', ()
 
     it('核心名真的不同（如 -c 后缀）→ 判定不一致（该报琥珀）', () => {
         expect(coreModelName('[逆-V]gemini-3.1-pro-preview-c')).not.toBe(coreModelName('[千岛-自营]gemini-3.1-pro-preview'));
+    });
+});
+
+describe('isSameCoreModel 方向性同名判定', () => {
+    it('裸前缀 / 路径前缀 → 同名（gcli-X↔X、X↔models/X）', () => {
+        expect(isSameCoreModel('gcli-gemini-3.1-pro-preview', 'gemini-3.1-pro-preview')).toBe(true);
+        expect(isSameCoreModel('gemini-3.1-pro-preview', 'models/gemini-3.1-pro-preview')).toBe(true);
+        expect(isSameCoreModel('(按次)gemini-3.1-pro-preview', 'gemini-3.1-pro-preview')).toBe(true);
+        expect(isSameCoreModel('[千岛-自营]gemini-3.1-pro-preview', 'gemini-3.1-pro-preview')).toBe(true);
+    });
+
+    it('尾部变体 → 不同名（缩水降级信号必须报琥珀）', () => {
+        expect(isSameCoreModel('[千岛-自营]gemini-3.1-pro-preview', '[逆-V]gemini-3.1-pro-preview-c')).toBe(false);
+        expect(isSameCoreModel('gpt-4o', 'gpt-4o-mini')).toBe(false);
+        expect(isSameCoreModel('gemini-3.1-pro-preview', 'gemini-3.1-flash-preview')).toBe(false);
+    });
+
+    it('短名不做 endsWith 宽容；空值不报警', () => {
+        expect(isSameCoreModel('4o', 'gpt-4o')).toBe(false);
+        expect(isSameCoreModel('x', '')).toBe(true);
     });
 });
