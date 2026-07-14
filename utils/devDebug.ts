@@ -421,6 +421,10 @@ export interface DevDebugHttpLogInput {
     error?: unknown;
     /** 本次请求从发起到成功 / 报错的耗时 ms（重试场景 = 最后一次 attempt 的耗时）。 */
     durationMs?: number;
+    /** 响应头到达耗时 ms（≈排队 + 服务端开始响应）。与 durationMs 差值 = 收响应体耗时。 */
+    headersMs?: number;
+    /** 第一段正文增量到达耗时 ms（真 TTFT，仅流式响应有）。大头在这 = prefill/排队慢；durationMs-firstDeltaMs 大 = 生成慢。 */
+    firstDeltaMs?: number;
 }
 
 /** 请求体字符数：messages 折叠后日志里看不出请求多大，这个数字补上「体积」维度。 */
@@ -445,6 +449,8 @@ function appendDevDebugHttpLog(category: DevDebugCaptureCategory, input: DevDebu
             method: input.method,
             status: input.status,
             durationMs: input.durationMs,
+            headersMs: input.headersMs,
+            firstDeltaMs: input.firstDeltaMs,
             requestChars: measureRequestChars(input.requestBody),
             request: parseRequestBody(input.requestBody),
             response: input.response,

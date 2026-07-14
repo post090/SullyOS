@@ -335,6 +335,8 @@ export async function safeFetchJson(
                     requestBody: options.body,
                     response: data,
                     durationMs: totalMs,
+                    headersMs,
+                    firstDeltaMs: timing.firstDeltaMs,
                 });
             }
             return data;
