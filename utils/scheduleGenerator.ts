@@ -301,8 +301,11 @@ export async function generateDailyScheduleForChar(
                 messages: [{ role: 'user', content: prompt }],
                 temperature: 0.85,
                 max_tokens: 8000
-            })
-        });
+            }),
+            // API 调用记录标签（全局 fetch 拦截器读取）；不传会兜底成「用户当时打开的 App」，
+            // 后台任务被标成 Message/群聊 之类，用户看记录一头雾水。
+            __sullyMeta: { appName: '日程系统', charId: char.id, charName: char.name, purpose: '生成当日日程' },
+        } as RequestInit);
 
         if (!response.ok) {
             console.error('[Schedule] API error:', response.status);
@@ -439,8 +442,9 @@ ${chatSummary}
                 messages: [{ role: 'user', content: prompt }],
                 temperature: 0.85,
                 max_tokens: 500
-            })
-        });
+            }),
+            __sullyMeta: { appName: '日程系统', charId: char.id, charName: char.name, purpose: '进化意识流' },
+        } as RequestInit);
 
         if (!response.ok) {
             console.error('[Schedule/Evolve] API error:', response.status);

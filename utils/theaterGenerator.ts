@@ -197,7 +197,8 @@ export async function generateSlotTheater(
                 // 12–18 行、每行可写得有质感，2600 容易把最后一拍截断；放宽到 4600 留足尾巴。
                 max_tokens: 4600,
             }),
-        });
+            __sullyMeta: { appName: '日程系统', charId: char.id, charName: char.name, purpose: '小剧场生成' },
+        } as RequestInit);
 
         if (!response.ok) {
             console.error('[Theater] API error:', response.status);

@@ -36,7 +36,9 @@ const callLlm = async (api: APIConfig, sys: string, user: string): Promise<strin
             max_tokens: 8000,
             stream: false,
         }),
-    });
+        // API 调用记录标签：音乐人格生成是后台任务，不标会被兜底成「用户当时打开的 App」
+        __sullyMeta: { appName: '音乐', purpose: '音乐人格生成' },
+    } as RequestInit);
     if (!resp.ok) throw new Error(`LLM ${resp.status}`);
     const j = await resp.json();
     return j?.choices?.[0]?.message?.content || '';
