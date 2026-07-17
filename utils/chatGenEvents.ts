@@ -26,11 +26,19 @@ export const CHAT_GEN_EVENTS = {
     emotionStart: 'chat-gen-emotion-start',
     /** 情绪评估结束（instant 路径由 worker 推回，结束信号是既有的 'instant-emotion-done'） */
     emotionEnd: 'chat-gen-emotion-end',
+    /**
+     * 情绪评估失败（本地 fetch 报错 / 云端 worker 空结果 / 输出解析全灭）。
+     * 过去失败只写 console.warn，用户侧表现是「情绪不更新但没任何报错」，完全没法自查
+     * （真实用户反馈）。OSContext 监听本事件弹 toast（每角色带冷却），detail.reason 带人话原因。
+     */
+    emotionFailed: 'chat-gen-emotion-failed',
 } as const;
 
 export interface ChatGenDetail {
     charId: string;
     charName: string;
+    /** emotionFailed 专用：失败原因（人话，可直接展示给用户） */
+    reason?: string;
 }
 
 export function announceChatGen(event: string, detail: ChatGenDetail): void {

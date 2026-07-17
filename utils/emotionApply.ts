@@ -1,6 +1,19 @@
 import { DB } from './db';
 import type { CharacterProfile, CharacterBuff } from '../types';
 import { landAmbientEventFromEval } from './roomAmbient';
+import { CHAT_GEN_EVENTS } from './chatGenEvents';
+
+// 情绪评估失败的用户可见信号（OSContext 监听弹 toast）。本函数是本地 / instant(worker)
+// 两条路径的共用落点，在这里派发能覆盖「worker 推回的 raw 解析全灭」这类云端失败。
+const announceEmotionFailed = (charData: CharacterProfile, reason: string): void => {
+    try {
+        if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent(CHAT_GEN_EVENTS.emotionFailed, {
+                detail: { charId: charData.id, charName: charData.name, reason },
+            }));
+        }
+    } catch { /* SSR / 测试环境无 window */ }
+};
 
 // 角色「最后一次内心独白(InnerState)」的轻量缓存（localStorage）。
 // innerState 是瞬时产物，这里在情绪评估落地的共用点顺手缓存一份，供别处（如查手机首页）读取，
@@ -344,6 +357,7 @@ export async function applyEmotionEvalRaw(
         const result = parseEmotionEvalOutput(rawText || '');
         if (!result) {
             console.warn('🎭 [Emotion] Could not parse eval output (all repairs + salvage failed):', (rawText || '').slice(0, 300));
+            announceEmotionFailed(charData, '评估模型的输出不是可解析的 JSON（模型掉格式，可换个评估模型试试）');
             return null;
         }
         if (result.salvaged) {
@@ -405,6 +419,7 @@ export async function applyEmotionEvalRaw(
         return innerStateOut;
     } catch (e: any) {
         console.warn('🎭 [Emotion] applyEmotionEvalRaw failed:', e?.message);
+        announceEmotionFailed(charData, `评估结果落库失败：${e?.message || '未知错误'}`);
         return null;
     }
 }

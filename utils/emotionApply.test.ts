@@ -207,3 +207,40 @@ describe('extractAssistantText — 响应形态兜底', () => {
         expect(extractAssistantText(null)).toBe('');
     });
 });
+
+describe('applyEmotionEvalRaw — 失败可见性 (chat-gen-emotion-failed)', () => {
+    // 评估失败过去只写 console.warn，用户侧「情绪不更新但没报错」没法自查（真实反馈）。
+    // 锁住：解析全灭时必须派发失败事件（OSContext 监听弹 toast）。
+    it('解析全灭 → 派发 chat-gen-emotion-failed，detail 带 charId/reason', async () => {
+        const dispatched: any[] = [];
+        (globalThis as any).window = {
+            dispatchEvent: (e: any) => { dispatched.push(e); return true; },
+        };
+        try {
+            const inner = await applyEmotionEvalRaw('完全不是 JSON 的输出', makeChar());
+            expect(inner).toBeNull();
+            const failed = dispatched.find((e) => e.type === 'chat-gen-emotion-failed');
+            expect(failed).toBeTruthy();
+            expect(failed.detail.charId).toBe('char-1');
+            expect(failed.detail.charName).toBe('测试角色');
+            expect(typeof failed.detail.reason).toBe('string');
+        } finally {
+            delete (globalThis as any).window;
+        }
+    });
+
+    it('解析成功（即使 salvage）不派发失败事件', async () => {
+        const dispatched: any[] = [];
+        (globalThis as any).window = {
+            dispatchEvent: (e: any) => { dispatched.push(e); return true; },
+        };
+        try {
+            await applyEmotionEvalRaw(JSON.stringify(VALID), makeChar());
+            expect(dispatched.some((e) => e.type === 'chat-gen-emotion-failed')).toBe(false);
+            // 正常路径照旧广播 emotion-updated
+            expect(dispatched.some((e) => e.type === 'emotion-updated')).toBe(true);
+        } finally {
+            delete (globalThis as any).window;
+        }
+    });
+});

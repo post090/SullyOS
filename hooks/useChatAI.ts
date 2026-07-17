@@ -324,23 +324,43 @@ export async function evaluateEmotionBackground(
             'Authorization': `Bearer ${api.apiKey || 'sk-none'}`
         };
 
-        const data = await safeFetchJson(`${baseUrl}/chat/completions`, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify({
-                model: api.model,
-                messages: [{ role: 'user', content: prompt }],
-                temperature: 0.85,
-                // 显式给足输出额度: 部分代理不传 max_tokens 时默认很小 (1k~2k), eval 的
-                // injection+innerState 很长, 会被截断成半截 JSON → buff 静默丢失.
-                max_tokens: 8000,
-                // 跟随全局流式开关（响应由 safeFetchJson 透明拼装，下游 JSON 解析不变）。
-                // 好处: ①评估动辄生成 4~5k token、跑 30~46s，非流式最容易撞网关超时；
-                // ②中转若按流式/非流式分渠道池，评估与主聊天落同一池，行为可对比。
-                stream: !!api.stream,
-                ...(api.stream ? { stream_options: { include_usage: true } } : {}),
-            })
-        }, 2, 0, { appName: '消息', charId: charData.id, charName: charData.name, purpose: '情绪评估' });
+        const evalBody = {
+            model: api.model,
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.85,
+            // 显式给足输出额度: 部分代理不传 max_tokens 时默认很小 (1k~2k), eval 的
+            // injection+innerState 很长, 会被截断成半截 JSON → buff 静默丢失.
+            max_tokens: 8000,
+        };
+        const evalMeta = { appName: '消息', charId: charData.id, charName: charData.name, purpose: '情绪评估' };
+        let data: any;
+        try {
+            data = await safeFetchJson(`${baseUrl}/chat/completions`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    ...evalBody,
+                    // 跟随全局流式开关（响应由 safeFetchJson 透明拼装，下游 JSON 解析不变）。
+                    // 好处: ①评估动辄生成 4~5k token、跑 30~46s，非流式最容易撞网关超时；
+                    // ②中转若按流式/非流式分渠道池，评估与主聊天落同一池，行为可对比。
+                    stream: !!api.stream,
+                    ...(api.stream ? { stream_options: { include_usage: true } } : {}),
+                })
+            }, 2, 0, evalMeta);
+        } catch (e: any) {
+            if (!api.stream) throw e;
+            // 流式自愈: 个别中转/模型对 stream / stream_options 直接 4xx。主聊天的透明流式
+            // 升级层有「用升级前原 body 重发」的回退 (OSContext), 但评估请求自带 stream:true
+            // 不经过升级层, 没有这层兜底 —— 这里补上同等待遇: 非流式重发一次, 行为退回
+            // 「评估跟随流式开关」(32c7be7) 之前。评估失败过去被静默吞掉, 用户只看到
+            // 情绪徽章闪一下就灭、情绪永不更新 (真实反馈), 这类形状问题必须能自愈。
+            console.warn('🎭 [Emotion] streamed eval failed, retrying non-stream:', e?.message);
+            data = await safeFetchJson(`${baseUrl}/chat/completions`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ ...evalBody, stream: false })
+            }, 1, 0, evalMeta);
+        }
 
         // 排查贩子降级路由用：把评估实际落到的后端和 token 计数打出来，
         // 和主聊天的 🔢 [Token Usage] 一对比就能看出哪个请求被挤进了备用渠道。
@@ -353,11 +373,19 @@ export async function evaluateEmotionBackground(
                 finish_reason: data.choices?.[0]?.finish_reason,
                 has_message: !!data.choices?.[0]?.message,
             }));
+            announceChatGen(CHAT_GEN_EVENTS.emotionFailed, {
+                charId: charData.id, charName: charData.name,
+                reason: `评估模型没有输出内容 (finish_reason: ${data.choices?.[0]?.finish_reason ?? '?'})`,
+            });
             return null;
         }
         return await applyEmotionEvalRaw(raw, charData);
     } catch (e: any) {
         console.warn('🎭 [Emotion] Evaluation failed:', e.message);
+        announceChatGen(CHAT_GEN_EVENTS.emotionFailed, {
+            charId: charData.id, charName: charData.name,
+            reason: e?.message || '请求失败',
+        });
         return null;
     } finally {
         announceChatGen(CHAT_GEN_EVENTS.emotionEnd, { charId: charData.id, charName: charData.name });
