@@ -2824,7 +2824,7 @@ function classifyLLMOutput(text) {
 }
 
 // utils/instantWorkerVersion.ts
-var INSTANT_WORKER_VERSION = "2026-07-04";
+var INSTANT_WORKER_VERSION = "2026-07-17";
 
 // worker/instant-push/src/index.ts
 var MULTIPART_TRANSPORT = { enabled: true };
@@ -3141,7 +3141,7 @@ var cfWorker = createCloudflareWorker((env) => {
     onAfterLoop: async ({ deliver, pending, requestBody, sessionId }) => {
       if (!pending?.emotionEval) return;
       try {
-        const emotionRaw = await pending.emotionEval;
+        const { raw: emotionRaw, error: emotionError } = await pending.emotionEval;
         const charId = requestBody?.charId || requestBody?.metadata?.charId || "";
         await deliver({
           messageKind: "emotion_update",
@@ -3150,7 +3150,8 @@ var cfWorker = createCloudflareWorker((env) => {
           metadata: {
             ...requestBody?.metadata || {},
             charId,
-            emotionRaw
+            emotionRaw,
+            ...emotionError ? { emotionError } : {}
           },
           notification: {
             show: "when-hidden",
@@ -3169,7 +3170,7 @@ var cfWorker = createCloudflareWorker((env) => {
 async function runEmotionEval(body) {
   const ee = body?.emotionEval;
   if (!ee?.prompt || !ee?.api?.baseUrl || !ee?.api?.apiKey || !ee?.api?.model) {
-    return "";
+    return { raw: "", error: "\u8BC4\u4F30\u914D\u7F6E\u4E0D\u5B8C\u6574\uFF08\u7F3A prompt / baseUrl / apiKey / model\uFF09" };
   }
   const charId = body?.metadata && typeof body.metadata === "object" ? body.metadata.charId : "";
   const priorMessages = Array.isArray(body?.messages) ? body.messages : [];
@@ -3210,18 +3211,25 @@ async function runEmotionEval(body) {
         stream: false
       })
     });
-    let raw = "";
-    if (res.ok) {
-      const data = await res.json();
-      const msg = data?.choices?.[0]?.message;
-      raw = flattenContent(msg?.content) || (typeof msg?.reasoning_content === "string" ? msg.reasoning_content : "");
-    } else {
+    if (!res.ok) {
+      let snippet = "";
+      try {
+        snippet = (await res.text()).replace(/\s+/g, " ").slice(0, 120);
+      } catch {
+      }
       console.error("[emotion-eval] LLM call failed", res.status);
+      return { raw: "", error: `\u526F API HTTP ${res.status}${snippet ? `\uFF1A${snippet}` : ""}` };
     }
-    return raw;
+    const data = await res.json();
+    const msg = data?.choices?.[0]?.message;
+    const raw = flattenContent(msg?.content) || (typeof msg?.reasoning_content === "string" ? msg.reasoning_content : "");
+    if (!raw) {
+      return { raw: "", error: `\u8BC4\u4F30\u6A21\u578B\u6CA1\u6709\u8F93\u51FA\u5185\u5BB9 (finish_reason: ${data?.choices?.[0]?.finish_reason ?? "?"})` };
+    }
+    return { raw };
   } catch (e) {
     console.error("[emotion-eval] failed", e);
-    return "";
+    return { raw: "", error: `\u8BC4\u4F30\u8BF7\u6C42\u5F02\u5E38\uFF1A${e?.message || String(e)}` };
   }
 }
 function withSseAntiBufferingHeaders(resp) {

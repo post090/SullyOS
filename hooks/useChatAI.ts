@@ -853,7 +853,14 @@ export const useChatAI = ({
                 instantEmotionTimerRef.current = setTimeout(() => {
                     setEmotionStatus('');
                     instantEmotionTimerRef.current = null;
-                }, 90_000);  // 安全网: 正常情况下 worker 推回 emotion_update 会 fire 'instant-emotion-done' 提前熄灭; 只在 worker 被杀/推送丢失时兜底.
+                    // 超时无回音最常见的原因是用户部署的 worker 版本过旧（不支持情绪评估、
+                    // 压根不会推 emotion_update），其次是 worker 被杀/推送丢失。过去这里
+                    // 静默熄灯, 用户只看到「情绪永远不更新」—— 给一条可操作的提示。
+                    announceChatGen(CHAT_GEN_EVENTS.emotionFailed, {
+                        charId: char.id, charName: char.name,
+                        reason: '云端情绪评估超时无回音——worker 可能是旧版（不支持情绪评估），请到 设置→Instant 消息设置 更新 worker 后重试',
+                    });
+                }, 90_000);  // 安全网: 正常情况下 worker 推回 emotion_update 会 fire 'instant-emotion-done' 提前熄灭; 只在 worker 旧版/被杀/推送丢失时兜底.
             }
 
             // 发送前汇总计时

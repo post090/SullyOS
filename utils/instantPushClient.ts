@@ -330,7 +330,10 @@ export interface InstantWorkerVersionResult {
   /** 仅当 worker 自报版本 = 随包 INSTANT_WORKER_VERSION 时为 true。其它任何情况 (404 / 405 /
    *  网络错误 / 版本对不上) 都算 false —— 老 bundle 根本没有 /version 路由, 拉不到就当不是最新。 */
   ok: boolean;
-  /** worker 自报的版本号 (仅 ok=true 时有值); 调试用, 不影响 UI 判定。 */
+  /** worker URL 有 HTTP 应答 (含 404/405 —— 老 bundle 没 /version 路由也算应答)。
+   *  用来区分「确认部署过旧」(reachable && !ok, 该提醒更新) 和「网络不通/没配」(不该瞎提醒)。 */
+  reachable: boolean;
+  /** worker 自报的版本号 (仅拿到合法响应时有值); 调试用, 不影响 UI 判定。 */
   version?: string;
   error?: string;
 }
@@ -405,25 +408,25 @@ export async function probeInstantWorkerVersion(
 ): Promise<InstantWorkerVersionResult> {
   const workerUrl = normalizeWorkerUrl(cfg.workerUrl || '');
   if (!workerUrl.startsWith('https://')) {
-    return { ok: false, error: 'Worker URL 未配置或不是 https' };
+    return { ok: false, reachable: false, error: 'Worker URL 未配置或不是 https' };
   }
   try {
     const res = await fetch(`${workerUrl}/version`, { method: 'GET' });
     const { parsed } = await resolveSafeFetchText(res);
     if (!res.ok) {
-      return { ok: false, error: parsed?.error?.message ?? `HTTP ${res.status}` };
+      return { ok: false, reachable: true, error: parsed?.error?.message ?? `HTTP ${res.status}` };
     }
     const version = parsed?.data?.version;
     if (typeof version !== 'string' || !version) {
-      return { ok: false, error: 'Worker 未返回版本号' };
+      return { ok: false, reachable: true, error: 'Worker 未返回版本号' };
     }
     if (version !== INSTANT_WORKER_VERSION) {
-      return { ok: false, version, error: `Worker 自报 ${version}, 不是最新` };
+      return { ok: false, reachable: true, version, error: `Worker 自报 ${version}, 不是最新` };
     }
-    return { ok: true, version };
+    return { ok: true, reachable: true, version };
   } catch (e) {
     const err = e as { message?: string } | null;
-    return { ok: false, error: err?.message ?? String(e) };
+    return { ok: false, reachable: false, error: err?.message ?? String(e) };
   }
 }
 

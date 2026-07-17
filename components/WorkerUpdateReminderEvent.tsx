@@ -8,7 +8,9 @@
  * 启用了 Instant Push 的用户会被提醒一次：去重新部署 / 同步一下 worker。
  *
  * 只提醒启用了 Instant Push 的用户；没开的人完全不受打扰。
- * 同一个版本号只弹一次 (sullyos_worker_build_seen 记 dismiss 过的版本)。
+ * 「稍后处理」只贪睡 3 天（不算确认）；sullyos_worker_build_seen 只在用户真正
+ * 部署过的语境写入（设置里保存/对比一致）。启动时的 /version 异步探测（PhoneShell）
+ * 若确认部署的 worker 过旧，会清掉 seen 重新武装提醒。
  */
 
 import React, { useState } from 'react';
@@ -21,10 +23,15 @@ import { INSTANT_WORKER_VERSION } from '../utils/instantWorkerVersion';
 
 // 记录用户「已确认过的 worker 版本号」。
 const WORKER_UPDATE_SEEN_KEY = 'sullyos_worker_build_seen';
+// 「稍后处理」的贪睡截止时间戳。过去「稍后处理」直接 markWorkerBuildSeen 永久压掉提醒，
+// 结果一批用户点完就再也想不起来更新，worker 长期停在旧版 —— 前端持续自动更新、
+// worker 原地踏步，instant 各种「时灵时不灵」的反馈都从这条漂移里长出来。
+// 现在「稍后处理」只贪睡 3 天，直到用户真正部署 (设置里保存/对比一致才 markSeen)。
+const WORKER_UPDATE_SNOOZE_KEY = 'sullyos_worker_update_snooze_until';
 
 /**
- * 把当前 worker 版本标记为已确认。用户点过提醒、或刚配好 worker (视为已是最新)
- * 时调用，避免之后被无意义地反复提醒。
+ * 把当前 worker 版本标记为已确认。只在用户**真正部署过**的语境调用
+ * (设置里保存启用配置 / 对比已部署一致)，不要在「稍后处理」时调。
  */
 export const markWorkerBuildSeen = (): void => {
   try {
@@ -32,15 +39,36 @@ export const markWorkerBuildSeen = (): void => {
   } catch { /* ignore */ }
 };
 
+/** 「稍后处理」：贪睡 N 天后再提醒（默认 3 天）。 */
+export const snoozeWorkerUpdateReminder = (days = 3): void => {
+  try {
+    localStorage.setItem(WORKER_UPDATE_SNOOZE_KEY, String(Date.now() + days * 86_400_000));
+  } catch { /* ignore */ }
+};
+
+/**
+ * 重新武装提醒（清掉已确认标记）。启动时的 /version 异步探测确认「部署的 worker
+ * 确实旧了」时调用 —— 即使用户以前确认过这个版本号，实际部署漂移了也要再提醒。
+ * 贪睡窗口仍然生效，不会连日轰炸。
+ */
+export const rearmWorkerUpdateReminder = (): void => {
+  try {
+    localStorage.removeItem(WORKER_UPDATE_SEEN_KEY);
+  } catch { /* ignore */ }
+};
+
 /**
  * 是否要弹「worker 有更新」提醒：
  *  - 只对启用了 Instant Push 的用户弹
+ *  - 贪睡窗口内不弹
  *  - 已确认版本与当前内置版本不一致才弹 (null 也算不一致 —— 老用户首次铺该功能时提醒一次)
  */
 export const shouldShowWorkerUpdateReminder = (): boolean => {
   try {
     const cfg = loadInstantConfig();
     if (!cfg.enabled) return false;
+    const snoozeUntil = Number(localStorage.getItem(WORKER_UPDATE_SNOOZE_KEY) || 0);
+    if (Date.now() < snoozeUntil) return false;
     const seen = localStorage.getItem(WORKER_UPDATE_SEEN_KEY);
     return seen !== INSTANT_WORKER_VERSION;
   } catch {
@@ -83,7 +111,8 @@ export const WorkerUpdateReminderPopup: React.FC<WorkerUpdateReminderPopupProps>
   };
 
   const handleLater = () => {
-    markWorkerBuildSeen();
+    // 只贪睡, 不 markSeen —— 否则用户点完就永远想不起来更新, worker 长期漂在旧版
+    snoozeWorkerUpdateReminder();
     onClose();
   };
 

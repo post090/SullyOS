@@ -425,9 +425,11 @@ const cfWorker = createCloudflareWorker((env: Env) => {
       if (!pending?.emotionEval) return;
 
       try {
-        const emotionRaw = await pending.emotionEval;
+        const { raw: emotionRaw, error: emotionError } = await pending.emotionEval;
         // 无论成功 / 失败 / 空结果都推一条 emotion_update (emotionRaw 可能为空字符串):
         // 客户端据此熄灭 "情绪分析中" 徽章, 否则只能等本地安全超时, 体验上像卡死.
+        // emotionError: 失败时带回人话原因 (副 API HTTP 状态等), 客户端 toast 显示 ——
+        // 过去只推空串, 用户侧「情绪不更新但没报错」完全没法自查 (真实反馈)。
         const charId = requestBody?.charId || requestBody?.metadata?.charId || '';
         await deliver({
           messageKind: 'emotion_update',
@@ -437,6 +439,7 @@ const cfWorker = createCloudflareWorker((env: Env) => {
             ...(requestBody?.metadata || {}),
             charId,
             emotionRaw,
+            ...(emotionError ? { emotionError } : {}),
           },
           notification: {
             show: 'when-hidden',
@@ -460,10 +463,10 @@ const cfWorker = createCloudflareWorker((env: Env) => {
  *
  * 失败全吞 (情绪评估失败不该影响主回复); emotion_update 携带静默 notification 属性防系统拉黑，客户端仍静默入 inbox。.
  */
-async function runEmotionEval(body: any): Promise<string> {
+async function runEmotionEval(body: any): Promise<{ raw: string; error?: string }> {
   const ee = body?.emotionEval;
   if (!ee?.prompt || !ee?.api?.baseUrl || !ee?.api?.apiKey || !ee?.api?.model) {
-    return '';
+    return { raw: '', error: '评估配置不完整（缺 prompt / baseUrl / apiKey / model）' };
   }
 
   const charId = (body?.metadata && typeof body.metadata === 'object') ? body.metadata.charId : '';
@@ -519,22 +522,26 @@ async function runEmotionEval(body: any): Promise<string> {
         stream: false,
       }),
     });
-    let raw = '';
-    if (res.ok) {
-      const data: any = await res.json();
-      // content 可能是分块数组; 个别代理把全部输出塞进 reasoning_content 而 content 留空 —
-      // 与客户端 utils/emotionApply.ts:extractAssistantText 同一套兜底 (解析容错在客户端 applyEmotionEvalRaw).
-      const msg = data?.choices?.[0]?.message;
-      raw = flattenContent(msg?.content)
-        || (typeof msg?.reasoning_content === 'string' ? msg.reasoning_content : '');
-    } else {
+    if (!res.ok) {
+      // 失败原因带回客户端 toast。正文可能是 HTML 错误页, 截一小段够定位即可。
+      let snippet = '';
+      try { snippet = (await res.text()).replace(/\s+/g, ' ').slice(0, 120); } catch { /* ignore */ }
       console.error('[emotion-eval] LLM call failed', res.status);
+      return { raw: '', error: `副 API HTTP ${res.status}${snippet ? `：${snippet}` : ''}` };
     }
-
-    return raw;
-  } catch (e) {
+    const data: any = await res.json();
+    // content 可能是分块数组; 个别代理把全部输出塞进 reasoning_content 而 content 留空 —
+    // 与客户端 utils/emotionApply.ts:extractAssistantText 同一套兜底 (解析容错在客户端 applyEmotionEvalRaw).
+    const msg = data?.choices?.[0]?.message;
+    const raw = flattenContent(msg?.content)
+      || (typeof msg?.reasoning_content === 'string' ? msg.reasoning_content : '');
+    if (!raw) {
+      return { raw: '', error: `评估模型没有输出内容 (finish_reason: ${data?.choices?.[0]?.finish_reason ?? '?'})` };
+    }
+    return { raw };
+  } catch (e: any) {
     console.error('[emotion-eval] failed', e);
-    return '';
+    return { raw: '', error: `评估请求异常：${e?.message || String(e)}` };
   }
 }
 
