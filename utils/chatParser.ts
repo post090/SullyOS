@@ -305,7 +305,8 @@ export const ChatParser = {
         const stripped = text
             .replace(/%%BILINGUAL%%/gi, '')
             .replace(/%%TRANS%%[\s\S]*/gi, '')
-            .replace(/<\/?翻译>|<\/?原文>|<\/?译文>/g, '')
+            // 容错版 (对齐 MessageItem stripJunk): 截断/全角/简繁的破翻译标签也不算显示内容
+            .replace(/[<＜]\s*[/／]?\s*(?:翻[译譯]|原文|[译譯]文)\s*[>＞]?/g, '')
             .replace(/^\s*---\s*$/gm, '')
             .replace(/``+/g, '')
             .replace(/(^|\s)`(\s|$)/gm, '$1$2')

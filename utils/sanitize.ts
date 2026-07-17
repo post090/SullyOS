@@ -230,6 +230,68 @@ export function normalizeVoiceTags(t: string): string {
   return result;
 }
 
+// ─── 翻译标签规整 (掉格式自愈) ──────────────────────────────────────────────
+
+const simpTransTag = (tag: string): string => tag.replace(/譯/g, '译');
+
+/**
+ * 把 LLM 写歪的 <翻译>/<原文>/<译文> 标签修回规范形态
+ * `<翻译><原文>X</原文><译文>Y</译文></翻译>`, 让下游所有严格配对正则
+ * (applyAssistantPostProcessing Step 8 双语拆泡 / sanitizeIntoSegments Phase 1.5
+ * 原子保护 / extractTranslationOriginal banner 提取) 都能命中。
+ * 落库前跑一次 (三个 facade 都挂了), 下游不用各自容错。
+ *
+ * 修复的形态 (来自真实掉格式报告 —— 多模型多站点同时出现"掉格式"):
+ *  1. 全角尖括号 / 全角斜杠 / 标签内空格 / 简繁互换: ＜／譯文＞ → </译文>
+ *  2. 截断标签少写 `>`: 行尾/文尾/紧贴下一标签的 `</译文` → `</译文>` (截图报告形态)
+ *  3. 配对修复: 有开无闭 → 末尾补闭合; 孤儿闭合 / 嵌套重复开标签 / 自闭合 → 删除
+ *  4. 结构自愈 → 规范块:
+ *     - 缺外层包裹 / 缺 </翻译>: `<原文>X</原文><译文>Y</译文>` → 补齐 <翻译> 包裹
+ *     - sibling 幻觉: `<翻译>X</翻译><译文>Y</译文>` → 规范块
+ *       (extractTranslationOriginal 注释里记录的已知形态)
+ *  5. 兜底不变量: 自愈后文本里只允许存在规范完整块 —— 仍配不成对的翻译标签
+ *     全部剥除、正文保留 (宁可退化成普通气泡, 也绝不把 `</译文` 这类破标签漏给用户)。
+ */
+export function normalizeTranslationTags(t: string): string {
+  if (!/[<＜]\s*[/／]?\s*(?:翻[译譯]|原文|[译譯]文)/.test(t)) return t; // fast path
+  let result = t;
+  // 1. 全角尖括号/斜杠 + 标签内空格 + 简繁 → 规范半角简体
+  result = result.replace(/[<＜]\s*[/／]\s*(翻[译譯]|原文|[译譯]文)\s*[>＞]/g, (_m, tag) => `</${simpTransTag(tag)}>`);
+  result = result.replace(/[<＜]\s*(翻[译譯]|原文|[译譯]文)\s*[>＞]/g, (_m, tag) => `<${simpTransTag(tag)}>`);
+  // 2. 截断补全: 行尾/文尾/紧贴下一个 `<` 处少写 `>` (流截断 / 模型偷懒的高频形态)
+  result = result.replace(
+    /[<＜]\s*([/／]?)\s*(翻[译譯]|原文|[译譯]文)\s*(?=$|\n|[<＜])/g,
+    (_m, slash, tag) => `<${slash ? '/' : ''}${simpTransTag(tag)}>`,
+  );
+  // 3. 配对修复: 先内层 (原文/译文) 再外层 (翻译), 未闭合开标签才能按嵌套顺序补对
+  result = repairPairedTag(result, /<\/?原文[^>]*>/g, () => '原文', false);
+  result = repairPairedTag(result, /<\/?译文[^>]*>/g, () => '译文', false);
+  result = repairPairedTag(result, /<\/?翻译[^>]*>/g, () => '翻译', false);
+  // 4. 结构自愈。先把本来就规范的完整块 (多行/紧凑都算) 用占位符护住原样保留,
+  //    只对剩余的掉格式残局做规范化重写。
+  const HOLD = String.fromCharCode(3);
+  const blocks: string[] = [];
+  const hold = (m: string): string => { blocks.push(m); return `${HOLD}${blocks.length - 1}${HOLD}`; };
+  result = result.replace(/<翻译>\s*<原文>[\s\S]*?<\/原文>\s*<译文>[\s\S]*?<\/译文>\s*<\/翻译>/g, hold);
+  // 4a. 配好的 原文+译文 对 (外层 <翻译> 包裹缺失/只剩半边) → 规范块
+  result = result.replace(
+    /(?:<翻译>\s*)?<原文>([\s\S]*?)<\/原文>\s*<译文>([\s\S]*?)<\/译文>\s*(?:<\/翻译>)?/g,
+    (_m, a: string, b: string) => hold(`<翻译><原文>${a.trim()}</原文><译文>${b.trim()}</译文></翻译>`),
+  );
+  // 4b. sibling 幻觉形态 <翻译>X</翻译><译文>Y</译文> → 规范块
+  result = result.replace(
+    /<翻译>\s*(?!<原文>)((?:(?!<\/?翻译>)[\s\S])*?)<\/翻译>\s*<译文>([\s\S]*?)<\/译文>/g,
+    (_m, a: string, b: string) => hold(`<翻译><原文>${a.trim()}</原文><译文>${b.trim()}</译文></翻译>`),
+  );
+  // 5. 兜底不变量: 规范块之外不允许残留任何翻译标签。
+  //    配不成对的 <译文> 整块是重复的目标语内容 —— 按 extractTranslationOriginal
+  //    既有策略整块丢弃; 其余散标签 (全角/截断/贴字) 剥掉标签保留正文。
+  result = result.replace(/<译文>[\s\S]*?<\/译文>/g, '');
+  result = result.replace(/[<＜]\s*[/／]?\s*(?:翻[译譯]|原文|[译譯]文)\s*[>＞]?/g, '');
+  result = result.replace(new RegExp(`${HOLD}(\\d+)${HOLD}`, 'g'), (_m, n) => blocks[Number(n)] || '');
+  return result;
+}
+
 /**
  * 翻译块只保留原文.
  *
@@ -272,7 +334,8 @@ export function sanitizeForNotification(text: string): string {
   // 4. 反向 emoji tag 先于正向 SEND_EMOJI (反向可能也走 SEND_EMOJI 重写, 但这里直接转最终展示)
   result = replaceEmojiReverseTag(result);
   result = replaceSendEmoji(result);
-  // 5. 翻译块保留原文剥译文
+  // 5. 翻译块保留原文剥译文 (先自愈掉格式的标签, 严格提取正则才能命中)
+  result = normalizeTranslationTags(result);
   result = extractTranslationOriginal(result);
   // 6. LLM mimicking 历史的 leak: 时间戳 / 日期 / 角色名 prefix
   result = stripTimestamps(result);
@@ -314,8 +377,10 @@ export function sanitizeForBubble(
   let result = text;
   // 1. 字面 \n 还原
   result = stripLiteralBackslashN(result);
-  // 1.5. 语音标签自愈 — 必须在 chunkText 之前 (下游原子块保护靠配对正则)
+  // 1.5. 语音/翻译标签自愈 — 必须在 chunkText 之前 (下游原子块保护 /
+  //      applyAssistantPostProcessing Step 8 双语拆泡都靠严格配对正则)
   result = normalizeVoiceTags(result);
+  result = normalizeTranslationTags(result);
   // 2. 源标签 / 时间戳 / 业务标签
   result = stripSourceTags(result);
   result = stripTimestamps(result);
@@ -391,6 +456,7 @@ export function sanitizeIntoSegments(text: string): Segment[] {
   let cleaned = stripLiteralBackslashN(text);
   cleaned = stripThinkBlocks(cleaned);
   cleaned = normalizeVoiceTags(cleaned); // 语音标签自愈 — Phase 1.5 的配对保护靠它兜底
+  cleaned = normalizeTranslationTags(cleaned); // 翻译标签自愈 — 同上, Phase 1.5 的 <翻译> 原子保护靠它命中
 
   // Phase 1.5: 原子语义块交给 amsg-instant 标准 protected-block splitter 识别,
   // 再桥回旧 pipeline。这样只替换"如何保护原子块", 不改变后续清洗/分段语义。

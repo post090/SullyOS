@@ -3180,7 +3180,9 @@ const MessageItem = React.memo(({
     const stripJunk = (s: string) => stripFishCuesForDisplay(s
         .replace(/%%TRANS%%[\s\S]*/gi, '')           // legacy translation marker
         .replace(/%%BILINGUAL%%/gi, '\n')            // raw bilingual marker → newline
-        .replace(/<\/?翻译>|<\/?原文>|<\/?译文>/g, '')  // stray bilingual XML tags
+        // stray bilingual XML tags — 容错版：全角括号/斜杠、标签内空格、简繁、少写 `>` 的截断形态
+        // (如 `</译文`) 都吃掉。掉格式消息已经按破标签落过库，显示端不容错就会原样漏给用户。
+        .replace(/[<＜]\s*[/／]?\s*(?:翻[译譯]|原文|[译譯]文)\s*[>＞]?/g, '')
         .replace(/\s*\[(?:聊天|通话|约会)\]\s*/g, '\n')   // source tags leaked from history context
         .replace(/\[\[(?:QU[OA]TE|引用)[：:][\s\S]*?\]\]/g, '')  // residual double-bracket quotes (incl. typos & Chinese)
         .replace(/\[(?:QU[OA]TE|引用)[：:][^\]]*\]/g, '')     // residual single-bracket quotes (incl. typos & Chinese)
