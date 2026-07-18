@@ -28,8 +28,7 @@ import { evaluateEmotionBackground } from '../hooks/useChatAI';
 import { CHAT_GEN_EVENTS, setChatViewSnapshot } from '../utils/chatGenEvents';
 import { buildChatRequestPayload } from '../utils/chatRequestPayload';
 import { extractHtmlBlocks } from '../utils/htmlPrompt';
-import { loadMusicHooks, loadMusicPlaybackSnapshot } from './MusicContext';
-import { buildMusicTrackChangeHint, MUSIC_TRACK_CHANGED_EVENT, type MusicTrackChangeDetail } from '../utils/musicTrackChange';
+import { loadMusicPlaybackSnapshot } from './MusicContext';
 import { setMinimaxRegion } from '../utils/minimaxEndpoint';
 import { setTtsProvider, setVoicePromptOverrides } from '../utils/ttsProvider';
 import { LocalNotifications } from '@capacitor/local-notifications';
@@ -47,11 +46,8 @@ import { exportMcdLocal } from '../utils/mcdMcpClient';
 import { exportDesktopSkinLocal } from '../utils/desktopSkinBackup';
 import { inspectCsyBackup, prepareCsyMigration, type CsyMigrationReport } from '../utils/csyMigration';
 
-type ProactiveRunReason = { kind: 'music-track-change'; detail: MusicTrackChangeDetail };
-
 interface ProactiveQueueEntry {
   charId: string;
-  reason?: ProactiveRunReason;
 }
 
 const normalizeProactiveAiContent = (raw: string): string => {
@@ -1661,18 +1657,15 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       const drainQueuedProactive = () => {
           const next = proactiveQueueRef.current.shift();
           if (next) {
-              void runProactive(next.charId, next.reason);
+              void runProactive(next.charId);
           }
       };
 
-      const runProactive = async (charId: string, reason?: ProactiveRunReason) => {
+      const runProactive = async (charId: string) => {
           if (proactiveRunningRef.current) {
               const queuedIndex = proactiveQueueRef.current.findIndex(item => item.charId === charId);
               if (queuedIndex < 0) {
-                  proactiveQueueRef.current.push({ charId, reason });
-              } else if (reason?.kind === 'music-track-change') {
-                  // 同一角色排队期间再次收到更具体的换歌事件时，以最新歌曲为准。
-                  proactiveQueueRef.current[queuedIndex] = { charId, reason };
+                  proactiveQueueRef.current.push({ charId });
               }
               return;
           }
@@ -1690,8 +1683,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               return;
           }
 
-          // 换歌判断属于用户刚刚发起的“一起听”交互，不受定时主动消息开关限制。
-          if (reason?.kind !== 'music-track-change' && char.proactiveConfig && !char.proactiveConfig.enabled) {
+          if (char.proactiveConfig && !char.proactiveConfig.enabled) {
               drainQueuedProactive();
               console.log(`🔕 [Proactive/Global] Skipped for ${char.name}: disabled`);
               return;
@@ -1760,9 +1752,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               const justMetOffline = lastRealMsgRaw?.metadata?.source === 'date'
                   && (now.getTime() - lastRealMsgRaw.timestamp) < DATE_AFTERGLOW_MS;
 
-              const hintContent = reason?.kind === 'music-track-change'
-                  ? buildMusicTrackChangeHint(reason.detail, userName)
-                  : justMetOffline
+              const hintContent = justMetOffline
                       ? `[系统提示（非${userName}发言）: 现在是 ${timeStr}。你和${userName}刚刚在线下见过面（如果上下文里有标着 [约会] 的内容，那就是你们见面时发生的事），现在你们暂时分开了，你拿起手机想给${userName}发条消息。请基于刚才的见面来发——可以回味见面里的某个细节、补一句当时没说出口的话、关心${userName}到家了没，或者就是刚分开就有点想念。绝对不要表现得好像很久没联系，更不要对刚才的见面毫不知情。一两句话就好。]`
                       : `[系统提示（非${userName}发言）: 现在是 ${timeStr}。${timeSinceUser ? `${userName}已经 ${timeSinceUser} 没有找你说话了。` : ''}这是系统给你的一次主动发消息机会——${userName}并没有在跟你说话，是你想主动找${userName}。像真人一样随意地发条消息吧，比如：随手拍了张照片想分享、刚看到个有趣的事想说、突然想到个冷知识、吐槽今天的天气/食物/见闻、或者就是单纯想找${userName}聊几句。不要刻意，不要像在"汇报近况"，就像你真的拿起手机随手发了条消息。一两句话就好。${timeSinceUser && parseInt(timeSinceUser) > 2 ? `（${userName}挺久没找你了，你也可以表达想念、好奇${userName}在干嘛、或者小小地抱怨一下。）` : ''}]`;
 
@@ -1842,11 +1832,6 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               }, 2, 0, { appName: '消息', charId, charName: char.name, purpose: '主动消息' });
 
               // 5. Process & save response
-              if (reason?.kind === 'music-track-change'
-                  && loadMusicPlaybackSnapshot()?.current?.id !== reason.detail.currentSong.id) {
-                  console.log(`🎵 [Proactive/Global] Skipped stale track-change response for ${char.name}`);
-                  return;
-              }
               let aiContent = data.choices?.[0]?.message?.content || '';
               // 思考链抽取 — 与 useChatAI 保持一致:reasoning_content 字段 + 主 content 里的 <think>/<thinking>/<thought> 块,
               // 拼接后挂到本回合首条 assistant 消息的 metadata.thinkingChain
@@ -1873,26 +1858,6 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               aiContent = aiContent.replace(/\s*\[(?:聊天|通话|约会)\]\s*/g, '\n').trim();
 
               aiContent = normalizeProactiveAiContent(aiContent);
-
-              // 换歌触发只执行 MUSIC_ACTION，不顺带放开主动消息路径里的其他动作。
-              // 卡片由 ChatParser 落库；正文继续走下方原有的主动消息保存流程。
-              let musicActionExecuted = false;
-              const musicActionTagPattern = /\[\[MUSIC_ACTION:(?:join|add|add_new|join_and_add|join_and_add_new)(?:\|[^\]]*)?\]\]/g;
-              const musicActionTags = aiContent.match(musicActionTagPattern);
-              if (reason?.kind === 'music-track-change' && musicActionTags?.length) {
-                  const musicHooks = loadMusicHooks();
-                  if (musicHooks) {
-                      await ChatParser.parseAndExecuteActions(
-                          musicActionTags.join(' '),
-                          charId,
-                          char.name,
-                          () => {},
-                          musicHooks,
-                      );
-                      musicActionExecuted = true;
-                  }
-                  aiContent = aiContent.replace(musicActionTagPattern, '').trim();
-              }
 
               const savedPreviewChunks: string[] = [];
               const baseTimestamp = Date.now();
@@ -2074,10 +2039,10 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                   }
               }
 
-              if (offset > 0 || musicActionExecuted) {
+              if (offset > 0) {
                   const previewSource = savedPreviewChunks.join(' ').trim();
                   const preview = previewSource.replace(/\s+/g, ' ').trim().slice(0, 120)
-                      || (musicActionExecuted ? `${char.name} 回应了新歌` : `${char.name} sent a proactive message`);
+                      || `${char.name} sent a proactive message`;
 
                   // 6. Notify OS for unread badge + toast
                   window.dispatchEvent(new CustomEvent('proactive-message-sent', {
@@ -2101,15 +2066,6 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       ProactiveChat.onTrigger((charId: string) => {
           void runProactive(charId);
       });
-
-      const onMusicTrackChanged = (event: Event) => {
-          const detail = (event as CustomEvent<MusicTrackChangeDetail>).detail;
-          if (!detail?.currentSong || !Array.isArray(detail.charIds)) return;
-          for (const charId of new Set(detail.charIds)) {
-              void runProactive(charId, { kind: 'music-track-change', detail });
-          }
-      };
-      window.addEventListener(MUSIC_TRACK_CHANGED_EVENT, onMusicTrackChanged);
 
       // 「彼方」自主登入 —— 独立调度，复用同一批 refs 拿最新状态
       const runVR = async (charId: string, room?: string, letterId?: string) => {
@@ -2211,7 +2167,6 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           ProactiveChat.onTrigger(() => {});
           VRScheduler.onTrigger(() => {});
           WorldScheduler.onTrigger(() => {});
-          window.removeEventListener(MUSIC_TRACK_CHANGED_EVENT, onMusicTrackChanged);
           window.removeEventListener('world-reroll-request', onRerollRequest as EventListener);
       };
   // eslint-disable-next-line react-hooks/exhaustive-deps
