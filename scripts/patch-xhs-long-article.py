@@ -15,16 +15,18 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-PATCH_MARKER = "SULLY_LONG_EDITOR_PATCH_V5"
+PATCH_MARKER = "SULLY_LONG_EDITOR_PATCH_V6"
 START = "def _fill_long_content(page: Page, content: str) -> None:\n"
 END = "\ndef _insert_images_to_editor(page: Page, image_paths: list[str]) -> None:\n"
+NEXT_START = "def click_next_and_fill_description(page: Page, description: str) -> None:\n"
+NEXT_END = "\n\n# ========== 内部辅助函数 ==========\n"
 
 REPLACEMENT = '''def _fill_long_content(page: Page, content: str) -> None:
     """通过页面语义与真实焦点定位正文区，不依赖单一易变 class。"""
     if not content.strip():
         raise PublishError("长文正文为空，已停止发布")
 
-    # SULLY_LONG_EDITOR_PATCH_V5：优先可见提示；提示由 CSS 伪元素渲染时，
+    # SULLY_LONG_EDITOR_PATCH_V6：优先可见提示；提示由 CSS 伪元素渲染时，
     # 回退到可见可编辑元素，并按 contenteditable / tiptap / ProseMirror 语义加权。
     target = page.evaluate(
         r"""
@@ -226,6 +228,107 @@ REPLACEMENT = '''def _fill_long_content(page: Page, content: str) -> None:
     logger.info("已填写长文正文 (%d 字)", len(content))
     time.sleep(1)
 '''
+NEXT_REPLACEMENT = '''def click_next_and_fill_description(page: Page, description: str) -> None:
+    """进入最终发布页，语义定位描述编辑器并验证写入结果。"""
+    _click_button_by_text(page, NEXT_STEP_BUTTON_TEXT)
+    time.sleep(_PAGE_LOAD_WAIT)
+
+    if not description.strip():
+        logger.info("最终发布页描述为空，跳过填写")
+        return
+    if len(description) > 1000:
+        description = description[:800]
+        logger.warning("描述超过1000字，已截断到800字")
+
+    selector = '[data-sully-final-editor-v6="true"]'
+    target = page.evaluate(
+        r"""
+        (() => {
+            const visible = (el) => {
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                const s = getComputedStyle(el);
+                return r.width > 100 && r.height > 40 &&
+                    s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity || 1) > 0;
+            };
+            const candidates = Array.from(document.querySelectorAll(
+                '[contenteditable="true"], [role="textbox"], .ql-editor, .ProseMirror, textarea'
+            )).filter((el) => {
+                if (!visible(el)) return false;
+                const placeholder = String(el.getAttribute('placeholder') || el.getAttribute('data-placeholder') || '');
+                if (placeholder.includes('输入标题')) return false;
+                if (el.closest('.title-container')) return false;
+                return true;
+            });
+            const score = (el) => {
+                const r = el.getBoundingClientRect();
+                const placeholder = String(el.getAttribute('placeholder') || el.getAttribute('data-placeholder') || '');
+                const cls = String(el.className || '').toLowerCase();
+                let value = Math.min(r.width * r.height, 1000000) / 1000;
+                if (placeholder.includes('正文描述') || placeholder.includes('真诚有价值')) value += 30000;
+                if (el.getAttribute('contenteditable') === 'true') value += 10000;
+                if (el.getAttribute('role') === 'textbox') value += 5000;
+                if (cls.includes('ql-editor') || cls.includes('prosemirror')) value += 3000;
+                return value;
+            };
+            candidates.sort((a, b) => score(b) - score(a));
+            let editor = candidates[0] || null;
+            if (!editor) {
+                const all = Array.from(document.querySelectorAll('body *'));
+                const hint = all.find((el) => visible(el) &&
+                    (el.textContent || '').includes('输入正文描述'));
+                if (hint) editor = hint.closest('[contenteditable="true"], [role="textbox"], .ql-editor, .ProseMirror') ||
+                    hint.querySelector('[contenteditable="true"], [role="textbox"], .ql-editor, .ProseMirror');
+            }
+            if (!editor || !visible(editor)) return null;
+            document.querySelectorAll('[data-sully-final-editor-v6]').forEach(
+                (el) => el.removeAttribute('data-sully-final-editor-v6')
+            );
+            editor.setAttribute('data-sully-final-editor-v6', 'true');
+            editor.scrollIntoView({block: 'center'});
+            if (typeof editor.focus === 'function') editor.focus();
+            return {
+                tag: editor.tagName,
+                cls: String(editor.className || '').slice(0, 120),
+                editable: editor.getAttribute('contenteditable'),
+                role: editor.getAttribute('role'),
+                placeholder: editor.getAttribute('placeholder') || editor.getAttribute('data-placeholder'),
+                candidates: candidates.slice(0, 8).map((el) => ({
+                    tag: el.tagName,
+                    cls: String(el.className || '').slice(0, 80),
+                    placeholder: el.getAttribute('placeholder') || el.getAttribute('data-placeholder'),
+                    editable: el.getAttribute('contenteditable'),
+                    score: score(el)
+                }))
+            };
+        })()
+        """
+    )
+    if not target:
+        raise PublishError("没有找到最终发布页正文描述输入框")
+
+    logger.info("最终发布页描述编辑器: %s", target)
+    page.input_content_editable(selector, description)
+    time.sleep(0.8)
+
+    verification = page.evaluate(
+        f"""
+        (() => {{
+            const el = document.querySelector({json.dumps(selector)});
+            const text = el ? (el.innerText || el.textContent || el.value || '').trim() : '';
+            const bodyText = document.body ? (document.body.innerText || '') : '';
+            const probe = {json.dumps(description.strip()[:12])};
+            return {{
+                textLength: text.length,
+                bodyContainsProbe: probe ? bodyText.includes(probe) : false
+            }};
+        }})()
+        """
+    ) or {}
+    if verification.get("textLength", 0) <= 0 and not verification.get("bodyContainsProbe"):
+        raise PublishError(f"最终发布页正文描述写入失败，已停止发布；目标={target}，验收={verification}")
+    logger.info("已填写最终发布页描述 (%d 字)", len(description))
+'''
 
 
 def find_target() -> Path | None:
@@ -241,20 +344,39 @@ def find_target() -> Path | None:
 def apply_patch(target: Path) -> int:
     text = target.read_text(encoding="utf-8")
     if PATCH_MARKER in text:
-        print(f"[skip] {target} 长文正文补丁已存在。")
+        print(f"[skip] {target} 长文发布补丁已存在。")
         return 0
-    start = text.find(START)
-    end = text.find(END, start + len(START)) if start >= 0 else -1
-    if start < 0 or end < 0:
+
+    fill_start = text.find(START)
+    fill_end = text.find(END, fill_start + len(START)) if fill_start >= 0 else -1
+    next_start = text.find(NEXT_START)
+    next_end = text.find(NEXT_END, next_start + len(NEXT_START)) if next_start >= 0 else -1
+    if fill_start < 0 or fill_end < 0:
         print(f"[error] {target} 中找不到 _fill_long_content 函数边界；可能上游已变更。")
         return 2
-    patched = text[:start] + REPLACEMENT + text[end:]
+    if next_start < 0 or next_end < 0:
+        print(f"[error] {target} 中找不到 click_next_and_fill_description 函数边界；可能上游已变更。")
+        return 2
+
+    # 从靠后的函数开始替换，避免前一段长度变化影响后一段索引。
+    patched = text[:next_start] + NEXT_REPLACEMENT + text[next_end:]
+    fill_start = patched.find(START)
+    fill_end = patched.find(END, fill_start + len(START)) if fill_start >= 0 else -1
+    if fill_start < 0 or fill_end < 0:
+        print(f"[error] {target} 替换最终页逻辑后无法重新定位 _fill_long_content。")
+        return 2
+    patched = patched[:fill_start] + REPLACEMENT + patched[fill_end:]
+
+    if PATCH_MARKER not in patched or "data-sully-final-editor-v6" not in patched:
+        print(f"[error] {target} 补丁生成结果不完整，拒绝写盘。")
+        return 2
+
     backup = target.with_suffix(target.suffix + ".bak-sully-long")
     if not backup.exists():
         backup.write_text(text, encoding="utf-8")
         print(f"  [bak] {backup.name}")
     target.write_text(patched, encoding="utf-8")
-    print(f"[done] {target} 长文正文补丁已应用。")
+    print(f"[done] {target} 长文正文与最终发布页补丁已应用。")
     return 0
 
 
