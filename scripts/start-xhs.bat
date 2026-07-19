@@ -150,13 +150,13 @@ if exist "%LONG_ARTICLE_PATCH%" (
     echo [PATCH] Checking xiaohongshu-skills long-article editor patch...
     pushd "%SKILLS_DIR%"
     uv run python "%LONG_ARTICLE_PATCH%"
-    set "LONG_PATCH_RC=%ERRORLEVEL%"
-    popd
-    if not "%LONG_PATCH_RC%"=="0" (
+    if errorlevel 1 (
+        popd
         echo [ERROR] Long-article editor patch failed. Refusing to start an unsafe publisher.
         pause
-        exit /b %LONG_PATCH_RC%
+        exit /b 1
     )
+    popd
 ) else (
     echo [ERROR] patch-xhs-long-article.py not found.
     pause
