@@ -345,12 +345,13 @@ const handlers = {
                     ? articleResult.data.templates.filter(Boolean)
                     : [];
                 if (templates.length === 0) {
-                    throw new Error('长文排版未返回可用模板，已停止发布；请检查小红书发布页或扩展状态。');
+                    throw new Error('长文正文已填写，但排版未返回可用模板，已停止发布；请检查小红书发布页或扩展状态。');
                 }
+                const selectedTemplate = templates[0];
 
-                const templateResult = await runCli('select-template', ['--name', templates[0]]);
+                const templateResult = await runCli('select-template', ['--name', selectedTemplate]);
                 if (templateResult.data?.success === false) {
-                    throw new Error(templateResult.data.error || `长文模板选择失败: ${templates[0]}`);
+                    throw new Error(templateResult.data.error || `长文模板选择失败: ${selectedTemplate}`);
                 }
 
                 const nextResult = await runCli('next-step', ['--content-file', contentFile]);

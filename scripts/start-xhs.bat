@@ -130,16 +130,37 @@ if not exist "%SKILLS_DIR%\.venv" (
 )
 
 REM === Apply local patches to skills (idempotent, safe to re-run) ===
-REM Currently patches: publish.py tab-selector bug (off-screen carousel tabs).
+REM Patches publish tab selection and long-article content editor detection.
 set "PATCH_SCRIPT=%TOOLKIT_DIR%\patch-xhs-publish.py"
 if not exist "%PATCH_SCRIPT%" (
     if exist "%TOOLKIT_DIR%\scripts\patch-xhs-publish.py" set "PATCH_SCRIPT=%TOOLKIT_DIR%\scripts\patch-xhs-publish.py"
 )
 if exist "%PATCH_SCRIPT%" (
-    echo [PATCH] Checking xiaohongshu-skills patches...
+    echo [PATCH] Checking xiaohongshu-skills publish-tab patch...
     pushd "%SKILLS_DIR%"
     uv run python "%PATCH_SCRIPT%"
     popd
+)
+
+set "LONG_ARTICLE_PATCH=%TOOLKIT_DIR%\patch-xhs-long-article.py"
+if not exist "%LONG_ARTICLE_PATCH%" (
+    if exist "%TOOLKIT_DIR%\scripts\patch-xhs-long-article.py" set "LONG_ARTICLE_PATCH=%TOOLKIT_DIR%\scripts\patch-xhs-long-article.py"
+)
+if exist "%LONG_ARTICLE_PATCH%" (
+    echo [PATCH] Checking xiaohongshu-skills long-article editor patch...
+    pushd "%SKILLS_DIR%"
+    uv run python "%LONG_ARTICLE_PATCH%"
+    set "LONG_PATCH_RC=%ERRORLEVEL%"
+    popd
+    if not "%LONG_PATCH_RC%"=="0" (
+        echo [ERROR] Long-article editor patch failed. Refusing to start an unsafe publisher.
+        pause
+        exit /b %LONG_PATCH_RC%
+    )
+) else (
+    echo [ERROR] patch-xhs-long-article.py not found.
+    pause
+    exit /b 1
 )
 
 REM === Detect skill version: OLD (CDP, needs --remote-debugging-port=9222) vs NEW (Extension Bridge) ===
