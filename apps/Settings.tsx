@@ -856,12 +856,13 @@ const Settings: React.FC = () => {
           const blob = await exportSystem(mode);
           
           if (Capacitor.isNativePlatform()) {
-              // 手机端分片写盘：整包一次性 readAsDataURL 会把几十~上百 MB 的 base64
-              // 一股脑塞进内存，WebView 容易 OOM 闪退。改成按 3MiB 切片，每片转成纯
-              // base64 再 appendFile 追加。先写临时文件，全部写完才改名+分享；中途任何
-              // 一步失败都删掉残片，避免留下一个看着像成功、其实损坏的 .zip。
+              // Android 原生端先把备份持久写入 Documents/SullyOS，再调起分享面板。
+              // 分享插件在部分系统上即使用户正常保存也会返回 "Share canceled"；
+              // 因此“写盘”和“分享”必须分开处理，分享回执不能反过来否定已落盘的文件。
               const fileName = `Sully_Backup_${mode}_${Date.now()}.zip`;
-              const tempName = `${fileName}.part`;
+              const exportDir = 'SullyOS';
+              const finalPath = `${exportDir}/${fileName}`;
+              const tempPath = `${finalPath}.part`;
 
               // 读一个 Blob 分片为纯 base64（去掉 data:...;base64, 前缀）。
               const sliceToBase64 = (slice: Blob): Promise<string> => new Promise((resolve, reject) => {
@@ -876,26 +877,49 @@ const Settings: React.FC = () => {
                   reader.readAsDataURL(slice);
               });
 
+              // 阶段一：持久写盘。只有这一段失败才提示“保存文件失败”。
               try {
+                  await Filesystem.mkdir({ path: exportDir, directory: Directory.Documents, recursive: true });
+                  // 清理同名残片（正常情况下不存在）。
+                  try { await Filesystem.deleteFile({ path: tempPath, directory: Directory.Documents }); } catch { /* ignore */ }
+
                   const ranges = sliceRanges(blob.size, EXPORT_CHUNK_SIZE);
                   for (let i = 0; i < ranges.length; i++) {
                       const [start, end] = ranges[i];
                       const base64 = await sliceToBase64(blob.slice(start, end));
                       if (i === 0) {
-                          await Filesystem.writeFile({ path: tempName, data: base64, directory: Directory.Cache });
+                          await Filesystem.writeFile({ path: tempPath, data: base64, directory: Directory.Documents, recursive: true });
                       } else {
-                          await Filesystem.appendFile({ path: tempName, data: base64, directory: Directory.Cache });
+                          await Filesystem.appendFile({ path: tempPath, data: base64, directory: Directory.Documents });
                       }
                   }
-                  // 全部分片写盘成功，才把临时文件改名为正式名并分享。
-                  await Filesystem.rename({ from: tempName, to: fileName, directory: Directory.Cache });
-                  const uriResult = await Filesystem.getUri({ directory: Directory.Cache, path: fileName });
-                  await Share.share({ title: `Sully Backup`, files: [uriResult.uri] });
+                  await Filesystem.rename({
+                      from: tempPath,
+                      to: finalPath,
+                      directory: Directory.Documents,
+                      toDirectory: Directory.Documents,
+                  });
               } catch (e) {
-                  console.error("Native write failed", e);
-                  // 尽力清掉写了一半的残片，别留下损坏文件。
-                  try { await Filesystem.deleteFile({ path: tempName, directory: Directory.Cache }); } catch { /* ignore */ }
-                  addToast("保存文件失败", "error");
+                  console.error('Native backup write failed', e);
+                  try { await Filesystem.deleteFile({ path: tempPath, directory: Directory.Documents }); } catch { /* ignore */ }
+                  addToast('保存文件失败', 'error');
+                  return;
+              }
+
+              addToast(`备份已保存到 Documents/SullyOS/${fileName}`, 'success');
+
+              // 阶段二：分享。取消或系统错误不删除、不否定已经持久保存的备份。
+              try {
+                  const uriResult = await Filesystem.getUri({ directory: Directory.Documents, path: finalPath });
+                  await Share.share({ title: 'Sully Backup', files: [uriResult.uri] });
+              } catch (e: any) {
+                  const message = String(e?.message || e || '');
+                  if (/cancel/i.test(message)) {
+                      console.info('Backup share sheet closed; persistent backup remains at', finalPath);
+                  } else {
+                      console.warn('Backup share failed; persistent backup remains available', e);
+                      addToast('分享面板未完成，备份文件已保存在 Documents/SullyOS', 'info');
+                  }
               }
           } else {
               // Web Download
