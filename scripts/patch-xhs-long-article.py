@@ -15,8 +15,21 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-PATCH_MARKER = "SULLY_LONG_EDITOR_PATCH_V7"
+PATCH_MARKER = "SULLY_LONG_EDITOR_PATCH_V8"
+CDP_MARKER = "SULLY_BRIDGEPAGE_INSERT_TEXT_V1"
+CDP_START = "    def get_element_text(self, selector: str) -> str | None:\n"
+CDP_INSERT_TEXT = '''    # SULLY_BRIDGEPAGE_INSERT_TEXT_V1: TipTap/ProseMirror 兼容文本插入。
+    def insert_text(self, text: str) -> None:
+        """将文本插入当前焦点编辑器，使用 CDP Input.insertText。"""
+        self._send_session(
+            "Input.insertText",
+            {"text": text},
+        )
+        time.sleep(0.05)
+
+'''
 START = "def _fill_long_content(page: Page, content: str) -> None:\n"
+
 END = "\ndef _insert_images_to_editor(page: Page, image_paths: list[str]) -> None:\n"
 NEXT_START = "def click_next_and_fill_description(page: Page, description: str) -> None:\n"
 NEXT_END = "\n\n# ========== 内部辅助函数 ==========\n"
@@ -26,7 +39,7 @@ REPLACEMENT = '''def _fill_long_content(page: Page, content: str) -> None:
     if not content.strip():
         raise PublishError("长文正文为空，已停止发布")
 
-    # SULLY_LONG_EDITOR_PATCH_V7：优先可见提示；提示由 CSS 伪元素渲染时，
+    # SULLY_LONG_EDITOR_PATCH_V8：优先可见提示；提示由 CSS 伪元素渲染时，
     # 回退到可见可编辑元素，并按 contenteditable / tiptap / ProseMirror 语义加权。
     target = page.evaluate(
         r"""
@@ -240,7 +253,7 @@ NEXT_REPLACEMENT = '''def click_next_and_fill_description(page: Page, descriptio
         description = description[:800]
         logger.warning("描述超过1000字，已截断到800字")
 
-    selector = '[data-sully-final-editor-v7="true"]'
+    selector = '[data-sully-final-editor-v8="true"]'
     target = page.evaluate(
         r"""
         (() => {
@@ -281,10 +294,10 @@ NEXT_REPLACEMENT = '''def click_next_and_fill_description(page: Page, descriptio
                     hint.querySelector('[contenteditable="true"], [role="textbox"], .ql-editor, .ProseMirror');
             }
             if (!editor || !visible(editor)) return null;
-            document.querySelectorAll('[data-sully-final-editor-v7]').forEach(
-                (el) => el.removeAttribute('data-sully-final-editor-v7')
+            document.querySelectorAll('[data-sully-final-editor-v8]').forEach(
+                (el) => el.removeAttribute('data-sully-final-editor-v8')
             );
-            editor.setAttribute('data-sully-final-editor-v7', 'true');
+            editor.setAttribute('data-sully-final-editor-v8', 'true');
             editor.scrollIntoView({block: 'center'});
             if (typeof editor.focus === 'function') editor.focus();
             return {
@@ -309,7 +322,7 @@ NEXT_REPLACEMENT = '''def click_next_and_fill_description(page: Page, descriptio
 
     logger.info("最终发布页描述编辑器: %s", target)
     page.select_all_text(selector)
-    page.type_text(description, delay_ms=20)
+    page.insert_text(description)
     time.sleep(0.8)
 
     verification = page.evaluate(
@@ -341,8 +354,37 @@ def find_target() -> Path | None:
         candidates.append(base / "scripts" / "xhs" / "publish_long_article.py")
     return next((p for p in candidates if p.is_file()), None)
 
+def find_cdp_target() -> Path | None:
+    here = Path(__file__).resolve().parent
+    candidates: list[Path] = []
+    for base in [here, *here.parents]:
+        for name in ("xiaohongshu-skills", "xiaohongshu-skills-main"):
+            candidates.append(base / name / "scripts" / "xhs" / "cdp.py")
+        candidates.append(base / "scripts" / "xhs" / "cdp.py")
+    return next((p for p in candidates if p.is_file()), None)
 
-def apply_patch(target: Path) -> int:
+
+def apply_cdp_patch(target: Path) -> int:
+    text = target.read_text(encoding="utf-8")
+    if CDP_MARKER in text:
+        print(f"[skip] {target} BridgePage insert_text 补丁已存在。")
+        return 0
+    occurrences = text.count(CDP_START)
+    if occurrences != 1:
+        print(f"[error] {target} get_element_text 插入锚点匹配 {occurrences} 次，拒绝写盘。")
+        return 2
+    patched = text.replace(CDP_START, CDP_INSERT_TEXT + CDP_START, 1)
+    if CDP_MARKER not in patched or "Input.insertText" not in patched:
+        print(f"[error] {target} BridgePage insert_text 补丁生成不完整，拒绝写盘。")
+        return 2
+    backup = target.with_suffix(target.suffix + ".bak-sully-insert-text")
+    if not backup.exists():
+        backup.write_text(text, encoding="utf-8")
+        print(f"  [bak] {backup.name}")
+    target.write_text(patched, encoding="utf-8")
+    print(f"[done] {target} 已加入公开 insert_text()。")
+    return 0
+def apply_publish_patch(target: Path) -> int:
     text = target.read_text(encoding="utf-8")
     if PATCH_MARKER in text:
         print(f"[skip] {target} 长文发布补丁已存在。")
@@ -368,7 +410,12 @@ def apply_patch(target: Path) -> int:
         return 2
     patched = patched[:fill_start] + REPLACEMENT + patched[fill_end:]
 
-    if PATCH_MARKER not in patched or "data-sully-final-editor-v7" not in patched:
+    required = (
+        PATCH_MARKER,
+        "data-sully-final-editor-v8",
+        "page.insert_text(description)",
+    )
+    if any(item not in patched for item in required):
         print(f"[error] {target} 补丁生成结果不完整，拒绝写盘。")
         return 2
 
@@ -380,19 +427,116 @@ def apply_patch(target: Path) -> int:
     print(f"[done] {target} 长文正文与最终发布页补丁已应用。")
     return 0
 
+def validate_cdp_target(target: Path) -> bool:
+    """只检查 cdp.py 是否有唯一插入锚点；不检查任何历史版本号。"""
+    text = target.read_text(encoding="utf-8")
+    return CDP_MARKER in text or text.count(CDP_START) == 1
+
+
+def validate_publish_target(target: Path) -> bool:
+    """只检查两个目标函数边界；不检查 V7/V8 或历史 marker。"""
+    text = target.read_text(encoding="utf-8")
+    if "page.insert_text(description)" in text:
+        return True
+    fill_start = text.find(START)
+    fill_end = text.find(END, fill_start + len(START)) if fill_start >= 0 else -1
+    next_start = text.find(NEXT_START)
+    next_end = text.find(NEXT_END, next_start + len(NEXT_START)) if next_start >= 0 else -1
+    return fill_start >= 0 and fill_end >= 0 and next_start >= 0 and next_end >= 0
+
+
+def rollback_file(target: Path) -> None:
+    """安装第二个文件失败时恢复本轮已写入的第一个文件。"""
+    backup = target.with_suffix(target.suffix + ".bak-sully-insert-text")
+    if backup.exists():
+        target.write_text(backup.read_text(encoding="utf-8"), encoding="utf-8")
 
 def main() -> int:
-    if len(sys.argv) > 1:
-        target = Path(sys.argv[1]).expanduser().resolve()
-        if not target.is_file():
-            print(f"[error] 文件不存在: {target}")
+    # 支持无参数自动发现，也支持测试台/特殊目录显式指定两个目标。
+    # 位置参数仍兼容：<publish_long_article.py> [cdp.py]
+    raw_args = sys.argv[1:]
+    publish_arg: str | None = None
+    cdp_arg: str | None = None
+    i = 0
+    positional: list[str] = []
+    while i < len(raw_args):
+        arg = raw_args[i]
+        if arg in ("--publish-file", "--publish"):
+            if i + 1 >= len(raw_args):
+                print(f"[error] {arg} 缺少文件路径")
+                return 2
+            publish_arg = raw_args[i + 1]
+            i += 2
+            continue
+        if arg in ("--cdp-file", "--cdp"):
+            if i + 1 >= len(raw_args):
+                print(f"[error] {arg} 缺少文件路径")
+                return 2
+            cdp_arg = raw_args[i + 1]
+            i += 2
+            continue
+        if arg.startswith("-"):
+            print(f"[error] 未知参数: {arg}")
             return 2
+        positional.append(arg)
+        i += 1
+
+    if publish_arg is None and positional:
+        publish_arg = positional[0]
+    if cdp_arg is None and len(positional) > 1:
+        cdp_arg = positional[1]
+    if len(positional) > 2:
+        print("[error] 最多接受两个位置参数: publish_long_article.py [cdp.py]")
+        return 2
+
+    publish_target = (
+        Path(publish_arg).expanduser().resolve() if publish_arg
+        else find_target()
+    )
+    if publish_target is None or not publish_target.is_file():
+        print(f"[error] 找不到发布脚本: {publish_target or '自动搜索失败'}")
+        return 2
+
+    if cdp_arg:
+        cdp_target = Path(cdp_arg).expanduser().resolve()
     else:
-        target = find_target()
-        if target is None:
-            print("[error] 找不到 xiaohongshu-skills/scripts/xhs/publish_long_article.py")
-            return 2
-    return apply_patch(target)
+        cdp_target = publish_target.with_name("cdp.py")
+        if not cdp_target.is_file():
+            cdp_target = find_cdp_target()
+    if cdp_target is None or not cdp_target.is_file():
+        print(f"[error] 找不到 cdp.py: {cdp_target or '自动搜索失败'}")
+        return 2
+
+    print(f"[check] publish_target={publish_target}")
+    print(f"[check] cdp_target={cdp_target}")
+
+    # 先完整预检两个目标，再执行任何写盘，避免留下半安装状态。
+    if not validate_cdp_target(cdp_target):
+        print(f"[error] {cdp_target} 的 insert_text 插入锚点异常，拒绝写盘。")
+        return 2
+    if not validate_publish_target(publish_target):
+        print(f"[error] {publish_target} 的长文函数边界异常，拒绝写盘。")
+        return 2
+
+    # 保存本轮原文；如果第二个目标失败，只回滚本轮对 CDP 的修改，
+    # 不依赖历史 .bak 文件，避免恢复到更早版本。
+    cdp_before = cdp_target.read_text(encoding="utf-8")
+    cdp_rc = apply_cdp_patch(cdp_target)
+    print(f"[check] cdp_patch_rc={cdp_rc}")
+    if cdp_rc != 0:
+        return 2
+
+    publish_rc = apply_publish_patch(publish_target)
+    print(f"[check] publish_patch_rc={publish_rc}")
+    if publish_rc != 0:
+        cdp_after = cdp_target.read_text(encoding="utf-8")
+        if cdp_after != cdp_before:
+            cdp_target.write_text(cdp_before, encoding="utf-8")
+            print(f"[rollback] 已恢复本轮 CDP 修改: {cdp_target}")
+        return 2
+    return 0
+
+
 
 
 if __name__ == "__main__":
