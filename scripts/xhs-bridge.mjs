@@ -331,19 +331,54 @@ const handlers = {
     },
 
     'publish': async (body) => {
+        const images = Array.isArray(body.images) ? body.images.filter(Boolean) : [];
         const titleFile = writeTempFile(body.title || '');
         const contentFile = writeTempFile(body.content || '');
-        const cliArgs = ['--title-file', titleFile, '--content-file', contentFile];
-
-        if (body.images?.length) {
-            for (const img of body.images) cliArgs.push('--images', img);
-        }
-        if (body.tags?.length) {
-            for (const tag of body.tags) cliArgs.push('--tags', tag);
-        }
-        if (body.visibility) cliArgs.push('--visibility', body.visibility);
 
         try {
+            if (images.length === 0) {
+                const articleResult = await runCli('long-article', [
+                    '--title-file', titleFile,
+                    '--content-file', contentFile,
+                ]);
+                const templates = Array.isArray(articleResult.data?.templates)
+                    ? articleResult.data.templates.filter(Boolean)
+                    : [];
+                if (templates.length === 0) {
+                    throw new Error('长文排版未返回可用模板，已停止发布；请检查小红书发布页或扩展状态。');
+                }
+
+                const templateResult = await runCli('select-template', ['--name', templates[0]]);
+                if (templateResult.data?.success === false) {
+                    throw new Error(templateResult.data.error || `长文模板选择失败: ${templates[0]}`);
+                }
+
+                const nextResult = await runCli('next-step', ['--content-file', contentFile]);
+                if (nextResult.data?.success === false) {
+                    throw new Error(nextResult.data.error || '长文进入发布页失败');
+                }
+
+                const publishResult = await runCli('click-publish');
+                if (publishResult.data?.success === false) {
+                    throw new Error(publishResult.data.error || '长文最终发布失败');
+                }
+
+                return {
+                    code: publishResult.code,
+                    data: {
+                        ...publishResult.data,
+                        publish_mode: 'long-article',
+                        template: templates[0],
+                    },
+                };
+            }
+
+            const cliArgs = ['--title-file', titleFile, '--content-file', contentFile];
+            for (const img of images) cliArgs.push('--images', img);
+            if (body.tags?.length) {
+                for (const tag of body.tags) cliArgs.push('--tags', tag);
+            }
+            if (body.visibility) cliArgs.push('--visibility', body.visibility);
             return await runCli('publish', cliArgs);
         } finally {
             cleanupTempFile(titleFile);

@@ -72,6 +72,53 @@ describe('XhsMcpClient Bridge credentials', () => {
         expect(result.error).toContain('CORS/PNA');
     });
 
+    it('Bridge 无图帖子交给服务端自动转为长文发布', async () => {
+        XhsMcpClient.setBridgeToken('bridge-secret', 'http://192.168.1.8:18061/api');
+        const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+            expect(String(input)).toBe('http://192.168.1.8:18061/api/publish');
+            expect(new Headers(init?.headers).get('authorization')).toBe('Bearer bridge-secret');
+            expect(JSON.parse(String(init?.body))).toMatchObject({
+                title: '无图测试',
+                images: [],
+            });
+            return jsonResponse({ published: true, publish_mode: 'long-article' });
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const result = await XhsMcpClient.publishNote('http://192.168.1.8:18061/api', {
+            title: '无图测试',
+            content: '正文',
+            images: [],
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.data?.publish_mode).toBe('long-article');
+        expect(fetchMock).toHaveBeenCalledOnce();
+    });
+
+    it('Bridge 普通图文有图片时正常调用 publish 接口', async () => {
+        XhsMcpClient.setBridgeToken('bridge-secret', 'http://192.168.1.8:18061/api');
+        const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+            expect(String(input)).toBe('http://192.168.1.8:18061/api/publish');
+            expect(new Headers(init?.headers).get('authorization')).toBe('Bearer bridge-secret');
+            expect(JSON.parse(String(init?.body))).toMatchObject({
+                title: '有图测试',
+                images: ['C:/images/test.jpg'],
+            });
+            return jsonResponse({ published: true });
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const result = await XhsMcpClient.publishNote('http://192.168.1.8:18061/api', {
+            title: '有图测试',
+            content: '正文',
+            images: ['C:/images/test.jpg'],
+        });
+
+        expect(result.success).toBe(true);
+        expect(fetchMock).toHaveBeenCalledOnce();
+    });
+
     it('服务端拒绝 token 时返回明确鉴权错误', async () => {
         vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ error: 'Bridge 访问令牌错误或未提供' }, 401)));
 

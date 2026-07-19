@@ -206,10 +206,16 @@ if not defined XHS_BRIDGE_TOKEN (
     exit /b 1
 )
 
-REM Pick the IPv4 address used by the default route; fall back to the first active adapter.
+REM Detect the LAN IPv4 without PowerShell pipelines, which are fragile inside batch FOR /F.
 set "LAN_IP="
-for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command "$route=Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue ^| Sort-Object RouteMetric,InterfaceMetric ^| Select-Object -First 1; $ip=$null; if($route){$ip=Get-NetIPAddress -InterfaceIndex $route.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue ^| Where-Object {$_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' -and $_.AddressState -eq 'Preferred'} ^| Select-Object -First 1 -ExpandProperty IPAddress}; if(-not $ip){$ip=Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue ^| Where-Object {$_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' -and $_.AddressState -eq 'Preferred'} ^| Sort-Object InterfaceMetric ^| Select-Object -First 1 -ExpandProperty IPAddress}; if($ip){Write-Output $ip}"`) do set "LAN_IP=%%I"
-if not defined LAN_IP set "LAN_IP=YOUR-PC-IP"
+for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command "$udp=New-Object Net.Sockets.UdpClient; try{$udp.Connect('1.1.1.1',53); $ip=($udp.Client.LocalEndPoint).Address.IPAddressToString; if($ip -and $ip -ne '0.0.0.0'){[Console]::WriteLine($ip)}}finally{$udp.Dispose()}"`) do set "LAN_IP=%%I"
+REM Fallback: take the first private IPv4 printed by ipconfig.
+if not defined LAN_IP for /f "tokens=2 delims=:" %%I in ('ipconfig ^| findstr /R /C:"IPv4.*: 192\.168\." /C:"IPv4.*: 10\." /C:"IPv4.*: 172\.1[6-9]\." /C:"IPv4.*: 172\.2[0-9]\." /C:"IPv4.*: 172\.3[0-1]\."') do if not defined LAN_IP for /f "tokens=*" %%J in ("%%I") do set "LAN_IP=%%J"
+if not defined LAN_IP (
+    echo [WARN] Could not detect the computer LAN IPv4 automatically.
+    echo        Run ipconfig and replace YOUR-PC-IP on the phone with the active adapter IPv4.
+    set "LAN_IP=YOUR-PC-IP"
+)
 REM === Step 2: Show connection info, then run Bridge in this window ===
 echo.
 echo  ============================================

@@ -556,10 +556,11 @@ export const XhsMcpClient = {
     publishNote: async (serverUrl: string, params: {
         title: string; content: string; images?: string[]; tags?: string[]; is_private?: boolean;
     }): Promise<McpToolResult> => {
+        const images = (params.images || []).filter(Boolean);
         if (detectMode(serverUrl) === 'bridge') {
             return bridgePost(serverUrl, 'publish', {
                 title: params.title, content: params.content,
-                images: params.images || [], tags: params.tags || [],
+                images, tags: params.tags || [],
                 visibility: params.is_private ? 'private' : undefined,
             });
         }
