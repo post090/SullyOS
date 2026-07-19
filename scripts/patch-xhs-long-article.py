@@ -15,7 +15,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-PATCH_MARKER = "SULLY_LONG_EDITOR_PATCH_V4"
+PATCH_MARKER = "SULLY_LONG_EDITOR_PATCH_V5"
 START = "def _fill_long_content(page: Page, content: str) -> None:\n"
 END = "\ndef _insert_images_to_editor(page: Page, image_paths: list[str]) -> None:\n"
 
@@ -24,7 +24,7 @@ REPLACEMENT = '''def _fill_long_content(page: Page, content: str) -> None:
     if not content.strip():
         raise PublishError("长文正文为空，已停止发布")
 
-    # SULLY_LONG_EDITOR_PATCH_V4：优先可见提示；提示由 CSS 伪元素渲染时，
+    # SULLY_LONG_EDITOR_PATCH_V5：优先可见提示；提示由 CSS 伪元素渲染时，
     # 回退到可见可编辑元素，并按 contenteditable / tiptap / ProseMirror 语义加权。
     target = page.evaluate(
         r"""
@@ -86,10 +86,10 @@ REPLACEMENT = '''def _fill_long_content(page: Page, content: str) -> None:
                 const nested = el.querySelector('[contenteditable="true"], [role="textbox"], .tiptap, .ProseMirror');
                 if (nested && visible(nested)) el = nested;
             }
-            document.querySelectorAll('[data-sully-long-editor-v4]').forEach(
-                (node) => node.removeAttribute('data-sully-long-editor-v4')
+            document.querySelectorAll('[data-sully-long-editor-v5]').forEach(
+                (node) => node.removeAttribute('data-sully-long-editor-v5')
             );
-            el.setAttribute('data-sully-long-editor-v4', 'true');
+            el.setAttribute('data-sully-long-editor-v5', 'true');
             const r = el.getBoundingClientRect();
             return {
                 x: r.left + Math.min(Math.max(r.width / 2, 12), r.width - 12),
@@ -137,7 +137,7 @@ REPLACEMENT = '''def _fill_long_content(page: Page, content: str) -> None:
     focus_before = page.evaluate(
         r"""
         (() => {
-            let marked = document.querySelector('[data-sully-long-editor-v4="true"]');
+            let marked = document.querySelector('[data-sully-long-editor-v5="true"]');
             const visible = (el) => {
                 if (!el) return false;
                 const r = el.getBoundingClientRect();
@@ -165,7 +165,7 @@ REPLACEMENT = '''def _fill_long_content(page: Page, content: str) -> None:
                 };
                 candidates.sort((a, b) => score(b) - score(a));
                 marked = candidates[0] || null;
-                if (marked) marked.setAttribute('data-sully-long-editor-v4', 'true');
+                if (marked) marked.setAttribute('data-sully-long-editor-v5', 'true');
             }
             let editor = marked;
             if (editor && editor.getAttribute('contenteditable') !== 'true') {
@@ -194,16 +194,8 @@ REPLACEMENT = '''def _fill_long_content(page: Page, content: str) -> None:
     if not focus_before or not focus_before.get("focused"):
         raise PublishError(f"长文正文区域未获得输入焦点，已停止发布；目标={target}，焦点={focus_before}")
 
-    # 对已验证的正文焦点输入，不再用易变 CSS selector 重新定位。
-    page._send_session("Input.dispatchKeyEvent", {"type": "keyDown", "key": "a", "code": "KeyA", "modifiers": 2})
-    page._send_session("Input.dispatchKeyEvent", {"type": "keyUp", "key": "a", "code": "KeyA", "modifiers": 2})
-    page.press_key("Backspace")
-    for char in content:
-        if char == "\\n":
-            page.press_key("Enter")
-        else:
-            page._send_session("Input.dispatchKeyEvent", {"type": "keyDown", "text": char})
-            page._send_session("Input.dispatchKeyEvent", {"type": "keyUp", "text": char})
+    # BridgePage 与 CDP Page 共同公开支持的输入接口；禁止调用实现私有方法。
+    page.input_content_editable('[data-sully-long-editor-v5="true"]', content)
     time.sleep(0.8)
 
     verification = page.evaluate(
