@@ -1,0 +1,31 @@
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # 每天 UTC 0:00 自动跑（北京时间 8:00）
+  workflow_dispatch: {}  # 也支持手动触发
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout your fork
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Sync upstream changes
+        run: |
+          git remote add upstream https://github.com/qegj567-cloud/SullyOS.git || true
+          git fetch upstream
+          git merge upstream/main --allow-unrelated-histories --no-edit
+          git push origin HEAD:main
