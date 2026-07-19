@@ -3336,12 +3336,14 @@ export interface XhsFreeRoamSession {
     activities: XhsActivityRecord[];
     summary?: string;  // AI-generated session summary
 }
-
 export interface XhsMcpConfig {
     enabled: boolean;
-    serverUrl: string;  // MCP: "http://localhost:18060/mcp" | Skills: "http://localhost:18061/api" | Lite Worker: "https://xhs-lite.<acct>.workers.dev/api"
+    serverUrl: string;  // MCP: "http://localhost:18060/mcp" | Skills: "http://电脑IP:18061/api" | Lite Worker: "https://xhs-lite.<acct>.workers.dev/api"
+    backendMode?: 'local' | 'lite'; // 显式记录模式，避免把电脑 Bridge 的 /api 地址误判成 Lite。
     cookie?: string;    // Lite 模式：登录后的小红书完整 cookie（含 a1 / web_session）。仅 lite Worker 用。
+    bridgeToken?: string; // 电脑 Skills Bridge 的访问令牌。仅存本机，请求时通过 Authorization 头发送。
     loggedInUserId?: string;   // 登录用户的 user_id，连接测试成功后自动获取
+
     loggedInNickname?: string; // 登录用户的昵称
     userXsecToken?: string;    // 连接测试时从首页推荐自动提取的 xsec_token
 }

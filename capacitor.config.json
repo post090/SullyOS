@@ -6,6 +6,9 @@
     "androidScheme": "https",
     "cleartext": true
   },
+  "android": {
+    "allowMixedContent": true
+  },
   "plugins": {
     "SplashScreen": {
       "launchShowDuration": 0
