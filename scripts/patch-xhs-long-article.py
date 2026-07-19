@@ -16,16 +16,39 @@ import sys
 from pathlib import Path
 
 PATCH_MARKER = "SULLY_LONG_EDITOR_PATCH_V8"
-CDP_MARKER = "SULLY_BRIDGEPAGE_INSERT_TEXT_V1"
-CDP_START = "    def get_element_text(self, selector: str) -> str | None:\n"
-CDP_INSERT_TEXT = '''    # SULLY_BRIDGEPAGE_INSERT_TEXT_V1: TipTap/ProseMirror 兼容文本插入。
+BRIDGE_MARKER = "SULLY_BRIDGEPAGE_INSERT_TEXT_V2"
+BRIDGE_START = "    def get_element_text(self, selector: str) -> str | None:\n"
+BRIDGE_INSERT_TEXT = '''    # SULLY_BRIDGEPAGE_INSERT_TEXT_V2: 通过扩展后台强制调用 CDP Input.insertText。
     def insert_text(self, text: str) -> None:
-        """将文本插入当前焦点编辑器，使用 CDP Input.insertText。"""
-        self._send_session(
-            "Input.insertText",
-            {"text": text},
-        )
-        time.sleep(0.05)
+        """将文本插入当前焦点编辑器，不经过 content.js/execCommand。"""
+        self._call("insert_text", {"text": text})
+
+'''
+BACKGROUND_MARKER = "SULLY_BACKGROUND_INSERT_TEXT_V1"
+BACKGROUND_ROUTE_ANCHOR = '''    case "type_text":
+      return await cmdTypeTextViaDebugger(params);
+'''
+BACKGROUND_ROUTE_REPLACEMENT = '''    case "type_text":
+      return await cmdTypeTextViaDebugger(params);
+
+    // SULLY_BACKGROUND_INSERT_TEXT_V1: TipTap/ProseMirror 强制走 CDP Input.insertText。
+    case "insert_text":
+      return await cmdInsertTextViaDebugger(params);
+'''
+BACKGROUND_FUNCTION_ANCHOR = "// ───────────────────────── 文件上传（chrome.debugger + CDP） ─────────\n"
+BACKGROUND_INSERT_FUNCTION = '''// SULLY_BACKGROUND_INSERT_TEXT_V1
+async function cmdInsertTextViaDebugger({ text }) {
+  const tab = await getOrOpenXhsTab();
+  const target = { tabId: tab.id };
+  await chrome.debugger.detach(target).catch(() => {});
+  await chrome.debugger.attach(target, "1.3");
+  try {
+    await chrome.debugger.sendCommand(target, "Input.insertText", { text: String(text || "") });
+  } finally {
+    await chrome.debugger.detach(target).catch(() => {});
+  }
+  return null;
+}
 
 '''
 START = "def _fill_long_content(page: Page, content: str) -> None:\n"
@@ -344,70 +367,93 @@ NEXT_REPLACEMENT = '''def click_next_and_fill_description(page: Page, descriptio
     logger.info("已填写最终发布页描述 (%d 字)", len(description))
 '''
 
-
-def find_target() -> Path | None:
+def _candidate_roots() -> list[Path]:
     here = Path(__file__).resolve().parent
-    candidates: list[Path] = []
+    roots: list[Path] = []
     for base in [here, *here.parents]:
         for name in ("xiaohongshu-skills", "xiaohongshu-skills-main"):
-            candidates.append(base / name / "scripts" / "xhs" / "publish_long_article.py")
-        candidates.append(base / "scripts" / "xhs" / "publish_long_article.py")
-    return next((p for p in candidates if p.is_file()), None)
-
-def find_cdp_target() -> Path | None:
-    here = Path(__file__).resolve().parent
-    candidates: list[Path] = []
-    for base in [here, *here.parents]:
-        for name in ("xiaohongshu-skills", "xiaohongshu-skills-main"):
-            candidates.append(base / name / "scripts" / "xhs" / "cdp.py")
-        candidates.append(base / "scripts" / "xhs" / "cdp.py")
-    return next((p for p in candidates if p.is_file()), None)
+            roots.append(base / name)
+        # 当补丁脚本本身位于 skills/scripts/ 时也能找到仓库根。
+        if (base / "scripts" / "xhs").is_dir() and (base / "extension").is_dir():
+            roots.append(base)
+    unique: list[Path] = []
+    for root in roots:
+        if root not in unique:
+            unique.append(root)
+    return unique
 
 
-def apply_cdp_patch(target: Path) -> int:
-    text = target.read_text(encoding="utf-8")
-    if CDP_MARKER in text:
-        print(f"[skip] {target} BridgePage insert_text 补丁已存在。")
-        return 0
-    occurrences = text.count(CDP_START)
-    if occurrences != 1:
-        print(f"[error] {target} get_element_text 插入锚点匹配 {occurrences} 次，拒绝写盘。")
-        return 2
-    patched = text.replace(CDP_START, CDP_INSERT_TEXT + CDP_START, 1)
-    if CDP_MARKER not in patched or "Input.insertText" not in patched:
-        print(f"[error] {target} BridgePage insert_text 补丁生成不完整，拒绝写盘。")
-        return 2
-    backup = target.with_suffix(target.suffix + ".bak-sully-insert-text")
-    if not backup.exists():
-        backup.write_text(text, encoding="utf-8")
-        print(f"  [bak] {backup.name}")
-    target.write_text(patched, encoding="utf-8")
-    print(f"[done] {target} 已加入公开 insert_text()。")
-    return 0
-def apply_publish_patch(target: Path) -> int:
-    text = target.read_text(encoding="utf-8")
-    if PATCH_MARKER in text:
-        print(f"[skip] {target} 长文发布补丁已存在。")
-        return 0
+def find_publish_target() -> Path | None:
+    candidates = [root / "scripts" / "xhs" / "publish_long_article.py" for root in _candidate_roots()]
+    return next((path for path in candidates if path.is_file()), None)
+
+
+def find_bridge_target() -> Path | None:
+    candidates = [root / "scripts" / "xhs" / "bridge.py" for root in _candidate_roots()]
+    return next((path for path in candidates if path.is_file()), None)
+
+
+def find_background_target() -> Path | None:
+    candidates = [root / "extension" / "background.js" for root in _candidate_roots()]
+    return next((path for path in candidates if path.is_file()), None)
+
+
+def build_bridge_patch(text: str) -> str | None:
+    if BRIDGE_MARKER in text and 'self._call("insert_text"' in text:
+        return text
+    if text.count(BRIDGE_START) != 1:
+        return None
+    patched = text.replace(BRIDGE_START, BRIDGE_INSERT_TEXT + BRIDGE_START, 1)
+    if BRIDGE_MARKER not in patched or 'self._call("insert_text"' not in patched:
+        return None
+    # 在写盘前用 Python 自身编译生成源码。
+    compile(patched, "bridge.py", "exec")
+    return patched
+
+
+def build_background_patch(text: str) -> str | None:
+    patched = text
+    has_route = 'case "insert_text"' in patched and "cmdInsertTextViaDebugger(params)" in patched
+    has_function = "async function cmdInsertTextViaDebugger" in patched and '"Input.insertText"' in patched
+
+    if not has_route:
+        if patched.count(BACKGROUND_ROUTE_ANCHOR) != 1:
+            return None
+        patched = patched.replace(BACKGROUND_ROUTE_ANCHOR, BACKGROUND_ROUTE_REPLACEMENT, 1)
+    if not has_function:
+        if patched.count(BACKGROUND_FUNCTION_ANCHOR) != 1:
+            return None
+        patched = patched.replace(
+            BACKGROUND_FUNCTION_ANCHOR,
+            BACKGROUND_INSERT_FUNCTION + BACKGROUND_FUNCTION_ANCHOR,
+            1,
+        )
+
+    required = (
+        'case "insert_text"',
+        "cmdInsertTextViaDebugger(params)",
+        "async function cmdInsertTextViaDebugger",
+        '"Input.insertText"',
+    )
+    return patched if all(item in patched for item in required) else None
+
+
+def build_publish_patch(text: str) -> str | None:
+    if "page.insert_text(description)" in text and "data-sully-final-editor-v8" in text:
+        return text
 
     fill_start = text.find(START)
     fill_end = text.find(END, fill_start + len(START)) if fill_start >= 0 else -1
     next_start = text.find(NEXT_START)
     next_end = text.find(NEXT_END, next_start + len(NEXT_START)) if next_start >= 0 else -1
-    if fill_start < 0 or fill_end < 0:
-        print(f"[error] {target} 中找不到 _fill_long_content 函数边界；可能上游已变更。")
-        return 2
-    if next_start < 0 or next_end < 0:
-        print(f"[error] {target} 中找不到 click_next_and_fill_description 函数边界；可能上游已变更。")
-        return 2
+    if min(fill_start, fill_end, next_start, next_end) < 0:
+        return None
 
-    # 从靠后的函数开始替换，避免前一段长度变化影响后一段索引。
     patched = text[:next_start] + NEXT_REPLACEMENT + text[next_end:]
     fill_start = patched.find(START)
     fill_end = patched.find(END, fill_start + len(START)) if fill_start >= 0 else -1
     if fill_start < 0 or fill_end < 0:
-        print(f"[error] {target} 替换最终页逻辑后无法重新定位 _fill_long_content。")
-        return 2
+        return None
     patched = patched[:fill_start] + REPLACEMENT + patched[fill_end:]
 
     required = (
@@ -415,128 +461,90 @@ def apply_publish_patch(target: Path) -> int:
         "data-sully-final-editor-v8",
         "page.insert_text(description)",
     )
-    if any(item not in patched for item in required):
-        print(f"[error] {target} 补丁生成结果不完整，拒绝写盘。")
-        return 2
+    if not all(item in patched for item in required):
+        return None
+    compile(patched, "publish_long_article.py", "exec")
+    return patched
 
-    backup = target.with_suffix(target.suffix + ".bak-sully-long")
+
+def _write_backup(target: Path, original: str, suffix: str) -> None:
+    backup = target.with_suffix(target.suffix + suffix)
     if not backup.exists():
-        backup.write_text(text, encoding="utf-8")
+        backup.write_text(original, encoding="utf-8")
         print(f"  [bak] {backup.name}")
-    target.write_text(patched, encoding="utf-8")
-    print(f"[done] {target} 长文正文与最终发布页补丁已应用。")
-    return 0
 
-def validate_cdp_target(target: Path) -> bool:
-    """只检查 cdp.py 是否有唯一插入锚点；不检查任何历史版本号。"""
-    text = target.read_text(encoding="utf-8")
-    return CDP_MARKER in text or text.count(CDP_START) == 1
-
-
-def validate_publish_target(target: Path) -> bool:
-    """只检查两个目标函数边界；不检查 V7/V8 或历史 marker。"""
-    text = target.read_text(encoding="utf-8")
-    if "page.insert_text(description)" in text:
-        return True
-    fill_start = text.find(START)
-    fill_end = text.find(END, fill_start + len(START)) if fill_start >= 0 else -1
-    next_start = text.find(NEXT_START)
-    next_end = text.find(NEXT_END, next_start + len(NEXT_START)) if next_start >= 0 else -1
-    return fill_start >= 0 and fill_end >= 0 and next_start >= 0 and next_end >= 0
-
-
-def rollback_file(target: Path) -> None:
-    """安装第二个文件失败时恢复本轮已写入的第一个文件。"""
-    backup = target.with_suffix(target.suffix + ".bak-sully-insert-text")
-    if backup.exists():
-        target.write_text(backup.read_text(encoding="utf-8"), encoding="utf-8")
 
 def main() -> int:
-    # 支持无参数自动发现，也支持测试台/特殊目录显式指定两个目标。
-    # 位置参数仍兼容：<publish_long_article.py> [cdp.py]
-    raw_args = sys.argv[1:]
-    publish_arg: str | None = None
-    cdp_arg: str | None = None
-    i = 0
-    positional: list[str] = []
-    while i < len(raw_args):
-        arg = raw_args[i]
-        if arg in ("--publish-file", "--publish"):
-            if i + 1 >= len(raw_args):
-                print(f"[error] {arg} 缺少文件路径")
-                return 2
-            publish_arg = raw_args[i + 1]
-            i += 2
-            continue
-        if arg in ("--cdp-file", "--cdp"):
-            if i + 1 >= len(raw_args):
-                print(f"[error] {arg} 缺少文件路径")
-                return 2
-            cdp_arg = raw_args[i + 1]
-            i += 2
-            continue
-        if arg.startswith("-"):
-            print(f"[error] 未知参数: {arg}")
+    # 日常无参数自动发现；测试台可显式指定三个目标。
+    args = sys.argv[1:]
+    publish_target = find_publish_target()
+    bridge_target = find_bridge_target()
+    background_target = find_background_target()
+
+    if args:
+        if len(args) != 3:
+            print("[error] 显式模式需要三个路径: publish_long_article.py bridge.py background.js")
             return 2
-        positional.append(arg)
-        i += 1
+        publish_target = Path(args[0]).expanduser().resolve()
+        bridge_target = Path(args[1]).expanduser().resolve()
+        background_target = Path(args[2]).expanduser().resolve()
 
-    if publish_arg is None and positional:
-        publish_arg = positional[0]
-    if cdp_arg is None and len(positional) > 1:
-        cdp_arg = positional[1]
-    if len(positional) > 2:
-        print("[error] 最多接受两个位置参数: publish_long_article.py [cdp.py]")
+    targets = {
+        "publish": publish_target,
+        "bridge": bridge_target,
+        "background": background_target,
+    }
+    for label, target in targets.items():
+        if target is None or not target.is_file():
+            print(f"[error] 找不到 {label} 目标: {target or '自动搜索失败'}")
+            return 2
+        print(f"[check] {label}_target={target}")
+
+    originals = {
+        "publish": publish_target.read_text(encoding="utf-8"),
+        "bridge": bridge_target.read_text(encoding="utf-8"),
+        "background": background_target.read_text(encoding="utf-8"),
+    }
+
+    try:
+        generated = {
+            "bridge": build_bridge_patch(originals["bridge"]),
+            "background": build_background_patch(originals["background"]),
+            "publish": build_publish_patch(originals["publish"]),
+        }
+    except (SyntaxError, ValueError) as exc:
+        print(f"[error] 生成文件编译失败，拒绝写盘: {exc}")
         return 2
 
-    publish_target = (
-        Path(publish_arg).expanduser().resolve() if publish_arg
-        else find_target()
-    )
-    if publish_target is None or not publish_target.is_file():
-        print(f"[error] 找不到发布脚本: {publish_target or '自动搜索失败'}")
+    failed = [name for name, content in generated.items() if content is None]
+    if failed:
+        print(f"[error] 补丁锚点或完整性检查失败，拒绝写盘: {', '.join(failed)}")
         return 2
 
-    if cdp_arg:
-        cdp_target = Path(cdp_arg).expanduser().resolve()
-    else:
-        cdp_target = publish_target.with_name("cdp.py")
-        if not cdp_target.is_file():
-            cdp_target = find_cdp_target()
-    if cdp_target is None or not cdp_target.is_file():
-        print(f"[error] 找不到 cdp.py: {cdp_target or '自动搜索失败'}")
+    # 三份生成结果全部完成后才开始写盘；写入异常则恢复本轮原文。
+    try:
+        _write_backup(bridge_target, originals["bridge"], ".bak-sully-insert-text")
+        _write_backup(background_target, originals["background"], ".bak-sully-insert-text")
+        _write_backup(publish_target, originals["publish"], ".bak-sully-long")
+
+        bridge_changed = generated["bridge"] != originals["bridge"]
+        background_changed = generated["background"] != originals["background"]
+        publish_changed = generated["publish"] != originals["publish"]
+
+        bridge_target.write_text(generated["bridge"], encoding="utf-8")
+        background_target.write_text(generated["background"], encoding="utf-8")
+        publish_target.write_text(generated["publish"], encoding="utf-8")
+
+        print(f"[{'done' if bridge_changed else 'skip'}] {bridge_target} BridgePage.insert_text")
+        print(f"[{'done' if background_changed else 'skip'}] {background_target} Input.insertText 路由")
+        print(f"[{'done' if publish_changed else 'skip'}] {publish_target} 长文正文与最终描述")
+        return 0
+    except Exception as exc:
+        bridge_target.write_text(originals["bridge"], encoding="utf-8")
+        background_target.write_text(originals["background"], encoding="utf-8")
+        publish_target.write_text(originals["publish"], encoding="utf-8")
+        print(f"[rollback] 三个目标已恢复本轮原文: {exc}")
         return 2
-
-    print(f"[check] publish_target={publish_target}")
-    print(f"[check] cdp_target={cdp_target}")
-
-    # 先完整预检两个目标，再执行任何写盘，避免留下半安装状态。
-    if not validate_cdp_target(cdp_target):
-        print(f"[error] {cdp_target} 的 insert_text 插入锚点异常，拒绝写盘。")
-        return 2
-    if not validate_publish_target(publish_target):
-        print(f"[error] {publish_target} 的长文函数边界异常，拒绝写盘。")
-        return 2
-
-    # 保存本轮原文；如果第二个目标失败，只回滚本轮对 CDP 的修改，
-    # 不依赖历史 .bak 文件，避免恢复到更早版本。
-    cdp_before = cdp_target.read_text(encoding="utf-8")
-    cdp_rc = apply_cdp_patch(cdp_target)
-    print(f"[check] cdp_patch_rc={cdp_rc}")
-    if cdp_rc != 0:
-        return 2
-
-    publish_rc = apply_publish_patch(publish_target)
-    print(f"[check] publish_patch_rc={publish_rc}")
-    if publish_rc != 0:
-        cdp_after = cdp_target.read_text(encoding="utf-8")
-        if cdp_after != cdp_before:
-            cdp_target.write_text(cdp_before, encoding="utf-8")
-            print(f"[rollback] 已恢复本轮 CDP 修改: {cdp_target}")
-        return 2
-    return 0
-
-
 
 
 if __name__ == "__main__":
