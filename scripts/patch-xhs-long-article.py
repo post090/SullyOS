@@ -15,7 +15,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-PATCH_MARKER = "SULLY_LONG_EDITOR_PATCH_V6"
+PATCH_MARKER = "SULLY_LONG_EDITOR_PATCH_V7"
 START = "def _fill_long_content(page: Page, content: str) -> None:\n"
 END = "\ndef _insert_images_to_editor(page: Page, image_paths: list[str]) -> None:\n"
 NEXT_START = "def click_next_and_fill_description(page: Page, description: str) -> None:\n"
@@ -26,7 +26,7 @@ REPLACEMENT = '''def _fill_long_content(page: Page, content: str) -> None:
     if not content.strip():
         raise PublishError("长文正文为空，已停止发布")
 
-    # SULLY_LONG_EDITOR_PATCH_V6：优先可见提示；提示由 CSS 伪元素渲染时，
+    # SULLY_LONG_EDITOR_PATCH_V7：优先可见提示；提示由 CSS 伪元素渲染时，
     # 回退到可见可编辑元素，并按 contenteditable / tiptap / ProseMirror 语义加权。
     target = page.evaluate(
         r"""
@@ -240,7 +240,7 @@ NEXT_REPLACEMENT = '''def click_next_and_fill_description(page: Page, descriptio
         description = description[:800]
         logger.warning("描述超过1000字，已截断到800字")
 
-    selector = '[data-sully-final-editor-v6="true"]'
+    selector = '[data-sully-final-editor-v7="true"]'
     target = page.evaluate(
         r"""
         (() => {
@@ -281,10 +281,10 @@ NEXT_REPLACEMENT = '''def click_next_and_fill_description(page: Page, descriptio
                     hint.querySelector('[contenteditable="true"], [role="textbox"], .ql-editor, .ProseMirror');
             }
             if (!editor || !visible(editor)) return null;
-            document.querySelectorAll('[data-sully-final-editor-v6]').forEach(
-                (el) => el.removeAttribute('data-sully-final-editor-v6')
+            document.querySelectorAll('[data-sully-final-editor-v7]').forEach(
+                (el) => el.removeAttribute('data-sully-final-editor-v7')
             );
-            editor.setAttribute('data-sully-final-editor-v6', 'true');
+            editor.setAttribute('data-sully-final-editor-v7', 'true');
             editor.scrollIntoView({block: 'center'});
             if (typeof editor.focus === 'function') editor.focus();
             return {
@@ -308,7 +308,8 @@ NEXT_REPLACEMENT = '''def click_next_and_fill_description(page: Page, descriptio
         raise PublishError("没有找到最终发布页正文描述输入框")
 
     logger.info("最终发布页描述编辑器: %s", target)
-    page.input_content_editable(selector, description)
+    page.select_all_text(selector)
+    page.type_text(description, delay_ms=20)
     time.sleep(0.8)
 
     verification = page.evaluate(
@@ -367,7 +368,7 @@ def apply_patch(target: Path) -> int:
         return 2
     patched = patched[:fill_start] + REPLACEMENT + patched[fill_end:]
 
-    if PATCH_MARKER not in patched or "data-sully-final-editor-v6" not in patched:
+    if PATCH_MARKER not in patched or "data-sully-final-editor-v7" not in patched:
         print(f"[error] {target} 补丁生成结果不完整，拒绝写盘。")
         return 2
 
