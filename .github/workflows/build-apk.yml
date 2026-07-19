@@ -56,6 +56,19 @@ jobs:
         run: npx cap add android || true
       - name: Sync Capacitor
         run: npx cap sync android
+      - name: Install fixed Android debug signing key
+        shell: bash
+        env:
+          ANDROID_DEBUG_KEYSTORE_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$ANDROID_DEBUG_KEYSTORE_B64" ]; then
+            echo "Missing ANDROID_DEBUG_KEYSTORE_B64 repository secret" >&2
+            exit 1
+          fi
+          mkdir -p "$HOME/.android"
+          printf '%s' "$ANDROID_DEBUG_KEYSTORE_B64" | base64 --decode > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+
       - name: Apply SullyOS launcher icon
         shell: bash
         run: |
@@ -66,9 +79,19 @@ jobs:
             size="${spec##*:}"
             dir="android/app/src/main/res/mipmap-${density}"
             mkdir -p "$dir"
-            convert assets/icon.png -resize "${size}x${size}" "$dir/ic_launcher.png"
-            cp "$dir/ic_launcher.png" "$dir/ic_launcher_round.png"
+            convert public/icons/icon-512.png -resize "${size}x${size}" "$dir/sully_launcher.png"
           done
+          python3 - <<'PY'
+          from pathlib import Path
+          manifest = Path('android/app/src/main/AndroidManifest.xml')
+          text = manifest.read_text(encoding='utf-8')
+          text = text.replace('android:icon="@mipmap/ic_launcher"', 'android:icon="@mipmap/sully_launcher"')
+          text = text.replace('android:roundIcon="@mipmap/ic_launcher_round"', 'android:roundIcon="@mipmap/sully_launcher"')
+          manifest.write_text(text, encoding='utf-8')
+          if '@mipmap/sully_launcher' not in text:
+              raise SystemExit('Failed to patch Android launcher icon references')
+          PY
+
       - name: Build Debug APK
         working-directory: android
         run: ./gradlew assembleDebug --no-daemon -x lint
