@@ -91,10 +91,24 @@ jobs:
           if '@mipmap/sully_launcher' not in text:
               raise SystemExit('Failed to patch Android launcher icon references')
           PY
-
-      - name: Build Debug APK
+      - name: Build and sign Debug APK with fixed key
         working-directory: android
-        run: ./gradlew assembleDebug --no-daemon -x lint
+        shell: bash
+        run: |
+          ./gradlew assembleDebug --no-daemon -x lint
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          UNSIGNED_COPY="app/build/outputs/apk/debug/app-debug-gradle.apk"
+          mv "$APK" "$UNSIGNED_COPY"
+          "$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner" sign \
+            --ks "$HOME/.android/debug.keystore" \
+            --ks-key-alias androiddebugkey \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --out "$APK" \
+            "$UNSIGNED_COPY"
+          "$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner" verify --verbose --print-certs "$APK"
+          rm -f "$UNSIGNED_COPY"
+
 
       - name: Generate build tag
         id: date
