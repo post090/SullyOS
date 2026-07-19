@@ -457,12 +457,15 @@ const Settings: React.FC = () => {
     '注意：别用 Console 的 document.cookie，拿不到 web_session(httpOnly)。cookie 数天~数周会过期，失效重复制即可。',
   ].join('\n');
   const _xhsCfgUrl = realtimeConfig.xhsMcpConfig?.serverUrl || '';
-  // local MCP 地址不含 /api；lite bridge 含 /api。按这个判模式（与 xhsMcpClient.detectMode 一致），
-  // 比之前的 `!== XHS_LITE_URL` 更稳——换 worker 域名后老的 lite 配置不会被误判成 local。
-  const _xhsIsLocal = !!_xhsCfgUrl && !_xhsCfgUrl.includes('/api');
+  // 新配置显式记录模式；旧配置仅在 URL 等于当前 Lite Worker 时判为 Lite。
+  // 电脑 Skills Bridge 同样以 /api 结尾，不能再靠路径猜模式。
+  const _xhsIsLocal = realtimeConfig.xhsMcpConfig?.backendMode
+      ? realtimeConfig.xhsMcpConfig.backendMode === 'local'
+      : (!!_xhsCfgUrl && _xhsCfgUrl !== XHS_LITE_URL);
   const [rtXhsMcpEnabled, setRtXhsMcpEnabled] = useState(realtimeConfig.xhsMcpConfig?.enabled || false);
   const [rtXhsMode, setRtXhsMode] = useState<'lite' | 'local'>(_xhsIsLocal ? 'local' : 'lite');
-  const [rtXhsLocalUrl, setRtXhsLocalUrl] = useState(_xhsIsLocal ? _xhsCfgUrl : 'http://localhost:18060/mcp');
+  const [rtXhsLocalUrl, setRtXhsLocalUrl] = useState(_xhsIsLocal ? _xhsCfgUrl : 'http://192.168.1.100:18061/api');
+  const [rtXhsBridgeToken, setRtXhsBridgeToken] = useState(realtimeConfig.xhsMcpConfig?.bridgeToken || '');
   const [rtXhsNickname, setRtXhsNickname] = useState(realtimeConfig.xhsMcpConfig?.loggedInNickname || '');
   const [rtXhsUserId, setRtXhsUserId] = useState(realtimeConfig.xhsMcpConfig?.loggedInUserId || '');
   const [rtXhsCookie, setRtXhsCookie] = useState(realtimeConfig.xhsMcpConfig?.cookie || '');
@@ -1085,8 +1088,10 @@ const Settings: React.FC = () => {
           xhsEnabled: rtXhsEnabled,
           xhsMcpConfig: {
               enabled: rtXhsMcpEnabled,
-              serverUrl: rtXhsMode === 'lite' ? XHS_LITE_URL : rtXhsLocalUrl,
+              backendMode: rtXhsMode,
+              serverUrl: rtXhsMode === 'lite' ? XHS_LITE_URL : rtXhsLocalUrl.trim(),
               cookie: rtXhsMode === 'lite' ? (rtXhsCookie.trim() || undefined) : undefined,
+              bridgeToken: rtXhsMode === 'local' ? (rtXhsBridgeToken.trim() || undefined) : undefined,
               loggedInNickname: rtXhsNickname || undefined,
               loggedInUserId: rtXhsUserId || undefined,
               userXsecToken: realtimeConfig.xhsMcpConfig?.userXsecToken, // 保留自动获取的 token
@@ -1147,8 +1152,10 @@ const Settings: React.FC = () => {
 
   // 测试小红书 Bridge 连接
   const testXhsMcp = async () => {
-      const urlToUse = rtXhsMode === 'lite' ? XHS_LITE_URL : rtXhsLocalUrl;
+      const urlToUse = (rtXhsMode === 'lite' ? XHS_LITE_URL : rtXhsLocalUrl).trim();
       const cookieToUse = rtXhsMode === 'lite' ? (rtXhsCookie.trim() || undefined) : undefined;
+      const tokenToUse = rtXhsMode === 'local' ? (rtXhsBridgeToken.trim() || undefined) : undefined;
+
       if (!urlToUse) {
           setRtTestStatus('请填写服务器 URL');
           return;
@@ -1157,24 +1164,29 @@ const Settings: React.FC = () => {
           setRtTestStatus('请先粘贴小红书 cookie');
           return;
       }
+      if (rtXhsMode === 'local' && urlToUse.includes('/api') && !tokenToUse) {
+          setRtTestStatus('请填写电脑启动脚本显示的 Bridge 访问令牌');
+          return;
+      }
       setRtTestStatus('正在连接...');
       try {
-          const result = await XhsMcpClient.testConnection(urlToUse, cookieToUse);
+          const result = await XhsMcpClient.testConnection(urlToUse, cookieToUse, tokenToUse);
           if (result.connected) {
               const toolCount = result.tools?.length || 0;
               const tokenInfo = result.xsecToken ? ' | xsecToken 已获取' : '';
               const loginInfo = result.loggedIn
                   ? ` | ${result.nickname ? `账号: ${result.nickname}` : '已登录'}${result.userId ? ` (ID: ${result.userId})` : ''}${tokenInfo}`
-                  : ' | 未登录，请检查 cookie 或登录小红书';
+                  : ` | 未登录，请在电脑 Chrome 登录小红书${rtXhsMode === 'lite' ? '或检查 cookie' : ''}`;
               setRtTestStatus(`连接成功! ${toolCount} 个功能可用${loginInfo}`);
-              // 自动填充：只在用户未手动填写时覆盖
               if (result.nickname && !rtXhsNickname) setRtXhsNickname(result.nickname);
               if (result.userId && !rtXhsUserId) setRtXhsUserId(result.userId);
               updateRealtimeConfig({
                   xhsMcpConfig: {
                       enabled: rtXhsMcpEnabled,
+                      backendMode: rtXhsMode,
                       serverUrl: urlToUse,
                       cookie: cookieToUse,
+                      bridgeToken: tokenToUse,
                       loggedInNickname: rtXhsNickname || result.nickname,
                       loggedInUserId: rtXhsUserId || result.userId,
                       userXsecToken: result.xsecToken,
@@ -2895,8 +2907,15 @@ const Settings: React.FC = () => {
                       <div className="space-y-2">
                           <div>
                               <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">服务器 URL</label>
-                              <input value={rtXhsLocalUrl} onChange={e => setRtXhsLocalUrl(e.target.value)} className="w-full bg-white/80 border border-red-200 rounded-xl px-3 py-2 text-[11px] font-mono" placeholder="http://localhost:18060/mcp" />
+                              <input value={rtXhsLocalUrl} onChange={e => setRtXhsLocalUrl(e.target.value)} className="w-full bg-white/80 border border-red-200 rounded-xl px-3 py-2 text-[11px] font-mono" placeholder="http://电脑局域网IP:18061/api" />
                           </div>
+                          {rtXhsLocalUrl.includes('/api') && (
+                              <div>
+                                  <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Bridge 访问令牌</label>
+                                  <input type="password" value={rtXhsBridgeToken} onChange={e => setRtXhsBridgeToken(e.target.value)} className="w-full bg-white/80 border border-red-200 rounded-xl px-3 py-2 text-[11px] font-mono" placeholder="复制电脑启动窗口显示的令牌" autoComplete="off" />
+                                  <p className="text-[9px] text-slate-400 mt-1">仅保存在本机，通过 Authorization 请求头发送。</p>
+                              </div>
+                          )}
                           <button onClick={testXhsMcp} className="w-full py-2 bg-red-100 text-red-600 text-xs font-bold rounded-xl active:scale-95 transition-transform">测试连接</button>
                           <div className="grid grid-cols-2 gap-2">
                               <div>

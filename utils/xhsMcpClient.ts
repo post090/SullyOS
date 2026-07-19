@@ -28,17 +28,43 @@ const detectMode = (serverUrl: string): BackendMode => {
 // Lite-Worker cookie: set from settings, sent as x-xhs-cookie on bridge calls.
 // Local Bridge/Skills servers ignore the header; the cloud Worker requires it.
 let liteCookie = '';
+let liteCookieServerUrl = '';
+let bridgeToken = '';
+let bridgeTokenServerUrl = '';
+
+const readPersistedXhsConfig = (): Record<string, any> => {
+    try {
+        const raw = localStorage.getItem('os_realtime_config');
+        return raw ? (JSON.parse(raw)?.xhsMcpConfig || {}) : {};
+    } catch { return {}; }
+};
 
 // Resolve the XHS cookie for bridge requests: prefer the explicitly-set value,
 // otherwise read it straight from persisted realtime config. This keeps chat-
 // driven XHS calls authenticated without any call site having to push it in.
-const resolveLiteCookie = (): string => {
-    if (liteCookie) return liteCookie;
-    try {
-        const raw = localStorage.getItem('os_realtime_config');
-        if (raw) return JSON.parse(raw)?.xhsMcpConfig?.cookie || '';
-    } catch { /* ignore */ }
-    return '';
+const resolveLiteCookie = (serverUrl: string): string => {
+    const requestedUrl = serverUrl.replace(/\/+$/, '');
+    if (liteCookie && liteCookieServerUrl === requestedUrl) return liteCookie;
+    const cfg = readPersistedXhsConfig();
+    const configuredUrl = String(cfg.serverUrl || '').replace(/\/+$/, '');
+    return configuredUrl === requestedUrl ? String(cfg.cookie || '') : '';
+};
+
+const resolveBridgeToken = (serverUrl: string): string => {
+    const requestedUrl = serverUrl.replace(/\/+$/, '');
+    if (bridgeToken && bridgeTokenServerUrl === requestedUrl) return bridgeToken;
+    const cfg = readPersistedXhsConfig();
+    const configuredUrl = String(cfg.serverUrl || '').replace(/\/+$/, '');
+    return configuredUrl === requestedUrl ? String(cfg.bridgeToken || '') : '';
+};
+
+const buildBridgeHeaders = (serverUrl: string): Record<string, string> => {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const ck = resolveLiteCookie(serverUrl);
+    if (ck) headers['x-xhs-cookie'] = ck;
+    const token = resolveBridgeToken(serverUrl);
+    if (token) headers.Authorization = `Bearer ${token}`;
+    return headers;
 };
 
 // ==================== Bridge Mode (REST) ====================
@@ -50,10 +76,8 @@ const bridgePost = async (
 ): Promise<McpToolResult> => {
     const baseUrl = serverUrl.replace(/\/+$/, '').replace(/\/api$/, '');
     const url = `${baseUrl}/api/${endpoint}`;
+    const headers = buildBridgeHeaders(serverUrl);
 
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    const ck = resolveLiteCookie();
-    if (ck) headers['x-xhs-cookie'] = ck;
 
     try {
         const resp = await fetch(url, {
@@ -63,7 +87,8 @@ const bridgePost = async (
         });
 
         if (resp.status === 401) {
-            return { success: false, error: '未登录，请先登录小红书' };
+            const errData = await resp.json().catch(() => ({}));
+            return { success: false, error: errData.error || 'Bridge 访问令牌错误或未填写' };
         }
 
         if (!resp.ok) {
@@ -371,18 +396,33 @@ export const XhsMcpClient = {
     },
 
     // Lite Worker auth: register the XHS cookie used for x-xhs-cookie header.
-    setCookie: (cookie?: string) => {
+    setCookie: (cookie?: string, serverUrl?: string) => {
         liteCookie = cookie || '';
+        liteCookieServerUrl = serverUrl ? serverUrl.replace(/\/+$/, '') : '';
     },
 
-    testConnection: async (serverUrl: string, cookie?: string): Promise<{ connected: boolean; tools?: string[]; error?: string; nickname?: string; userId?: string; loggedIn?: boolean; xsecToken?: string }> => {
-        if (cookie !== undefined) liteCookie = cookie;
+    // Computer Skills Bridge auth: sent as Authorization: Bearer <token>.
+    setBridgeToken: (token?: string, serverUrl?: string) => {
+        bridgeToken = token || '';
+        bridgeTokenServerUrl = serverUrl ? serverUrl.replace(/\/+$/, '') : '';
+    },
+
+    testConnection: async (serverUrl: string, cookie?: string, token?: string): Promise<{ connected: boolean; tools?: string[]; error?: string; nickname?: string; userId?: string; loggedIn?: boolean; xsecToken?: string }> => {
+        if (cookie !== undefined) {
+            liteCookie = cookie;
+            liteCookieServerUrl = serverUrl.replace(/\/+$/, '');
+        }
+        if (token !== undefined) {
+            bridgeToken = token;
+            bridgeTokenServerUrl = serverUrl.replace(/\/+$/, '');
+        }
         const mode = detectMode(serverUrl);
 
         if (mode === 'bridge') {
             try {
                 const baseUrl = serverUrl.replace(/\/+$/, '').replace(/\/api$/, '');
-                const healthResp = await fetch(`${baseUrl}/api/health`);
+                const healthResp = await fetch(`${baseUrl}/api/health`, { headers: buildBridgeHeaders(serverUrl) });
+                if (healthResp.status === 401) return { connected: false, error: 'Bridge 访问令牌错误或未填写' };
                 if (!healthResp.ok) return { connected: false, error: `Bridge 服务未响应 (HTTP ${healthResp.status})` };
 
                 const loginResult = await bridgePost(serverUrl, 'check-login');

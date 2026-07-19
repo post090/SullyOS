@@ -27,6 +27,7 @@
  */
 
 import { createServer } from 'http';
+import { timingSafeEqual } from 'crypto';
 import { spawn } from 'child_process';
 import { writeFileSync, unlinkSync, mkdtempSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
@@ -43,7 +44,13 @@ const getArg = (name, fallback) => {
 };
 
 const PORT = parseInt(getArg('--port', '18061'), 10);
+const HOST = getArg('--host', '127.0.0.1');
+const ACCESS_TOKEN = getArg('--token', process.env.XHS_BRIDGE_TOKEN || '');
 const BRIDGE_URL = getArg('--bridge-url', ''); // 空字符串 = 用 cli.py 默认 (ws://localhost:9333)
+
+if (HOST !== '127.0.0.1' && HOST !== 'localhost' && !ACCESS_TOKEN) {
+    throw new Error('监听非本机地址时必须通过 --token 或 XHS_BRIDGE_TOKEN 设置访问令牌');
+}
 
 // Auto-detect skills directory
 function findSkillsDir() {
@@ -69,9 +76,24 @@ const CLI_PATH = join(SKILLS_DIR, 'scripts', 'cli.py');
 const CORS_HEADERS = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Xhs-Token',
     'Access-Control-Max-Age': '86400',
 };
+
+function tokenMatches(req) {
+    if (!ACCESS_TOKEN) return true;
+    const authorization = String(req.headers.authorization || '');
+    const bearer = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+    const supplied = bearer || String(req.headers['x-xhs-token'] || '');
+    const expectedBuffer = Buffer.from(ACCESS_TOKEN);
+    const suppliedBuffer = Buffer.from(supplied);
+    return expectedBuffer.length === suppliedBuffer.length && timingSafeEqual(expectedBuffer, suppliedBuffer);
+}
+
+function sendJson(res, status, body) {
+    res.writeHead(status, { ...CORS_HEADERS, 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(body));
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -372,7 +394,12 @@ createServer(async (req, res) => {
         return;
     }
 
-    const url = new URL(req.url, `http://localhost:${PORT}`);
+    if (!tokenMatches(req)) {
+        sendJson(res, 401, { error: 'Bridge 访问令牌错误或未提供' });
+        return;
+    }
+
+    const url = new URL(req.url, `http://${HOST}:${PORT}`);
     const path = url.pathname;
 
     if (path === '/api/health' || path === '/health') {
@@ -422,9 +449,12 @@ createServer(async (req, res) => {
             res.end(JSON.stringify({ error: e.message }));
         }
     });
-}).listen(PORT, () => {
+}).listen(PORT, HOST, () => {
+    const displayHost = HOST === '0.0.0.0' ? '<电脑局域网 IP>' : HOST;
     console.log(`XHS Bridge Server started`);
-    console.log(`  Listen:     http://localhost:${PORT}/api`);
+    console.log(`  Listen:     http://${displayHost}:${PORT}/api`);
+    console.log(`  Bind:       ${HOST}:${PORT}`);
+    console.log(`  Auth:       ${ACCESS_TOKEN ? 'Bearer token required' : 'disabled (localhost only)'}`);
     console.log(`  Skills dir: ${SKILLS_DIR}`);
     console.log(`  CLI path:   ${CLI_PATH}`);
     console.log(`  Mode:       Extension Bridge`);
@@ -448,7 +478,7 @@ createServer(async (req, res) => {
     for (const cmd of Object.keys(handlers)) {
         console.log(`  POST /api/${cmd}`);
     }
-    console.log(`\nSet your server URL to: http://localhost:${PORT}/api`);
+    console.log(`\nSet your server URL to: http://${displayHost}:${PORT}/api`);
     console.log(`\nNotes:`);
     console.log(`  - cli.py 会在首次请求时自动启动 bridge_server.py 和打开 Chrome`);
     console.log(`  - 确保 "XHS Bridge" 浏览器扩展已在 Chrome 加载并启用`);

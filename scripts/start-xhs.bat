@@ -185,9 +185,32 @@ if not defined CHROME_EXE (
     timeout /t 2 /nobreak >nul
 )
 
-REM === Step 2: Start bridge server ===
+REM === Create/read a persistent LAN access token ===
+set "TOKEN_FILE=%TOOLKIT_DIR%\.xhs-bridge-token"
+if not exist "%TOKEN_FILE%" (
+    echo [SETUP] Generating Bridge access token...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$bytes=New-Object byte[] 32; $rng=New-Object Security.Cryptography.RNGCryptoServiceProvider; try{$rng.GetBytes($bytes)}finally{$rng.Dispose()}; $token=([BitConverter]::ToString($bytes)).Replace('-','').ToLowerInvariant(); [IO.File]::WriteAllText('%TOKEN_FILE%',$token)"
+    if errorlevel 1 (
+        echo [ERROR] Failed to generate Bridge access token.
+        pause
+        exit /b 1
+    )
+)
+set /p XHS_BRIDGE_TOKEN=<"%TOKEN_FILE%"
+if not defined XHS_BRIDGE_TOKEN (
+    echo [ERROR] Bridge access token is empty: %TOKEN_FILE%
+    pause
+    exit /b 1
+)
+
+REM Pick the first active non-loopback IPv4 address for the phone URL.
+set "LAN_IP="
+for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command "$ip=Get-NetIPAddress -AddressFamily IPv4 ^| Where-Object {$_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' -and $_.AddressState -eq 'Preferred'} ^| Sort-Object InterfaceMetric ^| Select-Object -First 1 -ExpandProperty IPAddress; if($ip){$ip}"`) do set "LAN_IP=%%I"
+if not defined LAN_IP set "LAN_IP=YOUR-PC-IP"
+
+REM === Step 2: Start bridge server (LAN + token auth) ===
 echo [2] Starting bridge server...
-start "XHS-Bridge" cmd /k node "%BRIDGE%" --skills-dir "%SKILLS_DIR%" --port 18061
+start "XHS-Bridge" cmd /k node "%BRIDGE%" --skills-dir "%SKILLS_DIR%" --host 0.0.0.0 --port 18061 --token "%XHS_BRIDGE_TOKEN%"
 timeout /t 2 /nobreak >nul
 
 REM === Step 3: Cloudflared tunnel (optional) ===
@@ -200,19 +223,21 @@ if defined CLOUDFLARED (
 
 echo.
 echo  ============================================
-echo   ALL STARTED
+echo   ALL STARTED - PHONE CONNECTION INFO
 echo  ============================================
 echo.
-echo   Bridge: http://localhost:18061/api
+echo   Phone URL:    http://%LAN_IP%:18061/api
+echo   Access Token: %XHS_BRIDGE_TOKEN%
+echo.
+echo   Copy both values into SullyOS:
+echo   Settings - Realtime - Xiaohongshu Local.
+echo   Keep this token private. Port 9333 stays local-only.
 echo.
 if defined CLOUDFLARED (
-    echo   Cloudflared tunnel is starting...
-    echo   Look for the public URL in the Cloudflared window.
-    echo   It looks like: https://xxx-xxx-xxx.trycloudflare.com
-    echo   Use that URL + /api as your server URL.
+    echo   Cloudflared was detected and started, but LAN mode above is recommended.
+    echo   Do not expose this Bridge publicly unless you add stronger access controls.
 ) else (
-    echo   Local only mode (no tunnel^).
-    echo   Set server URL to: http://localhost:18061/api
+    echo   LAN-only mode. Phone and computer must use the same Wi-Fi.
 )
 echo.
 echo   Chrome should be open at xiaohongshu.com.
