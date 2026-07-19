@@ -73,12 +73,22 @@ function findSkillsDir() {
 const SKILLS_DIR = findSkillsDir();
 const CLI_PATH = join(SKILLS_DIR, 'scripts', 'cli.py');
 
-const CORS_HEADERS = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Xhs-Token',
-    'Access-Control-Max-Age': '86400',
-};
+function corsHeaders(req) {
+    const requestedHeaders = String(req.headers['access-control-request-headers'] || '').trim();
+    return {
+        'Access-Control-Allow-Origin': String(req.headers.origin || '*'),
+        'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+        'Access-Control-Allow-Headers': requestedHeaders || 'Content-Type, Authorization, X-Xhs-Token',
+        'Access-Control-Allow-Private-Network': 'true',
+        'Access-Control-Max-Age': '86400',
+        'Vary': 'Origin, Access-Control-Request-Headers, Access-Control-Request-Private-Network',
+    };
+}
+
+function requestLabel(req) {
+    const origin = String(req.headers.origin || '-');
+    return `${req.method || '?'} ${req.url || '/'} origin=${origin}`;
+}
 
 function tokenMatches(req) {
     if (!ACCESS_TOKEN) return true;
@@ -90,8 +100,8 @@ function tokenMatches(req) {
     return expectedBuffer.length === suppliedBuffer.length && timingSafeEqual(expectedBuffer, suppliedBuffer);
 }
 
-function sendJson(res, status, body) {
-    res.writeHead(status, { ...CORS_HEADERS, 'Content-Type': 'application/json' });
+function sendJson(req, res, status, body) {
+    res.writeHead(status, { ...corsHeaders(req), 'Content-Type': 'application/json' });
     res.end(JSON.stringify(body));
 }
 
@@ -388,14 +398,22 @@ const handlers = {
 // ==================== HTTP Server ====================
 
 createServer(async (req, res) => {
+    const label = requestLabel(req);
+    const startedAt = Date.now();
+    const logResult = (status, detail = '') => {
+        console.log(`[http] ${label} -> ${status} ${Date.now() - startedAt}ms${detail ? ` ${detail}` : ''}`);
+    };
+
     if (req.method === 'OPTIONS') {
-        res.writeHead(204, CORS_HEADERS);
+        res.writeHead(204, corsHeaders(req));
         res.end();
+        logResult(204, req.headers['access-control-request-private-network'] ? 'PNA' : 'CORS');
         return;
     }
 
     if (!tokenMatches(req)) {
-        sendJson(res, 401, { error: 'Bridge 访问令牌错误或未提供' });
+        sendJson(req, res, 401, { error: 'Bridge 访问令牌错误或未提供' });
+        logResult(401, 'auth-rejected');
         return;
     }
 
@@ -403,15 +421,15 @@ createServer(async (req, res) => {
     const path = url.pathname;
 
     if (path === '/api/health' || path === '/health') {
-        res.writeHead(200, { ...CORS_HEADERS, 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', backend: 'xiaohongshu-skills', mode: 'extension-bridge' }));
+        sendJson(req, res, 200, { status: 'ok', backend: 'xiaohongshu-skills', mode: 'extension-bridge' });
+        logResult(200, 'health');
         return;
     }
 
     const match = path.match(/^\/api\/(.+)$/);
     if (!match) {
-        res.writeHead(404, { ...CORS_HEADERS, 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Not found. Use /api/<command>' }));
+        sendJson(req, res, 404, { error: 'Not found. Use /api/<command>' });
+        logResult(404, 'route-not-found');
         return;
     }
 
@@ -419,8 +437,8 @@ createServer(async (req, res) => {
     const handler = handlers[command];
 
     if (!handler) {
-        res.writeHead(404, { ...CORS_HEADERS, 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: `Unknown command: ${command}. Available: ${Object.keys(handlers).join(', ')}` }));
+        sendJson(req, res, 404, { error: `Unknown command: ${command}. Available: ${Object.keys(handlers).join(', ')}` });
+        logResult(404, `unknown-command=${command}`);
         return;
     }
 
@@ -432,21 +450,21 @@ createServer(async (req, res) => {
             try {
                 body = JSON.parse(Buffer.concat(chunks).toString());
             } catch {
-                res.writeHead(400, { ...CORS_HEADERS, 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Invalid JSON body' }));
+                sendJson(req, res, 400, { error: 'Invalid JSON body' });
+                logResult(400, `command=${command} invalid-json`);
                 return;
             }
         }
 
         try {
             const result = await handler(body);
-            res.writeHead(200, { ...CORS_HEADERS, 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(result.data));
+            sendJson(req, res, 200, result.data);
+            logResult(200, `command=${command}`);
         } catch (e) {
             console.error(`[bridge] Error in ${command}:`, e.message);
             const status = e.message.includes('未登录') ? 401 : 500;
-            res.writeHead(status, { ...CORS_HEADERS, 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: e.message }));
+            sendJson(req, res, status, { error: e.message });
+            logResult(status, `command=${command}`);
         }
     });
 }).listen(PORT, HOST, () => {

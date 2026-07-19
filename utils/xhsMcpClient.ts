@@ -67,6 +67,14 @@ const buildBridgeHeaders = (serverUrl: string): Record<string, string> => {
     return headers;
 };
 
+const describeBridgeNetworkError = (serverUrl: string, error: unknown): string => {
+    const message = error instanceof Error ? error.message : String(error || '');
+    if (/failed to fetch|networkerror|load failed/i.test(message)) {
+        return `无法访问电脑 Bridge（${serverUrl}）。请确认电脑已运行最新版 start-xhs.bat、手机与电脑同一 Wi-Fi、防火墙已放行 18061；若 Bridge 窗口没有 OPTIONS/GET/POST 日志，通常是 CORS/PNA 或地址被系统拦截。`;
+    }
+    return message || 'Bridge 网络请求失败';
+};
+
 // ==================== Bridge Mode (REST) ====================
 
 const bridgePost = async (
@@ -102,7 +110,7 @@ const bridgePost = async (
         }
         return { success: true, data };
     } catch (e: any) {
-        return { success: false, error: e.message };
+        return { success: false, error: describeBridgeNetworkError(serverUrl, e) };
     }
 };
 
@@ -452,7 +460,7 @@ export const XhsMcpClient = {
                 }
                 return { connected: true, tools, nickname, userId, loggedIn, xsecToken };
             } catch (e: any) {
-                return { connected: false, error: e.message };
+                return { connected: false, error: describeBridgeNetworkError(serverUrl, e) };
             }
         }
 

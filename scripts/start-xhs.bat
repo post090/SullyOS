@@ -165,10 +165,13 @@ if defined CHROME_BIN (
     )
 )
 
-REM Priority 2: Try common Chrome locations
+REM Priority 2: Try common Chrome and Edge locations
 if not defined CHROME_EXE if exist "C:\Program Files\Google\Chrome\Application\chrome.exe" set "CHROME_EXE=C:\Program Files\Google\Chrome\Application\chrome.exe"
 if not defined CHROME_EXE if exist "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe" set "CHROME_EXE=C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
 if not defined CHROME_EXE if exist "%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe" set "CHROME_EXE=%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"
+if not defined CHROME_EXE if exist "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" set "CHROME_EXE=C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+if not defined CHROME_EXE if exist "C:\Program Files\Microsoft\Edge\Application\msedge.exe" set "CHROME_EXE=C:\Program Files\Microsoft\Edge\Application\msedge.exe"
+if not defined CHROME_EXE if exist "%LOCALAPPDATA%\Microsoft\Edge\Application\msedge.exe" set "CHROME_EXE=%LOCALAPPDATA%\Microsoft\Edge\Application\msedge.exe"
 REM Try Chrome in toolkit directory (portable Chrome)
 if not defined CHROME_EXE if exist "%TOOLKIT_DIR%\chrome\chrome.exe" set "CHROME_EXE=%TOOLKIT_DIR%\chrome\chrome.exe"
 if not defined CHROME_EXE if exist "%TOOLKIT_DIR%\Chrome\Application\chrome.exe" set "CHROME_EXE=%TOOLKIT_DIR%\Chrome\Application\chrome.exe"
@@ -203,9 +206,9 @@ if not defined XHS_BRIDGE_TOKEN (
     exit /b 1
 )
 
-REM Pick the first active non-loopback IPv4 address for the phone URL.
+REM Pick the IPv4 address used by the default route; fall back to the first active adapter.
 set "LAN_IP="
-for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command "$ip=Get-NetIPAddress -AddressFamily IPv4 ^| Where-Object {$_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' -and $_.AddressState -eq 'Preferred'} ^| Sort-Object InterfaceMetric ^| Select-Object -First 1 -ExpandProperty IPAddress; if($ip){$ip}"`) do set "LAN_IP=%%I"
+for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command "$route=Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue ^| Sort-Object RouteMetric,InterfaceMetric ^| Select-Object -First 1; $ip=$null; if($route){$ip=Get-NetIPAddress -InterfaceIndex $route.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue ^| Where-Object {$_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' -and $_.AddressState -eq 'Preferred'} ^| Select-Object -First 1 -ExpandProperty IPAddress}; if(-not $ip){$ip=Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue ^| Where-Object {$_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' -and $_.AddressState -eq 'Preferred'} ^| Sort-Object InterfaceMetric ^| Select-Object -First 1 -ExpandProperty IPAddress}; if($ip){Write-Output $ip}"`) do set "LAN_IP=%%I"
 if not defined LAN_IP set "LAN_IP=YOUR-PC-IP"
 
 REM === Step 2: Start bridge server (LAN + token auth) ===

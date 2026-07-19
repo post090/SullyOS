@@ -58,6 +58,20 @@ describe('XhsMcpClient Bridge credentials', () => {
         expect(calls.every(call => call.headers.get('x-xhs-cookie') === 'a1=x; web_session=y')).toBe(true);
     });
 
+    it('网络层拦截时返回可操作的局域网诊断，不只暴露 Failed to fetch', async () => {
+        vi.stubGlobal('fetch', vi.fn(async () => {
+            throw new TypeError('Failed to fetch');
+        }));
+
+        const url = 'http://192.168.1.8:18061/api';
+        const result = await XhsMcpClient.testConnection(url, undefined, 'bridge-secret');
+
+        expect(result.connected).toBe(false);
+        expect(result.error).toContain('无法访问电脑 Bridge');
+        expect(result.error).toContain('同一 Wi-Fi');
+        expect(result.error).toContain('CORS/PNA');
+    });
+
     it('服务端拒绝 token 时返回明确鉴权错误', async () => {
         vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ error: 'Bridge 访问令牌错误或未提供' }, 401)));
 
