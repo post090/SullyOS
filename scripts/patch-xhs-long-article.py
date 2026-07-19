@@ -15,7 +15,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-PATCH_MARKER = "SULLY_LONG_EDITOR_PATCH_V3"
+PATCH_MARKER = "SULLY_LONG_EDITOR_PATCH_V4"
 START = "def _fill_long_content(page: Page, content: str) -> None:\n"
 END = "\ndef _insert_images_to_editor(page: Page, image_paths: list[str]) -> None:\n"
 
@@ -24,7 +24,7 @@ REPLACEMENT = '''def _fill_long_content(page: Page, content: str) -> None:
     if not content.strip():
         raise PublishError("长文正文为空，已停止发布")
 
-    # SULLY_LONG_EDITOR_PATCH_V3：优先可见提示；提示由 CSS 伪元素渲染时，
+    # SULLY_LONG_EDITOR_PATCH_V4：优先可见提示；提示由 CSS 伪元素渲染时，
     # 回退到可见可编辑元素，并按 contenteditable / tiptap / ProseMirror 语义加权。
     target = page.evaluate(
         r"""
@@ -66,18 +66,30 @@ REPLACEMENT = '''def _fill_long_content(page: Page, content: str) -> None:
             };
             editableNodes.sort((a, b) => score(b) - score(a));
 
-            let el = hintNodes[0] || editableNodes[0] || null;
-            if (!el) return null;
+            const bestEditable = editableNodes[0] || null;
+            let el = null;
+            let source = 'editable-fallback';
             if (hintNodes[0]) {
-                const nested = el.matches('[contenteditable="true"], [role="textbox"]')
-                    ? el
-                    : el.querySelector('[contenteditable="true"], [role="textbox"], .tiptap, .ProseMirror');
+                // 提示通常是编辑器内部的 <p> 或 CSS placeholder；必须向上找到真正的
+                // contenteditable 宿主，不能把临时提示段落本身当成输入目标。
+                const hintEditor = hintNodes[0].matches('[contenteditable="true"], [role="textbox"]')
+                    ? hintNodes[0]
+                    : hintNodes[0].closest('[contenteditable="true"], [role="textbox"], .tiptap, .ProseMirror');
+                if (hintEditor && visible(hintEditor)) {
+                    el = hintEditor;
+                    source = 'hint-ancestor-editor';
+                }
+            }
+            if (!el) el = bestEditable;
+            if (!el) return null;
+            if (el.getAttribute('contenteditable') !== 'true') {
+                const nested = el.querySelector('[contenteditable="true"], [role="textbox"], .tiptap, .ProseMirror');
                 if (nested && visible(nested)) el = nested;
             }
-            document.querySelectorAll('[data-sully-long-editor-v3]').forEach(
-                (node) => node.removeAttribute('data-sully-long-editor-v3')
+            document.querySelectorAll('[data-sully-long-editor-v4]').forEach(
+                (node) => node.removeAttribute('data-sully-long-editor-v4')
             );
-            el.setAttribute('data-sully-long-editor-v3', 'true');
+            el.setAttribute('data-sully-long-editor-v4', 'true');
             const r = el.getBoundingClientRect();
             return {
                 x: r.left + Math.min(Math.max(r.width / 2, 12), r.width - 12),
@@ -86,7 +98,7 @@ REPLACEMENT = '''def _fill_long_content(page: Page, content: str) -> None:
                 className: String(el.className || ''),
                 editable: el.getAttribute('contenteditable'),
                 role: el.getAttribute('role'),
-                source: hintNodes[0] ? 'hint' : 'editable-fallback',
+                source,
                 candidates: editableNodes.slice(0, 6).map((node) => ({
                     tag: node.tagName,
                     cls: String(node.className || '').slice(0, 100),
@@ -125,7 +137,36 @@ REPLACEMENT = '''def _fill_long_content(page: Page, content: str) -> None:
     focus_before = page.evaluate(
         r"""
         (() => {
-            const marked = document.querySelector('[data-sully-long-editor-v3="true"]');
+            let marked = document.querySelector('[data-sully-long-editor-v4="true"]');
+            const visible = (el) => {
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                const s = getComputedStyle(el);
+                return r.width > 20 && r.height > 10 && s.display !== 'none' && s.visibility !== 'hidden';
+            };
+            // TipTap/Vue 可能在鼠标点击后重绘并丢掉临时标记；此时重新按正文语义选宿主。
+            if (!visible(marked)) {
+                const candidates = Array.from(document.querySelectorAll(
+                    '[contenteditable="true"], [role="textbox"], .tiptap, .ProseMirror'
+                )).filter((el) => {
+                    if (!visible(el) || el.matches('input, textarea')) return false;
+                    if (el.closest('.title-container') || el.getAttribute('placeholder') === '输入标题') return false;
+                    return true;
+                });
+                const score = (el) => {
+                    const r = el.getBoundingClientRect();
+                    const cls = String(el.className || '').toLowerCase();
+                    let value = Math.min(r.width * r.height, 1000000) / 1000;
+                    if (el.getAttribute('contenteditable') === 'true') value += 10000;
+                    if (cls.includes('tiptap')) value += 5000;
+                    if (cls.includes('prosemirror')) value += 5000;
+                    if (el.getAttribute('role') === 'textbox') value += 2000;
+                    return value;
+                };
+                candidates.sort((a, b) => score(b) - score(a));
+                marked = candidates[0] || null;
+                if (marked) marked.setAttribute('data-sully-long-editor-v4', 'true');
+            }
             let editor = marked;
             if (editor && editor.getAttribute('contenteditable') !== 'true') {
                 editor = editor.querySelector('[contenteditable="true"], [role="textbox"], .tiptap, .ProseMirror') || editor;
