@@ -341,6 +341,9 @@ const handlers = {
                     '--title-file', titleFile,
                     '--content-file', contentFile,
                 ]);
+                if (articleResult.data?.success === false) {
+                    throw new Error(articleResult.data.error || '长文正文填写或排版失败');
+                }
                 const templates = Array.isArray(articleResult.data?.templates)
                     ? articleResult.data.templates.filter(Boolean)
                     : [];

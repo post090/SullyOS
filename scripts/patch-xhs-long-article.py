@@ -15,65 +15,123 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-PATCH_MARKER = "data-sully-long-editor"
+PATCH_MARKER = "SULLY_LONG_EDITOR_PATCH_V2"
 START = "def _fill_long_content(page: Page, content: str) -> None:\n"
 END = "\ndef _insert_images_to_editor(page: Page, image_paths: list[str]) -> None:\n"
 
 REPLACEMENT = '''def _fill_long_content(page: Page, content: str) -> None:
-    """填写长文正文，并在继续排版前确认文字确实进入编辑器。"""
+    """通过页面可见提示点击正文区，并对当前焦点发送真实键盘输入。"""
     if not content.strip():
         raise PublishError("长文正文为空，已停止发布")
 
-    selector = '[data-sully-long-editor="true"]'
-    found = page.evaluate(
-        f"""
-        (() => {{
-            const candidates = Array.from(document.querySelectorAll(
-                '[contenteditable="true"], .ProseMirror, [role="textbox"]'
-            ));
-            const visible = candidates.filter((el) => {{
-                if (el.matches('input, textarea')) return false;
-                if (el.closest('textarea, .title-container')) return false;
-                const rect = el.getBoundingClientRect();
-                const style = window.getComputedStyle(el);
-                return rect.width > 100 && rect.height > 40 &&
-                    style.display !== 'none' && style.visibility !== 'hidden';
-            }});
-            visible.sort((a, b) => {{
-                const ar = a.getBoundingClientRect();
-                const br = b.getBoundingClientRect();
-                return (br.width * br.height) - (ar.width * ar.height);
-            }});
-            const editor = visible[0];
-            if (!editor) return null;
-            document.querySelectorAll('[data-sully-long-editor]').forEach(
-                (el) => el.removeAttribute('data-sully-long-editor')
+    # SULLY_LONG_EDITOR_PATCH_V2：不依赖 ql-editor / ProseMirror 等易变 class。
+    target = page.evaluate(
+        r"""
+        (() => {
+            const hint = '输入文字，内容将自动保存';
+            const visible = (el) => {
+                const r = el.getBoundingClientRect();
+                const s = getComputedStyle(el);
+                return r.width > 20 && r.height > 10 && s.display !== 'none' && s.visibility !== 'hidden';
+            };
+            const nodes = Array.from(document.querySelectorAll('body *')).filter((el) =>
+                visible(el) && ((el.textContent || '').trim().includes(hint) ||
+                    String(el.getAttribute('placeholder') || '').includes('输入文字'))
             );
-            editor.setAttribute('data-sully-long-editor', 'true');
-            const rect = editor.getBoundingClientRect();
-            return {{ tag: editor.tagName, className: String(editor.className || ''), width: rect.width, height: rect.height }};
-        }})()
+            nodes.sort((a, b) => {
+                const ar = a.getBoundingClientRect(), br = b.getBoundingClientRect();
+                return (ar.width * ar.height) - (br.width * br.height);
+            });
+            const hintEl = nodes[0] || null;
+            if (!hintEl) return null;
+            const r = hintEl.getBoundingClientRect();
+            return {
+                x: Math.max(r.left + 8, Math.min(r.right - 8, r.left + r.width / 2)),
+                y: Math.max(r.top + 8, Math.min(r.bottom - 8, r.top + Math.min(r.height / 2, 40))),
+                tag: hintEl.tagName,
+                className: String(hintEl.className || ''),
+                text: (hintEl.textContent || '').trim().slice(0, 120)
+            };
+        })()
         """
     )
-    if not found:
-        raise PublishError("未找到长文正文编辑器，小红书页面结构可能已变化")
+    if not target:
+        diagnostic = page.evaluate(
+            r"""
+            (() => Array.from(document.querySelectorAll('[contenteditable], [role="textbox"], textarea, input'))
+                .filter(el => {
+                    const r = el.getBoundingClientRect();
+                    return r.width > 0 && r.height > 0;
+                })
+                .slice(0, 12)
+                .map(el => ({
+                    tag: el.tagName,
+                    role: el.getAttribute('role'),
+                    editable: el.getAttribute('contenteditable'),
+                    placeholder: el.getAttribute('placeholder'),
+                    cls: String(el.className || '').slice(0, 100)
+                })))()
+            """
+        )
+        raise PublishError(f"未找到长文正文提示区域；页面候选元素: {diagnostic}")
 
-    logger.info("长文正文编辑器: %s", found)
-    page.input_content_editable(selector, content)
-    time.sleep(0.5)
+    logger.info("长文正文点击目标: %s", target)
+    page.mouse_click(target["x"], target["y"])
+    time.sleep(0.3)
 
-    written = page.evaluate(
+    focus_before = page.evaluate(
+        r"""
+        (() => {
+            const el = document.activeElement;
+            return el ? {
+                tag: el.tagName,
+                role: el.getAttribute('role'),
+                editable: el.getAttribute('contenteditable'),
+                cls: String(el.className || '').slice(0, 120)
+            } : null;
+        })()
+        """
+    )
+    logger.info("长文输入前焦点: %s", focus_before)
+
+    # 对页面当前焦点输入，不再先用 CSS selector 重新 focus 到错误元素。
+    page._send_session("Input.dispatchKeyEvent", {"type": "keyDown", "key": "a", "code": "KeyA", "modifiers": 2})
+    page._send_session("Input.dispatchKeyEvent", {"type": "keyUp", "key": "a", "code": "KeyA", "modifiers": 2})
+    page.press_key("Backspace")
+    for char in content:
+        if char == "\\n":
+            page.press_key("Enter")
+        else:
+            page._send_session("Input.dispatchKeyEvent", {"type": "keyDown", "text": char})
+            page._send_session("Input.dispatchKeyEvent", {"type": "keyUp", "text": char})
+    time.sleep(0.8)
+
+    verification = page.evaluate(
         f"""
         (() => {{
-            const el = document.querySelector({json.dumps(selector)});
-            return el ? (el.innerText || el.textContent || '').trim() : '';
+            const bodyText = document.body ? (document.body.innerText || '') : '';
+            const matches = Array.from(bodyText.matchAll(/字数[：:]?[^0-9]*([0-9]+)/g));
+            const counts = matches.map(m => Number(m[1])).filter(Number.isFinite);
+            const active = document.activeElement;
+            const activeText = active ? (active.innerText || active.textContent || active.value || '') : '';
+            const probe = {json.dumps(content.strip()[:12])};
+            return {{
+                count: counts.length ? Math.max(...counts) : null,
+                activeTextLength: activeText.trim().length,
+                bodyContainsProbe: probe ? bodyText.includes(probe) : false,
+                activeTag: active ? active.tagName : null
+            }};
         }})()
         """
-    ) or ""
-    if not written.strip():
-        raise PublishError("长文正文写入失败（页面仍显示 0 字），已停止发布")
+    ) or {}
+    logger.info("长文正文写入验收: %s", verification)
+    count = verification.get("count")
+    if not ((isinstance(count, (int, float)) and count > 0) or
+            verification.get("activeTextLength", 0) > 0 or
+            verification.get("bodyContainsProbe")):
+        raise PublishError(f"长文正文写入后仍为 0 字，已停止发布；焦点={focus_before}，验收={verification}")
 
-    logger.info("已填写长文正文 (%d 字，页面回读 %d 字)", len(content), len(written))
+    logger.info("已填写长文正文 (%d 字)", len(content))
     time.sleep(1)
 '''
 
