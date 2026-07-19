@@ -4,7 +4,8 @@
   "webDir": "dist",
   "server": {
     "androidScheme": "https",
-    "cleartext": true
+    "cleartext": true,
+    "allowMixedContent": true
   },
   "plugins": {
     "SplashScreen": {

@@ -54,10 +54,28 @@ jobs:
 
       - name: Add Android platform
         run: npx cap add android || true
-
       - name: Sync Capacitor
         run: npx cap sync android
-
+      - name: Apply SullyOS launcher icon
+        shell: bash
+        run: |
+          set -u
+          if command -v magick >/dev/null 2>&1; then
+            IMAGE_TOOL=(magick)
+          elif command -v convert >/dev/null 2>&1; then
+            IMAGE_TOOL=(convert)
+          else
+            echo "ImageMagick is required to generate launcher icons" >&2
+            exit 1
+          fi
+          for spec in "mdpi:48" "hdpi:72" "xhdpi:96" "xxhdpi:144" "xxxhdpi:192"; do
+            density="${spec%%:*}"
+            size="${spec##*:}"
+            dir="android/app/src/main/res/mipmap-${density}"
+            mkdir -p "$dir"
+            "${IMAGE_TOOL[@]}" assets/icon.png -resize "${size}x${size}" "$dir/ic_launcher.png"
+            cp "$dir/ic_launcher.png" "$dir/ic_launcher_round.png"
+          done
       - name: Build Debug APK
         working-directory: android
         run: ./gradlew assembleDebug --no-daemon -x lint
