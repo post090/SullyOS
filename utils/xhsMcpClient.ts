@@ -554,17 +554,22 @@ export const XhsMcpClient = {
     },
 
     publishNote: async (serverUrl: string, params: {
-        title: string; content: string; images?: string[]; tags?: string[]; is_private?: boolean;
+        title: string; content: string; description?: string; images?: string[]; tags?: string[]; is_private?: boolean;
     }): Promise<McpToolResult> => {
         const images = (params.images || []).filter(Boolean);
         if (detectMode(serverUrl) === 'bridge') {
             return bridgePost(serverUrl, 'publish', {
-                title: params.title, content: params.content,
-                images, tags: params.tags || [],
+                title: params.title,
+                content: params.content,
+                description: params.description,
+                images,
+                tags: params.tags || [],
                 visibility: params.is_private ? 'private' : undefined,
             });
         }
-        return mcpCallTool(serverUrl, 'publish_note', { ...params, images: params.images || [] });
+        // Lite/MCP 的 publish_note 暂无独立长文描述语义，不向未知服务透传扩展字段。
+        const { description: _description, ...mcpParams } = params;
+        return mcpCallTool(serverUrl, 'publish_note', { ...mcpParams, images: params.images || [] });
     },
 
     publishVideo: async (serverUrl: string, params: {

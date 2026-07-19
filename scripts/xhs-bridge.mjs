@@ -334,6 +334,12 @@ const handlers = {
         const images = Array.isArray(body.images) ? body.images.filter(Boolean) : [];
         const titleFile = writeTempFile(body.title || '');
         const contentFile = writeTempFile(body.content || '');
+        // 无图长文有两份文字：content 用于排版生图，description 用于最终发布页。
+        // 兼容旧客户端：没有 description 时沿用 content，但绝不把 tags 拼进正文。
+        const description = typeof body.description === 'string' && body.description.trim()
+            ? body.description
+            : (body.content || '');
+        const descriptionFile = writeTempFile(description);
 
         try {
             if (images.length === 0) {
@@ -357,7 +363,7 @@ const handlers = {
                     throw new Error(templateResult.data.error || `长文模板选择失败: ${selectedTemplate}`);
                 }
 
-                const nextResult = await runCli('next-step', ['--content-file', contentFile]);
+                const nextResult = await runCli('next-step', ['--content-file', descriptionFile]);
                 if (nextResult.data?.success === false) {
                     throw new Error(nextResult.data.error || '长文进入发布页失败');
                 }
@@ -387,6 +393,7 @@ const handlers = {
         } finally {
             cleanupTempFile(titleFile);
             cleanupTempFile(contentFile);
+            cleanupTempFile(descriptionFile);
         }
     },
 

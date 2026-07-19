@@ -30,7 +30,10 @@ interface LlmDecision {
     thinking: string;
     // For post
     title?: string;
+    /** 用于长文排版并生成图片的完整内容。 */
     content?: string;
+    /** 最终发布页展示的简短导语；与长文排版内容相互独立。 */
+    description?: string;
     tags?: string[];
     // For search
     keyword?: string;
@@ -158,14 +161,15 @@ const buildDecisionPrompt = (): string => {
     "action": "post" | "browse" | "search" | "check_profile" | "idle",
     "thinking": "你的内心想法（用第一人称，符合你的性格）",
     "title": "帖子标题（仅 action=post 时）",
-    "content": "帖子正文（仅 action=post 时）",
-    "tags": ["标签1", "标签2"],
+    "content": "用于长文排版并生成图片的完整内容（仅 action=post 时）",
+    "description": "最终发布页展示的简短导语，与 content 内容不同且不要重复全文（仅 action=post 时）",
+    "tags": ["根据当前帖子内容动态生成的标签1", "标签2"],
     "keyword": "搜索关键词（仅 action=search 时）"
 }
 \`\`\`
 
 示例:
-- 想发帖: {"action":"post","thinking":"今天天气好好，想分享一下我的心情","title":"阳光真好","content":"窗外的光打在桌上，觉得活着真好。","tags":["日常","心情"]}
+- 想发帖: {"action":"post","thinking":"今天天气好好，想分享一下我的心情","title":"阳光真好","content":"窗外的光落在桌面，我把这一刻和今天发生的小事认真写下来……（这里是用于长文排版的完整内容）","description":"把今天落在桌上的阳光留一下。","tags":["日常","心情"]}
 - 想搜索: {"action":"search","thinking":"昨天和主人聊到了咖啡，我也想看看","keyword":"手冲咖啡推荐"}
 - 想搜索自己的帖子: {"action":"search","thinking":"想看看我之前发的帖子怎么样了","keyword":"你自己的名字或帖子关键词"}
 - 想刷首页: {"action":"browse","thinking":"没什么特别想做的，刷刷看有什么好玩的"}
@@ -492,6 +496,7 @@ export const XhsFreeRoamEngine = {
                 const postResult = await XhsMcpClient.publishNote(mcpUrl, {
                     title: decision.title || '无题',
                     content: decision.content || '',
+                    description: decision.description?.trim() || decision.content || '',
                     images: images.length > 0 ? images : undefined,
                     tags: decision.tags,
                 });
@@ -504,6 +509,7 @@ export const XhsFreeRoamEngine = {
                     content: {
                         title: decision.title,
                         body: decision.content,
+                        description: decision.description,
                         tags: decision.tags,
                     },
                     thinking: decision.thinking,

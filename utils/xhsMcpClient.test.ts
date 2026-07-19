@@ -79,6 +79,8 @@ describe('XhsMcpClient Bridge credentials', () => {
             expect(new Headers(init?.headers).get('authorization')).toBe('Bearer bridge-secret');
             expect(JSON.parse(String(init?.body))).toMatchObject({
                 title: '无图测试',
+                content: '用于排版生图的长正文',
+                description: '最终发布页的短导语',
                 images: [],
             });
             return jsonResponse({ published: true, publish_mode: 'long-article' });
@@ -87,7 +89,8 @@ describe('XhsMcpClient Bridge credentials', () => {
 
         const result = await XhsMcpClient.publishNote('http://192.168.1.8:18061/api', {
             title: '无图测试',
-            content: '正文',
+            content: '用于排版生图的长正文',
+            description: '最终发布页的短导语',
             images: [],
         });
 
