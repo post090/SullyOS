@@ -210,23 +210,10 @@ REM Pick the IPv4 address used by the default route; fall back to the first acti
 set "LAN_IP="
 for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command "$route=Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue ^| Sort-Object RouteMetric,InterfaceMetric ^| Select-Object -First 1; $ip=$null; if($route){$ip=Get-NetIPAddress -InterfaceIndex $route.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue ^| Where-Object {$_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' -and $_.AddressState -eq 'Preferred'} ^| Select-Object -First 1 -ExpandProperty IPAddress}; if(-not $ip){$ip=Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue ^| Where-Object {$_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' -and $_.AddressState -eq 'Preferred'} ^| Sort-Object InterfaceMetric ^| Select-Object -First 1 -ExpandProperty IPAddress}; if($ip){Write-Output $ip}"`) do set "LAN_IP=%%I"
 if not defined LAN_IP set "LAN_IP=YOUR-PC-IP"
-
-REM === Step 2: Start bridge server (LAN + token auth) ===
-echo [2] Starting bridge server...
-start "XHS-Bridge" cmd /k node "%BRIDGE%" --skills-dir "%SKILLS_DIR%" --host 0.0.0.0 --port 18061 --token "%XHS_BRIDGE_TOKEN%"
-timeout /t 2 /nobreak >nul
-
-REM === Step 3: Cloudflared tunnel (optional) ===
-if defined CLOUDFLARED (
-    echo [3] Starting Cloudflared tunnel...
-    start "Cloudflared" cmd /k "%CLOUDFLARED%" tunnel --url http://localhost:18061
-) else (
-    echo [3] Cloudflared not found, skipping tunnel (local only mode^).
-)
-
+REM === Step 2: Show connection info, then run Bridge in this window ===
 echo.
 echo  ============================================
-echo   ALL STARTED - PHONE CONNECTION INFO
+echo   XHS BRIDGE - PHONE CONNECTION INFO
 echo  ============================================
 echo.
 echo   Phone URL:    http://%LAN_IP%:18061/api
@@ -236,33 +223,18 @@ echo   Copy both values into SullyOS:
 echo   Settings - Realtime - Xiaohongshu Local.
 echo   Keep this token private. Port 9333 stays local-only.
 echo.
-if defined CLOUDFLARED (
-    echo   Cloudflared was detected and started, but LAN mode above is recommended.
-    echo   Do not expose this Bridge publicly unless you add stronger access controls.
-) else (
-    echo   LAN-only mode. Phone and computer must use the same Wi-Fi.
-)
+echo   Phone and computer must use the same Wi-Fi.
+echo   Keep Edge open, keep XHS Bridge enabled, and stay logged in.
 echo.
-echo   Chrome should be open at xiaohongshu.com.
-echo   Please login if not already logged in.
+echo   Starting Bridge in this window...
+echo   Request logs will appear below.
+echo   Press Ctrl+C to stop the Bridge.
 echo.
-if exist "%SKILLS_DIR%\scripts\bridge_server.py" (
-    echo   NEW VERSION mode - extension required:
-    echo     1) chrome://extensions/  enable Developer mode
-    echo     2) Load unpacked  select %SKILLS_DIR%\extension\
-    echo     3) Make sure "XHS Bridge" is enabled.
-) else (
-    echo   OLD VERSION mode - CDP connection on port 9222.
-    echo   Login session saved in: %USERPROFILE%\.xhs\chrome-profile\
-)
+
+node "%BRIDGE%" --skills-dir "%SKILLS_DIR%" --host 0.0.0.0 --port 18061 --token "%XHS_BRIDGE_TOKEN%"
+set "BRIDGE_EXIT=%ERRORLEVEL%"
 echo.
-echo   Troubleshooting:
-echo     - Chrome not found? Set CHROME_BIN=path\to\chrome.exe
-echo     - "Bridge server start timeout"? See cli.py logs in the XHS-Bridge window
-echo     - Extension not connecting? Reload it in chrome://extensions/
-echo     - Chinese path issues? Save this file as ANSI encoding
-echo     - Port in use? Close previous XHS windows first
-echo.
-echo   To stop: close the other popup windows, or press Ctrl+C here.
-echo.
+echo [ERROR] Bridge stopped with exit code %BRIDGE_EXIT%.
+echo Check the error above. This window will remain open.
 pause
+exit /b %BRIDGE_EXIT%
