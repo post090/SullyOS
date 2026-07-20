@@ -7,6 +7,7 @@ import { Share } from '@capacitor/share';
 import { safeResponseJson } from '../utils/safeApi';
 import { nativeFetch } from '../utils/nativeFetch';
 import { EXPORT_CHUNK_SIZE, sliceRanges } from '../utils/backupExport';
+import { formatBackupTimestamp } from '../utils/format';
 import Modal from '../components/os/Modal';
 import { NotionManager, FeishuManager, RealtimeContextManager, fetchOwmWeather, fetchOpenMeteoWeather } from '../utils/realtimeContext';
 import { XhsMcpClient } from '../utils/xhsMcpClient';
@@ -907,7 +908,7 @@ const Settings: React.FC = () => {
               // Android 原生端先把备份持久写入 Documents/SullyOS，再调起分享面板。
               // 分享插件在部分系统上即使用户正常保存也会返回 "Share canceled"；
               // 因此“写盘”和“分享”必须分开处理，分享回执不能反过来否定已落盘的文件。
-              const fileName = `Sully_Backup_${mode}_${Date.now()}.zip`;
+              const fileName = `Sully_Backup_${mode}_${formatBackupTimestamp()}.zip`;
               const exportDir = 'SullyOS';
               const finalPath = `${exportDir}/${fileName}`;
 
@@ -985,7 +986,7 @@ const Settings: React.FC = () => {
               // Auto click
               const a = document.createElement('a');
               a.href = url;
-              a.download = `Sully_Backup_${mode}_${new Date().toISOString().slice(0,10)}.zip`;
+              a.download = `Sully_Backup_${mode}_${formatBackupTimestamp()}.zip`;
               document.body.appendChild(a);
               a.click();
               document.body.removeChild(a);

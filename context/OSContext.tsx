@@ -36,7 +36,7 @@ import { setTtsProvider, setVoicePromptOverrides } from '../utils/ttsProvider';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { Capacitor } from '@capacitor/core';
 import { isTaskReminderNotification, getCharIdFromReminder } from '../utils/taskReminderScheduler';
-import { formatBytes } from '../utils/format';
+import { formatBytes, formatBackupTimestamp } from '../utils/format';
 import { isEmotionEvalSkipped } from '../utils/devDebug';
 import { toMountedWorldbook } from '../utils/worldbook';
 import { initLocalStorageMirror } from '../utils/lsMirror';
@@ -1122,21 +1122,42 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       const toStringSafe = (a: unknown): string => {
           if (a instanceof Error) return a.message || a.toString();
           if (typeof a === 'string') return a;
-          if (a === null || a === undefined) return String(a);
-          if (typeof a === 'object') {
+          if (a && typeof a === 'object') {
               const obj = a as any;
               if (typeof obj.message === 'string') return obj.message;
-              if (typeof obj.message === 'object' && obj.message) {
-                  // .message 还是个对象 → JSON 兜底
-                  try { return JSON.stringify(obj.message); } catch { /* fallthrough */ }
-              }
-              try { return JSON.stringify(a); } catch { /* fallthrough */ }
+              // .message 还是个对象 → JSON 兜底
+              try { return JSON.stringify(obj.message); } catch { /* fallthrough */ }
           }
+          try { return JSON.stringify(a); } catch { /* fallthrough */ }
           try { return String(a); } catch { return '[unserializable]'; }
       };
+
+      // 预期内的"伪错误"白名单：这些是 Capacitor plugin 在 native 层主动 call.reject 的
+      // 业务正常情况，但 plugin 不论 JS 怎么 catch 都会冒泡到 console.error。如果记进
+      // systemLogs 会让用户看到一堆吓人的红字，实际什么问题都没有。
+      //
+      // 命中白名单时：仍然走 originalConsoleError（保留给开发者排查的渠道），但
+      // **不**记进 systemLogs（用户看不到）。
+      //
+      // 当前名单（全部来自 apps/Settings.tsx 的导出流程）：
+      //   - "Directory exists"       : Filesystem.mkdir 目录已存在（recursive:true 也不幂等）
+      //   - "File does not exist"    : Filesystem.deleteFile 清理可能存在的同名旧文件
+      //   - "Share canceled"         : 用户关掉系统分享面板 / 部分 ROM 保存到本地后也回这个
+      //
+      // 这三类都已经在调用处用 try/catch 处理过，业务无影响。
+      const EXPECTED_PLUGIN_NOISE = [
+          /^Directory exists$/i,
+          /^File does not exist$/i,
+          /^Share canceled$/i,
+      ];
+      const isExpectedPluginNoise = (msg: string): boolean =>
+          EXPECTED_PLUGIN_NOISE.some(re => re.test(msg.trim()));
       console.error = (...args) => {
           originalConsoleError(...args);
           const msg = args.map(toStringSafe).join(' ');
+          // 预期内"伪错误"白名单：业务已正确处理，不进用户可见的 systemLogs。
+          // 仍然调用 originalConsoleError（上面那行）让开发者在远程调试时能看到。
+          if (isExpectedPluginNoise(msg)) return;
           // detail 只有真拿到堆栈才用堆栈，否则回退完整 msg。
           // 旧写法 `args.map(a => a instanceof Error ? a.stack : '').join('\n')`
           // 对「多个非 Error 参数」会产出 "\n"（truthy），把回退短路掉——
@@ -2510,7 +2531,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           const blob = await exportSystem(mode);
 
           setSysOperation({ status: 'processing', message: '正在上传到云端...', progress: 50 });
-          const filename = `Sully_Backup_${mode}_${Date.now()}.zip`;
+          const filename = `Sully_Backup_${mode}_${formatBackupTimestamp()}.zip`;
           const result = await uploadBackup(cloudBackupConfig, blob, filename, (pct) => {
               setSysOperation(prev => ({ ...prev, message: `上传中 ${pct}%...`, progress: 50 + pct * 0.45 }));
           });
