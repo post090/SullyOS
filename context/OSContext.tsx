@@ -34,6 +34,7 @@ import { setMinimaxRegion } from '../utils/minimaxEndpoint';
 import { setTtsProvider, setVoicePromptOverrides } from '../utils/ttsProvider';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { Capacitor } from '@capacitor/core';
+import { isTaskReminderNotification, getCharIdFromReminder } from '../utils/taskReminderScheduler';
 import { formatBytes } from '../utils/format';
 import { isEmotionEvalSkipped } from '../utils/devDebug';
 import { toMountedWorldbook } from '../utils/worldbook';
@@ -760,6 +761,33 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       } catch {
           console.log('[Proactive] Native notification skipped');
       }
+  }, []);
+
+  // 任务提醒通知点击监听：用户从系统通知点开「该做 XX 了」→ 切到该角色聊天
+  // 只处理 source='task-reminder'，其他通知（proactive-chat 等）由各自的入口兜底。
+  // listener 用 ref 闸门保证整个 app 生命周期只挂一次。
+  const notifListenerRegistered = useRef(false);
+  useEffect(() => {
+      if (notifListenerRegistered.current) return;
+      if (!Capacitor.isNativePlatform()) return;
+      notifListenerRegistered.current = true;
+      const handle = LocalNotifications.addListener('localNotificationActionPerformed', (event) => {
+          try {
+              const extra = event.notification?.extra as Record<string, unknown> | undefined;
+              if (!isTaskReminderNotification(extra)) return;
+              const charId = getCharIdFromReminder(extra);
+              if (!charId) return;
+              setActiveCharacterId(charId);
+              setActiveApp(AppID.Chat);
+          } catch (err) {
+              console.warn('[OSContext] task-reminder notif handler failed:', err);
+          }
+      });
+      return () => {
+          // Capacitor PluginListener 的 then 返回 Promise<PluginListenerHandle>，这里有 race，
+          // 但 app 整个生命周期不会真正卸载 OSContext，cleanup 仅作 hygiene。
+          handle.then(h => { try { h.remove(); } catch { /* ignore */ } });
+      };
   }, []);
 
   // --- Helper to inject custom font ---

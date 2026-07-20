@@ -19,6 +19,7 @@ import { isVideoShareUrl, parseVideoShareUrl } from '../utils/videoParser';
 import { isDevDebugAvailable } from '../utils/devDebug';
 import { resolveLifeRecordCard } from '../utils/lifeRecords';
 import { createTask } from '../utils/taskSettlement';
+import { syncTaskReminders } from '../utils/taskReminderScheduler';
 import type { TaskProposalMeta } from '../utils/chatParser';
 import { isMcdConfigured } from '../utils/mcdMcpClient';
 import { isMcdActivatedInMessages, MCD_ACTIVATE_TRIGGER, MCD_DEACTIVATE_TRIGGER } from '../utils/mcdToolBridge';
@@ -1212,6 +1213,8 @@ const Chat: React.FC = () => {
             taskId,
         }));
         addToast(`已建立契约：${task.title}`, 'success');
+        // 新建契约落地后重排本地通知（今天到点要响）
+        syncTaskReminders().catch(err => console.warn('[Chat] syncTaskReminders after confirm task failed:', err));
         await reloadMessages(visibleCountRef.current);
     }, [char, userProfile.name, reloadMessages, addToast]);
 

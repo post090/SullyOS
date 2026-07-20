@@ -6,6 +6,7 @@ import AppIcon from '../components/os/AppIcon';
 import { DB } from '../utils/db';
 import { CharacterProfile, Anniversary, AppID, DailySchedule } from '../types';
 import { runDailyCheck } from '../utils/taskSettlement';
+import { syncTaskReminders } from '../utils/taskReminderScheduler';
 import { ScheduleHomeWidget, ScheduleFullscreenViewer } from '../components/schedule/ScheduleHomeWidget';
 import NowPlayingSquareWidget from '../components/os/NowPlayingSquareWidget';
 import MobileGameHome from '../components/os/MobileGameHome';
@@ -560,13 +561,16 @@ const Launcher: React.FC = () => {
       // 迁移不阻塞结算（迁移失败也能直接对 v2 数据跑 daily check）
       DB.migrateLegacyTasksToV2().catch(err => console.warn('[Launcher] migrate legacy tasks failed:', err));
       runDailyCheck(characters, userProfile, apiConfig).then(results => {
-          if (!results.length) return;
-          const totalCoins = results.reduce((s, r) => s + r.coinDelta, 0);
-          const archived = results.filter(r => r.archived).length;
-          let msg = `已结算 ${results.length} 份契约`;
-          if (totalCoins !== 0) msg += `，流通币 ${totalCoins > 0 ? '+' : ''}${totalCoins}`;
-          if (archived > 0) msg += `，归档 ${archived} 份`;
-          addToast(msg, totalCoins >= 0 ? 'success' : 'error');
+          if (results.length) {
+              const totalCoins = results.reduce((s, r) => s + r.coinDelta, 0);
+              const archived = results.filter(r => r.archived).length;
+              let msg = `已结算 ${results.length} 份契约`;
+              if (totalCoins !== 0) msg += `，流通币 ${totalCoins > 0 ? '+' : ''}${totalCoins}`;
+              if (archived > 0) msg += `，归档 ${archived} 份`;
+              addToast(msg, totalCoins >= 0 ? 'success' : 'error');
+          }
+          // 跨日结算跑完后重排本地通知（取消旧的、按今天的任务状态重新排今天的提醒）
+          syncTaskReminders().catch(err => console.warn('[Launcher] syncTaskReminders failed:', err));
       }).catch(err => console.warn('[Launcher] daily check failed:', err));
   }, [isDataLoaded, apiConfig, userProfile, characters, addToast]);
 

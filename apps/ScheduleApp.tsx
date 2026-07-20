@@ -25,6 +25,7 @@ import { Anniversary, CharacterProfile, TaskV2 } from '../types';
 import Modal from '../components/os/Modal';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
 import { markTaskDone, skipToday, archiveTaskManual } from '../utils/taskSettlement';
+import { syncTaskReminders } from '../utils/taskReminderScheduler';
 import {
     computeCurrentStreak,
     computeBestStreak,
@@ -245,6 +246,9 @@ const ScheduleApp: React.FC = () => {
         const [t, a] = await Promise.all([DB.getAllTaskV2(), DB.getAllAnniversaries()]);
         setTasks(t.sort((a, b) => b.createdAt - a.createdAt));
         setAnniversaries(a.sort((a, b) => a.date.localeCompare(b.date)));
+        // 进入 App 时重排本地通知（任务状态可能已经变，比如跨日打卡）；
+        // Web 平台 / 未授权 syncTaskReminders 内部静默跳过。
+        syncTaskReminders().catch(err => console.warn('[ScheduleApp] syncTaskReminders failed:', err));
     };
 
     const toggleTheme = () => {
@@ -338,6 +342,7 @@ const ScheduleApp: React.FC = () => {
         setShowTaskModal(false);
         resetForm();
         addToast('已创建契约', 'success');
+        syncTaskReminders().catch(err => console.warn('[ScheduleApp] syncTaskReminders after create failed:', err));
     };
 
     const resetForm = () => {
@@ -367,6 +372,7 @@ const ScheduleApp: React.FC = () => {
             addToast(`打卡失败: ${err?.message || '未知错误'}`, 'error');
         } finally {
             setProcessingTaskIds(prev => { const n = new Set(prev); n.delete(task.id); return n; });
+            syncTaskReminders().catch(err => console.warn('[ScheduleApp] syncTaskReminders after checkin failed:', err));
         }
     };
 
@@ -374,17 +380,20 @@ const ScheduleApp: React.FC = () => {
         const updated = await skipToday(task);
         setTasks(prev => prev.map(t => t.id === task.id ? updated : t));
         addToast('已请假跳过今天', 'info');
+        syncTaskReminders().catch(err => console.warn('[ScheduleApp] syncTaskReminders after skip failed:', err));
     };
 
     const handleArchive = async (task: TaskV2) => {
         const updated = await archiveTaskManual(task);
         setTasks(prev => prev.map(t => t.id === task.id ? updated : t));
         addToast('已归档', 'info');
+        syncTaskReminders().catch(err => console.warn('[ScheduleApp] syncTaskReminders after archive failed:', err));
     };
 
     const handleDelete = async (id: string) => {
         await DB.deleteTaskV2(id);
         setTasks(prev => prev.filter(t => t.id !== id));
+        syncTaskReminders().catch(err => console.warn('[ScheduleApp] syncTaskReminders after delete failed:', err));
     };
 
     // --- 纪念日操作 ---

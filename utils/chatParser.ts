@@ -11,6 +11,7 @@ import {
     skipToday,
     archiveTaskManual,
 } from './taskSettlement';
+import { syncTaskReminders } from './taskReminderScheduler';
 
 export interface MusicActionSnapshot {
     songId: number;
@@ -386,6 +387,7 @@ export const ChatParser = {
             const DONE_RE = /\[\[TASK_DONE:\s*([^\]]*?)\s*\]\]/;
             const DONE_GLOBAL_RE = /\[\[TASK_DONE:[^\]]*\]\]/g;
             const doneMatch = content.match(DONE_RE);
+            let taskTouched = false;
             if (doneMatch) {
                 const keyword = doneMatch[1].trim();
                 const task = await findTaskByTitle(taskHooks.char.id, keyword);
@@ -393,6 +395,7 @@ export const ChatParser = {
                     try {
                         await markTaskDone(task, [taskHooks.char], taskHooks.userProfile, taskHooks.apiConfig);
                         addToast(`已完成「${task.title}」+${task.rewardCoins}`, 'success');
+                        taskTouched = true;
                     } catch (err) {
                         console.warn('[TaskAction] markTaskDone failed:', err);
                         addToast(`打卡失败：${task.title}`, 'error');
@@ -414,6 +417,7 @@ export const ChatParser = {
                     try {
                         await skipToday(task);
                         addToast(`已请假：${task.title}`, 'info');
+                        taskTouched = true;
                     } catch (err) {
                         console.warn('[TaskAction] skipToday failed:', err);
                         addToast(`请假失败：${task.title}`, 'error');
@@ -435,6 +439,7 @@ export const ChatParser = {
                     try {
                         await archiveTaskManual(task);
                         addToast(`已归档：${task.title}`, 'info');
+                        taskTouched = true;
                     } catch (err) {
                         console.warn('[TaskAction] archiveTaskManual failed:', err);
                         addToast(`归档失败：${task.title}`, 'error');
@@ -443,6 +448,11 @@ export const ChatParser = {
                     addToast(`${charName} 找不到对应契约：${keyword}`, 'error');
                 }
                 content = content.replace(ARCHIVE_GLOBAL_RE, '').trim();
+            }
+
+            // 任一任务状态变化后，重排本地通知（今天已打卡/请假/归档的不再催）
+            if (taskTouched) {
+                syncTaskReminders().catch(err => console.warn('[TaskAction] syncTaskReminders failed:', err));
             }
         } else if (!taskHooks && content.includes('[[TASK_')) {
             // taskHooks 没提供（不该发生但容错）—— 静默剥 tag
