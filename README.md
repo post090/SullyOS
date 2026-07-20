@@ -18,6 +18,7 @@
 - 时光契约任务监督系统（私聊建任务 / 卡片确认 / 通话日记查手机只读感知 / 定时催 / 优化三套自带主题样式）
 - TTS 接入 ElevenLabs v3
 - APK 自动构建（固定签名 + release 自动 changelog）
+- RSS 订阅源支持：实时感知加 13 个 RSS内置源（orz.ai 热榜 + RSS 混合），Settings 加 RSS 区块支持自定义源增删，热点 App 并列显示
 
 **APK 体验优化**
 - 网易云扫码登录持久化（cookie 进 IndexedDB 镜像）
