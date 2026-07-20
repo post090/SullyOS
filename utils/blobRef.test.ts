@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
     isBlobRef, BLOBREF_PREFIX,
-    putImageBlob, getBlobForRef, deleteBlobRef,
+    putImageBlob, getBlobForRef, deleteBlobRef, deleteBlobRefIfUnreferenced,
     dataUrlToBlob, blobToDataUrl,
-    migrateDataUrlToRef, resolveBlobRefsDeep,
+    migrateDataUrlToRef, migrateAppearancePresetBlobRefs, resolveBlobRefsDeep,
 } from './blobRef';
+import { DB } from './db';
 
 // fake-indexeddb 已由 test-setup.ts 注入；本组用例锁住 base64 ⇄ Blob 迁移层的核心不变量：
 // 令牌识别、Blob 存取、data URL 互转无损、深度解析（备份导出前把令牌变回 data:image）。
@@ -53,6 +54,31 @@ describe('putImageBlob / getBlobForRef / deleteBlobRef', () => {
     });
 });
 
+describe('deleteBlobRefIfUnreferenced', () => {
+    it('外观预设仍引用时保留，引用移除后才删除', async () => {
+        const ref = await putImageBlob(dataUrlToBlob(TINY_PNG));
+        await DB.saveAsset('appearance_preset_blobref_test', JSON.stringify({ wallpaper: ref }));
+
+        expect(await deleteBlobRefIfUnreferenced(ref)).toBe(false);
+        expect(await getBlobForRef(ref)).not.toBeNull();
+
+        await DB.deleteAsset('appearance_preset_blobref_test');
+        expect(await deleteBlobRefIfUnreferenced(ref)).toBe(true);
+        expect(await getBlobForRef(ref)).toBeNull();
+    });
+
+    it('localStorage 皮肤备份仍引用时不会删除', async () => {
+        const ref = await putImageBlob(dataUrlToBlob(TINY_PNG));
+        localStorage.setItem('acnh_wallpaper_backup_test', ref);
+
+        expect(await deleteBlobRefIfUnreferenced(ref)).toBe(false);
+        expect(await getBlobForRef(ref)).not.toBeNull();
+
+        localStorage.removeItem('acnh_wallpaper_backup_test');
+        expect(await deleteBlobRefIfUnreferenced(ref)).toBe(true);
+    });
+});
+
 describe('migrateDataUrlToRef', () => {
     it('data: 迁移成令牌，且能取回原图', async () => {
         const ref = await migrateDataUrlToRef(TINY_PNG);
@@ -64,6 +90,32 @@ describe('migrateDataUrlToRef', () => {
     it('非法 data URL 迁移失败时原样返回，不抛错、不丢值', async () => {
         const bad = 'not-a-data-url';
         expect(await migrateDataUrlToRef(bad)).toBe(bad);
+    });
+});
+
+describe('migrateAppearancePresetBlobRefs', () => {
+    it('导入时立即迁移壁纸、锁屏和自定义图标，并复用相同图片 Blob', async () => {
+        const source: any = {
+            id: 'preset_import_test',
+            name: '导入测试',
+            createdAt: 1,
+            theme: {
+                hue: 88,
+                saturation: 14,
+                lightness: 46,
+                wallpaper: TINY_PNG,
+                lockWallpaper: TINY_PNG,
+                darkMode: false,
+            },
+            customIcons: { chat: TINY_PNG },
+        };
+
+        const migrated = await migrateAppearancePresetBlobRefs(source);
+        expect(isBlobRef(migrated.theme.wallpaper)).toBe(true);
+        expect(migrated.theme.lockWallpaper).toBe(migrated.theme.wallpaper);
+        expect(migrated.customIcons?.chat).toBe(migrated.theme.wallpaper);
+        expect(await blobToDataUrl((await getBlobForRef(migrated.theme.wallpaper))!)).toBe(TINY_PNG);
+        expect(source.theme.wallpaper).toBe(TINY_PNG);
     });
 });
 

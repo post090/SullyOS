@@ -136,6 +136,7 @@ interface ScheduleHomeWidgetProps {
     contentColor?: string;
     onOpen: () => void;
     acnh?: boolean;
+    paper?: boolean;
 }
 
 export const ScheduleHomeWidget: React.FC<ScheduleHomeWidgetProps> = ({
@@ -144,6 +145,7 @@ export const ScheduleHomeWidget: React.FC<ScheduleHomeWidgetProps> = ({
     contentColor = '#ffffff',
     onOpen,
     acnh = false,
+    paper = false,
 }) => {
     const currentIdx = schedule ? getCurrentSlotIndex(schedule.slots) : -1;
     const currentSlot = currentIdx >= 0 ? schedule!.slots[currentIdx] : null;
@@ -151,8 +153,8 @@ export const ScheduleHomeWidget: React.FC<ScheduleHomeWidgetProps> = ({
         ? schedule.slots[currentIdx + 1]
         : null;
 
-    const accentHsl = `hsl(${character?.themeColor ?? 260}, 70%, 65%)`;
-    const accentSoft = `hsla(${character?.themeColor ?? 260}, 70%, 55%, 0.28)`;
+    const accentHsl = paper ? '#788369' : `hsl(${character?.themeColor ?? 260}, 70%, 65%)`;
+    const accentSoft = paper ? 'rgba(120,131,105,0.14)' : `hsla(${character?.themeColor ?? 260}, 70%, 55%, 0.28)`;
 
     const now = new Date();
     const timeLabel = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
@@ -223,7 +225,12 @@ export const ScheduleHomeWidget: React.FC<ScheduleHomeWidgetProps> = ({
         <button
             onClick={onOpen}
             className="w-full group text-left rounded-3xl overflow-hidden transition-transform duration-200 active:scale-[0.98] relative"
-            style={acnh ? {
+            style={paper ? {
+                background: 'rgba(224,221,215,0.40)',
+                border: '1px solid rgba(91,72,51,0.07)',
+                boxShadow: '0 5px 16px rgba(91,72,51,0.055)',
+                color: contentColor,
+            } : acnh ? {
                 background: 'rgb(247,243,223)',
                 border: '2px solid #e8e2d6',
                 boxShadow: '0 6px 18px rgba(61,52,40,0.12)',
@@ -238,7 +245,7 @@ export const ScheduleHomeWidget: React.FC<ScheduleHomeWidgetProps> = ({
             }}
         >
             {/* Blurred avatar glow（动森奶油底下省略，避免糊脏） */}
-            {!acnh && character?.avatar && (
+            {!acnh && !paper && character?.avatar && (
                 <div
                     className="absolute inset-0 opacity-25 pointer-events-none"
                     style={{
@@ -252,13 +259,13 @@ export const ScheduleHomeWidget: React.FC<ScheduleHomeWidgetProps> = ({
             )}
             {/* Accent corner glow */}
             <div
-                className="absolute -top-12 -right-12 w-32 h-32 rounded-full pointer-events-none opacity-40"
+                className={`absolute -top-12 -right-12 w-32 h-32 rounded-full pointer-events-none ${paper ? 'opacity-10' : 'opacity-40'}`}
                 style={{ background: `radial-gradient(circle, ${accentHsl}, transparent 70%)` }}
             />
             {/* Accent vertical stripe */}
             <div
                 className="absolute left-0 top-0 bottom-0 w-[3px]"
-                style={{ background: `linear-gradient(to bottom, ${accentHsl}, transparent)` }}
+                style={{ background: paper ? 'linear-gradient(to bottom, #788369, rgba(120,131,105,0.12))' : `linear-gradient(to bottom, ${accentHsl}, transparent)` }}
             />
 
             <div className="relative flex flex-col p-4 gap-3">
@@ -272,10 +279,10 @@ export const ScheduleHomeWidget: React.FC<ScheduleHomeWidgetProps> = ({
                 {/* Main row: avatar | activity */}
                 <div className="flex items-center gap-4">
                     <div
-                        className="w-[72px] h-[72px] shrink-0 rounded-2xl overflow-hidden bg-slate-800/60 relative"
+                        className={`w-[72px] h-[72px] shrink-0 rounded-2xl overflow-hidden relative ${paper ? 'bg-[#ded2c1]' : 'bg-slate-800/60'}`}
                         style={{
-                            border: '1.5px solid rgba(255,255,255,0.24)',
-                            boxShadow: '0 6px 18px rgba(0,0,0,0.3)',
+                            border: paper ? '1px solid rgba(91,72,51,0.14)' : '1.5px solid rgba(255,255,255,0.24)',
+                            boxShadow: paper ? '0 6px 16px rgba(91,72,51,0.13)' : '0 6px 18px rgba(0,0,0,0.3)',
                         }}
                     >
                         {character?.avatar ? (
@@ -298,9 +305,9 @@ export const ScheduleHomeWidget: React.FC<ScheduleHomeWidgetProps> = ({
                             <span
                                 className="text-[9px] font-bold tracking-[0.22em] uppercase px-1.5 py-0.5 rounded-full"
                                 style={{
-                                    background: currentSlot ? accentSoft : 'rgba(255,255,255,0.14)',
+                                    background: currentSlot ? accentSoft : paper ? 'rgba(91,72,51,0.07)' : 'rgba(255,255,255,0.14)',
                                     color: currentSlot ? accentHsl : undefined,
-                                    border: '1px solid rgba(255,255,255,0.16)',
+                                    border: paper ? '1px solid rgba(91,72,51,0.10)' : '1px solid rgba(255,255,255,0.16)',
                                 }}
                             >
                                 {currentSlot ? 'Now' : 'Idle'}
@@ -314,9 +321,9 @@ export const ScheduleHomeWidget: React.FC<ScheduleHomeWidgetProps> = ({
                         </div>
                         <div className="flex items-center gap-1.5 min-w-0">
                             {currentSlot?.emoji && (
-                                <span className="text-lg shrink-0 drop-shadow-md">{currentSlot.emoji}</span>
+                                <span className={`text-lg shrink-0 ${paper ? '' : 'drop-shadow-md'}`}>{currentSlot.emoji}</span>
                             )}
-                            <span className="text-[15px] font-bold truncate drop-shadow-md leading-tight">
+                            <span className={`text-[15px] font-bold truncate leading-tight ${paper ? '' : 'drop-shadow-md'}`}>
                                 {currentSlot?.activity || (schedule ? '休息中 · 暂无安排' : '尚未生成日程')}
                             </span>
                         </div>
@@ -337,7 +344,7 @@ export const ScheduleHomeWidget: React.FC<ScheduleHomeWidgetProps> = ({
                     {/* Open indicator */}
                     <div
                         className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center opacity-70 group-hover:opacity-100 transition-opacity self-start"
-                        style={{ background: 'rgba(255,255,255,0.14)', border: '1px solid rgba(255,255,255,0.2)' }}
+                        style={{ background: paper ? 'rgba(120,131,105,0.10)' : 'rgba(255,255,255,0.14)', border: paper ? '1px solid rgba(91,72,51,0.11)' : '1px solid rgba(255,255,255,0.2)' }}
                     >
                         <svg viewBox="0 0 24 24" fill="none" strokeWidth={2.2} stroke="currentColor" className="w-3.5 h-3.5">
                             <path strokeLinecap="round" strokeLinejoin="round" d="M3 7.5V5a2 2 0 0 1 2-2h2.5M21 7.5V5a2 2 0 0 0-2-2h-2.5M3 16.5V19a2 2 0 0 0 2 2h2.5M21 16.5V19a2 2 0 0 1-2 2h-2.5" />
@@ -359,8 +366,8 @@ export const ScheduleHomeWidget: React.FC<ScheduleHomeWidgetProps> = ({
                                     <div
                                         className="w-full h-[3px] rounded-full transition-all"
                                         style={{
-                                            background: isCurrent ? accentHsl : isPast ? 'rgba(255,255,255,0.32)' : 'rgba(255,255,255,0.14)',
-                                            boxShadow: isCurrent ? `0 0 8px ${accentHsl}` : 'none',
+                                            background: isCurrent ? accentHsl : isPast ? (paper ? 'rgba(91,72,51,0.22)' : 'rgba(255,255,255,0.32)') : (paper ? 'rgba(91,72,51,0.10)' : 'rgba(255,255,255,0.14)'),
+                                            boxShadow: isCurrent && !paper ? `0 0 8px ${accentHsl}` : 'none',
                                         }}
                                     ></div>
                                     <span

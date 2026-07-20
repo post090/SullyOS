@@ -1167,8 +1167,13 @@ export const DB = {
 
   deleteAsset: async (id: string): Promise<void> => {
     const db = await openDB();
-    const transaction = db.transaction(STORE_ASSETS, 'readwrite');
-    transaction.objectStore(STORE_ASSETS).delete(id);
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(STORE_ASSETS, 'readwrite');
+      transaction.objectStore(STORE_ASSETS).delete(id);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error || new Error('deleteAsset aborted'));
+    });
   },
 
   // ─── Blob 资源（图片二进制，见 utils/blobRef.ts）───────────────
@@ -1200,8 +1205,13 @@ export const DB = {
   deleteBlobAsset: async (id: string): Promise<void> => {
       const db = await openDB();
       if (!db.objectStoreNames.contains(STORE_BLOB_ASSETS)) return;
-      const transaction = db.transaction(STORE_BLOB_ASSETS, 'readwrite');
-      transaction.objectStore(STORE_BLOB_ASSETS).delete(id);
+      return new Promise((resolve, reject) => {
+          const transaction = db.transaction(STORE_BLOB_ASSETS, 'readwrite');
+          transaction.objectStore(STORE_BLOB_ASSETS).delete(id);
+          transaction.oncomplete = () => resolve();
+          transaction.onerror = () => reject(transaction.error);
+          transaction.onabort = () => reject(transaction.error || new Error('deleteBlobAsset aborted'));
+      });
   },
 
   getJournalStickers: async (): Promise<{name: string, url: string}[]> => {

@@ -74,6 +74,8 @@ export interface OSTheme {
   saturation: number;
   lightness: number;
   wallpaper: string;
+  /** 独立锁屏壁纸；未设置时跟随桌面 wallpaper。 */
+  lockWallpaper?: string;
   darkMode: boolean;
   contentColor?: string;
   /** 桌面整体皮肤。'animalcrossing' = 动森风格（NookPhone 彩色圆角图标 + 暖色界面）；
@@ -84,7 +86,13 @@ export interface OSTheme {
   acnhChatSync?: boolean;
   launcherWidgetImage?: string; // DEPRECATED: always stripped on load — never renders.
   launcherWidgets?: Record<string, string>; // slots: 'tl' | 'tr' | 'wide' | 'dsq' (legacy 'bl' / 'br' are banned)
-  /** 默认皮肤桌面「正在播放」音乐卡片改用浅色系样式（默认 false = 深色玻璃）。 */
+  /** 默认桌面长按编辑后的 App / Dock / 第二页风车组件顺序。 */
+  launcherAppOrder?: string[];
+  launcherDockOrder?: string[];
+  launcherPinwheelOrder?: Array<'music' | 'appsA' | 'appsB' | 'image'>;
+  /** 自定义透明图标是否保留原始轮廓并移除系统圆角底框。默认 false。 */
+  preserveCustomIconOutlines?: boolean;
+  /** 默认皮肤桌面「正在播放」音乐卡片改用浅色系样式（新安装默认 true）。 */
   nowPlayingWidgetLight?: boolean;
   desktopDecorations?: DesktopDecoration[];
   customFont?: string;

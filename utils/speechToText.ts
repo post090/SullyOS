@@ -116,17 +116,18 @@ const startNative = async (lang: string, cb: SttCallbacks): Promise<SttSession> 
   // ── 1. 实际可用性探测：available() 检查系统有没有 RecognitionService ──
   // isSttSupported() 在 native 端无条件 return true（插件存在），但插件存在 ≠ 系统能识别。
   // 国产 ROM（华为/小米/OPPO 老版本）经常裁剪 RecognitionService，必须实际查一下。
+  // 注意：部分插件版本在某些 ROM 上 available() 会 reject 一个非 Error 原生对象（.message 还是对象），
+  // 这里把任何 reject 都当不可用处理 —— 与其继续往下走撞墙，不如直接报清楚。
   try {
     const avail = await SpeechRecognition.available();
     if (!avail.available) {
       throw new Error('系统语音识别不可用（国产 ROM 常裁剪 RecognitionService）。可以试试装个带 GMS 的设备、或者用文字输入。');
     }
   } catch (e: any) {
-    // available() 自己抛错（部分插件版本在某些 ROM 上不实现）→ 当作不可用处理。
-    const msg = e?.message || '';
-    if (/不可用|RecognitionService|available/i.test(msg)) throw e;
-    // 否则继续走，让 start() 自己暴露真正的错误（至少能拿 log）。
-    console.warn('[stt:native] available() check failed, will try start() anyway:', e);
+    const raw = (e && (e.message || String(e))) || '';
+    const msg = typeof raw === 'string' ? raw : String(raw);
+    if (/不可用|RecognitionService|available/i.test(msg)) throw new Error(msg);
+    throw new Error('系统语音识别不可用（available() 探测失败）。可能是 ROM 裁剪了 RecognitionService，可以试试装个带 GMS 的设备、或者用文字输入。');
   }
 
   // ── 2. 权限检查 ──
@@ -149,14 +150,17 @@ const startNative = async (lang: string, cb: SttCallbacks): Promise<SttSession> 
     if (m) { lastPartial = m; cb.onPartial?.(m); }
   });
 
-  const finish = (finalText: string, errMsg?: string) => {
+  const finish = (finalText: string, errMsg?: unknown) => {
     if (ended) return;
     ended = true;
     clearWatchdog();
     handle.remove().catch(() => { /* ignore */ });
     if (errMsg) {
-      console.error('[stt:native] error:', errMsg);
-      cb.onError?.(friendlyError(errMsg));
+      // errMsg 可能是 Error / 字符串 / 原生对象 —— 都规整成字符串。
+      const raw = (errMsg instanceof Error && errMsg.message) || (typeof errMsg === 'string' && errMsg) || String(errMsg);
+      const text = typeof raw === 'string' ? raw : String(raw);
+      console.error('[stt:native] error:', text, errMsg);
+      cb.onError?.(friendlyError(text));
     } else if (finalText) {
       cb.onFinal?.(finalText);
     }
@@ -164,9 +168,16 @@ const startNative = async (lang: string, cb: SttCallbacks): Promise<SttSession> 
   };
 
   // With partialResults: true, start() resolves once recognition settles.
-  SpeechRecognition.start({ language: lang, partialResults: true, popup: false, maxResults: 1 })
-    .then((res: any) => finish((res?.matches?.[0] || lastPartial || '').trim()))
-    .catch((e: any) => finish('', e?.message || 'native-error'));
+  // 关键：某些 ROM 上 start() 会同步抛异常（不在 Promise 链里），必须用 try 包住。
+  try {
+    SpeechRecognition.start({ language: lang, partialResults: true, popup: false, maxResults: 1 })
+      .then((res: any) => finish((res?.matches?.[0] || lastPartial || '').trim()))
+      .catch((e: any) => finish('', e?.message || 'native-error'));
+  } catch (e: any) {
+    // 同步抛出：把异常对象规整成字符串后走 finish。
+    const raw = (e && (e.message || String(e))) || 'native-error';
+    finish('', typeof raw === 'string' ? raw : String(raw));
+  }
 
   // ── 3. native 端看门狗：和 web 端对齐 ──
   // 部分 ROM 上 start() 既不 resolve 也不 reject（卡死等待系统回调），用户看到麦克风一直亮着但无响应。

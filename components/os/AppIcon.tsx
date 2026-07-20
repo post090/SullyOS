@@ -2,7 +2,8 @@
 import React from 'react';
 import { AppConfig } from '../../types';
 import { Icons } from '../../constants';
-import { useOS } from '../../context/OSContext';
+import { isPaperWallpaper, useOS } from '../../context/OSContext';
+import { useBlobRefUrl } from '../../utils/blobRef';
 import { getAcnhIcon } from './acnhIcons';
 import { preloadApp } from './appPreload';
 
@@ -25,8 +26,10 @@ const NOOK_TILE_COLORS: Record<string, string> = {
 const AppIcon: React.FC<AppIconProps> = React.memo(({ app, onClick, size = 'md', hideLabel = false, variant = 'default' }) => {
   const { customIcons, theme } = useOS();
   const IconComponent = Icons[app.icon] || Icons.Settings;
-  const customIconUrl = customIcons[app.id];
+  const customIconUrl = useBlobRefUrl(customIcons[app.id]);
   const isNook = theme.skin === 'animalcrossing';
+  const isPaperDesktop = theme.skin !== 'animalcrossing' && theme.skin !== 'mobilegame' && theme.skin !== 'tamagotchi' && isPaperWallpaper(theme.wallpaper);
+  const preserveCustomOutline = !!customIconUrl && theme.preserveCustomIconOutlines === true;
   // 动森皮肤下标签用深棕色，普通皮肤沿用主题 contentColor。
   const contentColor = isNook ? '#725d42' : (theme.contentColor || '#ffffff');
 
@@ -74,23 +77,37 @@ const AppIcon: React.FC<AppIconProps> = React.memo(({ app, onClick, size = 'md',
       className="flex flex-col items-center gap-1.5 group relative active:scale-95 transition-transform duration-200"
       style={{ WebkitTapHighlightColor: 'transparent' }}
     >
-      {/*
-        Keep uploaded artwork untouched: transparent PNG/WebP icons often provide their own
-        silhouette, so the system tile would otherwise show through as an unwanted white frame.
-        The translucent rounded tile remains the fallback treatment for built-in glyphs only.
-      */}
-      <div className={`${sizeClasses} relative flex items-center justify-center ${customIconUrl ? '' : `
+      {/* #409 的“保留透明图标原轮廓”改为可选；默认继续使用原来的系统圆角底框。 */}
+      <div
+        className={`${sizeClasses} relative flex items-center justify-center ${preserveCustomOutline ? '' : isPaperDesktop ? `
+          rounded-[1.1rem] border
+          transition-[transform,background-color,box-shadow] duration-200
+          group-hover:-translate-y-0.5
+        ` : `
         bg-white/40 rounded-[1.125rem]
         border border-white/35
         shadow-[0_4px_12px_rgba(0,0,0,0.16)]
         group-hover:bg-white/50 group-hover:border-white/50
-      `}`}>
+      `}`}
+        style={!preserveCustomOutline && isPaperDesktop ? {
+          background: 'rgba(224,221,215,0.42)',
+          borderColor: 'rgba(91,72,51,0.075)',
+          boxShadow: '0 4px 12px rgba(91,72,51,0.055)',
+        } : undefined}
+      >
 
         {customIconUrl ? (
-            <img src={customIconUrl} className="w-full h-full object-contain" alt={app.name} loading="lazy" />
+            <img
+              src={customIconUrl}
+              className={`w-full h-full ${preserveCustomOutline ? 'object-contain' : 'object-cover rounded-[1.2rem]'}`}
+              alt={app.name}
+              loading="lazy"
+            />
         ) : (
             <div 
-                className="w-[50%] h-[50%] drop-shadow-[0_2px_5px_rgba(0,0,0,0.3)] opacity-90"
+                className={isPaperDesktop
+                  ? 'w-[47%] h-[47%] opacity-80'
+                  : 'w-[50%] h-[50%] drop-shadow-[0_2px_5px_rgba(0,0,0,0.3)] opacity-90'}
                 style={{ color: contentColor }}
             >
                  <IconComponent className="w-full h-full" />
@@ -100,7 +117,7 @@ const AppIcon: React.FC<AppIconProps> = React.memo(({ app, onClick, size = 'md',
       
       {!hideLabel && (
         <span
-            className={`${size === 'sm' ? 'text-[8.5px] tracking-wider' : 'text-[10px] tracking-widest'} font-bold uppercase opacity-80 text-shadow-md transition-opacity max-w-full truncate ${variant === 'dock' ? 'hidden' : 'block'}`}
+            className={`${size === 'sm' ? 'text-[8.5px]' : 'text-[10px]'} ${isPaperDesktop ? 'tracking-[0.08em] font-semibold opacity-75' : 'tracking-widest font-bold uppercase opacity-80 text-shadow-md'} transition-opacity max-w-full truncate ${variant === 'dock' ? 'hidden' : 'block'}`}
             style={{ color: contentColor }}
         >
           {app.name}

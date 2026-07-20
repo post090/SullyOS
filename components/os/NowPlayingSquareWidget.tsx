@@ -5,7 +5,7 @@
  */
 import React from 'react';
 import { Play, Pause, SkipBack, SkipForward } from '@phosphor-icons/react';
-import { useOS } from '../../context/OSContext';
+import { isPaperWallpaper, useOS } from '../../context/OSContext';
 import { useMusic } from '../../context/MusicContext';
 import { AppID } from '../../types';
 
@@ -20,6 +20,7 @@ const NowPlayingSquareWidget: React.FC<{ contentColor: string }> = ({ contentCol
   const { openApp, theme } = useOS();
   const { current, playing, progress, duration, togglePlay, nextSong, prevSong } = useMusic();
   const acnh = theme.skin === 'animalcrossing'; // 动森：奶油卡片 + 薄荷进度
+  const paper = theme.skin !== 'animalcrossing' && theme.skin !== 'mobilegame' && theme.skin !== 'tamagotchi' && isPaperWallpaper(theme.wallpaper);
 
   const pct = duration > 0 ? (progress / duration) * 100 : 0;
   const hasSong = !!current;
@@ -28,7 +29,7 @@ const NowPlayingSquareWidget: React.FC<{ contentColor: string }> = ({ contentCol
   const title = current?.name || '抽一张来听';
   const artists = current?.artists || '— 轻触，进入';
   const statusText = !hasSong ? 'Standby' : (playing ? 'Now Playing' : 'Paused');
-  const dotColor = !hasSong ? '#fbbf24' : (playing ? '#4ade80' : '#fbbf24');
+  const dotColor = paper ? (!hasSong ? '#a66f52' : '#788369') : (!hasSong ? '#fbbf24' : (playing ? '#4ade80' : '#fbbf24'));
 
   const stopProp = (e: React.MouseEvent) => { e.stopPropagation(); };
   const handlePlay = (e: React.MouseEvent) => { e.stopPropagation(); if (hasSong) togglePlay(); else openApp(AppID.Music); };
@@ -95,8 +96,23 @@ const NowPlayingSquareWidget: React.FC<{ contentColor: string }> = ({ contentCol
 
   // 浅色系变体（外观设置可切换）：白卡 + 深字，给不喜欢深色玻璃卡的用户。
   const light = !!theme.nowPlayingWidgetLight;
-  const palette = light
+  const palette = paper
     ? {
+        textColor: '#4b4136',
+        cardBg: 'rgba(224,221,215,0.38)',
+        cardBorder: '1px solid rgba(91,72,51,0.07)',
+        cardShadow: '0 5px 16px rgba(91,72,51,0.055)',
+        coverOpacity: 0.14,
+        idleGlow:
+          'radial-gradient(110% 90% at 100% 100%, rgba(166,111,82,0.08), transparent 58%),' +
+          'radial-gradient(100% 80% at 0% 0%, rgba(120,131,105,0.10), transparent 62%)',
+        thumbBg: 'rgba(120,131,105,0.08)',
+        thumbBorder: '1px solid rgba(91,72,51,0.12)',
+        trackBg: 'rgba(91,72,51,0.12)',
+        playBg: '#5f684f',
+        playColor: '#fffdf8',
+      }
+    : light ? {
         textColor: '#46415c',
         cardBg: 'rgba(255,255,255,0.74)',
         cardBorder: '1px solid rgba(120,110,150,0.18)',
@@ -163,7 +179,7 @@ const NowPlayingSquareWidget: React.FC<{ contentColor: string }> = ({ contentCol
           style={{
             background: palette.thumbBg,
             border: palette.thumbBorder,
-            boxShadow: light ? '0 2px 8px rgba(80,70,120,0.14)' : '0 2px 8px rgba(0,0,0,0.25)',
+            boxShadow: paper ? '0 3px 9px rgba(91,72,51,0.10)' : light ? '0 2px 8px rgba(80,70,120,0.14)' : '0 2px 8px rgba(0,0,0,0.25)',
           }}
         >
           {albumPic ? (
@@ -217,8 +233,8 @@ const NowPlayingSquareWidget: React.FC<{ contentColor: string }> = ({ contentCol
             <div className="h-full rounded-full transition-[width] duration-150"
               style={{
                 width: `${pct}%`,
-                background: acnh ? 'linear-gradient(90deg, #82D5BB, #6fba2c)' : 'linear-gradient(90deg, #60a5fa, #c084fc)',
-                boxShadow: acnh ? 'none' : '0 0 6px rgba(192,132,252,0.55)',
+                background: acnh ? 'linear-gradient(90deg, #82D5BB, #6fba2c)' : paper ? 'linear-gradient(90deg, #a66f52, #788369)' : 'linear-gradient(90deg, #60a5fa, #c084fc)',
+                boxShadow: acnh || paper ? 'none' : '0 0 6px rgba(192,132,252,0.55)',
               }} />
           </div>
           <div className="flex justify-between text-[7.5px] uppercase font-medium opacity-50" style={{ letterSpacing: '0.15em' }}>
