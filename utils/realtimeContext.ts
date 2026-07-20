@@ -281,7 +281,6 @@ export const RealtimeContextManager = {
         { label: 'MIT Technology Review', url: 'https://www.technologyreview.com/feed/' },
         { label: 'The Onion', url: 'https://theonion.com/rss' },
         { label: 'Bangumi 每日番组', url: '/rss/bangumi/calendar' },
-        { label: '文京区区报', url: '/rss/bunkyo' },
     ] as { label: string; url: string }[],
 
     /**
