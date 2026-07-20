@@ -27,10 +27,6 @@
 - 数据导出修复（优化 APK 无法正常导出数据的 BUG，原生异常对象不再 toString 成 `[object Object]`）
 - APK 签名固定 / 备份导出修复 / MCP 在 APK 可用 / LLM 模型列表走 nativeFetch
 
-**UI 细节**
-- 聊天输入框 2 行 → 3.5 行
-
-
 以下是原版 README：
 
 ---
