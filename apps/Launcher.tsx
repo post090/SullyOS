@@ -5,6 +5,7 @@ import { isDevDebugAvailable, subscribeDevDebugAvailability } from '../utils/dev
 import AppIcon from '../components/os/AppIcon';
 import { DB } from '../utils/db';
 import { CharacterProfile, Anniversary, AppID, DailySchedule } from '../types';
+import { runDailyCheck } from '../utils/taskSettlement';
 import { ScheduleHomeWidget, ScheduleFullscreenViewer } from '../components/schedule/ScheduleHomeWidget';
 import NowPlayingSquareWidget from '../components/os/NowPlayingSquareWidget';
 import MobileGameHome from '../components/os/MobileGameHome';
@@ -444,7 +445,7 @@ let _lastPageIndex = 0;
 // --- Main Launcher ---
 
 const Launcher: React.FC = () => {
-  const { openApp, characters, activeCharacterId, theme, lastMsgTimestamp, isDataLoaded, unreadMessages } = useOS();
+  const { openApp, characters, activeCharacterId, theme, lastMsgTimestamp, isDataLoaded, unreadMessages, apiConfig, addToast, userProfile } = useOS();
 
   // Local state for widget data to prevent context trashing
   const [widgetChar, setWidgetChar] = useState<CharacterProfile | null>(null);
@@ -462,6 +463,10 @@ const Launcher: React.FC = () => {
   const startX = useRef(0);
   const scrollLeftRef = useRef(0);
   const dragMoved = useRef(0);
+
+  // 跨日结算闸门：同进程内只跑一次（避免和 ScheduleApp 内的兜底迁移 / 后续刷新重复触发）。
+  // runDailyCheck 内部对单个任务是幂等的，但并发跑会重复写存钱罐流水 / 聊天 system 消息。
+  const dailyCheckRanRef = useRef(false);
 
   // Pagination Logic
   // 跟随 DevDebug 可用性：prod 用户在设置页连点 5 下解锁后，CharCreatorDev 立刻出现；
@@ -544,6 +549,26 @@ const Launcher: React.FC = () => {
           loadData();
       }
   }, [activeCharacterId, lastMsgTimestamp, isDataLoaded, characters]); // Trigger on characters change
+
+  // 时光契约跨日结算：数据加载完成后只跑一次（ref 闸门保证不重复）。
+  // 老 Task → TaskV2 迁移是幂等的，ScheduleApp 内也有兜底，但 Launcher 先跑一次更稳。
+  // runDailyCheck 会调 LLM 生成监督人台词，后台跑不阻塞 UI；有变化才 toast。
+  useEffect(() => {
+      if (!isDataLoaded || dailyCheckRanRef.current) return;
+      dailyCheckRanRef.current = true;
+      if (!apiConfig?.apiKey || !userProfile) return;
+      // 迁移不阻塞结算（迁移失败也能直接对 v2 数据跑 daily check）
+      DB.migrateLegacyTasksToV2().catch(err => console.warn('[Launcher] migrate legacy tasks failed:', err));
+      runDailyCheck(characters, userProfile, apiConfig).then(results => {
+          if (!results.length) return;
+          const totalCoins = results.reduce((s, r) => s + r.coinDelta, 0);
+          const archived = results.filter(r => r.archived).length;
+          let msg = `已结算 ${results.length} 份契约`;
+          if (totalCoins !== 0) msg += `，流通币 ${totalCoins > 0 ? '+' : ''}${totalCoins}`;
+          if (archived > 0) msg += `，归档 ${archived} 份`;
+          addToast(msg, totalCoins >= 0 ? 'success' : 'error');
+      }).catch(err => console.warn('[Launcher] daily check failed:', err));
+  }, [isDataLoaded, apiConfig, userProfile, characters, addToast]);
 
   // Schedule widget data loading (shown below SpecialMoments icon)
   const scheduleChar = useMemo(() => {

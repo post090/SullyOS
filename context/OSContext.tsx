@@ -2913,7 +2913,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               // character_groups（角色分组定义）必须与 characters 同进退：
               // 角色身上的 groupId 指向这张表，漏导会让导入端全员回落「未分组」
               'characters', 'character_groups', 'messages', 'themes', 'emojis', 'emoji_categories', 'assets', 'gallery',
-              'user_profile', 'diaries', 'tasks', 'anniversaries', 'room_todos',
+              'user_profile', 'diaries', 'tasks', 'tasks_v2', 'anniversaries', 'room_todos',
               'room_notes', 'groups', 'journal_stickers', 'social_posts', 'courses', 'games', 'worldbooks', 'novels', 'songs',
               'bank_transactions', 'bank_data',
               'xhs_activities', 'xhs_stock',
@@ -3300,6 +3300,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                   case 'user_profile': if (processedData[0]) backupData.userProfile = processedData[0]; break;
                   case 'diaries': backupData.diaries = processedData; break;
                   case 'tasks': backupData.tasks = processedData; break;
+                  case 'tasks_v2': backupData.tasksV2 = processedData; break;
                   case 'anniversaries': backupData.anniversaries = processedData; break;
                   case 'room_todos': backupData.roomTodos = processedData; break;
                   case 'room_notes': backupData.roomNotes = processedData; break;

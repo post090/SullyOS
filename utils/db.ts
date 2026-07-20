@@ -9,7 +9,8 @@ import {
     LifeSimState, HandbookEntry, Tracker, TrackerEntry, HotNewsSnapshot,
     LifeRecord, MedPlan, LifeRecordSettings, CharacterGroup,
     VRWorldNovel, VRNovelAnnotation, CustomCreatorPart, VRMusicRoomState, VRGuestbookState, VRScript, VRStagedPlay, VRLetter,
-    WorldProfile, WorldEpisode
+    WorldProfile, WorldEpisode,
+    TaskV2,
 } from '../types';
 import { exportPostOfficeLocal, importPostOfficeLocal } from './vrWorld/postOffice';
 import { exportSignalLocal, importSignalLocal } from './vrWorld/signal';
@@ -37,7 +38,8 @@ const STORE_SCHEDULED = 'scheduled_messages';
 const STORE_GALLERY = 'gallery';
 const STORE_USER = 'user_profile'; 
 const STORE_DIARIES = 'diaries';
-const STORE_TASKS = 'tasks'; 
+const STORE_TASKS = 'tasks';
+const STORE_TASKS_V2 = 'tasks_v2'; // 时光契约新任务模型（重复 / 一次性 / 连胜 / 奖惩 / 提醒）
 const STORE_ANNIVERSARIES = 'anniversaries';
 const STORE_ROOM_TODOS = 'room_todos'; 
 const STORE_ROOM_NOTES = 'room_notes'; 
@@ -260,6 +262,7 @@ export const openDB = (): Promise<IDBDatabase> => {
       }
       
       createStore(STORE_TASKS, { keyPath: 'id' });
+      createStore(STORE_TASKS_V2, { keyPath: 'id' });
       createStore(STORE_ANNIVERSARIES, { keyPath: 'id' });
 
       if (!db.objectStoreNames.contains(STORE_ROOM_TODOS)) {
@@ -1465,6 +1468,100 @@ export const DB = {
       const db = await openDB();
       const transaction = db.transaction(STORE_TASKS, 'readwrite');
       transaction.objectStore(STORE_TASKS).delete(id);
+  },
+
+  // --- TaskV2（时光契约新任务模型） ---
+  // 老的 STORE_TASKS / Task 接口保留做向后兼容 + 启动时迁移；新代码全部走 V2。
+  getAllTaskV2: async (): Promise<TaskV2[]> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_TASKS_V2)) return [];
+      return new Promise((resolve, reject) => {
+          const transaction = db.transaction(STORE_TASKS_V2, 'readonly');
+          const store = transaction.objectStore(STORE_TASKS_V2);
+          const request = store.getAll();
+          request.onsuccess = () => resolve(request.result || []);
+          request.onerror = () => reject(request.error);
+      });
+  },
+
+  saveTaskV2: async (task: TaskV2): Promise<void> => {
+      const db = await openDB();
+      const transaction = db.transaction(STORE_TASKS_V2, 'readwrite');
+      transaction.objectStore(STORE_TASKS_V2).put(task);
+  },
+
+  deleteTaskV2: async (id: string): Promise<void> => {
+      const db = await openDB();
+      const transaction = db.transaction(STORE_TASKS_V2, 'readwrite');
+      transaction.objectStore(STORE_TASKS_V2).delete(id);
+  },
+
+  /**
+   * 老任务（STORE_TASKS）→ 新任务（STORE_TASKS_V2）一次性迁移。
+   * 规则：
+   *  - 已完成 → oneshot，archiveReason='completed'，history 一条 done（用 completedAt 的日期）
+   *  - 未完成 → oneshot，archived=false（用户可继续手动用，或自己改类型）
+   *  - tone 字段丢弃（新模型不再预设人设反应强度，交给 LLM 现场判断）
+   *  - deadline 如果有，迁过来；没有就不设
+   *  - 奖惩默认值：完成 +10、漏做 -3（跟 ScheduleApp 默认一致）
+   *  - 已迁移的标志：STORE_TASKS_V2 里若存在同 id 的任务，跳过；用 STORE_TASKS 里老 id 直接当 V2 id
+   *  - 迁移完成后不清空 STORE_TASKS，保留做备份（用户看不到，新 UI 只读 V2）
+   */
+  migrateLegacyTasksToV2: async (): Promise<{ migrated: number; skipped: number }> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_TASKS) || !db.objectStoreNames.contains(STORE_TASKS_V2)) {
+          return { migrated: 0, skipped: 0 };
+      }
+      const legacy: Task[] = await new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE_TASKS, 'readonly');
+          const req = tx.objectStore(STORE_TASKS).getAll();
+          req.onsuccess = () => resolve(req.result || []);
+          req.onerror = () => reject(req.error);
+      });
+      if (!legacy.length) return { migrated: 0, skipped: 0 };
+
+      const existing: TaskV2[] = await new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE_TASKS_V2, 'readonly');
+          const req = tx.objectStore(STORE_TASKS_V2).getAll();
+          req.onsuccess = () => resolve(req.result || []);
+          req.onerror = () => reject(req.error);
+      });
+      const existingIds = new Set(existing.map(t => t.id));
+
+      const toWrite: TaskV2[] = [];
+      for (const old of legacy) {
+          if (existingIds.has(old.id)) continue;
+          const completedAt = old.completedAt || old.createdAt;
+          const completedDate = new Date(completedAt);
+          const dateStr = `${completedDate.getFullYear()}-${(completedDate.getMonth()+1).toString().padStart(2,'0')}-${completedDate.getDate().toString().padStart(2,'0')}`;
+          toWrite.push({
+              id: old.id,
+              title: old.title,
+              supervisorId: old.supervisorId,
+              type: 'oneshot',
+              deadline: old.deadline,
+              history: old.isCompleted
+                  ? [{ date: dateStr, status: 'done', settledAt: completedAt }]
+                  : [],
+              rewardCoins: 10,
+              penaltyCoins: 3,
+              reminderEnabled: false,
+              archived: old.isCompleted,
+              createdAt: old.createdAt,
+              lastSettledDate: old.isCompleted ? dateStr : undefined,
+              archiveReason: old.isCompleted ? 'completed' : undefined,
+          });
+      }
+      if (!toWrite.length) return { migrated: 0, skipped: legacy.length };
+
+      await new Promise<void>((resolve, reject) => {
+          const tx = db.transaction(STORE_TASKS_V2, 'readwrite');
+          const store = tx.objectStore(STORE_TASKS_V2);
+          for (const t of toWrite) store.put(t);
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+      });
+      return { migrated: toWrite.length, skipped: legacy.length - toWrite.length };
   },
 
   getAllAnniversaries: async (): Promise<Anniversary[]> => {
@@ -2687,7 +2784,7 @@ export const DB = {
       const availableStores = [
           STORE_CHARACTERS, STORE_CHAR_GROUPS, STORE_MESSAGES, STORE_THEMES, STORE_EMOJIS, STORE_EMOJI_CATEGORIES,
           STORE_ASSETS, STORE_GALLERY, STORE_USER, STORE_DIARIES,
-          STORE_TASKS, STORE_ANNIVERSARIES, STORE_ROOM_TODOS, STORE_ROOM_NOTES,
+          STORE_TASKS, STORE_TASKS_V2, STORE_ANNIVERSARIES, STORE_ROOM_TODOS, STORE_ROOM_NOTES,
           STORE_GROUPS, STORE_JOURNAL_STICKERS, STORE_SOCIAL_POSTS, STORE_COURSES, STORE_GAMES, STORE_WORLDBOOKS, STORE_NOVELS, STORE_SONGS,
           STORE_BANK_TX, STORE_BANK_DATA,
           STORE_XHS_ACTIVITIES, STORE_XHS_STOCK,
@@ -2754,6 +2851,7 @@ export const DB = {
           data.galleryImages !== undefined,
           data.diaries !== undefined,
           data.tasks !== undefined,
+          data.tasksV2 !== undefined,
           data.anniversaries !== undefined,
           data.roomTodos !== undefined,
           data.roomNotes !== undefined,
@@ -3001,6 +3099,10 @@ export const DB = {
           await clearAndAdd(STORE_TASKS, data.tasks, '任务', false);
           data.tasks = undefined as any;
       }, data.tasks?.length || 0);
+      await runSection('任务v2', data.tasksV2 !== undefined, async () => {
+          await clearAndAdd(STORE_TASKS_V2, data.tasksV2, '任务v2', false);
+          data.tasksV2 = undefined as any;
+      }, data.tasksV2?.length || 0);
       await runSection('纪念日', data.anniversaries !== undefined, async () => {
           await clearAndAdd(STORE_ANNIVERSARIES, data.anniversaries, '纪念日', false);
           data.anniversaries = undefined as any;

@@ -2868,6 +2868,74 @@ export interface Task {
     createdAt: number;
 }
 
+/**
+ * 任务历史条目 —— TaskV2.history 数组的元素类型。
+ * date: YYYY-MM-DD（按用户本地时区折算的"那一天"）。
+ * status: done = 当日完成 / missed = 当日该做但没做（漏签）/ skipped = 用户主动请假跳过。
+ *
+ * 设计：history 只记"该被记的日子"，未到的不占位。
+ *   - recurring daily：每天都该有一条（done/missed/skipped 三选一）。
+ *   - recurring weekly custom（如周一三五）：只周一三五记，其它日子不进 history。
+ *   - oneshot：history 只在结算时写入一条（done / missed-by-deadline）。
+ */
+export type TaskHistoryStatus = 'done' | 'missed' | 'skipped';
+export interface TaskHistoryEntry {
+    date: string;            // YYYY-MM-DD
+    status: TaskHistoryStatus;
+    settledAt: number;       // 结算时间戳（用于排序 / 反查"什么时候判定的"）
+    reaction?: string;       // 监督角色当场的台词（来自 LLM），可选
+}
+
+/**
+ * 时光契约新任务模型（TaskV2）—— 兼容并取代老 Task。
+ *
+ * 设计要点：
+ *  - type 区分"重复任务"（recurring，按 frequency 周期循环，跨日自动结算）
+ *    与"一次性任务"（oneshot，到达 deadline 后归档）。
+ *  - history 是 append-only 的判定记录；recurring 的连胜 / 完成率都从 history 推导，
+ *    不再单独存"连胜数"等派生字段（避免状态不一致）。
+ *  - rewardCoins / penaltyCoins 是结算时给存钱罐的虚拟币收支（正奖负扣）。
+ *  - reminderTime / reminderEnabled 控制 InstantPush 到点催促。
+ *  - archived = true 后不再参与结算和提醒（保留历史可查）。
+ *  - lastSettledAt 是上次结算判定的日期戳（YYYY-MM-DD 格式存数字也行，
+ *    这里用 number 时间戳，跨日检查时取本地日期比对）。
+ */
+export interface TaskV2 {
+    id: string;
+    title: string;
+    supervisorId: string;
+    type: 'recurring' | 'oneshot';
+
+    // 重复任务字段（type=recurring 时生效）
+    frequency?: 'daily' | 'weekly' | 'custom';
+    /** weekly 时一个自然周（周一到周日）的目标次数，默认 7（即每天）；custom 时由 customDays 决定 */
+    targetCount?: number;
+    /** custom 时指定周几该做：0=周日、1=周一 ... 6=周六（跟 Date.getDay() 对齐） */
+    customDays?: number[];
+
+    // 一次性任务字段（type=oneshot 时生效）
+    deadline?: string;        // ISO 字符串 'YYYY-MM-DDTHH:mm'
+
+    // 进度与历史
+    history: TaskHistoryEntry[];
+
+    // 奖惩（存钱罐流通币）
+    rewardCoins: number;
+    penaltyCoins: number;
+
+    // 提醒
+    reminderTime?: string;    // 'HH:mm'
+    reminderEnabled: boolean;
+
+    // 状态
+    archived: boolean;
+    createdAt: number;
+    /** 上次结算判定的本地日期（YYYY-MM-DD），用于跨日检查"昨天/前天有没有漏结算" */
+    lastSettledDate?: string;
+    /** 一次性任务归档原因，便于 UI 区分"完成归档"vs"超期归档" */
+    archiveReason?: 'completed' | 'expired' | 'manual';
+}
+
 export interface Anniversary {
     id: string;
     title: string;
@@ -3094,6 +3162,7 @@ export interface FullBackupData {
     userProfile?: UserProfile;
     diaries?: DiaryEntry[];
     tasks?: Task[];
+    tasksV2?: TaskV2[];
     anniversaries?: Anniversary[];
     roomTodos?: RoomTodo[]; 
     roomNotes?: RoomNote[];
