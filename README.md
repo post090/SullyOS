@@ -1,3 +1,40 @@
+# SullyOS (Fork)
+
+> [SullyOS](https://github.com/qegj567-cloud/SullyOS) 的个人 Fork，自用为主，分享一下。
+> 跟随原版主线更新，致敬原作者 [qegj567-cloud](https://github.com/qegj567-cloud) —— 没有原版就没有这个 Fork。
+
+## 关于这个 Fork
+
+- **跟随上游**：定期 merge 原版，保留主体功能与 UI 风格。
+- **重点优化 APK 体验**：针对 Android WebView 做性能、稳定性、原生功能修复。
+- **功能增强**：在原版基础上做了一些补充，后续可能继续加。
+- **以 Release 为准**：README 不一定及时同步，具体改动看 [Releases](../../releases)。
+
+## 目前做了什么
+
+> 概览，完整清单以 [Releases](../../releases) 为准。
+
+**功能增强**
+- 时光契约任务监督系统（私聊建任务 / 卡片确认 / 通话日记查手机只读感知 / 定时催 / 优化三套自带主题样式）
+- TTS 接入 ElevenLabs v3
+- APK 自动构建（固定签名 + release 自动 changelog）
+
+**APK 体验优化**
+- 网易云扫码登录持久化（cookie 进 IndexedDB 镜像）
+- 返回桌面卡顿修复（图标 blob URL 模块级缓存）
+- 通话麦克风 STT 修复（循环重启模型，并对停止录音的 BUG 进行了优化）
+- 数据导出修复（优化 APK 无法正常导出数据的 BUG，原生异常对象不再 toString 成 `[object Object]`）
+- APK 签名固定 / 备份导出修复 / MCP 在 APK 可用 / LLM 模型列表走 nativeFetch
+
+**UI 细节**
+- 聊天输入框 2 行 → 3.5 行
+
+---
+
+以下是原版 README：
+
+---
+
 # SullyOS // 手抓糯米机
 <div align="center">
 <img width="800" alt="banner" src="https://cdn.jsdelivr.net/gh/qegj567-cloud/SullyOS-assets@main/bgm/SULLY/sDN.png" />
