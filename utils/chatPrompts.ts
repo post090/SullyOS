@@ -11,19 +11,22 @@ import { RealtimeContextManager, NotionManager, FeishuManager, defaultRealtimeCo
 import { isScheduleFeatureOn } from './scheduleGenerator';
 import { VOICE_ACTING_GUIDE } from './minimaxTts';
 import { FISH_VOICE_ACTING_GUIDE } from './fishAudioTts';
+import { ELEVEN_VOICE_ACTING_GUIDE } from './elevenLabsTts';
 import { getTtsProvider, getVoicePromptOverride } from './ttsProvider';
 import { resolveCharTimeZone, nowInTimeZone } from './timezone';
 import { buildLifeRecordInjection } from './lifeRecords';
 import { getCharNameById } from './charNameRegistry';
 
-// 语音格式指导按当前 TTS 服务商二选一：用 MiniMax 才注入 MiniMax 那套（含 <#秒#> 停顿标记），
-// 用鱼声则注入鱼声版（去掉 MiniMax 专属标记，改用标点 / 省略号控制停顿）。
+// 语音格式指导按当前 TTS 服务商三选一：用 MiniMax 才注入 MiniMax 那套（含 <#秒#> 停顿标记），
+// 用鱼声注入鱼声版（方括号 cue [laughing]/[whispering]…），用 ElevenLabs 注入 v3 版（[laugh]/[whisper]…）。
 // 用户在「设置 → 其他 API → 语音提示词」里自定义过该服务商的指南时，优先用用户那份；留空则回退内置默认。
 const voiceActingGuide = (): string => {
   const provider = getTtsProvider();
   const custom = getVoicePromptOverride(provider);
   if (custom) return custom;
-  return provider === 'fishaudio' ? FISH_VOICE_ACTING_GUIDE : VOICE_ACTING_GUIDE;
+  if (provider === 'fishaudio') return FISH_VOICE_ACTING_GUIDE;
+  if (provider === 'elevenlabs') return ELEVEN_VOICE_ACTING_GUIDE;
+  return VOICE_ACTING_GUIDE;
 };
 
 // 群活动注入专用：把一条群消息压成"适合塞进别人私聊背景"的短文本。

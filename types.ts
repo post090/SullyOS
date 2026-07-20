@@ -190,9 +190,9 @@ export interface VirtualTime {
 
 export type MinimaxRegion = 'domestic' | 'overseas';
 
-// 语音合成（TTS）服务商。'minimax'（默认）走 MiniMax T2A；'fishaudio' 走鱼声 Fish Audio。
-// 全局二选一：切换后所有语音场景（聊天语音条 / 约会 / 电话）统一用同一家。
-export type TtsProvider = 'minimax' | 'fishaudio';
+// 语音合成（TTS）服务商。'minimax'（默认）走 MiniMax T2A；'fishaudio' 走鱼声 Fish Audio；
+// 'elevenlabs' 走 ElevenLabs。全局三选一：切换后所有语音场景（聊天语音条 / 约会 / 电话）统一用同一家。
+export type TtsProvider = 'minimax' | 'fishaudio' | 'elevenlabs';
 
 export interface APIConfig {
   baseUrl: string;
@@ -203,22 +203,29 @@ export interface APIConfig {
   // 'overseas' → https://api.minimax.io  (海外站)
   // Missing / unknown falls back to domestic.
   minimaxRegion?: MinimaxRegion;
-  // 语音服务商二选一。缺省 → 'minimax'。
+  // 语音服务商三选一。缺省 → 'minimax'。
   ttsProvider?: TtsProvider;
   // 鱼声 Fish Audio API Key（https://fish.audio/）。仅 ttsProvider === 'fishaudio' 时使用。
   fishAudioApiKey?: string;
   // 鱼声默认模型（s2.1-pro / s2-pro / s1）。缺省 → 's2.1-pro'。
   // 角色 voiceProfile.fishModel 优先于这个全局默认。
   fishAudioModel?: string;
+  // ElevenLabs API Key（https://elevenlabs.io/）。仅 ttsProvider === 'elevenlabs' 时使用。
+  elevenLabsApiKey?: string;
+  // ElevenLabs 默认模型 ID（eleven_v3 / eleven_multilingual_v2 / eleven_turbo_v2_5 / eleven_flash_v2_5）。
+  // 缺省 → 'eleven_v3'（v3 支持方括号音频标签 [laugh]/[sigh]/[whisper] 等）。
+  // 角色 voiceProfile.elevenModel 优先于这个全局默认。
+  elevenLabsModel?: string;
   // 用户自定义「语音表演指南」——注入到角色 system prompt、教模型怎么写出有情绪的语音台词。
-  // minimax / fishaudio：聊天 + 电话共用，按 TTS 服务商分别存（两家标记体系不同，不能共用一份）；
-  //   留空 → 用内置默认（minimaxTts.VOICE_ACTING_GUIDE / fishAudioTts.FISH_VOICE_ACTING_GUIDE）。
+  // minimax / fishaudio / elevenlabs：聊天 + 电话共用，按 TTS 服务商分别存（标记体系不同，不能共用一份）；
+  //   留空 → 用内置默认（minimaxTts.VOICE_ACTING_GUIDE / fishAudioTts.FISH_VOICE_ACTING_GUIDE / elevenLabsTts.ELEVEN_VOICE_ACTING_GUIDE）。
   // dateVoice：见面（DateApp）专用的 [v:xxx] 语音情绪规则，与服务商无关、单独一份；
   //   留空 → 用内置默认（datePrompts.DATE_VOICE_GUIDE）。
   // 在「设置 → 其他 API → 语音提示词」里二次编辑，存 localStorage（随 apiConfig）。
   voicePrompts?: {
     minimax?: string;
     fishaudio?: string;
+    elevenlabs?: string;
     dateVoice?: string;
   };
   // Replicate token (r8_xxx) for ACE-Step song generation in 写歌 App.
@@ -2170,6 +2177,11 @@ export interface CharacterProfile {
       fishReferenceId?: string;
       // 该角色单独指定的鱼声模型（覆盖全局 fishAudioModel）。
       fishModel?: string;
+      // ElevenLabs 音色：从 ElevenLabs 网站 / Voice Lab 复制的 voice_id。
+      // 与上面两个不通用，单独保存，切换 provider 时各取各的。
+      elevenVoiceId?: string;
+      // 该角色单独指定的 ElevenLabs 模型（覆盖全局 elevenLabsModel）。
+      elevenModel?: string;
       voiceName?: string;
       source?: 'system' | 'voice_cloning' | 'voice_generation' | 'custom';
       model?: string;

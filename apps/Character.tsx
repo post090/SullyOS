@@ -1500,7 +1500,36 @@ ${isInitialGeneration ? `
                                    <p className="text-[10px] text-slate-400">从 fish.audio 选好音色后，把那一页的链接（含 ?modelId=…）或 32 位 id 直接贴进来都行，会自动识别。设置里语音选「鱼声 Fish」后该角色就用它合成；与上面的 MiniMax voice_id 各存各的。</p>
                                </div>
 
-                               {/* 语速：MiniMax 与鱼声共用 voiceProfile.speed */}
+                               {/* ElevenLabs 音色：仅当全局语音服务商切到 ElevenLabs 时生效（设置 → 其他 API） */}
+                               <div className="rounded-2xl border border-violet-200/60 bg-violet-50/40 p-2.5 space-y-1.5">
+                                   <div className="text-[10px] font-bold text-violet-600 uppercase tracking-widest">ElevenLabs 音色</div>
+                                   <input
+                                       value={formData.voiceProfile?.elevenVoiceId || ''}
+                                       onChange={(e) => handleChange('voiceProfile', {
+                                           ...(formData.voiceProfile || {}),
+                                           elevenVoiceId: e.target.value,
+                                       })}
+                                       className="w-full bg-white rounded-2xl px-3 py-2 text-xs border border-slate-200"
+                                       placeholder="粘贴 voice_id 或整条 elevenlabs.io 音色分享链接"
+                                   />
+                                   <p className="text-[10px] text-slate-400">从 ElevenLabs 网站 / Voice Lab 选好音色后，把音色分享链接（含 /voice/&lt;id&gt;）或 20 位 voice_id 直接贴进来都行，会自动识别。设置里语音选「ElevenLabs」后该角色就用它合成；与上面的 MiniMax voice_id / 鱼声 reference_id 各存各的。</p>
+
+                                   <div className="pt-1">
+                                       <div className="text-[10px] font-bold text-violet-500 uppercase tracking-widest mb-1">ElevenLabs 模型覆盖（可选）</div>
+                                       <input
+                                           value={formData.voiceProfile?.elevenModel || ''}
+                                           onChange={(e) => handleChange('voiceProfile', {
+                                               ...(formData.voiceProfile || {}),
+                                               elevenModel: e.target.value,
+                                           })}
+                                           className="w-full bg-white rounded-2xl px-3 py-2 text-xs border border-slate-200"
+                                           placeholder="留空 → 用设置里的全局默认（eleven_v3）"
+                                       />
+                                       <p className="text-[10px] text-slate-400 mt-1">留空走全局默认。填 eleven_v3 才支持 [laugh]/[sigh]/[whisper] 等方括号音频标签；其它模型不认标签会被原样念出来。</p>
+                                   </div>
+                               </div>
+
+                               {/* 语速：MiniMax / 鱼声 / ElevenLabs 共用 voiceProfile.speed */}
                                <div className="space-y-1 pt-1">
                                    <div className="flex items-center justify-between">
                                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">语速</label>
@@ -1518,7 +1547,7 @@ ${isInitialGeneration ? `
                                        })}
                                        className="w-full accent-primary"
                                    />
-                                   <p className="text-[10px] text-slate-400">越小越慢、越像娓娓道来。1.0 正常；觉得"赶"就拉到 0.85–0.95。MiniMax 与鱼声共用这个语速（鱼声没单独配时默认略慢 0.9）。</p>
+                                   <p className="text-[10px] text-slate-400">越小越慢、越像娓娓道来。1.0 正常；觉得"赶"就拉到 0.85–0.95。MiniMax / 鱼声 / ElevenLabs 共用这个语速（后两者没单独配时默认略慢 0.9）。</p>
                                </div>
 
                                {(voiceOptions.system.length + voiceOptions.voice_cloning.length + voiceOptions.voice_generation.length) > 0 && (

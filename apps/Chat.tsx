@@ -43,6 +43,7 @@ import { collectVoiceBatchSubtitle, isPoisonedVoiceSubtitle } from '../utils/voi
 import { synthesizeSpeechDetailed, characterHasVoice } from '../utils/ttsRouter';
 import { resolveMiniMaxApiKey } from '../utils/minimaxApiKey';
 import { resolveFishAudioApiKey, stripFishMarkupForDisplay, cleanTextForTtsFish } from '../utils/fishAudioTts';
+import { resolveElevenLabsApiKey, stripElevenMarkupForDisplay, cleanTextForTtsEleven } from '../utils/elevenLabsTts';
 import { resolveTtsProvider } from '../utils/ttsProvider';
 import { isInstantConfigReady, loadInstantConfig } from '../utils/instantPushClient';
 import { resolveActiveSound, playWhiteboxSound, unlockWhiteboxAudio, parseWhiteboxSound, upsertWhiteboxSound, stripWhiteboxSoundDirective, WhiteboxSound } from '../utils/whiteboxSound';
@@ -261,7 +262,9 @@ const Chat: React.FC = () => {
     /** Whether this character can synthesize real voice under the active TTS provider (key + a voice profile). */
     const isMinimaxReady = useCallback(() => {
         if (!characterHasVoice(char, apiConfig)) return false;
-        if (resolveTtsProvider(apiConfig) === 'fishaudio') return !!resolveFishAudioApiKey(apiConfig);
+        const provider = resolveTtsProvider(apiConfig);
+        if (provider === 'fishaudio') return !!resolveFishAudioApiKey(apiConfig);
+        if (provider === 'elevenlabs') return !!resolveElevenLabsApiKey(apiConfig);
         return !!resolveMiniMaxApiKey(apiConfig);
     }, [char, apiConfig]);
 
@@ -360,13 +363,16 @@ const Chat: React.FC = () => {
 
         // Parse the structured voice output: spoken text (sanitized) + per-message emotion.
         const parsedVoice = parseVoiceOutput(msg.content);
-        // 鱼声用原生 inline cue（[happy]/[whispering]…），要拿未剥离的 rawSpeech 送 API；
+        // 鱼声 / ElevenLabs v3 用原生 inline cue（[happy]/[whispering] 或 [laugh]/[sigh]…），要拿未剥离的 rawSpeech 送 API；
         // MiniMax 用清洗过的 speech。
-        const isFishTts = resolveTtsProvider(apiConfig) === 'fishaudio';
-        const voiceTagContent = parsedVoice.hasVoiceTag ? (isFishTts ? parsedVoice.rawSpeech : parsedVoice.speech) : '';
+        const ttsProvider = resolveTtsProvider(apiConfig);
+        const isFishTts = ttsProvider === 'fishaudio';
+        const isElevenTts = ttsProvider === 'elevenlabs';
+        const keepsInlineCue = isFishTts || isElevenTts;
+        const voiceTagContent = parsedVoice.hasVoiceTag ? (keepsInlineCue ? parsedVoice.rawSpeech : parsedVoice.speech) : '';
         const voiceEmotion = parsedVoice.emotion;
         // F12 调试：打印 LLM 这条消息的带标签原文，方便核对语音标签写法是否正确。
-        console.log('[voice] LLM 原文(带标签):', { provider: isFishTts ? 'fishaudio' : 'minimax', content: msg.content, voiceTagContent, emotion: voiceEmotion });
+        console.log('[voice] LLM 原文(带标签):', { provider: ttsProvider, content: msg.content, voiceTagContent, emotion: voiceEmotion });
 
         // Auto-TTS: only generate voice when AI explicitly used <语音> tag
         if (autoTriggered && !parsedVoice.hasVoiceTag) return;
@@ -378,8 +384,10 @@ const Chat: React.FC = () => {
         if (!isMinimaxReady()) {
             if (!autoTriggered && !minimaxWarnedRef.current) {
                 minimaxWarnedRef.current = true;
-                const tip = resolveTtsProvider(apiConfig) === 'fishaudio'
+                const tip = ttsProvider === 'fishaudio'
                     ? '该角色未配置鱼声音色或缺少 Fish API Key，无法播放真实语音，可点「转文字」查看内容'
+                    : ttsProvider === 'elevenlabs'
+                    ? '该角色未配置 ElevenLabs 音色或缺少 ElevenLabs API Key，无法播放真实语音，可点「转文字」查看内容'
                     : '该角色未配置 MiniMax 语音，无法播放真实语音，可点「转文字」查看内容';
                 addToast(tip, 'info');
             }
@@ -427,11 +435,15 @@ const Chat: React.FC = () => {
                     spokenText = langAText;
                     originalText = langBText || '';
                 } else {
-                    // 鱼声：保留 inline cue 送 API，显示侧剥掉；MiniMax：照旧。
+                    // 鱼声 / ElevenLabs：保留 inline cue 送 API，显示侧剥掉；MiniMax：照旧。
                     if (isFishTts) {
                         spokenText = cleanTextForTtsFish(msg.content);
                         if (!spokenText || spokenText.length < 2) return;
                         originalText = stripFishMarkupForDisplay(spokenText) || spokenText;
+                    } else if (isElevenTts) {
+                        spokenText = cleanTextForTtsEleven(msg.content);
+                        if (!spokenText || spokenText.length < 2) return;
+                        originalText = stripElevenMarkupForDisplay(spokenText) || spokenText;
                     } else {
                         originalText = cleanTextForTts(msg.content);
                         if (!originalText || originalText.length < 2) return;
@@ -453,8 +465,10 @@ const Chat: React.FC = () => {
                 emotion: voiceEmotion,
             });
             if (blobUrl.startsWith('blob:')) voiceBlobUrlsRef.current.add(blobUrl);
-            // 鱼声的 spokenText 里有 inline cue（[whispering] 等），转文字面板要剥掉再存，别让用户看到标记。
-            const displaySpoken = isFishTts ? stripFishMarkupForDisplay(spokenText) : spokenText;
+            // 鱼声 / ElevenLabs 的 spokenText 里有 inline cue（[whispering] / [laugh] 等），转文字面板要剥掉再存，别让用户看到标记。
+            const displaySpoken = isFishTts ? stripFishMarkupForDisplay(spokenText)
+                : isElevenTts ? stripElevenMarkupForDisplay(spokenText)
+                : spokenText;
             const storedSpokenText = voiceTagContent ? displaySpoken : (voiceLang ? displaySpoken : undefined);
             const storedLang = voiceLang || undefined;
             setVoiceDataMap(prev => ({ ...prev, [msg.id]: { url: blobUrl, originalText, spokenText: storedSpokenText, lang: storedLang } }));

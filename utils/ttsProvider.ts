@@ -1,5 +1,5 @@
 /**
- * 全局 TTS 服务商选择（MiniMax ↔ 鱼声 Fish Audio）。
+ * 全局 TTS 服务商选择（MiniMax ↔ 鱼声 Fish Audio ↔ ElevenLabs）。
  *
  * 大多数语音合成入口都能拿到 apiConfig，直接用 `resolveTtsProvider(apiConfig)` 即可。
  * 但少数地方（如 chatPrompts.buildSystemPrompt 拼语音格式指导时）拿不到 apiConfig，
@@ -10,7 +10,7 @@
 import type { APIConfig, TtsProvider } from '../types';
 
 export const normalizeTtsProvider = (raw: unknown): TtsProvider =>
-  raw === 'fishaudio' ? 'fishaudio' : 'minimax';
+  raw === 'fishaudio' ? 'fishaudio' : raw === 'elevenlabs' ? 'elevenlabs' : 'minimax';
 
 let currentProvider: TtsProvider = 'minimax';
 
@@ -32,8 +32,8 @@ export const resolveTtsProvider = (apiConfig?: Pick<APIConfig, 'ttsProvider'> | 
  * 所以 OSContext 在 apiConfig.voicePrompts 变化时调 setVoicePromptOverrides() 同步，
  * prompt 侧用 getVoicePromptOverride() 读最新值。某项留空 → 返回 undefined → 调用方回退内置默认。
  *
- * 三个键：
- *   - 'minimax' / 'fishaudio'：聊天 + 电话共用的语音表演指南，按 TTS 服务商二选一注入。
+ * 四个键：
+ *   - 'minimax' / 'fishaudio' / 'elevenlabs'：聊天 + 电话共用的语音表演指南，按 TTS 服务商三选一注入。
  *   - 'dateVoice'：见面（DateApp）专用的 [v:xxx] 语音情绪规则，与服务商无关、单独一份。
  */
 export type VoicePromptKey = TtsProvider | 'dateVoice';
@@ -44,6 +44,7 @@ export function setVoicePromptOverrides(overrides: APIConfig['voicePrompts'] | u
   voicePromptOverrides = {
     minimax: typeof overrides?.minimax === 'string' ? overrides.minimax : undefined,
     fishaudio: typeof overrides?.fishaudio === 'string' ? overrides.fishaudio : undefined,
+    elevenlabs: typeof overrides?.elevenlabs === 'string' ? overrides.elevenlabs : undefined,
     dateVoice: typeof overrides?.dateVoice === 'string' ? overrides.dateVoice : undefined,
   };
 }
