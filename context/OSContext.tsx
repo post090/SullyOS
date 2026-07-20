@@ -1116,9 +1116,27 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       }
 
       const originalConsoleError = console.error;
+      // 把任意值规整成可读字符串。Capacitor / 某些原生 API 抛出的异常对象
+      // 不是 Error 实例，且 .message 可能还是对象，String() 直接 toString 会得到 "[object Object]"。
+      // 这里递归拆一层：优先用 .message，其次尝试 JSON.stringify，最后兜底 String()。
+      const toStringSafe = (a: unknown): string => {
+          if (a instanceof Error) return a.message || a.toString();
+          if (typeof a === 'string') return a;
+          if (a === null || a === undefined) return String(a);
+          if (typeof a === 'object') {
+              const obj = a as any;
+              if (typeof obj.message === 'string') return obj.message;
+              if (typeof obj.message === 'object' && obj.message) {
+                  // .message 还是个对象 → JSON 兜底
+                  try { return JSON.stringify(obj.message); } catch { /* fallthrough */ }
+              }
+              try { return JSON.stringify(a); } catch { /* fallthrough */ }
+          }
+          try { return String(a); } catch { return '[unserializable]'; }
+      };
       console.error = (...args) => {
           originalConsoleError(...args);
-          const msg = args.map(a => (a instanceof Error ? a.message : String(a))).join(' ');
+          const msg = args.map(toStringSafe).join(' ');
           // detail 只有真拿到堆栈才用堆栈，否则回退完整 msg。
           // 旧写法 `args.map(a => a instanceof Error ? a.stack : '').join('\n')`
           // 对「多个非 Error 参数」会产出 "\n"（truthy），把回退短路掉——
@@ -1129,6 +1147,12 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               .map(a => a.stack || '')
               .filter(Boolean)
               .join('\n');
+          // 对象参数也尝试 JSON.stringify 进 detail，方便排查原生异常结构
+          const objDump = args
+              .filter(a => typeof a === 'object' && a !== null && !(a instanceof Error))
+              .map(a => { try { return JSON.stringify(a); } catch { return ''; } })
+              .filter(Boolean)
+              .join('\n');
           if (msg.includes('Warning:')) return;
           setSystemLogs(prev => [{
               id: `log-${Date.now()}-${Math.random()}`,
@@ -1136,7 +1160,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               type: 'error',
               source: 'Application',
               message: msg.substring(0, 100),
-              detail: stacks || msg
+              detail: stacks || objDump || msg
           }, ...prev.slice(0, 49)]);
       };
   }, []);

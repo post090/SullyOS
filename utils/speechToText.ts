@@ -143,18 +143,27 @@ const startNative = async (lang: string, cb: SttCallbacks): Promise<SttSession> 
   let watchdog: ReturnType<typeof setTimeout> | null = null;
   const clearWatchdog = () => { if (watchdog) { clearTimeout(watchdog); watchdog = null; } };
 
-  const handle = await SpeechRecognition.addListener('partialResults', (data: any) => {
-    gotSignal = true;
-    clearWatchdog();
-    const m = data?.matches?.[0];
-    if (m) { lastPartial = m; cb.onPartial?.(m); }
-  });
+  // addListener 在部分 ROM 上会 reject（插件版本不实现 partialResults 事件），必须包 try/catch。
+  // 拿不到 handle 时让 finish 不再尝试 handle.remove()。
+  let handle: { remove: () => Promise<void> } | null = null;
+  try {
+    handle = await SpeechRecognition.addListener('partialResults', (data: any) => {
+      gotSignal = true;
+      clearWatchdog();
+      const m = data?.matches?.[0];
+      if (m) { lastPartial = m; cb.onPartial?.(m); }
+    });
+  } catch (e: any) {
+    // 部分国产 ROM 不支持 partialResults 事件流，但不一定不支持识别本身 ——
+    // 继续往下走 start()，最坏情况是没 partial 但 start() resolve 时能拿到 final。
+    console.warn('[stt:native] addListener(partialResults) failed, will rely on start() result only:', e);
+  }
 
   const finish = (finalText: string, errMsg?: unknown) => {
     if (ended) return;
     ended = true;
     clearWatchdog();
-    handle.remove().catch(() => { /* ignore */ });
+    if (handle) handle.remove().catch(() => { /* ignore */ });
     if (errMsg) {
       // errMsg 可能是 Error / 字符串 / 原生对象 —— 都规整成字符串。
       const raw = (errMsg instanceof Error && errMsg.message) || (typeof errMsg === 'string' && errMsg) || String(errMsg);
@@ -167,16 +176,45 @@ const startNative = async (lang: string, cb: SttCallbacks): Promise<SttSession> 
     cb.onEnd?.();
   };
 
+  // 把任意异常对象规整成字符串。Capacitor 原生 Error 的 .message 可能还是对象。
+  const normalizeErr = (e: any): string => {
+    if (!e) return 'native-error';
+    if (typeof e === 'string') return e;
+    if (e instanceof Error) return e.message || e.toString();
+    if (typeof e.message === 'string') return e.message;
+    if (typeof e.message === 'object' && e.message) {
+      try { return JSON.stringify(e.message); } catch { /* fallthrough */ }
+    }
+    try { return JSON.stringify(e); } catch { /* fallthrough */ }
+    try { return String(e); } catch { return 'native-error'; }
+  };
+
+  // 实际启动识别。先试 popup:false + partialResults:true（最理想，能流式），
+  // 失败再 fallback 到 popup:true（部分国产 ROM 自带的 RecognitionService 只支持 popup 模式）。
+  const doStart = async (): Promise<{ matches?: string[] } | null> => {
+    try {
+      return await SpeechRecognition.start({ language: lang, partialResults: true, popup: false, maxResults: 1 });
+    } catch (e1: any) {
+      const msg1 = normalizeErr(e1);
+      console.warn('[stt:native] start(popup:false) failed, retrying with popup:true:', msg1);
+      try {
+        return await SpeechRecognition.start({ language: lang, partialResults: true, popup: true, maxResults: 1 });
+      } catch (e2: any) {
+        // 把第二个错误抛出去让上层 finish 处理
+        throw e2;
+      }
+    }
+  };
+
   // With partialResults: true, start() resolves once recognition settles.
   // 关键：某些 ROM 上 start() 会同步抛异常（不在 Promise 链里），必须用 try 包住。
   try {
-    SpeechRecognition.start({ language: lang, partialResults: true, popup: false, maxResults: 1 })
+    doStart()
       .then((res: any) => finish((res?.matches?.[0] || lastPartial || '').trim()))
-      .catch((e: any) => finish('', e?.message || 'native-error'));
+      .catch((e: any) => finish('', normalizeErr(e)));
   } catch (e: any) {
-    // 同步抛出：把异常对象规整成字符串后走 finish。
-    const raw = (e && (e.message || String(e))) || 'native-error';
-    finish('', typeof raw === 'string' ? raw : String(raw));
+    // 同步抛出（doStart 立即 reject 的情况）：把异常对象规整成字符串后走 finish。
+    finish('', normalizeErr(e));
   }
 
   // ── 3. native 端看门狗：和 web 端对齐 ──
