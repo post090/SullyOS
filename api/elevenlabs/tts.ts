@@ -86,7 +86,7 @@ export default async function handler(req: any, res: any) {
     });
 
     const elapsedMs = Date.now() - requestStartedAt;
-    const contentType = upstream.headers.get('content-type') || 'audio/mpeg';
+    const contentType = upstream.headers.get('content-type') || '';
 
     if (!upstream.ok) {
       const errText = await upstream.text();
@@ -97,9 +97,29 @@ export default async function handler(req: any, res: any) {
       return;
     }
 
+    // ⚠️ 关键修复：ElevenLabs 在某些 validation 场景会返回 200 OK + Content-Type: application/json
+    // + body {"detail": "..."}，而不是 4xx。如果不嗅探，会把 JSON 错误体当音频二进制原样转发，
+    // 客户端 `await res.blob()` 拿到 JSON blob（size > 0 绕过空检查），存进 IndexedDB 缓存，
+    // 之后每次命中缓存都返回坏 blob → <audio>.play() 失败被静默吞掉 → 用户看到语音条但无声。
+    // 修法：200 时也校验 contentType 必须是 audio/*，否则把 buffer 当错误体处理。
     const arrayBuffer = await upstream.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
-    console.log('[elevenlabs:tts] response', { http_status: upstream.status, duration_ms: elapsedMs, bytes: buffer.length });
+
+    if (!contentType.toLowerCase().includes('audio')) {
+      // 不是音频——多半是 ElevenLabs 返回的 JSON 错误体（200 + JSON 是已知的边缘 case）。
+      const errText = buffer.toString('utf8').slice(0, 500);
+      console.log('[elevenlabs:tts] non-audio 200 response', { content_type: contentType, duration_ms: elapsedMs, body_preview: errText });
+      res.status(502);
+      res.setHeader('Content-Type', 'application/json');
+      res.send(JSON.stringify({
+        error: 'ElevenLabs 返回了非音频内容（可能是 JSON 错误体）',
+        upstream_content_type: contentType,
+        upstream_body_preview: errText,
+      }));
+      return;
+    }
+
+    console.log('[elevenlabs:tts] response', { http_status: upstream.status, duration_ms: elapsedMs, bytes: buffer.length, content_type: contentType });
 
     res.status(200);
     res.setHeader('Content-Type', contentType);

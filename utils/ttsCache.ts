@@ -55,6 +55,19 @@ export async function getCachedTts(key: string): Promise<Blob | null> {
   try {
     const entry = (await DB.getAssetRaw(key)) as TtsCacheEntry | null;
     if (!entry || !(entry.blob instanceof Blob)) return null;
+    // ⚠️ 关键修复：校验 blob 是真的音频，避免"缓存中毒"。
+    // 历史背景：ElevenLabs / 鱼声在某些 validation 场景返回 200 + JSON 错误体，
+    // 早期代码只检查 blob.size > 0 就当音频存进了 IndexedDB。后续每次同文本命中缓存
+    // 都返回这个坏 blob → <audio>.play() 失败被静默吞 → 用户看到语音条但无声，永久复现。
+    // 这里多一道校验：blob.type 必须是 audio/* 或 octet-stream（兼容 Capacitor base64 解码）；
+    // 否则当成 miss 处理（返回 null 让调用方重合成），并 fire-and-forget 删掉这个坏 entry。
+    const type = (entry.blob.type || '').toLowerCase();
+    const isAudio = type.startsWith('audio/') || type.startsWith('application/octet-stream') || type === '';
+    if (!isAudio || entry.blob.size < 32) {
+      console.warn('[TTS cache] dropping poisoned entry', { key, type, size: entry.blob.size });
+      DB.deleteAsset(key).catch(() => { /* ignore */ });
+      return null;
+    }
     // Fire-and-forget touch so future pruning can keep the hot set.
     DB.saveAssetRaw(key, { ...entry, lastUsedAt: Date.now() }).catch(() => { /* ignore */ });
     return entry.blob;

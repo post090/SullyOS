@@ -46,6 +46,10 @@ const friendlyError = (raw: string): string => {
   if (/no-speech/i.test(raw)) return '没听清，再说一次？';
   if (/network/i.test(raw)) return '语音识别服务连不上，检查下网络';
   if (/aborted/i.test(raw)) return '';
+  // Native 端常见：插件 reject 但 message 是 "native-error" / "null" / 空 —— 给可操作文案。
+  if (/native-error|null|^\s*$/i.test(raw)) {
+    return '系统语音识别不可用（国产 ROM 常裁剪 RecognitionService）。可以试试装个带 GMS 的设备、或者用文字输入。';
+  }
   return raw || '语音识别出错了';
 };
 
@@ -109,6 +113,23 @@ const startWeb = (lang: string, cb: SttCallbacks): SttSession => {
 const startNative = async (lang: string, cb: SttCallbacks): Promise<SttSession> => {
   const { SpeechRecognition } = await import('@capacitor-community/speech-recognition');
 
+  // ── 1. 实际可用性探测：available() 检查系统有没有 RecognitionService ──
+  // isSttSupported() 在 native 端无条件 return true（插件存在），但插件存在 ≠ 系统能识别。
+  // 国产 ROM（华为/小米/OPPO 老版本）经常裁剪 RecognitionService，必须实际查一下。
+  try {
+    const avail = await SpeechRecognition.available();
+    if (!avail.available) {
+      throw new Error('系统语音识别不可用（国产 ROM 常裁剪 RecognitionService）。可以试试装个带 GMS 的设备、或者用文字输入。');
+    }
+  } catch (e: any) {
+    // available() 自己抛错（部分插件版本在某些 ROM 上不实现）→ 当作不可用处理。
+    const msg = e?.message || '';
+    if (/不可用|RecognitionService|available/i.test(msg)) throw e;
+    // 否则继续走，让 start() 自己暴露真正的错误（至少能拿 log）。
+    console.warn('[stt:native] available() check failed, will try start() anyway:', e);
+  }
+
+  // ── 2. 权限检查 ──
   const perm = await SpeechRecognition.checkPermissions().catch(() => ({ speechRecognition: 'prompt' as const }));
   if (perm.speechRecognition !== 'granted') {
     const req = await SpeechRecognition.requestPermissions();
@@ -117,7 +138,13 @@ const startNative = async (lang: string, cb: SttCallbacks): Promise<SttSession> 
 
   let lastPartial = '';
   let ended = false;
+  let gotSignal = false;
+  let watchdog: ReturnType<typeof setTimeout> | null = null;
+  const clearWatchdog = () => { if (watchdog) { clearTimeout(watchdog); watchdog = null; } };
+
   const handle = await SpeechRecognition.addListener('partialResults', (data: any) => {
+    gotSignal = true;
+    clearWatchdog();
     const m = data?.matches?.[0];
     if (m) { lastPartial = m; cb.onPartial?.(m); }
   });
@@ -125,9 +152,14 @@ const startNative = async (lang: string, cb: SttCallbacks): Promise<SttSession> 
   const finish = (finalText: string, errMsg?: string) => {
     if (ended) return;
     ended = true;
-    handle.remove();
-    if (errMsg) cb.onError?.(friendlyError(errMsg));
-    else if (finalText) cb.onFinal?.(finalText);
+    clearWatchdog();
+    handle.remove().catch(() => { /* ignore */ });
+    if (errMsg) {
+      console.error('[stt:native] error:', errMsg);
+      cb.onError?.(friendlyError(errMsg));
+    } else if (finalText) {
+      cb.onFinal?.(finalText);
+    }
     cb.onEnd?.();
   };
 
@@ -136,7 +168,16 @@ const startNative = async (lang: string, cb: SttCallbacks): Promise<SttSession> 
     .then((res: any) => finish((res?.matches?.[0] || lastPartial || '').trim()))
     .catch((e: any) => finish('', e?.message || 'native-error'));
 
-  return { stop: () => { SpeechRecognition.stop().catch(() => { /* ignore */ }); } };
+  // ── 3. native 端看门狗：和 web 端对齐 ──
+  // 部分 ROM 上 start() 既不 resolve 也不 reject（卡死等待系统回调），用户看到麦克风一直亮着但无响应。
+  // 7 秒内没收到任何 partialResults，就判定系统识别器没启动起来，主动停 + 报错。
+  watchdog = setTimeout(() => {
+    if (gotSignal || ended) return;
+    finish('', '系统语音识别没响应（国产 ROM 常见）。可以试试装个带 GMS 的设备、或者用文字输入。');
+    try { SpeechRecognition.stop().catch(() => { /* ignore */ }); } catch { /* ignore */ }
+  }, STT_WATCHDOG_MS);
+
+  return { stop: () => { clearWatchdog(); SpeechRecognition.stop().catch(() => { /* ignore */ }); } };
 };
 
 /**

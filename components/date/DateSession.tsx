@@ -218,7 +218,10 @@ const DateSession: React.FC<DateSessionProps> = ({
                 emotion,
             });
         } catch (err: any) {
-            console.warn('Date TTS failed:', err?.message);
+            // 之前是 console.warn 静默吞——用户根本看不到 ElevenLabs / 鱼声 / MiniMax 在约会模式下的报错。
+            // 现在 console.error + addToast 提示，方便用户知道是配置问题还是上游问题。
+            console.error('[Date TTS] failed:', err?.message, err);
+            addToast(`约会语音合成失败: ${err?.message || '未知错误'}`, 'error');
             return null;
         }
     };

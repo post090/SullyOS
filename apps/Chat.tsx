@@ -478,7 +478,18 @@ const Chat: React.FC = () => {
             if (!chatAudioRef.current) chatAudioRef.current = new Audio();
             chatAudioRef.current.src = blobUrl;
             chatAudioRef.current.onended = () => setPlayingMsgId(null);
-            chatAudioRef.current.play().catch(() => {});
+            // ⚠️ 修复：之前是 .catch(() => {}) 静默吞播放失败——如果 blob 是 JSON 错误体
+            // （上游 200 + JSON 被当音频缓存的"中毒"场景），用户看到语音条但无声，毫无报错。
+            // 现在 catch 里：(1) addToast 提示用户；(2) 释放这个 blob 的 URL + 从持久化库删掉，
+            // 避免下次进入会话又读到坏 blob。
+            chatAudioRef.current.play().catch((playErr) => {
+                console.error('[voice] audio.play() failed:', playErr, 'blob.type=', blob.type, 'size=', blob.size);
+                addToast('语音播放失败，可能是合成返回了无效内容，请重试或换条文本', 'error');
+                try {
+                    URL.revokeObjectURL(blobUrl);
+                    voiceBlobUrlsRef.current.delete(blobUrl);
+                } catch { /* ignore */ }
+            });
             setPlayingMsgId(msg.id);
         } catch (err: any) {
             addToast(`语音生成失败: ${err?.message || '未知错误'}`, 'error');

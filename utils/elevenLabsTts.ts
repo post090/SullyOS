@@ -378,10 +378,27 @@ const elevenFetchAudio = async (
       responseType: 'blob',
     });
     if (response.status < 200 || response.status >= 300) {
-      throw new Error(`ElevenLabs TTS 失败 (HTTP ${response.status})`);
+      // Native 路径补 detail：CapacitorHttp 在非 2xx 时 response.data 可能是错误体字符串（JSON / 文本），
+      // 拼到 throw message 里方便排查（之前只显示 HTTP 状态码，调试困难）。
+      let detail = '';
+      try {
+        const d = response.data;
+        detail = typeof d === 'string' ? d.slice(0, 200) : JSON.stringify(d).slice(0, 200);
+      } catch { /* ignore */ }
+      throw new Error(`ElevenLabs TTS 失败 (HTTP ${response.status})${detail ? `：${detail}` : ''}`);
     }
-    // CapacitorHttp blob 响应：data 是 base64 字符串
-    return base64ToBlob(String(response.data || ''));
+    // CapacitorHttp blob 响应：data 是 base64 字符串。
+    // ⚠️ 关键修复：上游 ElevenLabs 在某些 validation 场景会返回 200 + JSON 错误体（不是 4xx）。
+    // CapacitorHttp 拿到这种响应时 response.data 是 JSON 字符串的 base64，base64ToBlob 会得到
+    // 一个 type 为 'audio/mpeg' 但内容是 JSON 文本的 blob。这里嗅探一下：base64 解码后前几个字节
+    // 是不是 JSON 起始字符（{ 或 [），是就当错误处理，避免坏 blob 进缓存。
+    const b64Data = String(response.data || '');
+    const blob = base64ToBlob(b64Data);
+    if (blob.size < 32 || !(await isLikelyAudioBlob(blob))) {
+      const text = await blob.text().catch(() => '');
+      throw new Error(`ElevenLabs TTS 返回非音频内容${text ? `：${text.slice(0, 200)}` : ''}`);
+    }
+    return blob;
   }
 
   // 静态部署（github.io / file:）没有 /api serverless 代理，直连 api.elevenlabs.io 会被浏览器
@@ -408,7 +425,49 @@ const elevenFetchAudio = async (
   }
   const blob = await res.blob();
   if (!blob.size) throw new Error('ElevenLabs TTS 返回空音频');
+  // ⚠️ 关键修复：blob.type 不是 audio/* 时拒绝接受（防止 JSON 错误体被当音频缓存）。
+  // 后端 proxy 已经做了 contentType 嗅探会拦截，这里是客户端兜底——任何路径（包括 native、worker）
+  // 拿到非音频 blob 都拒绝，避免坏 blob 进 IndexedDB 造成"持续中毒"。
+  if (!(await isLikelyAudioBlob(blob))) {
+    const text = await blob.text().catch(() => '');
+    throw new Error(`ElevenLabs TTS 返回非音频内容${text ? `：${text.slice(0, 200)}` : ''}`);
+  }
   return blob;
+};
+
+/**
+ * 判断 blob 是不是真的音频。两道关：
+ * 1. blob.type 以 'audio/' 开头 → 通过
+ * 2. blob.type 为空（CapacitorHttp base64 解码的 blob 没设 type）→ 嗅探前 4 字节，看是不是
+ *    MP3/ID3/WAV/OGG/FLAC 等音频魔术字节；JSON 错误体（{ 或 [）会被拦下。
+ *
+ * 异步：因为读前 4 字节是 async 操作。调用方用 await。
+ */
+const isLikelyAudioBlob = async (blob: Blob): Promise<boolean> => {
+  const t = (blob.type || '').toLowerCase();
+  if (t.startsWith('audio/')) return true;
+  if (t && !t.startsWith('application/octet-stream') && !t.startsWith('text/')) {
+    // 显式非 audio / 非二进制流 → 拒绝（如 application/json）
+    return false;
+  }
+  // type 为空 / octet-stream → 嗅探前 4 字节魔术字节
+  try {
+    const buf = await blob.slice(0, 4).arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    // MP3 frame sync: 0xFF 0xE0 mask
+    if (bytes[0] === 0xFF && (bytes[1] & 0xE0) === 0xE0) return true;
+    if (bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) return true; // "ID3"
+    if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) return true; // "RIFF" (WAV)
+    if (bytes[0] === 0x4F && bytes[1] === 0x67 && bytes[2] === 0x67 && bytes[3] === 0x53) return true; // "OggS"
+    if (bytes[0] === 0x66 && bytes[1] === 0x4C && bytes[2] === 0x61 && bytes[3] === 0x43) return true; // "fLaC"
+    // JSON 错误体起始字符：{ 0x7B 或 [ 0x5B
+    if (bytes[0] === 0x7B || bytes[0] === 0x5B) return false;
+    // 其它二进制 → 假定是音频（兼容性优先，让 play() 自己判）
+    return true;
+  } catch {
+    // 嗅探失败 → 假定是音频（避免误拒正常 blob）
+    return true;
+  }
 };
 
 /**
@@ -420,6 +479,10 @@ export async function synthesizeSpeechElevenDetailed(
   text: string,
   char: CharacterProfile,
   apiConfig: APIConfig,
+  // 与 minimax/fish 同签名方便 ttsRouter 透明切换。
+  // 注意：languageBoost 和 groupId 在 ElevenLabs v3 里**没有对应字段**（v3 自动语种检测，
+  // 不需要 language hint），传了也会被忽略——参数保留只是为了签名对齐，避免 TS 报错。
+  // emotion 会被映射到 v3 支持的方括号 cue（如 happy → [laugh]）作为兜底。
   options?: { languageBoost?: string; groupId?: string; emotion?: string },
 ): Promise<TtsResult> {
   const apiKey = resolveElevenLabsApiKey(apiConfig);
