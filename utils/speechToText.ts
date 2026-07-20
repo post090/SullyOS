@@ -114,10 +114,6 @@ const startNative = async (lang: string, cb: SttCallbacks): Promise<SttSession> 
   const { SpeechRecognition } = await import('@capacitor-community/speech-recognition');
 
   // ── 1. 实际可用性探测：available() 检查系统有没有 RecognitionService ──
-  // isSttSupported() 在 native 端无条件 return true（插件存在），但插件存在 ≠ 系统能识别。
-  // 国产 ROM（华为/小米/OPPO 老版本）经常裁剪 RecognitionService，必须实际查一下。
-  // 注意：部分插件版本在某些 ROM 上 available() 会 reject 一个非 Error 原生对象（.message 还是对象），
-  // 这里把任何 reject 都当不可用处理 —— 与其继续往下走撞墙，不如直接报清楚。
   try {
     const avail = await SpeechRecognition.available();
     if (!avail.available) {
@@ -137,46 +133,30 @@ const startNative = async (lang: string, cb: SttCallbacks): Promise<SttSession> 
     if (req.speechRecognition !== 'granted') throw new Error('麦克风权限被拒绝');
   }
 
-  let lastPartial = '';
-  let ended = false;
-  let gotSignal = false;
-  let watchdog: ReturnType<typeof setTimeout> | null = null;
-  const clearWatchdog = () => { if (watchdog) { clearTimeout(watchdog); watchdog = null; } };
+  // ── 3. 状态变量 ──
+  // 关键设计：@capacitor-community/speech-recognition 的 start() 是"一次性"的 ——
+  // 它 resolve/reject 表示"识别结束"，而不是"识别开始"。在 partialResults:true 模式下，
+  // 如果用户没立刻说话，系统会很快返回 ERROR_NO_MATCH ("Didn't understand, please try again.")
+  // 并结束识别。要让麦克风"保持开启"持续聆听，必须在 start() 结束后自动重启。
+  let ended = false;            // 用户主动停止
+  let accumulatedText = '';     // 累计识别到的文字
+  let consecutiveNoMatch = 0;   // 连续"没听到"次数，超过阈值就停（避免无限循环）
+  let restartTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // addListener 在部分 ROM 上会 reject（插件版本不实现 partialResults 事件），必须包 try/catch。
-  // 拿不到 handle 时让 finish 不再尝试 handle.remove()。
+  // addListener 在部分 ROM 上会 reject，包 try/catch
   let handle: { remove: () => Promise<void> } | null = null;
   try {
     handle = await SpeechRecognition.addListener('partialResults', (data: any) => {
-      gotSignal = true;
-      clearWatchdog();
       const m = data?.matches?.[0];
-      if (m) { lastPartial = m; cb.onPartial?.(m); }
+      if (m) {
+        consecutiveNoMatch = 0;  // 收到结果就清零
+        cb.onPartial?.(m);
+      }
     });
   } catch (e: any) {
-    // 部分国产 ROM 不支持 partialResults 事件流，但不一定不支持识别本身 ——
-    // 继续往下走 start()，最坏情况是没 partial 但 start() resolve 时能拿到 final。
     console.warn('[stt:native] addListener(partialResults) failed, will rely on start() result only:', e);
   }
 
-  const finish = (finalText: string, errMsg?: unknown) => {
-    if (ended) return;
-    ended = true;
-    clearWatchdog();
-    if (handle) handle.remove().catch(() => { /* ignore */ });
-    if (errMsg) {
-      // errMsg 可能是 Error / 字符串 / 原生对象 —— 都规整成字符串。
-      const raw = (errMsg instanceof Error && errMsg.message) || (typeof errMsg === 'string' && errMsg) || String(errMsg);
-      const text = typeof raw === 'string' ? raw : String(raw);
-      console.error('[stt:native] error:', text, errMsg);
-      cb.onError?.(friendlyError(text));
-    } else if (finalText) {
-      cb.onFinal?.(finalText);
-    }
-    cb.onEnd?.();
-  };
-
-  // 把任意异常对象规整成字符串。Capacitor 原生 Error 的 .message 可能还是对象。
   const normalizeErr = (e: any): string => {
     if (!e) return 'native-error';
     if (typeof e === 'string') return e;
@@ -189,44 +169,114 @@ const startNative = async (lang: string, cb: SttCallbacks): Promise<SttSession> 
     try { return String(e); } catch { return 'native-error'; }
   };
 
-  // 实际启动识别。先试 popup:false + partialResults:true（最理想，能流式），
-  // 失败再 fallback 到 popup:true（部分国产 ROM 自带的 RecognitionService 只支持 popup 模式）。
-  const doStart = async (): Promise<{ matches?: string[] } | null> => {
-    try {
-      return await SpeechRecognition.start({ language: lang, partialResults: true, popup: false, maxResults: 1 });
-    } catch (e1: any) {
-      const msg1 = normalizeErr(e1);
-      console.warn('[stt:native] start(popup:false) failed, retrying with popup:true:', msg1);
-      try {
-        return await SpeechRecognition.start({ language: lang, partialResults: true, popup: true, maxResults: 1 });
-      } catch (e2: any) {
-        // 把第二个错误抛出去让上层 finish 处理
-        throw e2;
-      }
-    }
+  const cleanup = () => {
+    ended = true;
+    if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
+    if (handle) { handle.remove().catch(() => {}); handle = null; }
+    try { SpeechRecognition.stop().catch(() => {}); } catch {}
   };
 
-  // With partialResults: true, start() resolves once recognition settles.
-  // 关键：某些 ROM 上 start() 会同步抛异常（不在 Promise 链里），必须用 try 包住。
-  try {
-    doStart()
-      .then((res: any) => finish((res?.matches?.[0] || lastPartial || '').trim()))
-      .catch((e: any) => finish('', normalizeErr(e)));
-  } catch (e: any) {
-    // 同步抛出（doStart 立即 reject 的情况）：把异常对象规整成字符串后走 finish。
-    finish('', normalizeErr(e));
-  }
+  const finish = (finalText: string, errMsg?: unknown) => {
+    if (ended) return;
+    cleanup();
+    if (errMsg) {
+      const raw = (errMsg instanceof Error && errMsg.message) || (typeof errMsg === 'string' && errMsg) || String(errMsg);
+      const text = typeof raw === 'string' ? raw : String(raw);
+      console.error('[stt:native] error:', text, errMsg);
+      cb.onError?.(friendlyError(text));
+    } else if (finalText) {
+      cb.onFinal?.(finalText);
+    }
+    cb.onEnd?.();
+  };
 
-  // ── 3. native 端看门狗：和 web 端对齐 ──
-  // 部分 ROM 上 start() 既不 resolve 也不 reject（卡死等待系统回调），用户看到麦克风一直亮着但无响应。
-  // 7 秒内没收到任何 partialResults，就判定系统识别器没启动起来，主动停 + 报错。
-  watchdog = setTimeout(() => {
-    if (gotSignal || ended) return;
-    finish('', '系统语音识别没响应（国产 ROM 常见）。可以试试装个带 GMS 的设备、或者用文字输入。');
-    try { SpeechRecognition.stop().catch(() => { /* ignore */ }); } catch { /* ignore */ }
-  }, STT_WATCHDOG_MS);
+  // ── 4. 识别循环：start() 结束后自动重启，让麦克风保持开启 ──
+  // 每一轮 start() 会持续到系统判定"有结果"或"没听到"才 resolve/reject。
+  // - resolve（拿到结果）：累加文本，重启下一轮
+  // - reject "no match"：连续 5 次没听到就停（避免麦克风一直亮着空转）
+  // - reject 其它错误：直接 finish 报错
+  const ONE_SHOT_TIMEOUT_MS = 30000;  // 单轮最长 30 秒
+  const MAX_CONSECUTIVE_NO_MATCH = 5;
 
-  return { stop: () => { clearWatchdog(); SpeechRecognition.stop().catch(() => { /* ignore */ }); } };
+  const runOneCycle = (): void => {
+    if (ended) return;
+
+    let cycleTimeout: ReturnType<typeof setTimeout> | null = null;
+    let cycleDone = false;
+
+    const onCycleEnd = (finalChunk: string | null, errMsg?: unknown) => {
+      if (cycleDone) return;
+      cycleDone = true;
+      if (cycleTimeout) { clearTimeout(cycleTimeout); cycleTimeout = null; }
+
+      if (ended) return;
+
+      if (errMsg) {
+        const raw = (errMsg instanceof Error && errMsg.message) || (typeof errMsg === 'string' && errMsg) || String(errMsg);
+        const text = typeof raw === 'string' ? raw : String(raw);
+        // "Didn't understand" / "no match" 是正常情况 —— 用户可能没说话
+        if (/no.?match|didn.?t understand|please try again/i.test(text)) {
+          consecutiveNoMatch++;
+          if (consecutiveNoMatch >= MAX_CONSECUTIVE_NO_MATCH) {
+            finish('', '系统识别器一直没听到声音，可能麦克风有问题或者环境太吵。点麦克风重新开始。');
+            return;
+          }
+          // 短暂等待后重启下一轮
+          restartTimer = setTimeout(() => runOneCycle(), 100);
+          return;
+        }
+        // 其它真错误 → 结束
+        finish('', errMsg);
+        return;
+      }
+
+      // 成功：累加文本，清零计数，重启下一轮
+      consecutiveNoMatch = 0;
+      if (finalChunk) {
+        accumulatedText = finalChunk;  // 覆盖式，跟 web 端一致
+        cb.onPartial?.(accumulatedText);
+      }
+      if (!ended) {
+        restartTimer = setTimeout(() => runOneCycle(), 50);
+      }
+    };
+
+    // 单轮超时保护
+    cycleTimeout = setTimeout(() => {
+      onCycleEnd(null);  // 超时按"本轮没结果"处理，会重启
+    }, ONE_SHOT_TIMEOUT_MS);
+
+    // 先试 popup:false（理想：无 UI 干扰），失败 fallback popup:true
+    SpeechRecognition.start({ language: lang, partialResults: true, popup: false, maxResults: 1 })
+      .then((res: any) => {
+        const m = (res?.matches?.[0] || '').trim();
+        onCycleEnd(m);
+      })
+      .catch((e1: any) => {
+        const msg1 = normalizeErr(e1);
+        // popup:false 不支持 → 试 popup:true
+        if (/popup|not.?supported|invalid/i.test(msg1)) {
+          SpeechRecognition.start({ language: lang, partialResults: true, popup: true, maxResults: 1 })
+            .then((res: any) => onCycleEnd((res?.matches?.[0] || '').trim()))
+            .catch((e2: any) => onCycleEnd(null, e2));
+        } else {
+          onCycleEnd(null, e1);
+        }
+      });
+  };
+
+  // 启动第一轮
+  runOneCycle();
+
+  return {
+    stop: () => {
+      // 用户主动停止：把累计的文本作为 final 给出去
+      if (ended) return;
+      cleanup();
+      cb.onFinal?.(accumulatedText);
+      cb.onEnd?.();
+    },
+  };
 };
 
 /**
