@@ -43,6 +43,12 @@ export const MIRRORED_KEYS: readonly string[] = [
     'character_refine_prompts',
     'character_active_refine_prompt_id',
     'os_last_active_char_id',
+    // 音乐相关：APK 环境的 WebView 会被系统清理工具清 localStorage 但留 IndexedDB，
+    // 不加镜像兜底的话 cookie 丢了用户每次打开都要重新扫码登录网易云。
+    'sully_music_cfg_v1',                // 网易云登录 cookie（MUSIC_U）+ workerUrl + quality
+    'sully_music_state_v1',              // 播放队列 + 当前 idx
+    'sully_music_local_album_v1',        // 本地专辑
+    'sully_proxy_worker_url_v1',         // 中心代理 worker 地址
 ];
 
 const MIRROR_ASSET_ID = 'ls_mirror_v1';

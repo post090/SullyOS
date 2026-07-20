@@ -153,6 +153,7 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
   const { addToast, characters, userProfile } = useOS();
   const {
     cfg, setCfg, profile, refreshProfile, playSong,
+    profileLoading, profileError,
     current, playing, togglePlay, nextSong, prevSong,
     listeningTogetherWith, removeListeningPartner,
     localAlbumSongs, removeLocalSong,
@@ -308,10 +309,83 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
     await refreshProfile();
   }, [setCfg, refreshProfile]);
 
-  // 未登录 → 默认展示「一起写的歌」本地专辑 + 网易云登录入口；
-  // 没本地专辑 → 直接进登录面板（保持原来体验）。
+  // 三种「主页未就绪」情况：
+  //   1. 真未登录（!cfg.cookie）→ 默认展示「一起写的歌」本地专辑 + 网易云登录入口；
+  //      没本地专辑 → 直接进登录面板（保持原来体验）。
+  //   2. cookie 在但 profile 还在拉取（profileLoading && !profile）→ 显示「加载中」卡，
+  //      不弹登录面板，避免用户误以为要重新扫码。
+  //   3. cookie 在但 profile 拉取失败（profileError && !profile）→ 显示「加载失败 · 重试」卡，
+  //      cookie 可能仍有效，让用户主动重试而不是直接踢回登录。
   // ⚠️ 所有 hooks 必须在这个 early-return **之前** 声明完。
   if (!cfg.cookie || !profile) {
+    // 情况 2 / 3：cookie 在但 profile 没拉到 —— 给加载/重试卡，绝不弹登录面板
+    if (cfg.cookie && (profileLoading || profileError)) {
+      const retry = async () => {
+        try { await refreshProfile(); } catch {}
+      };
+      return (
+        <div className="flex flex-col h-full relative"
+          style={{ background: `linear-gradient(180deg, #ffffff 0%, ${C.bg} 50%, ${C.bgDeep} 100%)` }}>
+          <BokehBg />
+          <MizuHeader title="My Cloud" onBack={onBack} />
+          <div className="relative z-10 flex-1 overflow-y-auto pb-24 px-3 pt-3 shizuku-scrollbar">
+            {localAlbumSongs.length > 0 && (
+              <LocalAlbumCard
+                songs={localAlbumSongs}
+                expanded={localAlbumExpanded}
+                setExpanded={setLocalAlbumExpanded}
+                currentId={current?.id ?? null}
+                playing={playing}
+                onPlay={(s, idx) => playSong(s, { alsoSetQueue: true, replaceQueue: localAlbumSongs, startIdx: idx })}
+                onRemove={removeLocalSong}
+              />
+            )}
+            <button
+              onClick={retry}
+              className="mt-3 w-full rounded-2xl shizuku-glass p-4 flex items-center gap-3 transition-all active:scale-[0.99]"
+            >
+              <div className="w-10 h-10 rounded-full flex items-center justify-center"
+                style={{ background: `linear-gradient(135deg, ${C.faint}40, ${C.muted}30)`, border: `1px solid ${C.faint}40` }}>
+                <UserIcon size={18} color={C.muted} weight="duotone" />
+              </div>
+              <div className="flex-1 text-left">
+                {profileLoading ? (
+                  <>
+                    <div className="text-sm" style={{ color: C.text }}>正在加载网易云资料…</div>
+                    <div className="text-[10.5px]" style={{ color: C.muted }}>登录态还在，无需重新扫码</div>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-sm" style={{ color: C.text }}>资料加载失败，点此重试</div>
+                    <div className="text-[10.5px]" style={{ color: C.muted }}>可能是网络抖动 · 登录态仍在</div>
+                  </>
+                )}
+              </div>
+              <span className="text-[12px]" style={{ color: C.accent }}>{profileLoading ? '…' : '↻'}</span>
+            </button>
+          </div>
+          {current && (
+            <MiniPlayer
+              name={current.name}
+              artists={current.artists}
+              albumPic={current.albumPic}
+              playing={playing}
+              onTap={onOpenPlayer}
+              onPrev={prevSong}
+              onToggle={togglePlay}
+              onNext={nextSong}
+              userAvatar={userProfile?.avatar}
+              userName={userProfile?.name}
+              companions={companions}
+              onKickCompanion={removeListeningPartner}
+              regenStatus={current.id === regeneratingId ? regeneratingStatus : undefined}
+            />
+          )}
+        </div>
+      );
+    }
+
+    // 情况 1：真未登录
     if (localAlbumSongs.length === 0 || showNeteaseLogin) {
       return (
         <NeteaseLoginPanel

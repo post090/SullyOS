@@ -328,6 +328,8 @@ interface MusicContextType {
   // 用户
   profile: NeteaseProfile | null;
   refreshProfile: () => Promise<void>;
+  profileLoading: boolean;
+  profileError: boolean;
 
   // 操作
   playSong: (song: Song, opts?: { alsoSetQueue?: boolean; replaceQueue?: Song[]; startIdx?: number }) => Promise<void>;
@@ -462,12 +464,24 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // 用户信息
   const [profile, setProfile] = useState<NeteaseProfile | null>(null);
+  // profile 拉取状态：让 UI 能区分"未登录"和"cookie 在但拉取中/失败"
+  // 避免 NeteaseProfilePage 在网络抖动时误显示登录面板（用户以为要重新扫码）
+  const [profileLoading, setProfileLoading] = useState<boolean>(false);
+  const [profileError, setProfileError] = useState<boolean>(false);
   const refreshProfile = useCallback(async () => {
-    if (!cfg.cookie) { setProfile(null); return; }
+    if (!cfg.cookie) { setProfile(null); setProfileError(false); setProfileLoading(false); return; }
+    setProfileLoading(true);
+    setProfileError(false);
     try {
       const r = await musicApi.loginStatus(cfg);
       const p = r?.data?.profile || r?.profile;
-      if (!p) { setProfile(null); return; }
+      if (!p) {
+        // cookie 在但 profile=null：cookie 可能失效（一年后），按"未登录"处理
+        setProfile(null);
+        setProfileError(false);
+        setProfileLoading(false);
+        return;
+      }
       setProfile({
         userId: p.userId,
         nickname: p.nickname || '',
@@ -482,7 +496,13 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         eventCount: p.eventCount,
         playlistCount: p.playlistCount,
       });
-    } catch { setProfile(null); }
+      setProfileError(false);
+    } catch {
+      // 网络/服务端错误：cookie 可能仍有效，标记为 error 让 UI 显示重试而非登录面板
+      setProfile(null);
+      setProfileError(true);
+    }
+    setProfileLoading(false);
   }, [cfg]);
 
   useEffect(() => { refreshProfile(); }, [refreshProfile]);
@@ -950,6 +970,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     playing, progress, duration, loadingSong,
     lyric, tlyric, activeLyricIdx,
     profile, refreshProfile,
+    profileLoading, profileError,
     playSong, togglePlay, nextSong, prevSong, seek,
     playMode, setPlayMode,
     liked, toggleLike,
