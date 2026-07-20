@@ -14,6 +14,7 @@ import {
 import PersonaSim, { LifeLog, generatePersonaScript } from './PersonaSim';
 import { usePersonaSim, personaSimStore } from '../utils/personaSimStore';
 import { getLastInnerState } from '../utils/emotionApply';
+import { buildTaskSupervisionContext } from '../utils/taskContextInjector';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
 import {
     User, Phone, ChatCircleDots, ChatCircle, ShoppingBag, Hamburger, Compass, GearSix,
@@ -579,6 +580,14 @@ const CheckPhone: React.FC = () => {
                 { lastInteractionTs: lastMsg?.timestamp },
             );
 
+            // 时光契约监督状态（只读）：让角色在查手机场景感知自己监督的任务进度，
+            // 但不教 LLM 输出 [[TASK_*]] 命令（这些场景不能操作任务，只能看）。
+            // 角色当前没监督任何任务时返回空串，不污染上下文。
+            const taskBlock = await buildTaskSupervisionContext(
+                targetChar.id, userProfile.name, { verbose: false },
+            ).catch(() => '');
+            const contextWithTasks = taskBlock ? `${context}\n${taskBlock}` : context;
+
             // 聊天/通讯录类按 chatapp 的上下文设置（默认 500）取，其它 App 维持轻量 50 条
             const recentWindow = (type === 'chat' || type === 'contacts')
                 ? (targetChar.contextLimit && targetChar.contextLimit > 0 ? targetChar.contextLimit : 500)
@@ -682,7 +691,7 @@ ${realCharRule}
 - **绝不是用户「${userProfile.name}」的社交关系**：不要生成用户的人脉圈，也不要从用户的角度/口吻写备注。
 - 用户「${userProfile.name}」只是在偷看你的手机，TA **不是**你的联系人、**不进**你的通讯录（下面「和用户的最近聊天」只是背景参考，不是要生成的对象，也别把用户的熟人搬进来）。`;
 
-            const fullPrompt = `${context}\n\n### [你和用户「${userProfile.name}」的最近聊天（仅背景参考）]\n${recentMsgs}\n\n${perspectiveLock}\n\n### [Task]\n${promptInstruction}\n请结合上面的「当前时间 / 距离上次联系」和人设调整生成内容的时间戳和情绪。如果很久没联系，记录可能是近期的独处状态；如果刚聊过，记录可能与聊天内容相关。`;
+            const fullPrompt = `${contextWithTasks}\n\n### [你和用户「${userProfile.name}」的最近聊天（仅背景参考）]\n${recentMsgs}\n\n${perspectiveLock}\n\n### [Task]\n${promptInstruction}\n请结合上面的「当前时间 / 距离上次联系」和人设调整生成内容的时间戳和情绪。如果很久没联系，记录可能是近期的独处状态；如果刚聊过，记录可能与聊天内容相关。`;
 
             const response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
                 method: 'POST',

@@ -10,6 +10,7 @@ import { safeResponseJson, extractJson } from '../utils/safeApi';
 import { normalizeMessageContent } from '../utils/messageFormat';
 import { injectMemoryPalace, ingestDiaryToPalace, type DiaryIngestResult } from '../utils/memoryPalace/pipeline';
 import { getRoomLabel } from '../utils/memoryPalace/types';
+import { buildTaskSupervisionContext } from '../utils/taskContextInjector';
 import { Sparkle, Archive } from '@phosphor-icons/react';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
 
@@ -420,6 +421,14 @@ const JournalApp: React.FC = () => {
         try {
             await injectMemoryPalace(selectedChar, undefined, currentEntry.userPage.text);
             let systemPrompt = ContextBuilder.buildCoreContext(selectedChar, userProfile);
+
+            // 时光契约监督状态（只读）：让角色写日记时感知自己监督的任务进度，
+            // 不教 LLM 输出 [[TASK_*]] 命令（日记场景不能操作任务）。
+            // 角色没监督任何任务时返回空串，不污染上下文。
+            const taskBlock = await buildTaskSupervisionContext(
+                selectedChar.id, userProfile.name, { verbose: false },
+            ).catch(() => '');
+            if (taskBlock) systemPrompt += `\n${taskBlock}`;
 
             const styleOptions = PAPER_STYLES.map(p => p.id).join(', ');
             const defaultStickers = DEFAULT_STICKERS.join(' ');

@@ -14,6 +14,7 @@ import { startStt, isSttSupported, type SttSession } from '../utils/speechToText
 import { ContextBuilder } from '../utils/context';
 import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
 import { RealtimeContextManager } from '../utils/realtimeContext';
+import { buildTaskSupervisionContext } from '../utils/taskContextInjector';
 import { DB } from '../utils/db';
 import { ChatPrompts } from '../utils/chatPrompts';
 import { Message, ChatTheme, AppID } from '../types';
@@ -752,8 +753,20 @@ const CallApp: React.FC = () => {
       const callMsgs = await DB.getMessagesByCharId(selectedChar.id);
       await injectMemoryPalace(selectedChar, callMsgs);
     }
+    // 时光契约监督状态（只读）：让角色在通话中感知自己监督的任务进度，
+    // 不教 LLM 输出 [[TASK_*]] 命令（通话场景不能操作任务）。
+    // 角色没监督任何任务时返回空串，不污染上下文。
+    const taskBlock = selectedChar
+      ? await buildTaskSupervisionContext(selectedChar.id, userName, { verbose: false }).catch(() => '')
+      : '';
+    const coreContext = selectedChar
+      ? (() => {
+          const base = ContextBuilder.buildCoreContext(selectedChar, userProfile, true);
+          return taskBlock ? `${base}\n${taskBlock}` : base;
+        })()
+      : undefined;
     const systemPrompt = selectedChar
-      ? buildCallPrompt(userName, selectedChar.name, ContextBuilder.buildCoreContext(selectedChar, userProfile, true), voiceLang || undefined)
+      ? buildCallPrompt(userName, selectedChar.name, coreContext, voiceLang || undefined)
       : buildCallPrompt(userName, undefined, undefined, voiceLang || undefined);
     const messages = await buildHistoryMessages(input, skipDbId);
     const chatData = await safeFetchJson(`${baseUrl}/chat/completions`, {
