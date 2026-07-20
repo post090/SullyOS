@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useLayoutEffect, useMemo, useCallba
 import { createPortal } from 'react-dom';
 import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
-import { Message, MessageType, MemoryFragment, Emoji, EmojiCategory, DailySchedule, ScheduleSlot } from '../types';
+import { Message, MessageType, MemoryFragment, Emoji, EmojiCategory, DailySchedule, ScheduleSlot, TaskV2 } from '../types';
 import { processImage } from '../utils/file';
 import { safeResponseJson, extractContent } from '../utils/safeApi';
 import { buildChatFineTuneCss, mergeChatFineTune } from '../utils/chatFineTuneCss';
@@ -18,6 +18,8 @@ import { extractWebpageContent, detectFirstUrl, isXhsUrl, expandShortUrl, type E
 import { isVideoShareUrl, parseVideoShareUrl } from '../utils/videoParser';
 import { isDevDebugAvailable } from '../utils/devDebug';
 import { resolveLifeRecordCard } from '../utils/lifeRecords';
+import { createTask } from '../utils/taskSettlement';
+import type { TaskProposalMeta } from '../utils/chatParser';
 import { isMcdConfigured } from '../utils/mcdMcpClient';
 import { isMcdActivatedInMessages, MCD_ACTIVATE_TRIGGER, MCD_DEACTIVATE_TRIGGER } from '../utils/mcdToolBridge';
 import { isLuckinConfigured } from '../utils/luckinMcpClient';
@@ -1176,6 +1178,55 @@ const Chat: React.FC = () => {
         }
         await reloadMessages(visibleCountRef.current);
     }, [char, reloadMessages, addToast]);
+
+    // 用户在「时光契约提议」卡片上确认建立契约：
+    // 1) 用编辑后的 meta 构造 TaskV2 落库（createTask 内部会塞一条 system 消息告诉监督人）
+    // 2) 把原 task_proposal 消息的 metadata.status 标为 confirmed 并回填 taskId
+    // 3) reload 让卡片切到终态展示
+    const handleConfirmTaskProposal = useCallback(async (msg: Message, editedMeta: TaskProposalMeta) => {
+        if (!char) return;
+        if (msg.metadata?.status && msg.metadata.status !== 'pending') return;
+        const taskId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const now = Date.now();
+        const task: TaskV2 = {
+            id: taskId,
+            title: editedMeta.title.trim(),
+            supervisorId: editedMeta.supervisorId || char.id,
+            type: editedMeta.type,
+            frequency: editedMeta.type === 'recurring' ? editedMeta.frequency : undefined,
+            customDays: editedMeta.type === 'recurring' && editedMeta.frequency === 'custom' ? editedMeta.customDays : undefined,
+            deadline: editedMeta.type === 'oneshot' ? editedMeta.deadline : undefined,
+            history: [],
+            rewardCoins: editedMeta.rewardCoins,
+            penaltyCoins: editedMeta.penaltyCoins,
+            reminderTime: editedMeta.reminderEnabled ? editedMeta.reminderTime : undefined,
+            reminderEnabled: editedMeta.reminderEnabled,
+            archived: false,
+            createdAt: now,
+        };
+        await createTask(task, userProfile.name);
+        await DB.updateMessageMetadata(msg.id, (prev) => ({
+            ...(prev || {}),
+            ...editedMeta,
+            status: 'confirmed',
+            taskId,
+        }));
+        addToast(`已建立契约：${task.title}`, 'success');
+        await reloadMessages(visibleCountRef.current);
+    }, [char, userProfile.name, reloadMessages, addToast]);
+
+    // 用户点「先不要」：把原消息 metadata 标为 dismissed 即可，不调 LLM、不落库任务。
+    // 监督人角色不会主动知道用户驳回了，但下次再提议时 prompt 里"无未归档任务"的状态
+    // 会让 ta 自然感知到，不需要额外 system 消息。
+    const handleDismissTaskProposal = useCallback(async (msg: Message) => {
+        if (msg.metadata?.status && msg.metadata.status !== 'pending') return;
+        await DB.updateMessageMetadata(msg.id, (prev) => ({
+            ...(prev || {}),
+            status: 'dismissed',
+        }));
+        addToast('已拒绝契约提议', 'info');
+        await reloadMessages(visibleCountRef.current);
+    }, [reloadMessages, addToast]);
 
     // 顶栏 ⚡ 手动触发。instant 模式下给"上一条 assistant 之后的所有 user 消息"打上"准备中"
     // 三个点（从写入 DB 到 SSE POST 入队之间），由 onInstantPosted 清除 ——
@@ -3121,6 +3172,8 @@ const Chat: React.FC = () => {
                             onMcdCandidate={handleMcdCandidate}
                             onResolveTransfer={handleResolveTransfer}
                             onResolveLifeRecord={handleResolveLifeRecord}
+                            onConfirmTaskProposal={handleConfirmTaskProposal}
+                            onDismissTaskProposal={handleDismissTaskProposal}
                             thinkingChainOptions={thinkingChainOptions}
                         />
                         </div>

@@ -11,6 +11,8 @@ import McdCard from './McdCard';
 import HtmlCard from './HtmlCard';
 import LuckinCard from './LuckinCard';
 import LuckinCheckoutCard from './LuckinCheckoutCard';
+import TaskProposalCard from './TaskProposalCard';
+import type { TaskProposalMeta } from '../../utils/chatParser';
 
 // 思考链卡片支持的 12 种风格预设 — 同时被 MessageItem 与 ThinkingChainSettingsModal 复用
 export type ThinkingChainStyleId = 'echo' | 'whisper' | 'minimal' | 'ink' | 'neon' | 'terminal' | 'stellar' | 'tama' | 'pixel' | 'muji' | 'ins' | 'custom';
@@ -1246,6 +1248,10 @@ interface MessageItemProps {
     onResolveTransfer?: (m: Message, action: 'accepted' | 'returned') => void;
     /** 用户点「生活记录」卡 → 确认 / 否决（角色代记的记录） */
     onResolveLifeRecord?: (m: Message, action: 'confirmed' | 'rejected') => void;
+    /** 用户在「时光契约提议」卡上确认建立契约 → 父组件调 createTask 落库 */
+    onConfirmTaskProposal?: (m: Message, editedMeta: TaskProposalMeta) => Promise<void> | void;
+    /** 用户在「时光契约提议」卡上拒绝 → 父组件把 metadata.status 标为 dismissed */
+    onDismissTaskProposal?: (m: Message) => Promise<void> | void;
     /** 思考链卡片视觉与交互 */
     thinkingChainOptions?: {
         styleId?: ThinkingChainStyleId;
@@ -1292,6 +1298,8 @@ const MessageItem = React.memo(({
     onLuckinCandidate,
     onResolveTransfer,
     onResolveLifeRecord,
+    onConfirmTaskProposal,
+    onDismissTaskProposal,
     thinkingChainOptions,
 }: MessageItemProps) => {
     const isUser = m.role === 'user';
@@ -3049,6 +3057,17 @@ const MessageItem = React.memo(({
 
     if (m.type === 'life_card') {
         return <LifeRecordCard m={m} charName={charName} commonLayout={commonLayout} selectionMode={selectionMode} onResolveLifeRecord={onResolveLifeRecord} />;
+    }
+
+    if (m.type === 'task_proposal') {
+        return <TaskProposalCard
+            m={m}
+            charName={charName}
+            commonLayout={commonLayout}
+            selectionMode={selectionMode}
+            onConfirm={onConfirmTaskProposal}
+            onDismiss={onDismissTaskProposal}
+        />;
     }
 
     // 表情气泡默认尺寸 160→96（吸收社区美化的共识尺寸）。sully-emoji-msg 是给自定义 CSS 用的

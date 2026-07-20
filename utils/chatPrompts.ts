@@ -15,6 +15,7 @@ import { ELEVEN_VOICE_ACTING_GUIDE } from './elevenLabsTts';
 import { getTtsProvider, getVoicePromptOverride } from './ttsProvider';
 import { resolveCharTimeZone, nowInTimeZone } from './timezone';
 import { buildLifeRecordInjection } from './lifeRecords';
+import { buildTaskSupervisionContext, buildTaskCommandGuide } from './taskContextInjector';
 import { getCharNameById } from './charNameRegistry';
 
 // 语音格式指导按当前 TTS 服务商三选一：用 MiniMax 才注入 MiniMax 那套（含 <#秒#> 停顿标记），
@@ -436,6 +437,20 @@ ${groupLogStr}\n`;
 
         // 群聊背景带时间戳、随群消息实时滚动 → 易变；日记标题/生活记录变化很慢 → 稳定。
         volatileState += groupContextText;
+
+        // 时光契约监督状态：仅当该角色当前正在监督未归档任务时才注入。
+        // 用户要求："没有任务的时候不用说 ta 可以操作什么任务，等真有任务了再说"。
+        // - buildTaskSupervisionContext 在无任务时返回空串 → 整段跳过
+        // - 有任务时注入状态块 + 命令说明（verbose=true）
+        try {
+            const taskBlock = await buildTaskSupervisionContext(char.id, userProfile.name, { verbose: true });
+            if (taskBlock) {
+                volatileState += `\n${taskBlock}\n${buildTaskCommandGuide(userProfile.name)}\n`;
+            }
+        } catch (e) {
+            console.error('Failed to inject task supervision context:', e);
+        }
+
         baseSystemPrompt += notionDiaryText;
         baseSystemPrompt += feishuDiaryText;
         baseSystemPrompt += notionNotesText;
