@@ -4,10 +4,10 @@ on:
   push:
     branches: [main]
     paths-ignore:
-      # 纯文档/配置改动不触发 APK 重建（避免改 README 也要等 10 分钟构建）
+      # 纯文档改动不触发 APK 重建（避免改 README 也要等 10 分钟构建）
+      # 注意：不能 ignore '.github/**' —— 那 workflow 自身改动会被自己拦住（狗咬尾巴）
       - '**.md'
       - 'docs/**'
-      - '.github/**'
       - '.gitignore'
       - 'LICENSE'
   workflow_dispatch:
