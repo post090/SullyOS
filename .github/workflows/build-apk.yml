@@ -1,5 +1,7 @@
 name: Build Android APK
 
+# 触发方式：仅手动 workflow_dispatch。
+# 上游 sync 后想自动构建，需要 sync-upstream workflow 先有至少一次成功 run 才能加 workflow_run trigger。
 on:
   workflow_dispatch:
     inputs:
