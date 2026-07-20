@@ -77,18 +77,17 @@ const AppIcon: React.FC<AppIconProps> = React.memo(({ app, onClick, size = 'md',
       {/*
         Keep uploaded artwork untouched: transparent PNG/WebP icons often provide their own
         silhouette, so the system tile would otherwise show through as an unwanted white frame.
-        圆角瓦片形状对自定义/内置图标都保留，只是自定义图标不再叠白底/边框/阴影——
-        否则桌面上自定义图标会变成方角，跟内置图标的圆角瓦片不一致。
+        The translucent rounded tile remains the fallback treatment for built-in glyphs only.
       */}
-      <div className={`${sizeClasses} relative flex items-center justify-center rounded-[1.125rem] overflow-hidden ${customIconUrl ? '' : `
-        bg-white/40
+      <div className={`${sizeClasses} relative flex items-center justify-center ${customIconUrl ? '' : `
+        bg-white/40 rounded-[1.125rem]
         border border-white/35
         shadow-[0_4px_12px_rgba(0,0,0,0.16)]
         group-hover:bg-white/50 group-hover:border-white/50
       `}`}>
 
         {customIconUrl ? (
-            <img src={customIconUrl} className="w-full h-full object-contain rounded-[1.125rem]" alt={app.name} loading="lazy" />
+            <img src={customIconUrl} className="w-full h-full object-contain" alt={app.name} loading="lazy" />
         ) : (
             <div 
                 className="w-[50%] h-[50%] drop-shadow-[0_2px_5px_rgba(0,0,0,0.3)] opacity-90"
