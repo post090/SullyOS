@@ -238,14 +238,49 @@ export async function resolveBlobRefsDeep(root: unknown): Promise<void> {
 // ─── React 渲染 hook ────────────────────────────────────────────
 
 /**
+ * 模块级 objectURL 缓存 —— 解决 Launcher remount 时 N 个 AppIcon 各自发
+ * IndexedDB 请求 + 级联重渲染的卡顿。
+ *
+ * 背景：PhoneShell 的 renderApp() 让 Launcher 在切走/返回桌面时整棵卸载→重挂载。
+ * 每个 AppIcon 的 useBlobRefUrl 都会异步读 IndexedDB → setUrl 触发二次渲染。
+ * N 个自定义图标 = N 波并行 IndexedDB 读取 + N 波级联 re-render，叠加 OSContext
+ * 每秒 tick，返回桌面的首帧卡顿被显著放大。
+ *
+ * 方案：令牌是内容寻址的（同一令牌 = 同一 Blob），把 ref → objectURL 缓存在模块级
+ * Map 里，命中时首帧同步返回，零 IndexedDB 请求、零二次渲染。in-flight 去重让多个
+ * AppIcon 同时请求同一令牌只发一次 IndexedDB 读。
+ *
+ * 内存代价：缓存的 objectURL 长期持有，对应 Blob 不会被 GC。图标体积小（KB 级），
+ * 几十个图标常驻约 1-2MB，可接受。令牌删除时（图标被换/清空）由调用方调
+ * invalidateBlobRefUrlCache 清除对应条目。
+ */
+const objUrlCache = new Map<string, string>();
+const pendingPromises = new Map<string, Promise<string | undefined>>();
+
+/** 让指定令牌的缓存 objectURL 失效（图标被删除/替换时调）。非令牌或未缓存 no-op。 */
+export function invalidateBlobRefUrlCache(ref: string | undefined | null): void {
+    if (!ref || !isBlobRef(ref)) return;
+    const objUrl = objUrlCache.get(ref);
+    if (objUrl) {
+        try { URL.revokeObjectURL(objUrl); } catch { /* ignore */ }
+        objUrlCache.delete(ref);
+    }
+}
+
+/**
  * 把一个图片字段值解析成可直接用于 <img src>/CSS url() 的字符串。
  *   · blobref 令牌 → 读 Blob 建 objectURL，组件卸载 / value 变化时 revoke，绝不泄漏；
  *   · 其它（data: / http(s) / 渐变 / undefined）→ 原样返回。
  * 令牌解析前返回 undefined（首帧可能无图，等 Blob 读出后再渲染，属预期）。
+ *
+ * 性能：命中模块级缓存时首帧同步返回，不再触发二次渲染。Launcher remount 时
+ * 已读过的图标零成本。
  */
 export function useBlobRefUrl(value: string | undefined | null): string | undefined {
+    // 缓存命中 → 首帧同步返回（避免二次渲染）
+    const cachedOnMount = (value && isBlobRef(value)) ? objUrlCache.get(value) : undefined;
     const [url, setUrl] = useState<string | undefined>(
-        isBlobRef(value) ? undefined : (value ?? undefined)
+        cachedOnMount ?? (!isBlobRef(value) ? (value ?? undefined) : undefined)
     );
 
     useEffect(() => {
@@ -253,21 +288,32 @@ export function useBlobRefUrl(value: string | undefined | null): string | undefi
             setUrl(value ?? undefined);
             return;
         }
+        // 命中缓存 → 直接用，不再发 IndexedDB 请求
+        const cached = objUrlCache.get(value);
+        if (cached) {
+            if (url !== cached) setUrl(cached);
+            return;
+        }
+        // 未命中 → 异步读 + in-flight 去重
         let alive = true;
-        let objUrl: string | undefined;
-        getBlobForRef(value).then(blob => {
-            if (!alive) return;
-            if (blob) {
-                objUrl = URL.createObjectURL(blob);
-                setUrl(objUrl);
-            } else {
-                setUrl(undefined);
-            }
+        let pending = pendingPromises.get(value);
+        if (!pending) {
+            pending = getBlobForRef(value).then(blob => {
+                if (blob) {
+                    const objUrl = URL.createObjectURL(blob);
+                    objUrlCache.set(value, objUrl);
+                    return objUrl;
+                }
+                return undefined;
+            }).finally(() => {
+                pendingPromises.delete(value);
+            });
+            pendingPromises.set(value, pending);
+        }
+        pending.then(objUrl => {
+            if (alive && objUrl) setUrl(objUrl);
         });
-        return () => {
-            alive = false;
-            if (objUrl) URL.revokeObjectURL(objUrl);
-        };
+        return () => { alive = false; };
     }, [value]);
 
     return url;
