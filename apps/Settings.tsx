@@ -5,6 +5,7 @@ import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import { safeResponseJson } from '../utils/safeApi';
+import { nativeFetch } from '../utils/nativeFetch';
 import { EXPORT_CHUNK_SIZE, sliceRanges } from '../utils/backupExport';
 import Modal from '../components/os/Modal';
 import { NotionManager, FeishuManager, RealtimeContextManager, fetchOwmWeather, fetchOpenMeteoWeather } from '../utils/realtimeContext';
@@ -787,7 +788,7 @@ const Settings: React.FC = () => {
     setStatusMsg('正在连接...');
     try {
         const baseUrl = localUrl.replace(/\/+$/, '');
-        const response = await fetch(`${baseUrl}/models`, {
+        const response = await nativeFetch(`${baseUrl}/models`, {
             method: 'GET',
             headers: { 'Authorization': `Bearer ${localKey}`, 'Content-Type': 'application/json' }
         });
@@ -1671,7 +1672,7 @@ const Settings: React.FC = () => {
                         setTestingApi(true);
                         setTestApiResult(null);
                         try {
-                            const res = await fetch(`${localUrl.trim().replace(/\/+$/, '')}/chat/completions`, {
+                            const res = await nativeFetch(`${localUrl.trim().replace(/\/+$/, '')}/chat/completions`, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localKey.trim()}` },
                                 body: JSON.stringify({
