@@ -610,12 +610,17 @@ export const XhsFreeRoamEngine = {
                     }
                 }
 
-                // 主页动作只使用主页接口；不要把主页失败偷偷降级成按角色昵称搜索。
-                // AI 若想按关键词搜索，应返回 action=search 并提供 keyword。
-                if (rawNotes.length === 0 && !profileSuccess && !profileError) {
-                    profileError = loggedInUserId
-                        ? '主页接口未返回帖子数据'
-                        : '未配置 loggedInUserId，无法查看主页；如需按关键词查找，请使用 search + keyword';
+                // 降级: getUserProfile 没拿到数据时用搜索
+                if (rawNotes.length === 0) {
+                    console.log(`[FreeRoam] check_profile: 降级到搜索「${char.name}」...`);
+                    callbacks.onStatus(`${char.name}在搜索自己的帖子...`);
+                    const searchResult = await XhsMcpClient.search(mcpUrl, char.name);
+                    if (searchResult.success) {
+                        rawNotes = extractNotesFromMcpData(searchResult.data);
+                        profileSuccess = true;
+                    } else {
+                        profileError = searchResult.error || '搜索失败';
+                    }
                 }
 
                 const notes = rawNotes.map(normalizeNote);

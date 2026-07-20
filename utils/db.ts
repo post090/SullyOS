@@ -723,7 +723,23 @@ export const DB = {
         const timestamp = typeof msg.timestamp === 'number' ? msg.timestamp : Date.now();
         const { timestamp: _ignored, ...payload } = msg;
         const request = store.add({ ...payload, timestamp });
-        request.onsuccess = () => resolve(request.result as number);
+        request.onsuccess = () => {
+            const newId = request.result as number;
+            // 水位线自愈：新消息的自增 id 必然大于既有一切消息 id，也就必然大于水位线
+            // （水位线本身是某条旧消息的 id）。出现 newId ≤ 水位线，只有一种可能——
+            // IndexedDB 被浏览器清过、自增计数器归零，而 localStorage 里的记忆宫殿水位
+            // 是清库前残留的。不清掉它，该角色所有新消息都会被 hwm 过滤挡在 AI 上下文
+            // 之外（请求只剩 system → 上游 400）。此处直接移除失效水位。
+            try {
+                const staleKeys = [`mp_lastMsgId_${msg.charId}`];
+                if (msg.groupId) staleKeys.push(`mp_lastMsgId_group_${msg.groupId}`);
+                for (const key of staleKeys) {
+                    const hwm = parseInt(localStorage.getItem(key) || '0', 10) || 0;
+                    if (hwm >= newId) localStorage.removeItem(key);
+                }
+            } catch { /* localStorage 不可用时静默跳过 */ }
+            resolve(newId);
+        };
         request.onerror = () => reject(request.error);
     });
   },

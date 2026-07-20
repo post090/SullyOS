@@ -37,3 +37,9 @@ scripts/.xhs-bridge-token
 
 # git worktrees
 .worktrees/
+
+# WorkBuddy agent 本地工作区（记忆/状态，绝不提交）
+.workbuddy/
+
+# xiaohongshu-skills 本地克隆目录（用户重命名版，与已忽略的 xiaohongshu-skills/ 依赖不同）
+xiaohongshu-skills-main/

@@ -29,6 +29,7 @@ import { CHAT_GEN_EVENTS, setChatViewSnapshot } from '../utils/chatGenEvents';
 import { buildChatRequestPayload } from '../utils/chatRequestPayload';
 import { extractHtmlBlocks } from '../utils/htmlPrompt';
 import { loadMusicPlaybackSnapshot } from './MusicContext';
+import { setCharNameRegistry } from '../utils/charNameRegistry';
 import { setMinimaxRegion } from '../utils/minimaxEndpoint';
 import { setTtsProvider, setVoicePromptOverrides } from '../utils/ttsProvider';
 import { LocalNotifications } from '@capacitor/local-notifications';
@@ -1626,6 +1627,11 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   // Refs to avoid stale closures in proactive callback
   const charactersRef = useRef(characters);
   charactersRef.current = characters;
+
+  // 同步 charId → 角色名 注册表，让 utils 层（群聊背景注入等）能标出真实发言人名。
+  useEffect(() => {
+    setCharNameRegistry(characters);
+  }, [characters]);
   const apiConfigRef = useRef(apiConfig);
   apiConfigRef.current = apiConfig;
 
