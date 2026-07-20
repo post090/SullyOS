@@ -27,5 +27,5 @@ jobs:
         run: |
           git remote add upstream https://github.com/qegj567-cloud/SullyOS.git || true
           git fetch upstream
-          git merge upstream/main --allow-unrelated-histories --no-edit
+          git merge upstream/master --allow-unrelated-histories --no-edit
           git push origin HEAD:main
