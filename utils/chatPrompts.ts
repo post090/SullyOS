@@ -157,10 +157,12 @@ export const ChatPrompts = {
         } | null,
         isListeningTogether?: boolean,
         musicCfg?: MusicCfg,
+        options?: { taskCommandGuide?: boolean },
     ): Promise<string> => {
         const parts = await ChatPrompts.buildSystemPromptParts(
             char, userProfile, groups, emojis, categories, currentMsgs,
             realtimeConfig, evolvedNarrative, userListeningContext, isListeningTogether, musicCfg,
+            undefined, options,
         );
         return parts.stable + parts.volatileState + parts.recencyTail;
     },
@@ -200,6 +202,10 @@ export const ChatPrompts = {
         musicCfg?: MusicCfg,
         // 刚才一起听途中歌被切了（char 还没重新加入）—— 注入"察觉换歌"提示。
         recentTrackSwitch?: { songName: string; artists: string } | null,
+        // 任务监督注入粒度控制：
+        //  - undefined / { taskCommandGuide: true }（默认）：注入任务状态 + 操作命令说明（私聊用）
+        //  - { taskCommandGuide: false }：只注入任务状态，不教 LLM 命令语法（主动消息用，省 token）
+        options?: { taskCommandGuide?: boolean },
     ): Promise<{ stable: string; volatileState: string; recencyTail: string }> => {
         // ── 分段计时（定位瓶颈用）──
         const perfT0 = performance.now();
@@ -441,11 +447,21 @@ ${groupLogStr}\n`;
         // 时光契约监督状态：仅当该角色当前正在监督未归档任务时才注入。
         // 用户要求："没有任务的时候不用说 ta 可以操作什么任务，等真有任务了再说"。
         // - buildTaskSupervisionContext 在无任务时返回空串 → 整段跳过
-        // - 有任务时注入状态块 + 命令说明（verbose=true）
+        // - 有任务时注入状态块（verbose=true）。命令说明按 options.taskCommandGuide 决定：
+        //   私聊默认 true；主动消息路径传 false 省 token（角色主动找用户时只需知道状态，不需要
+        //   被教语法，因为 ta 主动发的消息一般不会输出 [[TASK_DONE]] 这种用户确认才用的命令）。
+        const includeCmdGuide = options?.taskCommandGuide !== false;
         try {
-            const taskBlock = await buildTaskSupervisionContext(char.id, userProfile.name, { verbose: true });
+            const taskBlock = await buildTaskSupervisionContext(
+                char.id,
+                userProfile.name,
+                { verbose: true, includeCommandGuide: includeCmdGuide },
+            );
             if (taskBlock) {
-                volatileState += `\n${taskBlock}\n${buildTaskCommandGuide(userProfile.name)}\n`;
+                volatileState += `\n${taskBlock}\n`;
+                if (includeCmdGuide) {
+                    volatileState += `\n${buildTaskCommandGuide(userProfile.name)}\n`;
+                }
             }
         } catch (e) {
             console.error('Failed to inject task supervision context:', e);

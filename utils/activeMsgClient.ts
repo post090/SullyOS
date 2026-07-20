@@ -265,6 +265,10 @@ const buildCompletePrompt = async (
     categories,
     recentMessages,
     realtimeConfig,
+    // 主动消息路径：注入任务状态（让角色知道有什么可催的），但不要每轮教 LLM 命令语法
+    // （角色主动找用户时一般输出纯文本催促，不会用 [[TASK_DONE]] 这种用户确认才用的命令）。
+    undefined, undefined, undefined, undefined,
+    { taskCommandGuide: false },
   );
   const { apiMessages } = ChatPrompts.buildMessageHistory(
     recentMessages,
