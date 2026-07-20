@@ -862,7 +862,6 @@ const Settings: React.FC = () => {
               const fileName = `Sully_Backup_${mode}_${Date.now()}.zip`;
               const exportDir = 'SullyOS';
               const finalPath = `${exportDir}/${fileName}`;
-              const tempPath = `${finalPath}.part`;
 
               // 读一个 Blob 分片为纯 base64（去掉 data:...;base64, 前缀）。
               const sliceToBase64 = (slice: Blob): Promise<string> => new Promise((resolve, reject) => {
@@ -880,28 +879,27 @@ const Settings: React.FC = () => {
               // 阶段一：持久写盘。只有这一段失败才提示“保存文件失败”。
               try {
                   await Filesystem.mkdir({ path: exportDir, directory: Directory.Documents, recursive: true });
-                  // 清理同名残片（正常情况下不存在）。
-                  try { await Filesystem.deleteFile({ path: tempPath, directory: Directory.Documents }); } catch { /* ignore */ }
+                  // 清理可能存在的同名最终文件（极小概率撞 Date.now，正常不存在）。
+                  try { await Filesystem.deleteFile({ path: finalPath, directory: Directory.Documents }); } catch { /* ignore */ }
 
                   const ranges = sliceRanges(blob.size, EXPORT_CHUNK_SIZE);
                   for (let i = 0; i < ranges.length; i++) {
                       const [start, end] = ranges[i];
                       const base64 = await sliceToBase64(blob.slice(start, end));
                       if (i === 0) {
-                          await Filesystem.writeFile({ path: tempPath, data: base64, directory: Directory.Documents, recursive: true });
+                          await Filesystem.writeFile({ path: finalPath, data: base64, directory: Directory.Documents, recursive: true });
                       } else {
-                          await Filesystem.appendFile({ path: tempPath, data: base64, directory: Directory.Documents });
+                          await Filesystem.appendFile({ path: finalPath, data: base64, directory: Directory.Documents });
                       }
                   }
-                  await Filesystem.rename({
-                      from: tempPath,
-                      to: finalPath,
-                      directory: Directory.Documents,
-                      toDirectory: Directory.Documents,
-                  });
               } catch (e) {
-                  console.error('Native backup write failed', e);
-                  try { await Filesystem.deleteFile({ path: tempPath, directory: Directory.Documents }); } catch { /* ignore */ }
+                  // 把错误对象拆成可读的 message / stack 传进 console：之前直接 `console.error('...', e)`
+                  // 遇到 FilesystemException 这种没自定义 toString 的对象时，调试终端只会显示
+                  // "[object Object]"，等于啥都没记，下一次再炸照样看不见根因。
+                  const errMessage = (e && (e.message || String(e))) || 'Unknown backup write error';
+                  const errStack = (e && e.stack) || '';
+                  console.error('Native backup write failed:', errMessage, errStack);
+                  try { await Filesystem.deleteFile({ path: finalPath, directory: Directory.Documents }); } catch { /* ignore */ }
                   addToast('保存文件失败', 'error');
                   return;
               }
