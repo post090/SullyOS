@@ -1,3 +1,5 @@
+import { Capacitor, CapacitorHttp } from '@capacitor/core';
+
 /**
  * 通用 MCP 客户端 (Model Context Protocol, Streamable HTTP)
  *
@@ -273,6 +275,17 @@ const readSseResponse = async (resp: Response, expectedId: number | string | und
     }
 };
 
+const isNativePlatform = (): boolean => {
+    try { return Capacitor.isNativePlatform(); } catch { return false; }
+};
+
+// CapacitorHttp 对 JSON 响应可能已自动解析成对象，对 SSE/文本则是字符串。统一兜底成 McpJsonRpcResponse。
+const parseCapacitorBody = (data: any, contentType: string): McpJsonRpcResponse => {
+    if (data && typeof data === 'object') return data as McpJsonRpcResponse;
+    const text = typeof data === 'string' ? data : String(data ?? '');
+    return parseResp(text, contentType);
+};
+
 const post = async (
     server: McpServerConfig,
     body: McpJsonRpcRequest,
@@ -280,6 +293,59 @@ const post = async (
 ): Promise<{ response: McpJsonRpcResponse | null }> => {
     const session = getSession(server.id);
     const headers = buildMcpRequestHeaders(server, session.sessionId);
+
+    // 原生平台（Android/iOS WebView）走 CapacitorHttp：用系统 HTTP 栈绕过浏览器 CORS，
+    // 也能正常读到 Mcp-Session-Id 响应头。代价：不支持流式，整包响应一次拿回——
+    // initialize/tools/list/tools/call 的答复通常一坨就回来，parseCapacitorBody 解析即可。
+    // 极少数用 SSE 长连接挂着不关流的服务器可能等到超时；这是 CapacitorHttp 的固有限制，
+    // 但比之前手机上 MCP 被 CORS 挡死强得多。
+    if (isNativePlatform()) {
+        const url = buildMcpFetchUrl(server);
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error(`MCP 请求超时（${Math.round(MCP_REQUEST_TIMEOUT_MS / 1000)} 秒）`)), MCP_REQUEST_TIMEOUT_MS);
+        });
+        try {
+            const headersObj: Record<string, string> = {};
+            headers.forEach((value, key) => { headersObj[key] = value; });
+            let r: { status: number; headers: Record<string, string>; data: any };
+            try {
+                r = await Promise.race([
+                    CapacitorHttp.request({
+                        url,
+                        method: 'POST',
+                        headers: headersObj,
+                        data: body,
+                    }),
+                    timeoutPromise,
+                ]) as { status: number; headers: Record<string, string>; data: any };
+            } catch (e: any) {
+                throw new Error(`MCP 请求失败: ${e?.message || e}。`);
+            }
+            const respHeaders: Record<string, string> = r.headers || {};
+            const getHeader = (name: string): string | null => {
+                const lower = name.toLowerCase();
+                for (const k of Object.keys(respHeaders)) {
+                    if (k.toLowerCase() === lower) return respHeaders[k];
+                }
+                return null;
+            };
+            const newSid = getHeader('Mcp-Session-Id');
+            if (newSid) session.sessionId = newSid;
+            if (r.status === 401 || r.status === 403) {
+                throw new Error(`MCP 鉴权失败 (${r.status}): Token 可能无效或过期。${String(r.data ?? '').slice(0, 120)}`);
+            }
+            if (r.status === 202) return { response: null };
+            if (r.status < 200 || r.status >= 300) {
+                throw new Error(`MCP HTTP ${r.status}: ${String(r.data ?? '').slice(0, 200)}`);
+            }
+            if (!expectResponse) return { response: null };
+            const ct = getHeader('Content-Type') || getHeader('content-type') || '';
+            return { response: parseCapacitorBody(r.data, ct) };
+        } finally {
+            if (timeoutId) clearTimeout(timeoutId);
+        }
+    }
 
     let resp: Response;
     const controller = new AbortController();
