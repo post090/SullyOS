@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Microphone, SpeakerHigh, SpeakerSlash, PhoneDisconnect, Translate, Gear, Clock, CaretLeft, CaretRight } from '@phosphor-icons/react';
+import { Microphone, SpeakerHigh, SpeakerSlash, PhoneDisconnect, Translate, Gear, Clock, CaretLeft, CaretRight, Keyboard } from '@phosphor-icons/react';
 import { useOS } from '../context/OSContext';
 import { safeFetchJson } from '../utils/safeApi';
 import { minimaxFetch } from '../utils/minimaxEndpoint';
@@ -1573,13 +1573,24 @@ const CallApp: React.FC = () => {
       )}
       <div className="px-7 pb-7 pt-1.5">
         <div className="flex items-start justify-between">
-          {/* mic */}
-          <button onClick={() => setShowInputPanel(prev => !prev)} className="flex flex-col items-center gap-1.5 transition active:scale-95">
+          {/* 输入面板开关（不是录音按钮 —— 真正的语音输入按钮在面板里） */}
+          <button
+            onClick={() => {
+              setShowInputPanel(prev => {
+                  // 收起面板时主动停 STT，避免状态泄漏导致下次展开时小麦克风卡在 isListening=true 闪烁。
+                  if (prev && isListening) {
+                      sttSessionRef.current?.stop();
+                  }
+                  return !prev;
+              });
+            }}
+            className="flex flex-col items-center gap-1.5 transition active:scale-95"
+          >
             <span className="w-14 h-14 rounded-full border flex items-center justify-center backdrop-blur-md transition"
               style={showInputPanel ? { background: `${accentColor}33`, borderColor: `${accentColor}88`, boxShadow: `0 0 18px ${accentColor}55` } : { background: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.15)' }}>
-              <Microphone size={22} weight="fill" className="text-white/90" />
+              <Keyboard size={22} weight="fill" className="text-white/90" />
             </span>
-            <span className="text-[10px] text-white/70">麦克风</span>
+            <span className="text-[10px] text-white/70">输入</span>
             <span className="text-[8px] tracking-[0.15em]" style={{ color: showInputPanel ? accentColor : 'rgba(255,255,255,0.3)' }}>{showInputPanel ? 'ON' : 'OFF'}</span>
           </button>
           {/* translate */}

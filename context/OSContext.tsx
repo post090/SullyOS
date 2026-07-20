@@ -3443,7 +3443,9 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       } catch (e: any) {
           console.error("Export Failed", e);
           setSysOperation({ status: 'idle', message: '', progress: 0 });
-          throw new Error("导出失败: " + e.message);
+          // e.message 可能是对象（Capacitor FilesystemException 等），String() 兜底
+          const reason = (e && (e.message || String(e))) || '未知错误';
+          throw new Error("导出失败: " + (typeof reason === 'string' ? reason : String(reason)));
       }
   };
 

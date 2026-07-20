@@ -991,7 +991,11 @@ const Settings: React.FC = () => {
               document.body.removeChild(a);
           }
       } catch (e: any) {
-          addToast(e.message, 'error');
+          // Capacitor FilesystemException / 某些原生 API 抛出的异常 e.message 可能是对象，
+          // 直接传给 addToast 会被 React toString 成 "[object Object]"。
+          // 这里跟阶段一/阶段二 catch 一样兜底，确保 toast 一定是字符串。
+          const msg = (e && (e.message || String(e))) || '导出失败';
+          addToast(typeof msg === 'string' ? msg : String(msg), 'error');
       }
   };
 
