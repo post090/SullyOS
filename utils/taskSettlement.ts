@@ -367,6 +367,60 @@ export async function archiveTaskManual(task: TaskV2): Promise<TaskV2> {
 }
 
 /**
+ * 创建新任务（落库 + 通知监督人角色的聊天 system 消息）。
+ *
+ * 由 chatParser 在用户确认 TaskProposalCard 后调用；也由 ScheduleApp 表单直接调用。
+ * 不调 LLM ——「建好」是用户的事实，监督人之后在反应性场景里再演绎。
+ *
+ * @returns 创建好的 TaskV2（已 saveTaskV2 落库）
+ */
+export async function createTask(
+    task: TaskV2,
+    userName: string,
+): Promise<TaskV2> {
+    await DB.saveTaskV2(task);
+    // 塞一条 system 消息进监督人聊天，让 ta 之后开口时知道这个新契约存在
+    try {
+        const typeText = task.type === 'oneshot'
+            ? `一次性契约，截止 ${task.deadline || '未指定'}`
+            : `频率 ${task.frequency || 'daily'}${task.reminderEnabled && task.reminderTime ? `，提醒 ${task.reminderTime}` : ''}`;
+        await DB.saveMessage({
+            charId: task.supervisorId,
+            role: 'system',
+            type: 'text',
+            content: `[系统: 新契约已建立 | "${task.title}" | 监督人: ${userName} | ${typeText} | 奖励 +${task.rewardCoins} / 漏做 -${task.penaltyCoins}]`,
+        });
+    } catch (err) {
+        console.warn('[TaskSettlement] createTask inject chat failed:', err);
+    }
+    return task;
+}
+
+/**
+ * 按标题关键词模糊查找某角色监督的未归档任务。
+ * - 完全相等优先
+ * - 否则按 includes 子串匹配
+ * - 多条匹配返回 null（调用方应让角色反问"是 X 还是 Y？"）
+ * - 零匹配返回 null
+ */
+export async function findTaskByTitle(
+    supervisorId: string,
+    keyword: string,
+): Promise<TaskV2 | null> {
+    const all = await DB.getAllTaskV2();
+    const candidates = all.filter(t => !t.archived && t.supervisorId === supervisorId);
+    const k = keyword.trim();
+    if (!k) return null;
+    // 1. 完全相等
+    const exact = candidates.find(t => t.title === k);
+    if (exact) return exact;
+    // 2. 子串包含
+    const substring = candidates.filter(t => t.title.includes(k) || k.includes(t.title));
+    if (substring.length === 1) return substring[0];
+    return null;
+}
+
+/**
  * 跑全量任务的日检查（漏结算 + 超期归档）。
  * 由 Launcher 启动钩子 / ScheduleApp 进入时调。
  *

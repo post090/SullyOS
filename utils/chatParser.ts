@@ -1,9 +1,16 @@
 
 import { DB } from './db';
 import { LocalNotifications } from '@capacitor/local-notifications';
-import { CharacterProfile, CharPlaylistSong } from '../types';
+import { APIConfig, CharacterProfile, CharPlaylistSong, TaskV2, UserProfile } from '../types';
 import { sanitizeForBubble } from './sanitize';
 import { executeLifeDirectives } from './lifeRecords';
+import {
+    createTask,
+    findTaskByTitle,
+    markTaskDone,
+    skipToday,
+    archiveTaskManual,
+} from './taskSettlement';
 
 export interface MusicActionSnapshot {
     songId: number;
@@ -44,6 +51,38 @@ export interface MusicActionHooks {
     ) => Promise<{ playlistTitle: string; created: boolean } | null>;
 }
 
+/**
+ * 任务监督工具钩子 —— 让角色在聊天里能新建/打卡/请假/归档任务。
+ *
+ * TASK_PROPOSE 不调 createTask，只把提议塞进 task_proposal 消息 metadata，
+ * 等 UI 上的 TaskProposalCard 让用户确认后由 Chat 组件调 createTask。
+ * TASK_DONE / TASK_SKIP / TASK_ARCHIVE 直接执行（用户已表态，角色只是在确认动作）。
+ */
+export interface TaskActionHooks {
+    /** 当前对话角色 = 监督人 */
+    char: CharacterProfile;
+    userProfile: UserProfile;
+    apiConfig: APIConfig;
+}
+
+/** TaskProposal 卡片的 metadata 形状（chatParser 写入 / TaskProposalCard 读出）。 */
+export interface TaskProposalMeta {
+    title: string;
+    type: 'recurring' | 'oneshot';
+    frequency: 'daily' | 'weekly' | 'custom';
+    customDays?: number[];
+    deadline?: string;        // YYYY-MM-DDTHH:mm (oneshot)
+    reminderEnabled: boolean;
+    reminderTime?: string;    // HH:mm
+    rewardCoins: number;
+    penaltyCoins: number;
+    supervisorId: string;
+    /** 用户确认建立后的状态：pending → confirmed | dismissed */
+    status: 'pending' | 'confirmed' | 'dismissed';
+    /** 确认建立后回填 taskId */
+    taskId?: string;
+}
+
 export const ChatParser = {
     // Return cleaned content and perform side effects
     parseAndExecuteActions: async (
@@ -52,6 +91,7 @@ export const ChatParser = {
         charName: string,
         addToast: (msg: string, type: 'info'|'success'|'error') => void,
         musicHooks?: MusicActionHooks,
+        taskHooks?: TaskActionHooks,
     ) => {
         let content = aiContent;
 
@@ -280,6 +320,133 @@ export const ChatParser = {
                 console.error('[LifeRecord] parse failed:', e);
                 content = content.replace(/\[\[LIFE:[^\]]*\]\]/g, '').trim();
             }
+        }
+
+        // TASK — 时光契约监督工具（仅当 taskHooks 提供时启用）
+        //   [[TASK_PROPOSE: 标题 | 频率 | HH:mm]]   角色提议建契约（不直接执行，渲染卡片让用户确认）
+        //   [[TASK_DONE: 标题关键词]]               角色确认用户完成（直接调 markTaskDone）
+        //   [[TASK_SKIP: 标题关键词]]               角色确认请假（直接调 skipToday）
+        //   [[TASK_ARCHIVE: 标题关键词]]            角色确认归档（直接调 archiveTaskManual）
+        // 频率字段格式：
+        //   daily / weekly / custom:1,3,5 / oneshot:2026-08-01T20:00
+        if (taskHooks && content.includes('[[TASK_')) {
+            // PROPOSE — 只落一条 task_proposal 消息，不调 createTask
+            const PROPOSE_RE = /\[\[TASK_PROPOSE:\s*([^\]]*?)\s*\]\]/;
+            const PROPOSE_GLOBAL_RE = /\[\[TASK_PROPOSE:[^\]]*\]\]/g;
+            const proposeMatch = content.match(PROPOSE_RE);
+            if (proposeMatch) {
+                const raw = proposeMatch[1].trim();
+                // 用 | 切三段：标题 | 频率 | HH:mm
+                const segs = raw.split('|').map(s => s.trim());
+                const title = segs[0] || '未命名契约';
+                const freqRaw = segs[1] || 'daily';
+                const reminderTime = segs[2] || '20:00';
+                let type: 'recurring' | 'oneshot' = 'recurring';
+                let frequency: 'daily' | 'weekly' | 'custom' = 'daily';
+                let customDays: number[] | undefined;
+                let deadline: string | undefined;
+                if (freqRaw.startsWith('oneshot')) {
+                    type = 'oneshot';
+                    const dl = freqRaw.split(':')[1];
+                    if (dl) deadline = dl.trim();
+                } else if (freqRaw.startsWith('custom')) {
+                    frequency = 'custom';
+                    const daysStr = freqRaw.split(':')[1];
+                    if (daysStr) {
+                        customDays = daysStr.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n) && n >= 0 && n <= 6);
+                    }
+                } else if (freqRaw === 'weekly') {
+                    frequency = 'weekly';
+                }
+                const meta: TaskProposalMeta = {
+                    title,
+                    type,
+                    frequency,
+                    customDays,
+                    deadline,
+                    reminderEnabled: !!reminderTime,
+                    reminderTime: reminderTime || undefined,
+                    rewardCoins: 10,
+                    penaltyCoins: 3,
+                    supervisorId: taskHooks.char.id,
+                    status: 'pending',
+                };
+                await DB.saveMessage({
+                    charId,
+                    role: 'assistant',
+                    type: 'task_proposal',
+                    content: `[契约提议：${title}]`,
+                    metadata: meta as any,
+                });
+                addToast(`${charName} 提议了一份新契约：${title}`, 'info');
+                content = content.replace(PROPOSE_GLOBAL_RE, '').trim();
+            }
+
+            // DONE — 模糊匹配该角色监督的未归档任务，调 markTaskDone
+            const DONE_RE = /\[\[TASK_DONE:\s*([^\]]*?)\s*\]\]/;
+            const DONE_GLOBAL_RE = /\[\[TASK_DONE:[^\]]*\]\]/g;
+            const doneMatch = content.match(DONE_RE);
+            if (doneMatch) {
+                const keyword = doneMatch[1].trim();
+                const task = await findTaskByTitle(taskHooks.char.id, keyword);
+                if (task) {
+                    try {
+                        await markTaskDone(task, [taskHooks.char], taskHooks.userProfile, taskHooks.apiConfig);
+                        addToast(`已完成「${task.title}」+${task.rewardCoins}`, 'success');
+                    } catch (err) {
+                        console.warn('[TaskAction] markTaskDone failed:', err);
+                        addToast(`打卡失败：${task.title}`, 'error');
+                    }
+                } else {
+                    addToast(`${charName} 找不到对应契约：${keyword}`, 'error');
+                }
+                content = content.replace(DONE_GLOBAL_RE, '').trim();
+            }
+
+            // SKIP — 请假跳过今天
+            const SKIP_RE = /\[\[TASK_SKIP:\s*([^\]]*?)\s*\]\]/;
+            const SKIP_GLOBAL_RE = /\[\[TASK_SKIP:[^\]]*\]\]/g;
+            const skipMatch = content.match(SKIP_RE);
+            if (skipMatch) {
+                const keyword = skipMatch[1].trim();
+                const task = await findTaskByTitle(taskHooks.char.id, keyword);
+                if (task) {
+                    try {
+                        await skipToday(task);
+                        addToast(`已请假：${task.title}`, 'info');
+                    } catch (err) {
+                        console.warn('[TaskAction] skipToday failed:', err);
+                        addToast(`请假失败：${task.title}`, 'error');
+                    }
+                } else {
+                    addToast(`${charName} 找不到对应契约：${keyword}`, 'error');
+                }
+                content = content.replace(SKIP_GLOBAL_RE, '').trim();
+            }
+
+            // ARCHIVE — 手动归档
+            const ARCHIVE_RE = /\[\[TASK_ARCHIVE:\s*([^\]]*?)\s*\]\]/;
+            const ARCHIVE_GLOBAL_RE = /\[\[TASK_ARCHIVE:[^\]]*\]\]/g;
+            const archiveMatch = content.match(ARCHIVE_RE);
+            if (archiveMatch) {
+                const keyword = archiveMatch[1].trim();
+                const task = await findTaskByTitle(taskHooks.char.id, keyword);
+                if (task) {
+                    try {
+                        await archiveTaskManual(task);
+                        addToast(`已归档：${task.title}`, 'info');
+                    } catch (err) {
+                        console.warn('[TaskAction] archiveTaskManual failed:', err);
+                        addToast(`归档失败：${task.title}`, 'error');
+                    }
+                } else {
+                    addToast(`${charName} 找不到对应契约：${keyword}`, 'error');
+                }
+                content = content.replace(ARCHIVE_GLOBAL_RE, '').trim();
+            }
+        } else if (!taskHooks && content.includes('[[TASK_')) {
+            // taskHooks 没提供（不该发生但容错）—— 静默剥 tag
+            content = content.replace(/\[\[TASK_(?:PROPOSE|DONE|SKIP|ARCHIVE):[^\]]*\]\]/g, '').trim();
         }
 
         // RECALL tag removal (handling done in main loop logic, but cleaning here just in case)

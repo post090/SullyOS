@@ -1,15 +1,6 @@
 name: Build Android APK
 
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      # 纯文档改动不触发 APK 重建（避免改 README 也要等 10 分钟构建）
-      # 注意：不能 ignore '.github/**' —— 那 workflow 自身改动会被自己拦住（狗咬尾巴）
-      - '**.md'
-      - 'docs/**'
-      - '.gitignore'
-      - 'LICENSE'
   workflow_dispatch:
     inputs:
       release_notes:
@@ -27,8 +18,8 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # 三种触发方式都允许：push 到 main / 手动 / sync upstream 完成后
-    if: ${{ github.event_name == 'push' || github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    # 只允许手动触发 / sync upstream 完成后自动跑
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

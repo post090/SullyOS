@@ -25,7 +25,7 @@
  * Phase 2 会让 worker 端把识别出的副作用 (RECALL/SEARCH/...) 结构化传 directives, 这里只重放。
  */
 
-import { CharacterProfile, UserProfile, Message, Emoji, RealtimeConfig } from '../types';
+import { APIConfig, CharacterProfile, UserProfile, Message, Emoji, RealtimeConfig } from '../types';
 import { DB } from './db';
 import { ChatParser } from './chatParser';
 import { NotionManager, FeishuManager, XhsNote } from './realtimeContext';
@@ -1732,7 +1732,17 @@ export async function applyAssistantPostProcessing(
     aiContent = aiContent.replace(/\[\[XHS_POST:.*?\]\]/gs, '').trim();
 
     // ─── Step 3: ChatParser.parseAndExecuteActions ───
-    aiContent = await ChatParser.parseAndExecuteActions(aiContent, char.id, char.name, addToast, musicHooks);
+    // 任务监督工具钩子：从 ctx 构造一份 APIConfig 给 taskSettlement 用
+    const taskHooks = {
+        char,
+        userProfile: ctx.userProfile,
+        apiConfig: {
+            baseUrl: ctx.api.effectiveApi.baseUrl,
+            apiKey: ctx.api.effectiveApi.apiKey,
+            model: ctx.api.effectiveApi.model,
+        } as APIConfig,
+    };
+    aiContent = await ChatParser.parseAndExecuteActions(aiContent, char.id, char.name, addToast, musicHooks, taskHooks);
 
     // ─── Step 4: thinking chain 抽取 (本轮末尾展示用) ───
     // 跑过二轮 (data !== initialData) → 取二轮 data 的 reasoning; 没跑二轮 → 取一轮 (round1ThinkingChain,
