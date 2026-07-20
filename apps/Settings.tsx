@@ -878,7 +878,13 @@ const Settings: React.FC = () => {
 
               // 阶段一：持久写盘。只有这一段失败才提示“保存文件失败”。
               try {
-                  await Filesystem.mkdir({ path: exportDir, directory: Directory.Documents, recursive: true });
+                  // mkdir 在 Capacitor 6 Android 上即便 recursive:true，目录已存在时仍会抛 "Directory exists"
+                  // （recursive 只管建父目录，不管幂等）。二次导出或旧版本残留目录都会触发，包 try/catch 吞掉。
+                  try {
+                      await Filesystem.mkdir({ path: exportDir, directory: Directory.Documents, recursive: true });
+                  } catch (e) {
+                      if (!/exist/i.test(String(e?.message || e))) throw e;
+                  }
                   // 清理可能存在的同名最终文件（极小概率撞 Date.now，正常不存在）。
                   try { await Filesystem.deleteFile({ path: finalPath, directory: Directory.Documents }); } catch { /* ignore */ }
 
