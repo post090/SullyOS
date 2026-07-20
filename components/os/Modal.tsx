@@ -7,9 +7,11 @@ interface ModalProps {
     onClose: () => void;
     children: React.ReactNode;
     footer?: React.ReactNode;
+    /** 自定义 footer 容器的 className。不传则用默认样式（27 个共用 Modal 的地方默认行为不变）。 */
+    footerClassName?: string;
 }
 
-const Modal: React.FC<ModalProps> = ({ isOpen, title, onClose, children, footer }) => {
+const Modal: React.FC<ModalProps> = ({ isOpen, title, onClose, children, footer, footerClassName }) => {
     if (!isOpen) return null;
 
     return (
@@ -23,12 +25,12 @@ const Modal: React.FC<ModalProps> = ({ isOpen, title, onClose, children, footer 
                     {children}
                 </div>
                 {footer ? (
-                    <div className="px-6 pb-6 flex gap-3">
+                    <div className={`px-6 pb-6 flex gap-3 ${footerClassName || ''}`}>
                         {footer}
                     </div>
                 ) : (
                     <div className="px-6 pb-6">
-                        <button 
+                        <button
                             onClick={onClose}
                             className="w-full py-3 bg-slate-100 text-slate-500 font-bold rounded-2xl active:scale-95 transition-transform"
                         >

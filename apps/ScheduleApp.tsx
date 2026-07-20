@@ -673,6 +673,7 @@ const ScheduleApp: React.FC = () => {
                 isOpen={showTaskModal}
                 title={currentThemeMode === 'cyber' ? "INITIALIZE QUEST" : "新建契约"}
                 onClose={() => setShowTaskModal(false)}
+                footerClassName="pt-2"
                 footer={<button onClick={handleAddTask} className={`w-full py-3 transition-all ${theme.buttonPrimary}`}>保存契约</button>}
             >
                 <div className="space-y-5">
@@ -740,9 +741,9 @@ const ScheduleApp: React.FC = () => {
                         <CharacterGroupFilterBar characters={characters} groups={characterGroups} value={supervisorGroupId} onChange={setSupervisorGroupId} className="mb-2" />
                         <div className="flex gap-3 overflow-x-auto no-scrollbar pb-2">
                             {filterCharactersByGroup(characters, characterGroups, supervisorGroupId).map(c => (
-                                <button key={c.id} onClick={() => setForm({ ...form, supervisorId: c.id })} className={`flex flex-col items-center gap-2 p-2 rounded-lg border transition-all min-w-[60px] ${(form.supervisorId || activeCharacterId) === c.id ? (currentThemeMode === 'minimal' ? 'shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff] border-indigo-200' : 'border-current') : 'border-transparent opacity-50'}`}>
+                                <button key={c.id} onClick={() => setForm({ ...form, supervisorId: c.id })} className={`flex flex-col items-center gap-2 p-2 rounded-lg border transition-all min-w-[60px] ${(form.supervisorId || activeCharacterId) === c.id ? (currentThemeMode === 'minimal' ? 'shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff] border-indigo-200' : currentThemeMode === 'cyber' ? 'border-cyan-500 bg-cyan-50' : 'border-current') : (currentThemeMode === 'cyber' ? 'border-slate-200 bg-white' : 'border-transparent opacity-50')}`}>
                                     <img src={c.avatar} className="w-10 h-10 rounded-md object-cover" alt="" />
-                                    <span className={`text-[10px] font-bold whitespace-nowrap ${theme.text}`}>{c.name}</span>
+                                    <span className={`text-[10px] font-bold whitespace-nowrap ${currentThemeMode === 'cyber' ? 'text-slate-700' : theme.text}`}>{c.name}</span>
                                 </button>
                             ))}
                         </div>
@@ -825,9 +826,9 @@ const ScheduleApp: React.FC = () => {
                         <CharacterGroupFilterBar characters={characters} groups={characterGroups} value={anniCharGroupId} onChange={setAnniCharGroupId} className="mb-2" />
                         <div className="flex gap-3 overflow-x-auto no-scrollbar pb-2">
                             {filterCharactersByGroup(characters, characterGroups, anniCharGroupId).map(c => (
-                                <button key={c.id} onClick={() => setNewAnniChar(c.id)} className={`flex flex-col items-center gap-2 p-2 rounded-lg border transition-all min-w-[60px] ${(newAnniChar || activeCharacterId) === c.id ? (currentThemeMode === 'minimal' ? 'shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff] border-indigo-200' : 'border-current') : 'border-transparent opacity-50'}`}>
+                                <button key={c.id} onClick={() => setNewAnniChar(c.id)} className={`flex flex-col items-center gap-2 p-2 rounded-lg border transition-all min-w-[60px] ${(newAnniChar || activeCharacterId) === c.id ? (currentThemeMode === 'minimal' ? 'shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff] border-indigo-200' : currentThemeMode === 'cyber' ? 'border-cyan-500 bg-cyan-50' : 'border-current') : (currentThemeMode === 'cyber' ? 'border-slate-200 bg-white' : 'border-transparent opacity-50')}`}>
                                     <img src={c.avatar} className="w-10 h-10 rounded-md object-cover" alt="" />
-                                    <span className={`text-[10px] font-bold whitespace-nowrap ${theme.text}`}>{c.name}</span>
+                                    <span className={`text-[10px] font-bold whitespace-nowrap ${currentThemeMode === 'cyber' ? 'text-slate-700' : theme.text}`}>{c.name}</span>
                                 </button>
                             ))}
                         </div>
