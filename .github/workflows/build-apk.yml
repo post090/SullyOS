@@ -111,6 +111,27 @@ jobs:
         id: date
         run: echo "date=$(date +'%Y-%m-%d-%H-%M')" >> $GITHUB_OUTPUT
 
+      - name: Collect changelog since last release
+        id: changelog
+        shell: bash
+        run: |
+          # 找上一个 release tag（按 v*-*-*-*-* 格式 + 创建时间倒序），用它当起点拉 commit 列表。
+          # 找不到任何历史 tag 时（首次构建）就只列当前 commit。
+          LAST_TAG=$(git tag --list 'v[0-9]*' --sort=-creatordate | head -1 || true)
+          echo "Last tag: ${LAST_TAG:-<none>}"
+          if [ -n "$LAST_TAG" ]; then
+            # 跳过 merge commit、限制首行（oneline），列至上次 tag 以来所有 commit
+            LOG=$(git log "${LAST_TAG}..HEAD" --no-merges --pretty='- %s' | head -30)
+          else
+            LOG=$(git log -1 --no-merges --pretty='- %s')
+          fi
+          # 多行变量输出到 GITHUB_OUTPUT 要用 EOF heredoc 形式
+          {
+            echo "log<<CHANGELOG_EOF"
+            echo "$LOG"
+            echo "CHANGELOG_EOF"
+          } >> $GITHUB_OUTPUT
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -126,7 +147,11 @@ jobs:
           body: |
             SullyOS debug build (${{ steps.date.outputs.date }})
 
+            ## 本次更新
             ${{ github.event.inputs.release_notes }}
+
+            ## 自动 changelog（自上次 release 以来）
+            ${{ steps.changelog.outputs.log }}
 
             Built from commit: ${{ github.sha }}
           files: android/app/build/outputs/apk/debug/app-debug.apk
