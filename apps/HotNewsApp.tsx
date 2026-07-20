@@ -30,7 +30,7 @@ const HotNewsApp: React.FC = () => {
         }
     }, [realtimeConfig]);
 
-    // 手动刷新：无视时段去重，强制重拉当前时段
+    // 手动刷新：无视时段去重，强制重拉当前时段（orz.ai 热榜 + RSS 并发）
     const forceRefresh = useCallback(async () => {
         setLoading(true);
         setError(null);
@@ -39,12 +39,28 @@ const HotNewsApp: React.FC = () => {
             const platforms = (realtimeConfig.newsPlatforms && realtimeConfig.newsPlatforms.length > 0)
                 ? realtimeConfig.newsPlatforms
                 : RealtimeContextManager.DEFAULT_HOTNEWS_PLATFORMS;
-            const items = await RealtimeContextManager.fetchHotNews(platforms);
-            if (items.length > 0) {
-                const fresh: HotNewsSnapshot = { id, date, slot, slotLabel: label, items, platforms, fetchedAt: Date.now() };
+            const rssUrls = Array.isArray(realtimeConfig.rssUrls) ? realtimeConfig.rssUrls.filter(u => typeof u === 'string' && u.trim()) : [];
+
+            const [hotItems, rssItems] = await Promise.all([
+                RealtimeContextManager.fetchHotNews(platforms),
+                rssUrls.length > 0
+                    ? RealtimeContextManager.fetchRssNews(rssUrls).catch(() => [] as any[])
+                    : Promise.resolve([] as any[]),
+            ]);
+            // 跟 getSlottedHotNews 一样的混合策略：每 5 条插 1 条 RSS
+            const merged: any[] = [];
+            let rssIdx = 0;
+            for (let i = 0; i < hotItems.length; i++) {
+                merged.push(hotItems[i]);
+                if (rssIdx < rssItems.length && (i + 1) % 5 === 0) merged.push(rssItems[rssIdx++]);
+            }
+            while (rssIdx < rssItems.length) merged.push(rssItems[rssIdx++]);
+
+            if (merged.length > 0) {
+                const fresh: HotNewsSnapshot = { id, date, slot, slotLabel: label, items: merged, platforms, rssUrls, fetchedAt: Date.now() };
                 await DB.saveHotNewsSnapshot(fresh);
                 setSnapshot(fresh);
-                addToast(`已刷新 · ${label} ${items.length} 条`, 'success');
+                addToast(`已刷新 · ${label} ${merged.length} 条（RSS ${rssItems.length}）`, 'success');
             } else {
                 const latest = await DB.getLatestHotNewsSnapshot();
                 setSnapshot(latest);
@@ -174,7 +190,7 @@ const HotNewsApp: React.FC = () => {
 
                 {snapshot && (
                     <p className="text-center text-[10px] text-stone-400 mt-6 tracking-wide">
-                        — 数据来自 hot_news（orz.ai）多平台热榜 · 每天 6 个时段自动更新 · 点右上角可手动真·刷新 —
+                        — 数据来自 hot_news（orz.ai）多平台热榜{snapshot.rssUrls && snapshot.rssUrls.length > 0 ? ` + RSS 订阅源 ${snapshot.rssUrls.length} 个` : ''} · 每天 6 个时段自动更新 · 点右上角可手动真·刷新 —
                     </p>
                 )}
             </div>

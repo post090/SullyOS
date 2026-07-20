@@ -82,6 +82,89 @@ function route(url) {
   return null;
 }
 
+// ---- /rss 用: 轻量 RSS 2.0 / Atom XML 解析器（CF Worker 无 DOMParser）----
+// 输入 RSS / Atom XML 文本，输出 { title, items: [{title, link, desc, pubDate}] }。
+// 用正则提取，能处理 CDATA、HTML 实体；对常见源（BBC/NHK/HN/Aeon/Lancet/JAMA 等）足够稳健。
+function stripHtmlEntities(s) {
+  return String(s || '')
+    .replace(/<[^>]+>/g, '')              // 去 HTML 标签
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')  // 拆 CDATA
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_, n) => { try { return String.fromCodePoint(Number(n)); } catch { return ''; } })
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => { try { return String.fromCodePoint(parseInt(n, 16)); } catch { return ''; } })
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// 从一个 <item>/<entry> 块里提取指定标签的纯文本（支持 CDATA + 实体）
+function extractRssTag(block, tag) {
+  // 标签可能带命名空间（如 dc:date、content:encoded），匹配时允许前缀
+  const re = new RegExp(`<${tag}(?:\\s[^>]*)?>(?:<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>|([\\s\\S]*?))<\\/${tag}>`, 'i');
+  const m = block.match(re);
+  if (!m) return '';
+  return stripHtmlEntities(m[1] || m[2] || '');
+}
+
+// 从一个 <entry> 块里提取 <link href="..." /> 的 href
+function extractRssLinkHref(block) {
+  // 优先 rel="alternate" 的 link，否则取第一个 link 的 href
+  const reAlt = /<link[^>]*\brel=["']alternate["'][^>]*\bhref=["']([^"']+)["']/i;
+  const mAlt = block.match(reAlt);
+  if (mAlt) return mAlt[1].trim();
+  const reAny = /<link[^>]*\bhref=["']([^"']+)["']/i;
+  const mAny = block.match(reAny);
+  return mAny ? mAny[1].trim() : '';
+}
+
+function parseRssXml(xml) {
+  if (!xml || typeof xml !== 'string') return { title: '', items: [] };
+
+  // 提取 channel / feed 标题
+  let feedTitle = '';
+  const channelMatch = xml.match(/<channel>[\s\S]*?<title[^>]*>(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))<\/title>/i);
+  const feedMatch = xml.match(/<feed[\s\S]*?<title[^>]*>(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))<\/title>/i);
+  if (channelMatch) feedTitle = stripHtmlEntities(channelMatch[1] || channelMatch[2]);
+  else if (feedMatch) feedTitle = stripHtmlEntities(feedMatch[1] || feedMatch[2]);
+
+  const items = [];
+
+  // RSS 2.0: <item>...</item>
+  const itemRe = /<item\b[\s\S]*?<\/item>/gi;
+  let m;
+  while ((m = itemRe.exec(xml)) !== null) {
+    const block = m[0];
+    const title = extractRssTag(block, 'title');
+    if (!title) continue;
+    let link = extractRssTag(block, 'link');
+    if (!link) link = extractRssLinkHref(block);
+    const desc = extractRssTag(block, 'description') || extractRssTag(block, 'content:encoded') || extractRssTag(block, 'content');
+    const pubDate = extractRssTag(block, 'pubDate') || extractRssTag(block, 'dc:date') || extractRssTag(block, 'published') || extractRssTag(block, 'updated');
+    items.push({ title, link, desc: desc.slice(0, 400), pubDate });
+    if (items.length >= 50) break;
+  }
+
+  // Atom: <entry>...</entry>
+  const entryRe = /<entry\b[\s\S]*?<\/entry>/gi;
+  while ((m = entryRe.exec(xml)) !== null) {
+    const block = m[0];
+    const title = extractRssTag(block, 'title');
+    if (!title) continue;
+    const link = extractRssLinkHref(block) || extractRssTag(block, 'link');
+    const desc = extractRssTag(block, 'summary') || extractRssTag(block, 'content');
+    const pubDate = extractRssTag(block, 'published') || extractRssTag(block, 'updated');
+    items.push({ title, link, desc: desc.slice(0, 400), pubDate });
+    if (items.length >= 50) break;
+  }
+
+  return { title: feedTitle || 'RSS', items };
+}
+
 // ================================================================
 //  小红书签名 — 基于 xhshow 逆向的真实算法
 //  参考: https://github.com/Cloxl/xhshow
@@ -1647,6 +1730,164 @@ export default {
       } finally {
         clearTimeout(timer);
       }
+    }
+
+    // ========== RSS 代理 ==========
+    // 给前端绕过 CORS 抓 RSS / Atom 源用。服务端 fetch + 解析 XML 成统一 JSON。
+    // 同时支持几个无 RSS 的站点（Bangumi 每日番组 / 文京区区报 / JMA 天气），用专用子路径包装。
+    if (url.pathname === '/rss' || url.pathname === '/rss/bangumi/calendar' || url.pathname === '/rss/bunkyo' || url.pathname.startsWith('/rss/jma/')) {
+      if (request.method !== 'GET') {
+        return jsonResponse({ error: 'Method not allowed. Use GET.' }, { status: 405, origin });
+      }
+
+      // ── 1) Bangumi 每日番组（站点无官方 RSS，调官方 calendar API 包装）──
+      if (url.pathname === '/rss/bangumi/calendar') {
+        const c = new AbortController();
+        const t = setTimeout(() => c.abort(), 10000);
+        try {
+          const r = await fetch('https://api.bgm.tv/calendar', {
+            headers: { 'User-Agent': 'SullyOS/1.0 (https://github.com/post090/SullyOS)' },
+            signal: c.signal,
+          });
+          if (!r.ok) return jsonResponse({ error: `Bangumi HTTP ${r.status}` }, { status: 502, origin });
+          const arr = await r.json().catch(() => []);
+          const items = [];
+          for (const day of (Array.isArray(arr) ? arr : [])) {
+            const weekday = day.weekday?.cn || day.weekday?.ja || '';
+            for (const it of (Array.isArray(day.items) ? day.items : [])) {
+              const title = it.name_cn || it.name;
+              if (!title) continue;
+              let desc = it.summary || '';
+              if (it.name_cn && it.name && it.name_cn !== it.name) desc = `原名：${it.name}${desc ? '；' + desc : ''}`;
+              items.push({
+                title: `[${weekday}] ${title}`,
+                link: it.url || (typeof it.id !== 'undefined' ? `https://bgm.tv/subject/${it.id}` : ''),
+                desc: desc.slice(0, 280),
+                pubDate: '',
+              });
+              if (items.length >= 60) break;
+            }
+            if (items.length >= 60) break;
+          }
+          return jsonResponse({ title: 'Bangumi 每日番组', items }, { origin });
+        } catch (e) {
+          const aborted = e && e.name === 'AbortError';
+          return jsonResponse({ error: aborted ? 'Bangumi 抓取超时' : `Bangumi 抓取失败: ${String((e && e.message) || e)}` }, { status: aborted ? 504 : 502, origin });
+        } finally { clearTimeout(t); }
+      }
+
+      // ── 2) 文京区区报（官方只有 HTML 列表，抓最新一期）──
+      if (url.pathname === '/rss/bunkyo') {
+        const c = new AbortController();
+        const t = setTimeout(() => c.abort(), 10000);
+        try {
+          const r = await fetch('https://www.city.bunkyo.lg.jp/kuseijouhou/kouhou/kouhoushi/kuhoubunkyou/index.html', {
+            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SullyOS-RSSBot/1.0)' },
+            signal: c.signal,
+          });
+          if (!r.ok) return jsonResponse({ error: `文京区 HTTP ${r.status}` }, { status: 502, origin });
+          const html = await readBodyCapped(r, 1024 * 1024);
+          // 提取最新一期的链接和标题。区报页面通常是 <a href="...pdf">令和X年X月X日号</a>
+          const links = [];
+          const re = /<a[^>]+href=["']([^"']+\.pdf)["'][^>]*>([^<]+)<\/a>/gi;
+          let m;
+          while ((m = re.exec(html)) !== null) {
+            const href = m[1];
+            const text = stripHtmlEntities(m[2]);
+            if (!text || text.length < 4) continue;
+            const abs = href.startsWith('http') ? href : `https://www.city.bunkyo.lg.jp/kuseijouhou/kouhou/kouhoushi/kuhoubunkyou/${href.replace(/^\.?\//, '')}`;
+            links.push({ title: text.trim(), link: abs });
+            if (links.length >= 6) break;
+          }
+          if (links.length === 0) {
+            return jsonResponse({ title: '文京区区报', items: [{ title: '（本期区报未能解析，请访问官网查看）', link: 'https://www.city.bunkyo.lg.jp/kuseijouhou/kouhou/kouhoushi/kuhoubunkyou/index.html', desc: '' }] }, { origin });
+          }
+          return jsonResponse({ title: '文京区区报', items: links.map(l => ({ ...l, desc: '', pubDate: '' })) }, { origin });
+        } catch (e) {
+          const aborted = e && e.name === 'AbortError';
+          return jsonResponse({ error: aborted ? '文京区抓取超时' : `文京区抓取失败: ${String((e && e.message) || e)}` }, { status: aborted ? 504 : 502, origin });
+        } finally { clearTimeout(t); }
+      }
+
+      // ── 3) JMA 天气预报（官方 JSON API 包装成 RSS 条目）──
+      // 路径 /rss/jma/<areaCode>，areaCode 如 130000（東京地方）、110010（札幌）等
+      if (url.pathname.startsWith('/rss/jma/')) {
+        const areaCode = url.pathname.replace('/rss/jma/', '').trim();
+        if (!/^\d{6}$/.test(areaCode)) {
+          return jsonResponse({ error: '地区代码格式错误，应为 6 位数字（如 130000=東京地方）' }, { status: 400, origin });
+        }
+        const c = new AbortController();
+        const t = setTimeout(() => c.abort(), 10000);
+        try {
+          const r = await fetch(`https://www.jma.go.jp/bosai/forecast/data/forecast/${areaCode}.json`, {
+            headers: { 'User-Agent': 'SullyOS/1.0' },
+            signal: c.signal,
+          });
+          if (!r.ok) return jsonResponse({ error: `JMA HTTP ${r.status}` }, { status: 502, origin });
+          const data = await r.json().catch(() => []);
+          const first = Array.isArray(data) ? data[0] : data;
+          const time = first?.reportDatetime || '';
+          const area = first?.timeSeries?.[0]?.areas?.[0];
+          const areaName = area?.area?.name || '未知地区';
+          const weathers = Array.isArray(area?.weathers) ? area.weathers : [];
+          const temps = first?.timeSeries?.[1]?.areas?.[0]?.temps || [];
+          const pops = first?.timeSeries?.[0]?.pops || [];
+          const descParts = [];
+          if (weathers.length > 0) descParts.push('天气：' + weathers.join(' / '));
+          if (pops.length > 0) descParts.push('降水概率：' + pops.join(' / ') + '%');
+          if (temps.length > 0) descParts.push('气温：' + temps.join(' / ') + '℃');
+          const title = `[気象庁] ${areaName} 天气预报`;
+          const items = [{
+            title,
+            link: `https://www.jma.go.jp/bosai/forecast/#area_type=class20s&area_code=${areaCode}`,
+            desc: descParts.join('；').slice(0, 400),
+            pubDate: time,
+          }];
+          return jsonResponse({ title: '気象庁 天气预报', items }, { origin });
+        } catch (e) {
+          const aborted = e && e.name === 'AbortError';
+          return jsonResponse({ error: aborted ? 'JMA 抓取超时' : `JMA 抓取失败: ${String((e && e.message) || e)}` }, { status: aborted ? 504 : 502, origin });
+        } finally { clearTimeout(t); }
+      }
+
+      // ── 4) 通用 RSS / Atom 代理：fetch 任意公网 RSS 源，服务端解析 XML → JSON ──
+      const rawUrl = (url.searchParams.get('url') || '').trim();
+      if (!rawUrl) {
+        return jsonResponse({ error: 'Missing url parameter' }, { status: 400, origin });
+      }
+      let target;
+      try { target = new URL(rawUrl); } catch {
+        return jsonResponse({ error: 'Invalid URL' }, { status: 400, origin });
+      }
+      if (isUnsafeFetchTarget(target)) {
+        return jsonResponse({ error: '只允许抓取公网 http(s) RSS 源' }, { status: 400, origin });
+      }
+
+      const c = new AbortController();
+      const t = setTimeout(() => c.abort(), 10000);
+      try {
+        const upstream = await fetch(target.toString(), {
+          method: 'GET',
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (compatible; SullyOS-RSSBot/1.0; +https://github.com/post090/SullyOS)',
+            'Accept': 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*',
+          },
+          redirect: 'follow',
+          signal: c.signal,
+        });
+        if (!upstream.ok) {
+          return jsonResponse({ error: `上游 RSS 源返回 HTTP ${upstream.status}` }, { status: 502, origin });
+        }
+        const xml = await readBodyCapped(upstream, 2 * 1024 * 1024);
+        const parsed = parseRssXml(xml);
+        return jsonResponse(parsed, { origin });
+      } catch (e) {
+        const aborted = e && e.name === 'AbortError';
+        return jsonResponse(
+          { error: aborted ? 'RSS 抓取超时' : `RSS 抓取失败: ${String((e && e.message) || e)}` },
+          { status: aborted ? 504 : 502, origin }
+        );
+      } finally { clearTimeout(t); }
     }
 
     // ========== GitHub 代理 ==========

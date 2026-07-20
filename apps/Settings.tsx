@@ -437,6 +437,8 @@ const Settings: React.FC = () => {
   const [rtNewsEnabled, setRtNewsEnabled] = useState(realtimeConfig.newsEnabled);
   const [rtNewsApiKey, setRtNewsApiKey] = useState(realtimeConfig.newsApiKey || '');
   const [rtNewsPlatforms, setRtNewsPlatforms] = useState<string[]>(realtimeConfig.newsPlatforms || ['weibo', 'zhihu', 'baidu', 'bilibili', 'douyin']);
+  const [rtRssUrls, setRtRssUrls] = useState<string[]>(realtimeConfig.rssUrls || []);
+  const [rtRssCustomInput, setRtRssCustomInput] = useState('');
   const [rtNotionEnabled, setRtNotionEnabled] = useState(realtimeConfig.notionEnabled);
   const [rtNotionKey, setRtNotionKey] = useState(realtimeConfig.notionApiKey);
   const [rtNotionDbId, setRtNotionDbId] = useState(realtimeConfig.notionDatabaseId);
@@ -1157,6 +1159,7 @@ const Settings: React.FC = () => {
           newsEnabled: rtNewsEnabled,
           newsApiKey: rtNewsApiKey,
           newsPlatforms: rtNewsPlatforms,
+          rssUrls: rtRssUrls.length > 0 ? rtRssUrls : undefined,
           notionEnabled: rtNotionEnabled,
           notionApiKey: rtNotionKey,
           notionDatabaseId: rtNotionDbId,
@@ -2906,6 +2909,85 @@ const Settings: React.FC = () => {
                                   <p className="text-[10px] text-slate-400/70">仅当中文热榜拉取失败时才启用；都不可用时再兜底 Hacker News（英文）。</p>
                               </div>
                           </details>
+
+                          {/* RSS 订阅源：一坨内置勾选 + 自定义添加 */}
+                          <div className="border-t border-blue-200/50 pt-3 mt-2 space-y-2">
+                              <div className="flex items-center justify-between">
+                                  <p className="text-[11px] font-bold text-blue-700/90">RSS 订阅源</p>
+                                  <span className="text-[9px] text-slate-400">
+                                      已选 {rtRssUrls.length} 个{rtRssUrls.length > 0 ? ` · ${rtRssUrls.filter(u => u.startsWith('http')).length} 自定义` : ''}
+                                  </span>
+                              </div>
+                              <p className="text-[10px] text-slate-400/90 leading-relaxed">
+                                  勾选的 RSS 源会跟 orz.ai 热榜混合，一起存进分时段快照（每 4 小时刷新一次）。
+                                  AI 上下文随机抽 5 条注入，「热点」App 里也会跟 orz.ai 平台并列展示。所有 RSS 都走 worker 代理抓取，绕过 CORS。
+                              </p>
+                              <div className="flex flex-wrap gap-1.5">
+                                  {RealtimeContextManager.RSS_BUILTIN_SOURCES.map(s => {
+                                      const active = rtRssUrls.includes(s.url);
+                                      return (
+                                          <button
+                                              key={s.url}
+                                              type="button"
+                                              onClick={() => setRtRssUrls(prev => prev.includes(s.url) ? prev.filter(u => u !== s.url) : [...prev, s.url])}
+                                              className={`text-[11px] px-2.5 py-1 rounded-full font-bold transition-colors active:scale-95 ${active ? 'bg-blue-500 text-white shadow-sm' : 'bg-white/80 text-slate-500 border border-blue-200'}`}
+                                          >
+                                              {s.label}
+                                          </button>
+                                      );
+                                  })}
+                              </div>
+
+                              {/* 自定义源：列出已添加的 + 输入框 */}
+                              {rtRssUrls.filter(u => !RealtimeContextManager.RSS_BUILTIN_SOURCES.some(s => s.url === u)).length > 0 && (
+                                  <div className="space-y-1">
+                                      <p className="text-[10px] font-bold text-slate-400 uppercase">已添加的自定义源</p>
+                                      {rtRssUrls.filter(u => !RealtimeContextManager.RSS_BUILTIN_SOURCES.some(s => s.url === u)).map((u, i) => (
+                                          <div key={u + i} className="flex items-center gap-2 bg-white/60 border border-blue-200 rounded-lg px-2 py-1">
+                                              <span className="text-[10px] text-slate-500 font-mono flex-1 truncate" title={u}>{u}</span>
+                                              <button
+                                                  type="button"
+                                                  onClick={() => setRtRssUrls(prev => prev.filter(x => x !== u))}
+                                                  className="text-[10px] text-rose-400 hover:text-rose-600 font-bold shrink-0"
+                                              >删除</button>
+                                          </div>
+                                      ))}
+                                  </div>
+                              )}
+                              <div className="flex gap-1.5">
+                                  <input
+                                      type="url"
+                                      value={rtRssCustomInput}
+                                      onChange={e => setRtRssCustomInput(e.target.value)}
+                                      onKeyDown={e => {
+                                          if (e.key === 'Enter') {
+                                              e.preventDefault();
+                                              const v = rtRssCustomInput.trim();
+                                              if (v && /^https?:\/\//i.test(v) && !rtRssUrls.includes(v)) {
+                                                  setRtRssUrls(prev => [...prev, v]);
+                                                  setRtRssCustomInput('');
+                                              }
+                                          }
+                                      }}
+                                      className="flex-1 bg-white/80 border border-blue-200 rounded-xl px-3 py-1.5 text-[11px] font-mono text-slate-600"
+                                      placeholder="https://example.com/feed.xml（回车添加）"
+                                  />
+                                  <button
+                                      type="button"
+                                      onClick={() => {
+                                          const v = rtRssCustomInput.trim();
+                                          if (v && /^https?:\/\//i.test(v) && !rtRssUrls.includes(v)) {
+                                              setRtRssUrls(prev => [...prev, v]);
+                                              setRtRssCustomInput('');
+                                          }
+                                      }}
+                                      className="px-3 py-1.5 bg-blue-500 text-white text-[11px] font-bold rounded-xl active:scale-95 transition-transform shrink-0"
+                                  >添加</button>
+                              </div>
+                              {rtRssCustomInput && !/^https?:\/\//i.test(rtRssCustomInput) && (
+                                  <p className="text-[10px] text-rose-400">URL 必须以 http:// 或 https:// 开头</p>
+                              )}
+                          </div>
                       </div>
                   )}
               </div>

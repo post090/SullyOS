@@ -40,6 +40,9 @@ export interface RealtimeConfig {
     newsEnabled: boolean;
     newsApiKey?: string;    // 可选，Brave Search 回落源用
     newsPlatforms?: string[]; // hot_news 热榜平台 key（默认主源，免鉴权），留空用内置默认
+    // RSS 订阅源 URL 列表。内置勾选 + 用户自定义添加都塞这里。每条走 worker /rss 代理抓取。
+    // 留空 / 不填 = 不启用 RSS。RSS 跟 orz.ai 热榜混合存入同一份分时段快照。
+    rssUrls?: string[];
 
     // Notion 配置
     notionEnabled: boolean;
@@ -258,6 +261,98 @@ export const RealtimeContextManager = {
     DEFAULT_HOTNEWS_PLATFORMS: ['weibo', 'zhihu', 'baidu', 'bilibili', 'douyin'],
 
     /**
+     * RSS 内置订阅源清单（一坨显示，不分分类）。
+     *   - url 以 http(s):// 开头 → 走 worker /rss?url=<encoded> 通用代理（worker 服务端解析 XML）
+     *   - url 以 /rss/... 开头     → worker 内置包装器（无官方 RSS 的站点，worker 端调原始 API 转 RSS 条目）
+     *
+     * 用户在 Settings 里勾选 / 添加的 URL 都进 RealtimeConfig.rssUrls。
+     * 用户自定义源只能是 http(s):// 完整 URL（前端校验），内置包装路径不允许手动添加。
+     */
+    RSS_BUILTIN_SOURCES: [
+        { label: 'BBC News World', url: 'https://feeds.bbci.co.uk/news/world/rss.xml' },
+        { label: 'NHK 日本語', url: 'https://www.nhk.or.jp/rss/news/cat0.xml' },
+        { label: 'Hacker News Best', url: 'https://hnrss.org/best' },
+        { label: 'The Verge', url: 'https://www.theverge.com/rss/index.xml' },
+        { label: 'Aeon', url: 'https://www.aeon.co/feed.rss' },
+        { label: 'The Marginalian', url: 'https://themarginalian.org/feed/' },
+        { label: 'Psyche', url: 'https://psyche.co/feed.rss' },
+        { label: 'JAMA Psychiatry', url: 'https://jamanetwork.com/rss/site_14/onlineFirst_70.xml' },
+        { label: 'The Lancet Psychiatry', url: 'https://www.thelancet.com/rssfeed/lanpsy_online.xml' },
+        { label: 'MIT Technology Review', url: 'https://www.technologyreview.com/feed/' },
+        { label: 'The Onion', url: 'https://theonion.com/rss' },
+        { label: 'Bangumi 每日番组', url: '/rss/bangumi/calendar' },
+        { label: '文京区区报', url: '/rss/bunkyo' },
+    ] as { label: string; url: string }[],
+
+    /**
+     * 抓取一批 RSS 源。所有源都走 worker 代理（绕 CORS + 服务端解析 XML）。
+     * 并发拉取，每个源最多取前 N 条，最后按源 round-robin 交错合并避免单一源霸屏。
+     * url 形如：
+     *   - 完整 http(s)://  → 走 ${worker}/rss?url=<encoded>
+     *   - /rss/...         → worker 内置包装器，直接 ${worker}${url}
+     */
+    fetchRssNews: async (urls: string[], perSource = 10, total = 120): Promise<NewsItem[]> => {
+        if (!urls || urls.length === 0) return [];
+        const workerBase = getProxyWorkerUrl();
+
+        const perSourceResults = await Promise.all(urls.map(async (rawUrl): Promise<NewsItem[]> => {
+            // 推断源标签：内置源查表，自定义源用 hostname
+            const builtin = RealtimeContextManager.RSS_BUILTIN_SOURCES.find(s => s.url === rawUrl);
+            const label = builtin?.label || (() => {
+                try { return new URL(rawUrl).hostname.replace(/^www\./, ''); }
+                catch { return rawUrl; }
+            })();
+
+            // 拼请求 URL
+            let reqUrl: string;
+            if (/^https?:\/\//i.test(rawUrl)) {
+                reqUrl = `${workerBase}/rss?url=${encodeURIComponent(rawUrl)}`;
+            } else if (rawUrl.startsWith('/rss/')) {
+                reqUrl = `${workerBase}${rawUrl}`;
+            } else {
+                console.warn(`[rss] ${label} 跳过：URL 格式不识别（${rawUrl}）`);
+                return [];
+            }
+
+            try {
+                const res = await fetch(reqUrl, { headers: { 'Accept': 'application/json' } });
+                if (!res.ok) {
+                    console.warn(`[rss] ${label} HTTP ${res.status}`);
+                    return [];
+                }
+                const data = await safeResponseJson(res);
+                const items: any[] = Array.isArray(data?.items) ? data.items : [];
+                const picked = items
+                    .filter(it => it && typeof it.title === 'string' && it.title.trim())
+                    .slice(0, perSource)
+                    .map(it => {
+                        const desc = typeof it.desc === 'string' ? it.desc.replace(/\s+/g, ' ').trim() : '';
+                        return {
+                            title: String(it.title).trim(),
+                            source: label,
+                            url: typeof it.link === 'string' ? it.link : undefined,
+                            desc: desc && desc !== it.title ? desc.slice(0, 280) : undefined,
+                        };
+                    });
+                console.log(`[rss] ${label} ✓ 取 ${picked.length}/${items.length} 条`);
+                return picked;
+            } catch (e: any) {
+                console.warn(`[rss] ${label} ✗ 拉取失败:`, e?.message || e);
+                return [];
+            }
+        }));
+
+        // round-robin 交错
+        const merged: NewsItem[] = [];
+        for (let rank = 0; rank < perSource; rank++) {
+            for (const arr of perSourceResults) {
+                if (arr[rank]) merged.push(arr[rank]);
+            }
+        }
+        return merged.slice(0, total);
+    },
+
+    /**
      * 使用 hot_news（orz.ai）获取中文多平台热榜。
      * 免鉴权、半小时刷新。浏览器端优先直连；若被 CORS 拦截则本调用返回 []，
      * 由 fetchNews 自然回落到 Brave / Hacker News。
@@ -332,21 +427,22 @@ export const RealtimeContextManager = {
 
     /**
      * 分时段热点：每天每时段最多拉一次，持久化在 IndexedDB，全角色共享。
-     * - 本时段已有快照且平台集一致 → 直接复用，不发请求
-     * - 否则拉一次并存快照；拉失败则退回最近一次快照（且不写本时段，下次会重试）
+     * - 本时段已有快照且【平台集 + RSS 源集】都一致 → 直接复用，不发请求
+     * - 否则并发拉 orz.ai 热榜 + RSS 订阅源，合并后存快照；拉失败则退回最近一次快照
      */
     getSlottedHotNews: async (config: RealtimeConfig): Promise<NewsItem[]> => {
         const { id, date, slot, label } = RealtimeContextManager.getHotNewsSlot();
         const platforms = (config.newsPlatforms && config.newsPlatforms.length > 0)
             ? config.newsPlatforms
             : RealtimeContextManager.DEFAULT_HOTNEWS_PLATFORMS;
-        const samePlatforms = (a: string[] = [], b: string[] = []) =>
+        const rssUrls = Array.isArray(config.rssUrls) ? config.rssUrls.filter(u => typeof u === 'string' && u.trim()) : [];
+        const sameSet = (a: string[] = [], b: string[] = []) =>
             a.length === b.length && [...a].sort().join(',') === [...b].sort().join(',');
 
-        // 1. 命中本时段快照（平台一致）→ 复用
+        // 1. 命中本时段快照（平台集 + RSS 源集都一致）→ 复用
         try {
             const snap = await DB.getHotNewsSnapshot(id);
-            if (snap && snap.items?.length > 0 && samePlatforms(snap.platforms, platforms)) {
+            if (snap && snap.items?.length > 0 && sameSet(snap.platforms, platforms) && sameSet(snap.rssUrls || [], rssUrls)) {
                 const mins = Math.round((Date.now() - snap.fetchedAt) / 60000);
                 console.log(`%c[hot_news] 命中今日${label}快照（${snap.items.length} 条，${mins} 分钟前拉的）`, 'color:#16a34a');
                 return snap.items;
@@ -359,13 +455,35 @@ export const RealtimeContextManager = {
 
         const job = (async (): Promise<NewsItem[]> => {
             console.log(`%c[hot_news] 触发今日${label}拉取…`, 'color:#2563eb;font-weight:bold');
-            const items = await RealtimeContextManager.fetchHotNews(platforms);
-            if (items.length > 0) {
+            // orz.ai 热榜 + RSS 并发拉取，互不阻塞
+            const [hotItems, rssItems] = await Promise.all([
+                RealtimeContextManager.fetchHotNews(platforms),
+                rssUrls.length > 0
+                    ? RealtimeContextManager.fetchRssNews(rssUrls).catch(e => {
+                        console.warn('[rss] 整体抓取失败（不阻塞 orz.ai 热榜）:', e?.message || e);
+                        return [] as NewsItem[];
+                    })
+                    : Promise.resolve([] as NewsItem[]),
+            ]);
+
+            // 合并：先把 RSS 均匀穿插进 orz.ai 列表里（每 5 条插 1 条 RSS），让 AI 看到的池子更混合
+            const merged: NewsItem[] = [];
+            let rssIdx = 0;
+            for (let i = 0; i < hotItems.length; i++) {
+                merged.push(hotItems[i]);
+                if (rssIdx < rssItems.length && (i + 1) % 5 === 0) {
+                    merged.push(rssItems[rssIdx++]);
+                }
+            }
+            while (rssIdx < rssItems.length) merged.push(rssItems[rssIdx++]);
+
+            if (merged.length > 0) {
                 try {
-                    await DB.saveHotNewsSnapshot({ id, date, slot, slotLabel: label, items, platforms, fetchedAt: Date.now() });
+                    await DB.saveHotNewsSnapshot({ id, date, slot, slotLabel: label, items: merged, platforms, rssUrls, fetchedAt: Date.now() });
                     DB.pruneHotNewsSnapshots(12).catch(() => {});
                 } catch { /* 存快照失败不影响返回 */ }
-                return items;
+                console.log(`%c[hot_news] ${label}拉取完成：orz.ai ${hotItems.length} 条 + RSS ${rssItems.length} 条 → 合并 ${merged.length} 条`, 'color:#16a34a;font-weight:bold');
+                return merged;
             }
             // 拉取失败 → 退回最近一次快照（不写本时段，下条消息会再试）
             try {
