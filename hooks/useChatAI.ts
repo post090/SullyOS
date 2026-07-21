@@ -1054,6 +1054,15 @@ export const useChatAI = ({
                     : '请求失败';
                 addToast(`${char.name}：网络抖动（${reasonText}），正在自动重试…`, 'info');
             };
+            // patchedFetch 内部的 400 自愈重发 + stream 升级回退重发 + 原生栈 fallback
+            // 都通过 window.__sullyRetryNotifier 广播（OSContext 里 patchedFetch 调用）。
+            // 这里注册本轮发送的 notifier，复用 handleRetry 的"只 toast 一次"节流逻辑。
+            const prevNotifier = (window as any).__sullyRetryNotifier;
+            (window as any).__sullyRetryNotifier = (msg: string) => {
+                if (retryToastShown) return;
+                retryToastShown = true;
+                addToast(`${char.name}：${msg}`, 'info');
+            };
             const streamHooks = (streamPreviewEligible || streamThinkingEligible) ? {
                 onDelta: (_delta: string, fullText: string) => {
                     if (streamPreviewEligible) {
@@ -1591,6 +1600,8 @@ export const useChatAI = ({
         } finally {
             KeepAlive.stop();
             setIsTyping(false);
+            // 恢复上一轮的 retry notifier（避免本轮注册的闭包泄漏到下一轮 / 其他模块）
+            (window as any).__sullyRetryNotifier = prevNotifier;
             // 全局横幅熄灭（成功/失败/instant 均经过这里；OSContext 同时借它兜底刷新，
             // 覆盖 catch 里落库的错误系统消息）。
             announceChatGen(CHAT_GEN_EVENTS.replyEnd, { charId: char.id, charName: char.name });

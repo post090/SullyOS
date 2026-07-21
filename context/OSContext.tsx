@@ -35,6 +35,7 @@ import { setMinimaxRegion } from '../utils/minimaxEndpoint';
 import { setTtsProvider, setVoicePromptOverrides } from '../utils/ttsProvider';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { Capacitor } from '@capacitor/core';
+import { nativeFetch } from '../utils/nativeFetch';
 import { isTaskReminderNotification, getCharIdFromReminder } from '../utils/taskReminderScheduler';
 import { formatBytes, formatBackupTimestamp } from '../utils/format';
 import { isEmotionEvalSkipped } from '../utils/devDebug';
@@ -999,6 +1000,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                               const parsed = JSON.parse(sentBody);
                               if (stripSamplingParams(parsed)) {
                                   sendArgs = [resource, { ...(sendArgs[1] as RequestInit), body: JSON.stringify(parsed) }];
+                                  try { (window as any).__sullyRetryNotifier?.('采样参数被模型拒收，已自动摘除重试'); } catch { /* notifier 异常不影响自愈 */ }
                                   response = await originalFetch(...sendArgs);
                               }
                           } catch { /* 解析失败：保留原始 400 响应 */ }
@@ -1010,6 +1012,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               // 原 body 重发一次，行为退回旧版（升级只能赚不能赔）。
               if (streamUpgraded && !response.ok && (response.status === 400 || response.status === 422) && bodyBeforeStreamUpgrade) {
                   console.warn('🔁 [StreamUpgrade] 中转拒绝流式升级(HTTP ' + response.status + ')，回退原请求重发');
+                  try { (window as any).__sullyRetryNotifier?.('中转不支持流式升级，已回退原请求重试'); } catch { /* notifier 异常不影响自愈 */ }
                   response = await originalFetch(resource, { ...(config as RequestInit), body: bodyBeforeStreamUpgrade });
                   streamUpgraded = false;
               }
@@ -1085,6 +1088,42 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               }
               return response;
           } catch (err: any) {
+              // 网络层失败兜底：APK/原生平台走 WebView fetch 受 CORS 约束，部分中转没配
+              // CORS 头会被浏览器 block 成 "Failed to fetch"（TypeError）。这里在原生平台
+              // 上自动 fallback 到 CapacitorHttp（系统 HTTP 栈，无 CORS），整包响应一次拿回。
+              // 流式预览在这种情况下不工作（CapacitorHttp 不支持 SSE），但能拿到完整回复，
+              // 比"两次报错 + 等一会儿正常"体验好太多。
+              const isNativePlatform = (() => { try { return Capacitor.isNativePlatform(); } catch { return false; } })();
+              const isNetworkError = err?.name === 'TypeError' || /Failed to fetch|Load failed|NetworkError/i.test(err?.message || '');
+              if (isNativePlatform && isNetworkError && urlStr.includes('/chat/completions')) {
+                  try {
+                      const fallbackStartedAt = Date.now();
+                      const response = await nativeFetch(urlStr, sendArgs[1] as RequestInit || {});
+                      console.warn('🔁 [NativeFallback] WebView fetch 失败，已切换原生网络栈重试成功', { originalError: err?.message, durationMs: Date.now() - fallbackStartedAt });
+                      try { (window as any).__sullyRetryNotifier?.('WebView 网络受限，已自动切换原生网络栈重试'); } catch { /* notifier 异常不影响主流程 */ }
+                      // 走 patchedFetch 后续的响应归一化（stream 升级拼回 / API 调用记录 / 错误日志）
+                      // —— 但这里 response 已经是 nativeFetch 返回的整包 Response，streamUpgraded
+                      // 等改写都不适用（nativeFetch 用的是原始 body，没经过 stream 升级）。直接返回。
+                      if (urlStr.includes('/chat/completions')) {
+                          const meta = (config as any)?.__sullyMeta;
+                          const body = (sendArgs[1] as any)?.body;
+                          const status = response.status;
+                          const ok = response.ok;
+                          try {
+                              const usageClone = response.clone();
+                              usageClone.text().then((t) => {
+                                  const durationMs = Date.now() - fetchStartedAt;
+                                  let parsed: any = undefined;
+                                  try { parsed = JSON.parse(t); } catch { /* SSE 兜底 */ }
+                                  recordApiCall({ url: urlStr, body, status, ok, response: parsed, responseText: parsed === undefined ? t : undefined, meta, durationMs });
+                              }).catch(() => recordApiCall({ url: urlStr, body, status, ok, meta, durationMs: Date.now() - fetchStartedAt }));
+                          } catch { /* clone 失败就跳过记录 */ }
+                      }
+                      return response;
+                  } catch (fallbackErr) {
+                      console.warn('🔁 [NativeFallback] 原生栈重试也失败', fallbackErr);
+                  }
+              }
               // Network Failure
               if (urlStr.includes('/chat/completions')) {
                   recordApiCall({ url: urlStr, body: (sendArgs[1] as any)?.body, ok: false, meta: (config as any)?.__sullyMeta, durationMs: Date.now() - fetchStartedAt });
