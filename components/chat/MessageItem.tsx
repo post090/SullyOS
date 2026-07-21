@@ -1228,7 +1228,7 @@ interface MessageItemProps {
     bubbleVariant?: 'modern' | 'flat' | 'outline' | 'shadow' | 'wechat' | 'ios';
     messageSpacing?: 'compact' | 'default' | 'spacious';
     showTimestamp?: 'always' | 'hover' | 'never';
-    /** HTML 卡片 / 心象卡片的出现位置（聊天细节微调 chatModuleAlign 合并后的生效值）。缺省 = 居中 */
+    /** HTML / 心象 / 音乐卡片的出现位置（聊天细节微调 chatModuleAlign 合并后的生效值）。缺省 = 居中 */
     moduleAlign?: 'anchor' | 'center';
     /** 流式预览无缝接棒时，正式消息首帧已经可见，不应再次从透明态淡入。 */
     suppressEntranceAnimation?: boolean;
@@ -1752,8 +1752,8 @@ const MessageItem = React.memo(({
                     </div>
                 )}
 
-                {/* Avatar - Absolute Positioned */}
-                {!isUser && (
+                {/* HTML / 音乐卡片是独立模块，不继承普通消息外壳的角色头像。卡片内部自己的头像不受影响。 */}
+                {!isUser && !isModuleCard && (
                     <div className={`absolute bottom-0 z-0 ${selectionMode ? 'left-14' : 'left-3'} transition-[left] duration-300`}>
                         {renderAvatar(charAvatar)}
                     </div>
@@ -1812,8 +1812,8 @@ const MessageItem = React.memo(({
                     </div>
                 </div>
 
-                {/* User Avatar - Absolute Positioned */}
-                {isUser && (
+                {/* 用户侧若存在导入/历史模块卡，也保持同一条“卡片不带消息外侧头像”规则。 */}
+                {isUser && !isModuleCard && (
                     <div className={`absolute right-3 bottom-0 z-0 transition-[left] duration-300`}>
                         {renderAvatar(userAvatar)}
                     </div>
