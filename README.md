@@ -2,6 +2,7 @@
 
 > [SullyOS](https://github.com/qegj567-cloud/SullyOS) 的个人 Fork，自用为主，分享一下。
 > 跟随原版主线更新，致敬原作者 [qegj567-cloud](https://github.com/qegj567-cloud) —— 没有原版就没有这个 Fork。
+> **由于自定义RSS订阅功能的加入，使用本Fork意味着你需要部署自己的Worker。**
 
 ## 关于这个 Fork
 
