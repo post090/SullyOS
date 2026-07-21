@@ -134,40 +134,63 @@ export async function checkModelConsistency(
 /**
  * 重新向量化：用新模型重新 embedding 所有已有记忆。
  * 保留 MemoryNode 不动，只替换 MemoryVector。
+ *
+ * onProgress 回调用于 UI 显示进度（每完成一个分窗调用一次）。
+ * 分窗策略：每窗 BATCH_SIZE 条（默认 10），避免一次性把所有 text 塞进 getEmbeddings
+ * 导致内存峰值过高（一两千条记忆 × 1024 维 Float32Array ≈ 数 MB）。
+ * 报错抛出，调用方负责 catch + UI 提示。
  */
 export async function rebuildAllVectors(
     charId: string,
     embeddingConfig: EmbeddingConfig,
     remoteVectorConfig?: RemoteVectorConfig,
+    onProgress?: (rebuilt: number, total: number) => void,
 ): Promise<{ rebuilt: number }> {
     const nodes = await MemoryNodeDB.getByCharId(charId);
     const embeddedNodes = nodes.filter(n => n.embedded);
 
-    if (embeddedNodes.length === 0) return { rebuilt: 0 };
-
-    console.log(`🔄 [VectorStore] 开始重建 ${embeddedNodes.length} 条向量（${embeddingConfig.model}）...`);
-
-    // 批量 embedding
-    const texts = embeddedNodes.map(n => n.content);
-    const vectors = await getEmbeddings(texts, embeddingConfig);
-
-    // 逐条替换
-    for (let i = 0; i < embeddedNodes.length; i++) {
-        const mv: MemoryVector = {
-            memoryId: embeddedNodes[i].id,
-            charId,
-            vector: vectors[i],
-            dimensions: embeddingConfig.dimensions,
-            model: embeddingConfig.model,
-        };
-        await MemoryVectorDB.save(mv);
-
-        // 同步到远程
-        if (remoteVectorConfig?.enabled && remoteVectorConfig.initialized) {
-            remoteUpsert(remoteVectorConfig, embeddedNodes[i].id, charId, vectors[i], embeddedNodes[i], embeddingConfig.dimensions, embeddingConfig.model).catch(() => {});
-        }
+    const total = embeddedNodes.length;
+    if (total === 0) {
+        onProgress?.(0, 0);
+        return { rebuilt: 0 };
     }
 
-    console.log(`✅ [VectorStore] 重建完成：${embeddedNodes.length} 条向量已更新为 ${embeddingConfig.model}`);
-    return { rebuilt: embeddedNodes.length };
+    console.log(`🔄 [VectorStore] 开始重建 ${total} 条向量（${embeddingConfig.model}）...`);
+    onProgress?.(0, total);
+
+    // 分窗批量 embedding，避免一次性把所有 text 塞进 getEmbeddings 导致内存峰值过高
+    // （一两千条 × 1024 维 Float32Array ≈ 数 MB，且 getEmbeddings 内部还要并行多批）
+    const WINDOW_SIZE = 50; // 每窗 50 条，内部 getEmbeddings 再按 BATCH_SIZE=10 分批
+    let rebuilt = 0;
+
+    for (let start = 0; start < total; start += WINDOW_SIZE) {
+        const end = Math.min(start + WINDOW_SIZE, total);
+        const windowNodes = embeddedNodes.slice(start, end);
+        const windowTexts = windowNodes.map(n => n.content);
+
+        // 这一窗的向量
+        const vectors = await getEmbeddings(windowTexts, embeddingConfig);
+
+        // 逐条落库 + 同步远程
+        for (let i = 0; i < windowNodes.length; i++) {
+            const mv: MemoryVector = {
+                memoryId: windowNodes[i].id,
+                charId,
+                vector: vectors[i],
+                dimensions: embeddingConfig.dimensions,
+                model: embeddingConfig.model,
+            };
+            await MemoryVectorDB.save(mv);
+
+            if (remoteVectorConfig?.enabled && remoteVectorConfig.initialized) {
+                remoteUpsert(remoteVectorConfig, windowNodes[i].id, charId, vectors[i], windowNodes[i], embeddingConfig.dimensions, embeddingConfig.model).catch(() => {});
+            }
+        }
+
+        rebuilt += windowNodes.length;
+        onProgress?.(rebuilt, total);
+    }
+
+    console.log(`✅ [VectorStore] 重建完成：${rebuilt} 条向量已更新为 ${embeddingConfig.model}`);
+    return { rebuilt };
 }

@@ -591,7 +591,7 @@ const MemoApp: React.FC = () => {
             className="bg-[#f4efe4] border-b-2 border-stone-800 shrink-0 sticky top-0 z-10"
             style={{ paddingTop: 'var(--safe-top)' }}
         >
-            <div className="flex items-center px-4 py-3">
+            <div className="flex items-center px-4 py-2">
                 <div className="flex items-center gap-2 w-full">
                     {mode === 'detail' ? (
                         <button

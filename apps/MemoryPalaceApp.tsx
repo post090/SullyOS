@@ -12,6 +12,7 @@ import {
     DigestReportDB, PLATE_TITLES,
     bootstrapPlatesFromHistory, markPlateBootstrapDone,
     getBootstrapResume, setBootstrapResume, clearBootstrapResume,
+    rebuildAllVectors,
 } from '../utils/memoryPalace';
 import type { Anticipation, MigrationProgress, DigestResult, MemoryLink, EventBox, DigestReport } from '../utils/memoryPalace';
 import { confirmExportSafety } from '../utils/exportGuard';
@@ -459,6 +460,11 @@ export default function MemoryPalaceApp() {
     const [migrating, setMigrating] = useState(false);
     const [migrationProgress, setMigrationProgress] = useState<MigrationProgress | null>(null);
     const [migrationResult, setMigrationResult] = useState<string | null>(null);
+
+    // 全量重建向量状态
+    const [rebuilding, setRebuilding] = useState(false);
+    const [rebuildProgress, setRebuildProgress] = useState<{ rebuilt: number; total: number } | null>(null);
+    const [rebuildResult, setRebuildResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
     // 月份选择（导入旧记忆）
     const [availableMonths, setAvailableMonths] = useState<string[]>([]);
@@ -2868,6 +2874,118 @@ export default function MemoryPalaceApp() {
                             <StatusMessage msg={testResult} />
                         </div>
                     )}
+
+                    {/* 全量重新生成向量 */}
+                    <div style={{
+                        marginTop: 12, padding: 12, borderRadius: 12,
+                        background: '#fffbeb', border: '1px solid #fde68a',
+                    }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: '#92400e', marginBottom: 4 }}>
+                            全量重新生成向量
+                        </div>
+                        <div style={{ fontSize: 11, color: '#a16207', lineHeight: 1.6, marginBottom: 8 }}>
+                            用当前配置的模型，把 {char?.name ?? '该角色'} 所有已向量化的记忆重新 embedding 一遍。
+                            适用：换模型后、向量损坏、维度对不上、召回不准。
+                        </div>
+                        <button
+                            onClick={async () => {
+                                if (!char || !hasEmbeddingConfig) return;
+                                if (rebuilding) return;
+                                // 二次确认（如果记忆很多）
+                                if (totalCount > 100) {
+                                    const ok = window.confirm(
+                                        `将重新生成 ${totalCount} 条记忆的向量，会发送较多 API 请求。继续？`
+                                    );
+                                    if (!ok) return;
+                                }
+                                setRebuilding(true);
+                                setRebuildProgress(null);
+                                setRebuildResult(null);
+                                try {
+                                    const config = {
+                                        baseUrl: embUrl.trim(),
+                                        apiKey: embKey.trim(),
+                                        model: embModel.trim() || 'BAAI/bge-m3',
+                                        dimensions: embDimensions || 1024,
+                                    };
+                                    // 只重建本地向量；远程 Supabase 同步交给后续 pipeline 自然补上
+                                    const result = await rebuildAllVectors(char.id, config, undefined, (rebuilt, total) => {
+                                        setRebuildProgress({ rebuilt, total });
+                                    });
+                                    setRebuildResult({ ok: true, msg: `完成：${result.rebuilt} 条向量已重新生成` });
+                                } catch (err: any) {
+                                    setRebuildResult({ ok: false, msg: `失败：${err.message || String(err)}` });
+                                } finally {
+                                    setRebuilding(false);
+                                }
+                            }}
+                            disabled={rebuilding || !hasEmbeddingConfig || !char || totalCount === 0}
+                            style={{
+                                width: '100%',
+                                padding: '10px 0',
+                                borderRadius: 12,
+                                border: '1px solid #f59e0b',
+                                fontWeight: 600,
+                                fontSize: 13,
+                                color: '#b45309',
+                                background: 'white',
+                                cursor: (rebuilding || !hasEmbeddingConfig || !char || totalCount === 0) ? 'not-allowed' : 'pointer',
+                                opacity: (rebuilding || !hasEmbeddingConfig || !char || totalCount === 0) ? 0.6 : 1,
+                            }}
+                        >
+                            {rebuilding ? '正在重新生成...' : `全量重新生成（${totalCount} 条记忆）`}
+                        </button>
+
+                        {/* 进度条 */}
+                        {rebuilding && rebuildProgress && rebuildProgress.total > 0 && (
+                            <div style={{ marginTop: 8 }}>
+                                <div style={{
+                                    display: 'flex', justifyContent: 'space-between',
+                                    fontSize: 11, color: '#92400e', marginBottom: 4,
+                                }}>
+                                    <span>
+                                        {rebuildProgress.rebuilt === 0
+                                            ? '准备中...'
+                                            : `已处理 ${rebuildProgress.rebuilt}/${rebuildProgress.total} 条`}
+                                    </span>
+                                    <span>{Math.round(rebuildProgress.rebuilt / rebuildProgress.total * 100)}%</span>
+                                </div>
+                                <div style={{
+                                    width: '100%', height: 6, background: '#fde68a',
+                                    borderRadius: 3, overflow: 'hidden',
+                                }}>
+                                    <div style={{
+                                        width: `${rebuildProgress.rebuilt / rebuildProgress.total * 100}%`,
+                                        height: '100%', background: '#f59e0b',
+                                        transition: 'width 0.3s ease',
+                                    }} />
+                                </div>
+                            </div>
+                        )}
+
+                        {/* 结果 */}
+                        {rebuildResult && (
+                            <div style={{
+                                marginTop: 8, fontSize: 12, padding: '8px 12px', borderRadius: 8,
+                                background: rebuildResult.ok ? '#f0fdf4' : '#fef2f2',
+                                color: rebuildResult.ok ? '#16a34a' : '#dc2626',
+                            }}>
+                                {rebuildResult.msg}
+                            </div>
+                        )}
+
+                        {/* 禁用原因提示 */}
+                        {!hasEmbeddingConfig && (
+                            <div style={{ marginTop: 6, fontSize: 11, color: '#9ca3af' }}>
+                                需先填写并保存 Embedding 配置
+                            </div>
+                        )}
+                        {hasEmbeddingConfig && totalCount === 0 && !rebuilding && (
+                            <div style={{ marginTop: 6, fontSize: 11, color: '#9ca3af' }}>
+                                当前角色还没有任何记忆，无需重建
+                            </div>
+                        )}
+                    </div>
                 </div>
 
                 {/* Rerank API（可选 cross-encoder 二次排序） */}
