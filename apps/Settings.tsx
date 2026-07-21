@@ -438,7 +438,12 @@ const Settings: React.FC = () => {
   const [rtNewsApiKey, setRtNewsApiKey] = useState(realtimeConfig.newsApiKey || '');
   const [rtNewsPlatforms, setRtNewsPlatforms] = useState<string[]>(realtimeConfig.newsPlatforms || ['weibo', 'zhihu', 'baidu', 'bilibili', 'douyin']);
   const [rtRssUrls, setRtRssUrls] = useState<string[]>(realtimeConfig.rssUrls || []);
-  const [rtRssCustomInput, setRtRssCustomInput] = useState('');
+  const [rtRssCustom, setRtRssCustom] = useState<{ url: string; name: string }[]>(realtimeConfig.rssCustom || []);
+  const [rtRssCustomName, setRtRssCustomName] = useState('');
+  const [rtRssCustomUrl, setRtRssCustomUrl] = useState('');
+  const [rtRssEditingIdx, setRtRssEditingIdx] = useState<number | null>(null);
+  const [rtRssEditName, setRtRssEditName] = useState('');
+  const [rtRssEditUrl, setRtRssEditUrl] = useState('');
   const [rtNotionEnabled, setRtNotionEnabled] = useState(realtimeConfig.notionEnabled);
   const [rtNotionKey, setRtNotionKey] = useState(realtimeConfig.notionApiKey);
   const [rtNotionDbId, setRtNotionDbId] = useState(realtimeConfig.notionDatabaseId);
@@ -1160,6 +1165,7 @@ const Settings: React.FC = () => {
           newsApiKey: rtNewsApiKey,
           newsPlatforms: rtNewsPlatforms,
           rssUrls: rtRssUrls.length > 0 ? rtRssUrls : undefined,
+          rssCustom: rtRssCustom.length > 0 ? rtRssCustom : undefined,
           notionEnabled: rtNotionEnabled,
           notionApiKey: rtNotionKey,
           notionDatabaseId: rtNotionDbId,
@@ -2910,12 +2916,12 @@ const Settings: React.FC = () => {
                               </div>
                           </details>
 
-                          {/* RSS 订阅源：一坨内置勾选 + 自定义添加 */}
+                          {/* RSS 订阅源：一坨内置勾选 + 自定义添加（带名字 + 可编辑） */}
                           <div className="border-t border-blue-200/50 pt-3 mt-2 space-y-2">
                               <div className="flex items-center justify-between">
                                   <p className="text-[11px] font-bold text-blue-700/90">RSS 订阅源</p>
                                   <span className="text-[9px] text-slate-400">
-                                      已选 {rtRssUrls.length} 个{rtRssUrls.length > 0 ? ` · ${rtRssUrls.filter(u => u.startsWith('http')).length} 自定义` : ''}
+                                      内置 {rtRssUrls.length}{rtRssCustom.length > 0 ? ` · 自定义 ${rtRssCustom.length}` : ''}
                                   </span>
                               </div>
                               <p className="text-[10px] text-slate-400/90 leading-relaxed">
@@ -2936,56 +2942,146 @@ const Settings: React.FC = () => {
                                           </button>
                                       );
                                   })}
+                                  {/* 自定义源直接拼到内置源后面，名字后面带铅笔 + 删除 */}
+                                  {rtRssCustom.map((c, i) => (
+                                      <span key={c.url + i} className="inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full font-bold bg-amber-100 text-amber-700 border border-amber-300">
+                                          {c.name}
+                                          <button
+                                              type="button"
+                                              onClick={() => {
+                                                  setRtRssEditingIdx(i);
+                                                  setRtRssEditName(c.name);
+                                                  setRtRssEditUrl(c.url);
+                                              }}
+                                              className="text-amber-500 hover:text-amber-700 font-bold"
+                                              title="编辑"
+                                          >✎</button>
+                                          <button
+                                              type="button"
+                                              onClick={() => setRtRssCustom(prev => prev.filter((_, idx) => idx !== i))}
+                                              className="text-rose-400 hover:text-rose-600 font-bold"
+                                              title="删除"
+                                          >×</button>
+                                      </span>
+                                  ))}
                               </div>
 
-                              {/* 自定义源：列出已添加的 + 输入框 */}
-                              {rtRssUrls.filter(u => !RealtimeContextManager.RSS_BUILTIN_SOURCES.some(s => s.url === u)).length > 0 && (
-                                  <div className="space-y-1">
-                                      <p className="text-[10px] font-bold text-slate-400 uppercase">已添加的自定义源</p>
-                                      {rtRssUrls.filter(u => !RealtimeContextManager.RSS_BUILTIN_SOURCES.some(s => s.url === u)).map((u, i) => (
-                                          <div key={u + i} className="flex items-center gap-2 bg-white/60 border border-blue-200 rounded-lg px-2 py-1">
-                                              <span className="text-[10px] text-slate-500 font-mono flex-1 truncate" title={u}>{u}</span>
-                                              <button
-                                                  type="button"
-                                                  onClick={() => setRtRssUrls(prev => prev.filter(x => x !== u))}
-                                                  className="text-[10px] text-rose-400 hover:text-rose-600 font-bold shrink-0"
-                                              >删除</button>
-                                          </div>
-                                      ))}
+                              {/* 编辑中的源：展开成两个输入框 + 保存/取消 */}
+                              {rtRssEditingIdx !== null && (
+                                  <div className="space-y-1.5 bg-amber-50 border border-amber-200 rounded-xl p-2">
+                                      <p className="text-[10px] font-bold text-amber-700">编辑自定义源</p>
+                                      <div className="flex gap-1.5">
+                                          <input
+                                              type="text"
+                                              value={rtRssEditName}
+                                              onChange={e => setRtRssEditName(e.target.value)}
+                                              className="flex-1 bg-white/90 border border-amber-200 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-700"
+                                              placeholder="源名字（如：文京区区报）"
+                                          />
+                                          <input
+                                              type="url"
+                                              value={rtRssEditUrl}
+                                              onChange={e => setRtRssEditUrl(e.target.value)}
+                                              className="flex-[2] bg-white/90 border border-amber-200 rounded-lg px-2.5 py-1.5 text-[11px] font-mono text-slate-600"
+                                              placeholder="https://... 或 /rss/xxx"
+                                          />
+                                      </div>
+                                      <div className="flex gap-1.5 justify-end">
+                                          <button
+                                              type="button"
+                                              onClick={() => {
+                                                  setRtRssEditingIdx(null);
+                                                  setRtRssEditName('');
+                                                  setRtRssEditUrl('');
+                                              }}
+                                              className="px-3 py-1 bg-white text-slate-500 text-[11px] font-bold rounded-lg border border-slate-200"
+                                          >取消</button>
+                                          <button
+                                              type="button"
+                                              onClick={() => {
+                                                  const name = rtRssEditName.trim();
+                                                  const url = rtRssEditUrl.trim();
+                                                  if (!name || !url) return;
+                                                  // 跟其他自定义源 / 内置源 URL 不能重复
+                                                  const dupCustom = rtRssCustom.some((_, idx) => idx !== rtRssEditingIdx && rtRssCustom[idx].url === url);
+                                                  const dupBuiltin = RealtimeContextManager.RSS_BUILTIN_SOURCES.some(s => s.url === url);
+                                                  if (dupCustom || dupBuiltin) {
+                                                      return;
+                                                  }
+                                                  setRtRssCustom(prev => prev.map((c, idx) => idx === rtRssEditingIdx ? { name, url } : c));
+                                                  setRtRssEditingIdx(null);
+                                                  setRtRssEditName('');
+                                                  setRtRssEditUrl('');
+                                              }}
+                                              className="px-3 py-1 bg-amber-500 text-white text-[11px] font-bold rounded-lg active:scale-95 transition-transform"
+                                          >保存</button>
+                                      </div>
                                   </div>
                               )}
-                              <div className="flex gap-1.5">
-                                  <input
-                                      type="url"
-                                      value={rtRssCustomInput}
-                                      onChange={e => setRtRssCustomInput(e.target.value)}
-                                      onKeyDown={e => {
-                                          if (e.key === 'Enter') {
-                                              e.preventDefault();
-                                              const v = rtRssCustomInput.trim();
-                                              if (v && /^https?:\/\//i.test(v) && !rtRssUrls.includes(v)) {
-                                                  setRtRssUrls(prev => [...prev, v]);
-                                                  setRtRssCustomInput('');
-                                              }
-                                          }
-                                      }}
-                                      className="flex-1 bg-white/80 border border-blue-200 rounded-xl px-3 py-1.5 text-[11px] font-mono text-slate-600"
-                                      placeholder="https://example.com/feed.xml（回车添加）"
-                                  />
-                                  <button
-                                      type="button"
-                                      onClick={() => {
-                                          const v = rtRssCustomInput.trim();
-                                          if (v && /^https?:\/\//i.test(v) && !rtRssUrls.includes(v)) {
-                                              setRtRssUrls(prev => [...prev, v]);
-                                              setRtRssCustomInput('');
-                                          }
-                                      }}
-                                      className="px-3 py-1.5 bg-blue-500 text-white text-[11px] font-bold rounded-xl active:scale-95 transition-transform shrink-0"
-                                  >添加</button>
-                              </div>
-                              {rtRssCustomInput && !/^https?:\/\//i.test(rtRssCustomInput) && (
-                                  <p className="text-[10px] text-rose-400">URL 必须以 http:// 或 https:// 开头</p>
+
+                              {/* 添加新自定义源：名字 + URL 两栏 + 添加按钮 */}
+                              {rtRssEditingIdx === null && (
+                                  <>
+                                      <div className="flex gap-1.5">
+                                          <input
+                                              type="text"
+                                              value={rtRssCustomName}
+                                              onChange={e => setRtRssCustomName(e.target.value)}
+                                              onKeyDown={e => {
+                                                  if (e.key === 'Enter') {
+                                                      e.preventDefault();
+                                                      const name = rtRssCustomName.trim();
+                                                      const url = rtRssCustomUrl.trim();
+                                                      if (name && url && /^https?:\/\//i.test(url) && !rtRssCustom.some(c => c.url === url) && !RealtimeContextManager.RSS_BUILTIN_SOURCES.some(s => s.url === url)) {
+                                                          setRtRssCustom(prev => [...prev, { name, url }]);
+                                                          setRtRssCustomName('');
+                                                          setRtRssCustomUrl('');
+                                                      }
+                                                  }
+                                              }}
+                                              className="flex-1 bg-white/80 border border-blue-200 rounded-xl px-3 py-1.5 text-[11px] text-slate-600"
+                                              placeholder="源名字（如：文京区区报）"
+                                          />
+                                          <input
+                                              type="url"
+                                              value={rtRssCustomUrl}
+                                              onChange={e => setRtRssCustomUrl(e.target.value)}
+                                              onKeyDown={e => {
+                                                  if (e.key === 'Enter') {
+                                                      e.preventDefault();
+                                                      const name = rtRssCustomName.trim();
+                                                      const url = rtRssCustomUrl.trim();
+                                                      if (name && url && /^https?:\/\//i.test(url) && !rtRssCustom.some(c => c.url === url) && !RealtimeContextManager.RSS_BUILTIN_SOURCES.some(s => s.url === url)) {
+                                                          setRtRssCustom(prev => [...prev, { name, url }]);
+                                                          setRtRssCustomName('');
+                                                          setRtRssCustomUrl('');
+                                                      }
+                                                  }
+                                              }}
+                                              className="flex-[2] bg-white/80 border border-blue-200 rounded-xl px-3 py-1.5 text-[11px] font-mono text-slate-600"
+                                              placeholder="https://example.com/feed.xml"
+                                          />
+                                          <button
+                                              type="button"
+                                              onClick={() => {
+                                                  const name = rtRssCustomName.trim();
+                                                  const url = rtRssCustomUrl.trim();
+                                                  if (name && url && /^https?:\/\//i.test(url) && !rtRssCustom.some(c => c.url === url) && !RealtimeContextManager.RSS_BUILTIN_SOURCES.some(s => s.url === url)) {
+                                                      setRtRssCustom(prev => [...prev, { name, url }]);
+                                                      setRtRssCustomName('');
+                                                      setRtRssCustomUrl('');
+                                                  }
+                                              }}
+                                              className="px-3 py-1.5 bg-blue-500 text-white text-[11px] font-bold rounded-xl active:scale-95 transition-transform shrink-0"
+                                          >添加</button>
+                                      </div>
+                                      {rtRssCustomUrl && !/^https?:\/\//i.test(rtRssCustomUrl) && (
+                                          <p className="text-[10px] text-rose-400">URL 必须以 http:// 或 https:// 开头</p>
+                                      )}
+                                      {(rtRssCustomName.trim() && !rtRssCustomUrl.trim()) && (
+                                          <p className="text-[10px] text-slate-400">填了名字还得填 URL（回车或点「添加」生效）</p>
+                                      )}
+                                  </>
                               )}
                           </div>
                       </div>

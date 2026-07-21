@@ -40,11 +40,15 @@ const HotNewsApp: React.FC = () => {
                 ? realtimeConfig.newsPlatforms
                 : RealtimeContextManager.DEFAULT_HOTNEWS_PLATFORMS;
             const rssUrls = Array.isArray(realtimeConfig.rssUrls) ? realtimeConfig.rssUrls.filter(u => typeof u === 'string' && u.trim()) : [];
+            const rssCustom = Array.isArray(realtimeConfig.rssCustom)
+                ? realtimeConfig.rssCustom.filter(c => c && c.url && c.name)
+                : [];
+            const hasRss = rssUrls.length > 0 || rssCustom.length > 0;
 
             const [hotItems, rssItems] = await Promise.all([
                 RealtimeContextManager.fetchHotNews(platforms),
-                rssUrls.length > 0
-                    ? RealtimeContextManager.fetchRssNews(rssUrls).catch(() => [] as any[])
+                hasRss
+                    ? RealtimeContextManager.fetchRssNews(rssUrls, rssCustom).catch(() => [] as any[])
                     : Promise.resolve([] as any[]),
             ]);
             // 跟 getSlottedHotNews 一样的混合策略：每 5 条插 1 条 RSS
@@ -57,7 +61,7 @@ const HotNewsApp: React.FC = () => {
             while (rssIdx < rssItems.length) merged.push(rssItems[rssIdx++]);
 
             if (merged.length > 0) {
-                const fresh: HotNewsSnapshot = { id, date, slot, slotLabel: label, items: merged, platforms, rssUrls, fetchedAt: Date.now() };
+                const fresh: HotNewsSnapshot = { id, date, slot, slotLabel: label, items: merged, platforms, rssUrls, rssCustom, fetchedAt: Date.now() };
                 await DB.saveHotNewsSnapshot(fresh);
                 setSnapshot(fresh);
                 addToast(`已刷新 · ${label} ${merged.length} 条（RSS ${rssItems.length}）`, 'success');
@@ -188,11 +192,17 @@ const HotNewsApp: React.FC = () => {
                     </div>
                 )}
 
-                {snapshot && (
-                    <p className="text-center text-[10px] text-stone-400 mt-6 tracking-wide">
-                        — 数据来自 hot_news（orz.ai）多平台热榜{snapshot.rssUrls && snapshot.rssUrls.length > 0 ? ` + RSS 订阅源 ${snapshot.rssUrls.length} 个` : ''} · 每天 6 个时段自动更新 · 点右上角可手动真·刷新 —
-                    </p>
-                )}
+                {snapshot && (() => {
+                    const builtinCount = (snapshot.rssUrls || []).length;
+                    const customCount = (snapshot.rssCustom || []).length;
+                    const totalRss = builtinCount + customCount;
+                    const rssLabel = totalRss > 0 ? ` + RSS 订阅源 ${totalRss} 个${customCount > 0 ? `（含自定义 ${customCount}）` : ''}` : '';
+                    return (
+                        <p className="text-center text-[10px] text-stone-400 mt-6 tracking-wide">
+                            — 数据来自 hot_news（orz.ai）多平台热榜{rssLabel} · 每天 6 个时段自动更新 · 点右上角可手动真·刷新 —
+                        </p>
+                    );
+                })()}
             </div>
         </div>
     );

@@ -442,7 +442,8 @@ export interface HotNewsSnapshot {
   slotLabel: string;   // 早间 / 午间 / 晚间
   items: HotNewsItem[];
   platforms: string[]; // 本次召回用的平台 key 列表
-  rssUrls?: string[];  // 本次召回用的 RSS 订阅源 URL 列表（含内置勾选 + 自定义添加）
+  rssUrls?: string[];  // 本次召回用的内置 RSS 勾选 URL 列表
+  rssCustom?: { url: string; name: string }[];  // 本次召回用的自定义 RSS 源（带名字，可编辑）
   fetchedAt: number;   // 拉取时间戳
 }
 

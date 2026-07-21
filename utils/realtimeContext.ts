@@ -40,9 +40,11 @@ export interface RealtimeConfig {
     newsEnabled: boolean;
     newsApiKey?: string;    // 可选，Brave Search 回落源用
     newsPlatforms?: string[]; // hot_news 热榜平台 key（默认主源，免鉴权），留空用内置默认
-    // RSS 订阅源 URL 列表。内置勾选 + 用户自定义添加都塞这里。每条走 worker /rss 代理抓取。
-    // 留空 / 不填 = 不启用 RSS。RSS 跟 orz.ai 热榜混合存入同一份分时段快照。
+    // RSS 订阅源：内置勾选走 rssUrls（URL 数组，label 从 RSS_BUILTIN_SOURCES 查），
+    // 用户自定义源走 rssCustom（带名字，可编辑 / 删除）。
+    // 两批都走 worker /rss 代理抓取，跟 orz.ai 热榜混合存入同一份分时段快照。
     rssUrls?: string[];
+    rssCustom?: { url: string; name: string }[];
 
     // Notion 配置
     notionEnabled: boolean;
@@ -289,15 +291,31 @@ export const RealtimeContextManager = {
      * url 形如：
      *   - 完整 http(s)://  → 走 ${worker}/rss?url=<encoded>
      *   - /rss/...         → worker 内置包装器，直接 ${worker}${url}
+     * 自定义源（带 name）会优先用用户填的名字作为 source 标签，否则回落到内置表 / hostname。
      */
-    fetchRssNews: async (urls: string[], perSource = 10, total = 120): Promise<NewsItem[]> => {
-        if (!urls || urls.length === 0) return [];
+    fetchRssNews: async (
+        urls: string[],
+        custom?: { url: string; name: string }[],
+        perSource = 10,
+        total = 120,
+    ): Promise<NewsItem[]> => {
+        // 合并内置 + 自定义源，去重（同一 URL 只拉一次，自定义源 name 优先）
+        const customMap = new Map<string, string>();
+        (custom || []).forEach(c => {
+            if (c?.url && c?.name && !customMap.has(c.url)) customMap.set(c.url, c.name);
+        });
+        const allUrls = Array.from(new Set([
+            ...(urls || []).filter(u => typeof u === 'string' && u.trim()),
+            ...Array.from(customMap.keys()),
+        ]));
+        if (allUrls.length === 0) return [];
         const workerBase = getProxyWorkerUrl();
 
-        const perSourceResults = await Promise.all(urls.map(async (rawUrl): Promise<NewsItem[]> => {
-            // 推断源标签：内置源查表，自定义源用 hostname
+        const perSourceResults = await Promise.all(allUrls.map(async (rawUrl): Promise<NewsItem[]> => {
+            // 推断源标签：自定义 name > 内置表 > hostname
+            const customName = customMap.get(rawUrl);
             const builtin = RealtimeContextManager.RSS_BUILTIN_SOURCES.find(s => s.url === rawUrl);
-            const label = builtin?.label || (() => {
+            const label = customName || builtin?.label || (() => {
                 try { return new URL(rawUrl).hostname.replace(/^www\./, ''); }
                 catch { return rawUrl; }
             })();
@@ -435,13 +453,22 @@ export const RealtimeContextManager = {
             ? config.newsPlatforms
             : RealtimeContextManager.DEFAULT_HOTNEWS_PLATFORMS;
         const rssUrls = Array.isArray(config.rssUrls) ? config.rssUrls.filter(u => typeof u === 'string' && u.trim()) : [];
+        const rssCustom = Array.isArray(config.rssCustom)
+            ? config.rssCustom.filter(c => c && typeof c.url === 'string' && c.url.trim() && typeof c.name === 'string' && c.name.trim())
+            : [];
         const sameSet = (a: string[] = [], b: string[] = []) =>
             a.length === b.length && [...a].sort().join(',') === [...b].sort().join(',');
+        // 自定义源集合的指纹：用 `name|url` 排序后拼接，name 改了也算变更
+        const customFp = (arr: { url: string; name: string }[] = []) =>
+            arr.map(c => `${c.name}|${c.url}`).sort().join('§');
 
-        // 1. 命中本时段快照（平台集 + RSS 源集都一致）→ 复用
+        // 1. 命中本时段快照（平台集 + RSS 源集 + 自定义源集都一致）→ 复用
         try {
             const snap = await DB.getHotNewsSnapshot(id);
-            if (snap && snap.items?.length > 0 && sameSet(snap.platforms, platforms) && sameSet(snap.rssUrls || [], rssUrls)) {
+            if (snap && snap.items?.length > 0
+                && sameSet(snap.platforms, platforms)
+                && sameSet(snap.rssUrls || [], rssUrls)
+                && customFp(snap.rssCustom || []) === customFp(rssCustom)) {
                 const mins = Math.round((Date.now() - snap.fetchedAt) / 60000);
                 console.log(`%c[hot_news] 命中今日${label}快照（${snap.items.length} 条，${mins} 分钟前拉的）`, 'color:#16a34a');
                 return snap.items;
@@ -455,10 +482,11 @@ export const RealtimeContextManager = {
         const job = (async (): Promise<NewsItem[]> => {
             console.log(`%c[hot_news] 触发今日${label}拉取…`, 'color:#2563eb;font-weight:bold');
             // orz.ai 热榜 + RSS 并发拉取，互不阻塞
+            const hasRss = rssUrls.length > 0 || rssCustom.length > 0;
             const [hotItems, rssItems] = await Promise.all([
                 RealtimeContextManager.fetchHotNews(platforms),
-                rssUrls.length > 0
-                    ? RealtimeContextManager.fetchRssNews(rssUrls).catch(e => {
+                hasRss
+                    ? RealtimeContextManager.fetchRssNews(rssUrls, rssCustom).catch(e => {
                         console.warn('[rss] 整体抓取失败（不阻塞 orz.ai 热榜）:', e?.message || e);
                         return [] as NewsItem[];
                     })
@@ -478,7 +506,7 @@ export const RealtimeContextManager = {
 
             if (merged.length > 0) {
                 try {
-                    await DB.saveHotNewsSnapshot({ id, date, slot, slotLabel: label, items: merged, platforms, rssUrls, fetchedAt: Date.now() });
+                    await DB.saveHotNewsSnapshot({ id, date, slot, slotLabel: label, items: merged, platforms, rssUrls, rssCustom, fetchedAt: Date.now() });
                     DB.pruneHotNewsSnapshots(12).catch(() => {});
                 } catch { /* 存快照失败不影响返回 */ }
                 console.log(`%c[hot_news] ${label}拉取完成：orz.ai ${hotItems.length} 条 + RSS ${rssItems.length} 条 → 合并 ${merged.length} 条`, 'color:#16a34a;font-weight:bold');
