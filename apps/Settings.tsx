@@ -2954,7 +2954,7 @@ const Settings: React.FC = () => {
                                           </button>
                                       );
                                   })}
-                                  {/* 自定义源直接拼到内置源后面，名字后面带铅笔 + 删除 */}
+                                  {/* 自定义源直接拼到内置源后面，点铅笔进编辑面板才能删（避免误触） */}
                                   {rtRssCustom.map((c, i) => (
                                       <span key={c.url + i} className="inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full font-bold bg-amber-100 text-amber-700 border border-amber-300">
                                           {c.name}
@@ -2968,12 +2968,6 @@ const Settings: React.FC = () => {
                                               className="text-amber-500 hover:text-amber-700 font-bold"
                                               title="编辑"
                                           >✎</button>
-                                          <button
-                                              type="button"
-                                              onClick={() => setRtRssCustom(prev => prev.filter((_, idx) => idx !== i))}
-                                              className="text-rose-400 hover:text-rose-600 font-bold"
-                                              title="删除"
-                                          >×</button>
                                       </span>
                                   ))}
                               </div>
@@ -2998,16 +2992,28 @@ const Settings: React.FC = () => {
                                               placeholder="https://... 或 /rss/xxx"
                                           />
                                       </div>
-                                      <div className="flex gap-1.5 justify-end">
+                                      <div className="flex gap-1.5 justify-between">
                                           <button
                                               type="button"
                                               onClick={() => {
+                                                  if (rtRssEditingIdx === null) return;
+                                                  setRtRssCustom(prev => prev.filter((_, idx) => idx !== rtRssEditingIdx));
                                                   setRtRssEditingIdx(null);
                                                   setRtRssEditName('');
                                                   setRtRssEditUrl('');
                                               }}
-                                              className="px-3 py-1 bg-white text-slate-500 text-[11px] font-bold rounded-lg border border-slate-200"
-                                          >取消</button>
+                                              className="px-3 py-1 bg-rose-50 text-rose-500 text-[11px] font-bold rounded-lg border border-rose-200 active:scale-95 transition-transform"
+                                          >删除</button>
+                                          <div className="flex gap-1.5">
+                                              <button
+                                                  type="button"
+                                                  onClick={() => {
+                                                      setRtRssEditingIdx(null);
+                                                      setRtRssEditName('');
+                                                      setRtRssEditUrl('');
+                                                  }}
+                                                  className="px-3 py-1 bg-white text-slate-500 text-[11px] font-bold rounded-lg border border-slate-200"
+                                              >取消</button>
                                           <button
                                               type="button"
                                               onClick={() => {
@@ -3027,6 +3033,7 @@ const Settings: React.FC = () => {
                                               }}
                                               className="px-3 py-1 bg-amber-500 text-white text-[11px] font-bold rounded-lg active:scale-95 transition-transform"
                                           >保存</button>
+                                          </div>
                                       </div>
                                   </div>
                               )}
