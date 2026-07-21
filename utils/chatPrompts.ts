@@ -17,7 +17,7 @@ import { resolveCharTimeZone, nowInTimeZone } from './timezone';
 import { buildLifeRecordInjection } from './lifeRecords';
 import { buildTaskSupervisionContext, buildTaskCommandGuide } from './taskContextInjector';
 import { getCharNameById } from './charNameRegistry';
-import { renderMemosForPrompt, MEMO_MAX_COUNT } from './memos';
+import { renderMemosForPrompt, renderMemoInstructionsOnly, MEMO_MAX_COUNT } from './memos';
 import { getLocalDateKey } from './localDate';
 import { getLocalDailySchedule } from './dailySchedule';
 
