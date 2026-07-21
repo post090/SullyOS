@@ -5,8 +5,9 @@ import { DB } from '../../utils/db';
 import { BankTransaction, LifeRecord, LifeRecordModule, LifeRecordSettings, MedPlan } from '../../types';
 import {
     DEFAULT_CYCLE_LENGTH, DEFAULT_PERIOD_LENGTH, computePeriodStatus, getPeriodIntervals,
-    isMedPlanDueToday, lifeAddDays, lifeToday, medFreqLabel, weekStartOf,
+    isMedPlanDueToday, lifeAddDays, medFreqLabel, weekStartOf,
 } from '../../utils/lifeRecords';
+import { useLocalDateKey } from '../../hooks/useLocalDateKey';
 
 /**
  * 档案 App「生活记录」面板 —— 复古优雅浅色系，但四个模块各有独立版式：
@@ -214,7 +215,7 @@ const LifeRecordPanel: React.FC = () => {
     const [hideCandidate, setHideCandidate] = useState<LifeRecordModule | null>(null);
     const [showRestore, setShowRestore] = useState(false);
 
-    const today = lifeToday();
+    const today = useLocalDateKey();
 
     const reload = async () => {
         const [r, p, s, t] = await Promise.all([

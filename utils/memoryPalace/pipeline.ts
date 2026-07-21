@@ -73,6 +73,7 @@ import { MemoryNodeDB, MemoryVectorDB, MemoryLinkDB, AnticipationDB } from './db
 import { DB } from '../db';
 import { isMessageSemanticallyRelevant, formatMessageForPrompt } from '../messageFormat';
 import { sanitizeQuerySourceMessages } from './querySanitizer';
+import { getLocalDateKey } from '../localDate';
 
 // ─── 轻量 LLM 配置类型 ───────────────────────────────
 
@@ -1484,7 +1485,7 @@ async function applyMemorySideEffects(
                     merged.set(c.targetId, arr);
                 }
 
-                const dateStr = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+                const dateStr = getLocalDateKey();
                 const toRevectorize: import('./types').MemoryNode[] = [];
                 for (const [targetId, notes] of merged) {
                     const node = await MemoryNodeDB.getById(targetId);

@@ -83,8 +83,8 @@ export interface MemoryNode {
     digestedAt?: number | null;
 
     /**
-     * 从 CSY-OS 迁移时保留的原始语义元数据。正文与向量会转换成 SullyOS 原生结构，
-     * 这些字段留作审计与未来重新解释，避免一次迁移后丢失 CSY 特有信息。
+     * 历史版本曾迁移过的第三方语义元数据。当前已不再提供对应导入能力；保留该字段仅为
+     * 兼容已经落进用户本机数据库的旧记录，避免升级后读取异常。
      */
     legacyCsy?: {
         originalId: string;

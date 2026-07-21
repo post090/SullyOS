@@ -12,6 +12,7 @@ import { useOS } from '../../context/OSContext';
 import { safeResponseJson } from '../../utils/safeApi';
 import { DB } from '../../utils/db';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../character/CharacterGroupFilter';
+import { getLocalDateKey } from '../../utils/localDate';
 
 interface NovelWriterProps {
     activeBook: NovelBook;
@@ -407,7 +408,7 @@ ${chapterText.substring(0, 200000)}
         setSegments(newSegments);
         await updateNovel(activeBook.id, { segments: newSegments });
         
-        const currentDate = new Date().toISOString().split('T')[0];
+        const currentDate = getLocalDateKey();
         const chapterNum = newSegments.filter(s => s.focus === 'chapter_summary').length;
         const collabNames = collaborators.map(c => c.name).join('、');
 

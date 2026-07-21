@@ -7,6 +7,7 @@ import { safeResponseJson } from './safeApi';
 import { DB } from './db';
 import { getProxyWorkerUrl } from './proxyWorker';
 import { nowInTimeZone } from './timezone';
+import { getLocalDateKey } from './localDate';
 
 export interface WeatherData {
     temp: number;
@@ -988,7 +989,7 @@ export const NotionManager = {
     ): Promise<{ success: boolean; pageId?: string; url?: string; message: string }> => {
         try {
             const now = new Date();
-            const dateStr = entry.date || now.toISOString().split('T')[0];
+            const dateStr = entry.date || getLocalDateKey(now);
 
             // 使用 markdown 解析器生成丰富的 Notion blocks
             const children = parseMarkdownToNotionBlocks(entry.content, entry.mood, entry.characterName);
@@ -2089,7 +2090,7 @@ export const FeishuManager = {
             }
 
             const now = new Date();
-            const dateStr = entry.date || now.toISOString().split('T')[0];
+            const dateStr = entry.date || getLocalDateKey(now);
             const dateTimestamp = new Date(dateStr).getTime();
             const titlePrefix = entry.characterName ? `[${entry.characterName}] ` : '';
 
@@ -2199,7 +2200,17 @@ export const FeishuManager = {
                 const rawTitle = (Array.isArray(fields['标题']) ? fields['标题']?.[0]?.text : fields['标题']) || '无标题';
                 const cleanTitle = String(rawTitle).replace(/^\[.*?\]\s*/, '');
                 const rawDate = fields['日期'];
-                const dateStr = rawDate ? new Date(typeof rawDate === 'number' ? rawDate : rawDate).toISOString().split('T')[0] : '';
+                const rawDateText = typeof rawDate === 'string' ? rawDate.trim() : '';
+                const parsedDate = rawDate && !/^\d{4}-\d{2}-\d{2}$/.test(rawDateText)
+                    ? new Date(rawDate)
+                    : null;
+                const dateStr = rawDate
+                    ? /^\d{4}-\d{2}-\d{2}$/.test(rawDateText)
+                        ? rawDateText
+                        : parsedDate && !Number.isNaN(parsedDate.getTime())
+                            ? getLocalDateKey(parsedDate)
+                            : ''
+                    : '';
 
                 return {
                     recordId: item.record_id,

@@ -2,6 +2,7 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { BankTransaction, SavingsGoal, APIConfig } from '../../types';
 import { safeResponseJson } from '../../utils/safeApi';
+import { getLocalDateKey } from '../../utils/localDate';
 
 interface Props {
     transactions: BankTransaction[];
@@ -31,8 +32,8 @@ const BankAnalytics: React.FC<Props> = ({ transactions, goals, currency, onDelet
     const [aiSummary, setAiSummary] = useState<string>('');
 
     // Get date ranges
-    const today = new Date().toISOString().split('T')[0];
-    const currentMonth = new Date().toISOString().slice(0, 7);
+    const today = getLocalDateKey();
+    const currentMonth = today.slice(0, 7);
 
     // Calculate week start (Monday)
     const getWeekStart = () => {
@@ -40,7 +41,7 @@ const BankAnalytics: React.FC<Props> = ({ transactions, goals, currency, onDelet
         const day = now.getDay();
         const diff = now.getDate() - day + (day === 0 ? -6 : 1); // Adjust for Sunday
         const weekStart = new Date(now.setDate(diff));
-        return weekStart.toISOString().split('T')[0];
+        return getLocalDateKey(weekStart);
     };
     const weekStart = getWeekStart();
 

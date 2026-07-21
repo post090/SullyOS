@@ -20,6 +20,7 @@ import { useDreamSim, dreamSimStore } from '../utils/dreamSimStore';
 import { roomLaunch } from '../utils/roomLaunch';
 import { characterLaunch } from '../utils/characterLaunch';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
+import { getLocalDateKey } from '../utils/localDate';
 
 const TWEMOJI_BASE = 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72';
 const twemojiUrl = (codepoint: string) => `${TWEMOJI_BASE}/${codepoint}.png`;
@@ -501,7 +502,7 @@ const RoomApp: React.FC = () => {
         if (now.getHours() < 6) {
             now.setDate(now.getDate() - 1);
         }
-        return now.toISOString().split('T')[0]; // YYYY-MM-DD
+        return getLocalDateKey(now);
     };
 
     // Calculate Time Gap - Duplicated logic from other apps for self-containment

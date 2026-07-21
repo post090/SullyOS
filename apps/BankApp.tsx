@@ -14,6 +14,8 @@ import { SHOP_RECIPES, INITIAL_DOLLHOUSE } from '../components/bank/BankGameCons
 import { processImage } from '../utils/file';
 import { ContextBuilder } from '../utils/context';
 import { Coffee, ClipboardText, ChartBar, Coin, Target, UserCircle, BookOpen, Lightning, Storefront } from '@phosphor-icons/react';
+import { addLocalDays, getLocalDateKey } from '../utils/localDate';
+import { useLocalDateKey } from '../hooks/useLocalDateKey';
 
 const INITIAL_STATE: BankFullState = {
     config: {
@@ -47,11 +49,12 @@ const INITIAL_STATE: BankFullState = {
     },
     goals: [],
     todaySpent: 0,
-    lastLoginDate: new Date().toISOString().split('T')[0],
+    lastLoginDate: getLocalDateKey(),
 };
 
 const BankApp: React.FC = () => {
     const { closeApp, characters, addToast, apiConfig, userProfile } = useOS();
+    const localDateKey = useLocalDateKey();
     const [state, setState] = useState<BankFullState>(INITIAL_STATE);
     const [transactions, setTransactions] = useState<BankTransaction[]>([]);
     const [dollhouseState, setDollhouseState] = useState<DollhouseState>(INITIAL_DOLLHOUSE);
@@ -90,7 +93,7 @@ const BankApp: React.FC = () => {
     // Load Data
     useEffect(() => {
         loadData();
-    }, []);
+    }, [localDateKey]);
 
     // Calculate Appeal dynamically
     const calculateAppeal = (staffCount: number, unlockedIds: string[]) => {
@@ -234,13 +237,11 @@ const BankApp: React.FC = () => {
         }
 
         // DAILY RESET LOGIC
-        const today = new Date().toISOString().split('T')[0];
+        const today = getLocalDateKey();
 
         if (currentState.lastLoginDate !== today) {
             // Find yesterday's expenses to calculate AP
-            const yesterdayDate = new Date();
-            yesterdayDate.setDate(yesterdayDate.getDate() - 1);
-            const yesterdayStr = yesterdayDate.toISOString().split('T')[0];
+            const yesterdayStr = addLocalDays(today, -1);
 
             const yesterTx = txs.filter(t => t.dateStr === yesterdayStr);
             let gainedAP = 0;
@@ -307,7 +308,7 @@ const BankApp: React.FC = () => {
         }
         
         const amount = parseFloat(txAmount);
-        const today = new Date().toISOString().split('T')[0];
+        const today = getLocalDateKey();
         
         const newTx: BankTransaction = {
             id: `tx-${Date.now()}`,
@@ -347,7 +348,7 @@ const BankApp: React.FC = () => {
 
         const cur = stateRef.current;
         let newSpent = cur.todaySpent;
-        const today = new Date().toISOString().split('T')[0];
+        const today = getLocalDateKey();
         if (tx.dateStr === today) {
             newSpent = Math.max(0, cur.todaySpent - tx.amount);
         }

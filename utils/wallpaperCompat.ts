@@ -1,4 +1,4 @@
-/** 旧版系统默认的粉绿渐变；只用于识别并迁移，不能再作为新默认值使用。 */
+/** 旧版系统默认的粉绿渐变；不再是系统默认，仅供存量迁移和用户主动选择「怀旧版」。 */
 export const LEGACY_DEFAULT_WALLPAPER = 'linear-gradient(135deg, #FFDEE9 0%, #B5FFFC 100%)';
 
 /**
@@ -11,4 +11,12 @@ export function isLegacyDefaultWallpaper(wallpaper?: string): boolean {
     const hasPink = compact.includes('#ffdee9') || compact.includes('rgb(255,222,233)');
     const hasMint = compact.includes('#b5fffc') || compact.includes('rgb(181,255,252)');
     return compact.startsWith('linear-gradient(135deg,') && hasPink && hasMint;
+}
+
+/** 只有明确标记为怀旧版时才保留旧默认壁纸，避免普通老数据重新盖过纸感默认。 */
+export function shouldPreserveLegacyDefaultWallpaper(
+    wallpaper?: string,
+    desktopVariant?: string,
+): boolean {
+    return desktopVariant === 'nostalgia' && isLegacyDefaultWallpaper(wallpaper);
 }

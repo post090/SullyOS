@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { useOS, DEFAULT_WALLPAPER, DEFAULT_PAPER_APPEARANCE } from '../context/OSContext';
+import { useOS, DEFAULT_WALLPAPER, DEFAULT_PAPER_APPEARANCE, NOSTALGIA_APPEARANCE } from '../context/OSContext';
 import { OSTheme, DesktopDecoration, AppearancePreset, Toast } from '../types';
 import { INSTALLED_APPS, Icons } from '../constants';
 import { processImage, processImageToBlob } from '../utils/file';
@@ -103,7 +103,9 @@ const MOBILEGAME_WALLPAPER = 'radial-gradient(95% 55% at 85% 0%, #fdeef7 0%, tra
 // 电子宠物主题壁纸：薰衣草奶油（照抄参考稿——柔紫底衬奶油卡片与紫描边）。
 const TAMAGOTCHI_WALLPAPER = 'radial-gradient(85% 50% at 80% 0%, #e6dcf8 0%, transparent 55%), radial-gradient(75% 45% at 12% 10%, #f4edfb 0%, transparent 55%), linear-gradient(180deg, #ded4f4 0%, #d6cbf0 55%, #cfc3ec 100%)';
 
-const DESKTOP_SKINS: { id: string; name: string; desc: string; swatch: string; config: Partial<OSTheme> }[] = [
+type DesktopSkinOption = { id: string; name: string; desc: string; swatch: string; config: Partial<OSTheme> };
+
+const DESKTOP_SKINS: DesktopSkinOption[] = [
   {
     id: 'animalcrossing',
     name: '动森风格',
@@ -111,6 +113,7 @@ const DESKTOP_SKINS: { id: string; name: string; desc: string; swatch: string; c
     swatch: 'linear-gradient(135deg,#BCE7F5 0%,#BBE38F 55%,#7CBA4C 100%)',
     config: {
       skin: 'animalcrossing',
+      desktopVariant: 'paper',
       hue: 95, saturation: 48, lightness: 56,
       contentColor: '#725d42',
       wallpaper: ACNH_WALLPAPER,
@@ -128,6 +131,7 @@ const DESKTOP_SKINS: { id: string; name: string; desc: string; swatch: string; c
     swatch: 'linear-gradient(135deg,#f7d9ec 0%,#d9d4f5 55%,#a8b8e8 100%)',
     config: {
       skin: 'mobilegame',
+      desktopVariant: 'paper',
       hue: 270, saturation: 45, lightness: 70,
       contentColor: '#6b5b95',
       wallpaper: MOBILEGAME_WALLPAPER,
@@ -145,6 +149,7 @@ const DESKTOP_SKINS: { id: string; name: string; desc: string; swatch: string; c
     swatch: 'linear-gradient(135deg,#ded4f4 0%,#fdf9f2 52%,#f2a7bb 100%)',
     config: {
       skin: 'tamagotchi',
+      desktopVariant: 'paper',
       hue: 258, saturation: 42, lightness: 66,
       contentColor: '#7a6cb8',
       wallpaper: TAMAGOTCHI_WALLPAPER,
@@ -167,6 +172,14 @@ const DESKTOP_SKINS: { id: string; name: string; desc: string; swatch: string; c
     },
   },
 ];
+
+const NOSTALGIA_SKIN: DesktopSkinOption = {
+  id: 'nostalgia',
+  name: '怀旧版',
+  desc: '最初粉绿渐变 · 白色玻璃卡片、图标底与 Dock · 旧版配色',
+  swatch: NOSTALGIA_APPEARANCE.wallpaper,
+  config: { ...NOSTALGIA_APPEARANCE },
+};
 
 // 动森叶子贴纸：切换动森皮肤时自动撒到桌面。用 acnh-leaf- 前缀标记，便于切回时单独清掉而不动用户自己的装饰。
 const ACNH_LEAF_PREFIX = 'acnh-leaf-';
@@ -697,9 +710,12 @@ const Appearance: React.FC = () => {
   // 壁纸处理：进入动森前备份用户原壁纸（data URI 存 IndexedDB，渐变/URL 存 localStorage），
   // 切回默认时还原，避免覆盖用户自己设的桌面壁纸。
   const ACNH_WP_BACKUP_KEY = 'acnh_wallpaper_backup';
-  const applyDesktopSkin = async (skin: { id: string; name: string; config: Partial<OSTheme> }) => {
+  const currentDesktopSkinId = theme.skin && theme.skin !== 'default'
+      ? theme.skin
+      : theme.desktopVariant === 'nostalgia' ? 'nostalgia' : 'default';
+  const applyDesktopSkin = async (skin: DesktopSkinOption) => {
       const goingDefault = skin.id === 'default';
-      const currentlyThemed = (theme.skin || 'default') !== 'default';
+      const currentlyThemed = currentDesktopSkinId !== 'default';
 
       let wallpaper: string;
       if (!goingDefault) {
@@ -779,7 +795,7 @@ const Appearance: React.FC = () => {
                     <p className="text-[10px] text-slate-400 mb-4">一键切换整机主题：壁纸、配色、图标外观、聊天界面全部联动改变。</p>
                     <div className="grid grid-cols-2 gap-3">
                         {DESKTOP_SKINS.map(skin => {
-                            const active = (theme.skin || 'default') === skin.id;
+                            const active = currentDesktopSkinId === skin.id;
                             return (
                                 <button
                                     key={skin.id}
@@ -796,6 +812,24 @@ const Appearance: React.FC = () => {
                             );
                         })}
                     </div>
+
+                    <button
+                        onClick={() => applyDesktopSkin(NOSTALGIA_SKIN)}
+                        aria-pressed={currentDesktopSkinId === 'nostalgia'}
+                        className={`mt-3 w-full flex items-center gap-3 rounded-2xl p-3 text-left border-2 transition-all active:scale-[0.99] ${currentDesktopSkinId === 'nostalgia' ? 'border-primary ring-2 ring-primary/20' : 'border-slate-200 hover:border-slate-300'}`}
+                    >
+                        <div className="h-14 w-20 shrink-0 rounded-xl shadow-inner" style={{ background: NOSTALGIA_SKIN.swatch }} />
+                        <div className="min-w-0 flex-1">
+                            <div className="text-xs font-bold text-slate-700">
+                                {NOSTALGIA_SKIN.name}
+                                {currentDesktopSkinId === 'nostalgia' && <span className="ml-1 text-[9px] font-bold text-primary">· 当前</span>}
+                            </div>
+                            <div className="text-[9px] text-slate-400 mt-0.5 leading-snug">{NOSTALGIA_SKIN.desc}</div>
+                        </div>
+                        {currentDesktopSkinId !== 'nostalgia' && (
+                            <span className="shrink-0 text-[9px] font-semibold text-slate-400">一键切换</span>
+                        )}
+                    </button>
 
                     {/* 动森模式专属：聊天 App 是否联动 */}
                     {(theme.skin || 'default') === 'animalcrossing' && (

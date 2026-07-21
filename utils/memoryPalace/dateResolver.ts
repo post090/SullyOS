@@ -25,8 +25,6 @@ export interface DateRange {
     confidence: 'exact' | 'fuzzy';
 }
 
-const MS_DAY = 24 * 60 * 60 * 1000;
-
 // 中文数字（只处理 1-31，够用于月份和日期）
 const CN_DIGIT: Record<string, number> = {
     '零': 0, '〇': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4,
@@ -57,7 +55,7 @@ function daysInMonth(y: number, m0: number): number {
 /** 把日级定位成 [当天 00:00, 次日 00:00) */
 function dayRange(y: number, m0: number, d: number, label: string): DateRange {
     const start = startOfDay(y, m0, d);
-    return { start, end: start + MS_DAY, label, confidence: 'exact' };
+    return { start, end: startOfDay(y, m0, d + 1), label, confidence: 'exact' };
 }
 
 /** 把月级定位成 [1 号 00:00, 次月 1 号 00:00) */
@@ -215,7 +213,7 @@ export function resolveDateReferences(query: string, now: Date = new Date()): Da
     const thisMonday0 = startOfDay(curY, curM0, thisMondayD);
     if (/上\s*(个)?\s*(周|礼拜|星期)/.test(query)) {
         push({
-            start: thisMonday0 - 7 * MS_DAY,
+            start: startOfDay(curY, curM0, thisMondayD - 7),
             end: thisMonday0,
             label: '上周',
             confidence: 'fuzzy',
@@ -224,15 +222,15 @@ export function resolveDateReferences(query: string, now: Date = new Date()): Da
     if (/(本|这)\s*(周|礼拜|星期)/.test(query)) {
         push({
             start: thisMonday0,
-            end: thisMonday0 + 7 * MS_DAY,
+            end: startOfDay(curY, curM0, thisMondayD + 7),
             label: '本周',
             confidence: 'fuzzy',
         });
     }
     if (/下\s*(个)?\s*(周|礼拜|星期)/.test(query)) {
         push({
-            start: thisMonday0 + 7 * MS_DAY,
-            end: thisMonday0 + 14 * MS_DAY,
+            start: startOfDay(curY, curM0, thisMondayD + 7),
+            end: startOfDay(curY, curM0, thisMondayD + 14),
             label: '下周',
             confidence: 'fuzzy',
         });
@@ -251,8 +249,8 @@ export function resolveDateReferences(query: string, now: Date = new Date()): Da
 
     // 12) 最近 / 最近一周 / 最近几天（粗粒度，取 7 天）
     if (/最近(一周|几天|这(一|几)?天)?/.test(query)) {
-        const end = startOfDay(curY, curM0, curD) + MS_DAY; // 含今天
-        push({ start: end - 7 * MS_DAY, end, label: '最近', confidence: 'fuzzy' });
+        const end = startOfDay(curY, curM0, curD + 1); // 含今天
+        push({ start: startOfDay(curY, curM0, curD - 6), end, label: '最近', confidence: 'fuzzy' });
     }
 
     return ranges;

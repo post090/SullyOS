@@ -28,6 +28,7 @@ import { DB } from './db';
 import { safeResponseJson, extractJson } from './safeApi';
 import { ContextBuilder } from './context';
 import { LAYOUT_TEMPLATES, pickTemplate } from './handbookLayouts';
+import { getLocalDayRange } from './localDate';
 
 interface ApiConfig {
     baseUrl: string;
@@ -37,9 +38,7 @@ interface ApiConfig {
 
 // ─── 工具: 当日时间窗 ────────────────────────────────────
 function dayRange(date: string): { start: number; end: number } {
-    const [y, m, d] = date.split('-').map(Number);
-    const start = new Date(y, m - 1, d, 0, 0, 0, 0).getTime();
-    return { start, end: start + 86400000 };
+    return getLocalDayRange(date) || { start: 0, end: 0 };
 }
 
 function dayOfWeekZh(date: string): string {

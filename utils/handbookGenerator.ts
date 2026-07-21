@@ -20,6 +20,7 @@ import {
 import { DB } from './db';
 import { safeResponseJson, extractJson } from './safeApi';
 import { ContextBuilder } from './context';
+import { getLocalDayRange } from './localDate';
 
 // 局部 seedFloat — composePageLayout 用 (不引用 components/ 避免 utils → components 反向依赖).
 // FNV-1a + xorshift, 与 paper.tsx 里同名函数行为一致.
@@ -83,10 +84,7 @@ function fragmentsToPlainText(fragments: HandbookFragment[]): string {
 
 // ─── 工具：取一天范围 [start, end) 的 ms ───
 function dayRange(date: string): { start: number; end: number } {
-    const [y, m, d] = date.split('-').map(Number);
-    const start = new Date(y, m - 1, d, 0, 0, 0, 0).getTime();
-    const end = start + 24 * 60 * 60 * 1000;
-    return { start, end };
+    return getLocalDayRange(date) || { start: 0, end: 0 };
 }
 
 // 把单条消息渲染成一行文本，截掉过长内容；过滤系统/工具/隐藏内容

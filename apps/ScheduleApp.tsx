@@ -40,6 +40,11 @@ import {
     DotsThree, CheckCircle, XCircle, SkipForward, Archive as ArchiveIcon,
     Bell, Coins, Fire, Trophy, Warning, Clock,
 } from '@phosphor-icons/react';
+import { getCalendarDayDifference, getLocalDateKey } from '../utils/localDate';
+import { useLocalDateKey } from '../hooks/useLocalDateKey';
+
+const TWEMOJI_BASE = 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72';
+const twemojiUrl = (codepoint: string) => `${TWEMOJI_BASE}/${codepoint}.png`;
 
 type ThemeMode = 'cyber' | 'soft' | 'minimal';
 
@@ -173,6 +178,7 @@ const THEMES: Record<ThemeMode, {
 
 const ScheduleApp: React.FC = () => {
     const { closeApp, characters, activeCharacterId, apiConfig, addToast, userProfile, characterGroups } = useOS();
+    const localDateKey = useLocalDateKey();
     const [tasks, setTasks] = useState<TaskV2[]>([]);
     const [anniversaries, setAnniversaries] = useState<Anniversary[]>([]);
     const [activeTab, setActiveTab] = useState<'quest' | 'events'>('quest');
@@ -269,11 +275,15 @@ const ScheduleApp: React.FC = () => {
         }
         // 跑 LLM 的 prompt 由 taskPrompts.ts 风格写法（只描述场景，不预设语气）
         // —— 但纪念日不在 taskPrompts 模板里（只有契约打卡相关），这里直接写
+        // FEEDBACK: 显式调用时弹 loading toast
+        if (Date.now() - (anni.lastThoughtGeneratedAt || 0) > 10000) {
+            addToast(`${char.name} 正在查阅日历...`, 'info');
+        }
         try {
             const { ContextBuilder } = await import('../utils/context');
             const { injectMemoryPalace } = await import('../utils/memoryPalace/pipeline');
             const { safeResponseJson } = await import('../utils/safeApi');
-            const daysDiff = Math.ceil((new Date(anni.date).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
+            const daysDiff = getCalendarDayDifference(localDateKey, anni.date) ?? Math.ceil((new Date(anni.date).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
             const dayText = daysDiff > 0 ? `还有 ${daysDiff} 天` : (daysDiff === 0 ? '就是今天' : `已经过去 ${Math.abs(daysDiff)} 天`);
             await injectMemoryPalace(char, undefined, anni.title);
             const baseContext = ContextBuilder.buildCoreContext(char, userProfile);
@@ -422,16 +432,12 @@ const ScheduleApp: React.FC = () => {
 
     // --- 派生数据 ---
     const getDaysUntil = (dateStr: string) => {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const target = new Date(dateStr);
-        target.setHours(0, 0, 0, 0);
-        return Math.ceil((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+        return getCalendarDayDifference(localDateKey, dateStr) ?? Number.POSITIVE_INFINITY;
     };
 
     const upcomingAnni = useMemo(() => {
         return anniversaries.filter(a => getDaysUntil(a.date) >= 0).sort((a, b) => a.date.localeCompare(b.date))[0];
-    }, [anniversaries]);
+    }, [anniversaries, localDateKey]);
 
     useEffect(() => {
         if (upcomingAnni) generateAnniversaryThought(upcomingAnni);

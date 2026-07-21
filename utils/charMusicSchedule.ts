@@ -10,6 +10,7 @@
  */
 
 import { CharacterProfile, CharCurrentListening, CharPlaylistSong, DailySchedule, ScheduleSlot } from '../types';
+import { getLocalDateKey } from './localDate';
 
 const LISTENING_KEYWORDS = [
     '听歌', '听音乐', '戴耳机', '戴上耳机', '戴着耳机', '耳机',
@@ -96,7 +97,7 @@ export function computeCurrentListening(
     const slot = getCurrentSlot(schedule, now);
     if (!slot || !slotIsListening(slot)) return null;
 
-    const today = now.toISOString().slice(0, 10);
+    const today = getLocalDateKey(now);
     const song = pickSongForSlot(char, slot, today);
     if (!song) return null;
 

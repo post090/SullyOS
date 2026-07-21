@@ -20,6 +20,8 @@ import { removeSongsFromPlaylist } from '../../utils/charPlaylistEdit';
 import { DB } from '../../utils/db';
 import { C, Sparkle, MizuHeader, BokehBg, MiniPlayer } from './MusicUI';
 import { ArrowLeft, MusicNote, Heart, Plus, MagnifyingGlass, Trash, Check } from '@phosphor-icons/react';
+import { getLocalDailySchedule } from '../../utils/dailySchedule';
+import { useLocalDateKey } from '../../hooks/useLocalDateKey';
 
 interface Props {
   charId: string;
@@ -59,6 +61,7 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
     current, playing, togglePlay, nextSong, prevSong,
   } = useMusic();
   const char = useMemo(() => characters.find(c => c.id === charId), [characters, charId]);
+  const localDateKey = useLocalDateKey();
 
   const [initializing, setInitializing] = useState(false);
   const [expandedPl, setExpandedPl] = useState<string | null>(null);
@@ -128,8 +131,7 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
     let cancelled = false;
     (async () => {
       try {
-        const today = new Date().toISOString().slice(0, 10);
-        const schedule = await DB.getDailySchedule(char.id, today);
+        const schedule = await getLocalDailySchedule(char.id);
         if (cancelled) return;
         const cur = computeCurrentListening(char, schedule);
         const prev = char.musicProfile!.currentListening;
@@ -148,7 +150,7 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
       }
     })();
     return () => { cancelled = true; };
-  }, [char?.id, initialized]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [char?.id, initialized, localDateKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const doInitialize = useCallback(async () => {
     if (!char || initializing) return;

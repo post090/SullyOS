@@ -8,7 +8,7 @@
 // Adding a new Worker:
 //   1. drop the entry at worker/<new>/src/index.ts
 //   2. add a row to WORKERS below
-//   3. that's it — `npm run build` (which chains to build:workers) picks it up
+//   3. that's it — `pnpm run build` (which chains to build:workers) picks it up
 //
 // Why a manifest array instead of auto-discover: worker/proactive-push/ has
 // src/index.ts + wrangler.toml too, but its worker.bundle.js is hand-written
@@ -52,6 +52,12 @@ const WORKERS = [
   // 供粘进 CF 面板（选 ES Module 格式）或对照 wrangler deploy，不写 public/。
   {
     name: 'post-office',
+    skipPublicOut: true,
+  },
+  // loyal-recruitment 是一次性忠实用户招募服务：独立 D1 / secrets / 路由，
+  // 不与邮局或彼方活动共享运行时状态。
+  {
+    name: 'loyal-recruitment',
     skipPublicOut: true,
   },
 ];

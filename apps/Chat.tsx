@@ -9,6 +9,8 @@ import { buildChatFineTuneCss, mergeChatFineTune } from '../utils/chatFineTuneCs
 import ChatFineTunePanel from '../components/chat/ChatFineTunePanel';
 import { FadersHorizontal } from '@phosphor-icons/react';
 import { generateDailyScheduleForChar, isScheduleFeatureOn } from '../utils/scheduleGenerator';
+import { getLocalDailySchedule } from '../utils/dailySchedule';
+import { useLocalDateKey } from '../hooks/useLocalDateKey';
 import { generateSlotTheater } from '../utils/theaterGenerator';
 import TheaterPlayer from '../components/schedule/TheaterPlayer';
 import { formatMessageWithTime, normalizeMessageContent } from '../utils/messageFormat';
@@ -66,6 +68,7 @@ type InstantToolUiStatus = {
 const Chat: React.FC = () => {
     const { characters, activeCharacterId, setActiveCharacterId, updateCharacter, apiConfig, apiPresets, addApiPreset, closeApp, customThemes, removeCustomTheme, addToast, showError, userProfile, lastMsgTimestamp, groups, characterGroups, clearUnread, unreadMessages, realtimeConfig, memoryPalaceConfig, syncEmotionApiToAllCharacters, theme: osTheme, proactiveComposingChars, openDateWithChar } = useOS();
     const isProactiveComposing = !!(activeCharacterId && proactiveComposingChars[activeCharacterId]);
+    const localDateKey = useLocalDateKey();
 
     // 记忆宫殿高水位（用于清空聊天时的安全检查）
     const getMemoryPalaceHWM = useCallback(async (charId: string): Promise<number> => {
@@ -788,8 +791,7 @@ const Chat: React.FC = () => {
             setScheduleData(null);
             return;
         }
-        const today = new Date().toISOString().split('T')[0];
-        DB.getDailySchedule(char.id, today).then(existing => {
+        getLocalDailySchedule(char.id).then(existing => {
             if (!existing) {
                 // Generate in background, don't block chat
                 generateDailySchedule(char, false);
@@ -797,7 +799,7 @@ const Chat: React.FC = () => {
                 setScheduleData(existing);
             }
         }).catch(() => {});
-    }, [activeCharacterId, char?.scheduleFeatureEnabled]);
+    }, [activeCharacterId, char?.scheduleFeatureEnabled, localDateKey]);
 
     // Load all messages when history-manager modal opens
     useEffect(() => {
@@ -960,7 +962,7 @@ const Chat: React.FC = () => {
                 charId: char.id,
                 url: text,
                 timestamp: Date.now(),
-                savedDate: new Date().toISOString().split('T')[0],
+                savedDate: localDateKey,
                 chatContext: recentChat
             });
             addToast('图片已保存至相册', 'info');
@@ -1570,8 +1572,7 @@ const Chat: React.FC = () => {
     const loadSchedule = async () => {
         if (!char) return;
         if (!isScheduleFeatureOn(char)) { setScheduleData(null); return; }
-        const today = new Date().toISOString().split('T')[0];
-        const s = await DB.getDailySchedule(char.id, today);
+        const s = await getLocalDailySchedule(char.id);
         setScheduleData(s);
     };
 
@@ -1726,8 +1727,7 @@ const Chat: React.FC = () => {
         // 打开后立刻尝试生成（若今日未生成且已选风格）
         const updatedChar = { ...char, ...patch };
         if (updatedChar.scheduleStyle) {
-            const today = new Date().toISOString().split('T')[0];
-            const existing = await DB.getDailySchedule(char.id, today).catch(() => null);
+            const existing = await getLocalDailySchedule(char.id).catch(() => null);
             if (existing) {
                 setScheduleData(existing);
             } else {

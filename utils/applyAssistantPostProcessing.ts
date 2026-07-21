@@ -47,6 +47,7 @@ import {
     runXhsMyProfile,
     runXhsDetail,
 } from './agenticTools';
+import { getLocalDateKey } from './localDate';
 
 // ─── 模块内辅助 ──────────────────────────────────────────────────────────────
 
@@ -869,15 +870,15 @@ export async function applyAssistantPostProcessing(
     const parseDiaryDate = (dateInput: string): string => {
         const now = new Date();
         if (/^\d{4}-\d{2}-\d{2}$/.test(dateInput)) return dateInput;
-        if (dateInput === '今天') return now.toISOString().split('T')[0];
-        if (dateInput === '昨天') { const d = new Date(now); d.setDate(d.getDate() - 1); return d.toISOString().split('T')[0]; }
-        if (dateInput === '前天') { const d = new Date(now); d.setDate(d.getDate() - 2); return d.toISOString().split('T')[0]; }
+        if (dateInput === '今天') return getLocalDateKey(now);
+        if (dateInput === '昨天') { const d = new Date(now); d.setDate(d.getDate() - 1); return getLocalDateKey(d); }
+        if (dateInput === '前天') { const d = new Date(now); d.setDate(d.getDate() - 2); return getLocalDateKey(d); }
         const daysAgo = dateInput.match(/^(\d+)天前$/);
-        if (daysAgo) { const d = new Date(now); d.setDate(d.getDate() - parseInt(daysAgo[1])); return d.toISOString().split('T')[0]; }
+        if (daysAgo) { const d = new Date(now); d.setDate(d.getDate() - parseInt(daysAgo[1])); return getLocalDateKey(d); }
         const monthDay = dateInput.match(/(\d{1,2})月(\d{1,2})/);
         if (monthDay) return `${now.getFullYear()}-${monthDay[1].padStart(2, '0')}-${monthDay[2].padStart(2, '0')}`;
         const parsed = new Date(dateInput);
-        if (!isNaN(parsed.getTime())) return parsed.toISOString().split('T')[0];
+        if (!isNaN(parsed.getTime())) return getLocalDateKey(parsed);
         return '';
     };
 

@@ -11,6 +11,8 @@ import { ScheduleHomeWidget, ScheduleFullscreenViewer } from '../components/sche
 import NowPlayingSquareWidget from '../components/os/NowPlayingSquareWidget';
 import MobileGameHome from '../components/os/MobileGameHome';
 import TamagotchiHome from '../components/os/TamagotchiHome';
+import { getLocalDailySchedule } from '../utils/dailySchedule';
+import { useLocalDateKey } from '../hooks/useLocalDateKey';
 
 // --- Isolated Components to prevent full re-renders ---
 
@@ -469,6 +471,7 @@ let _lastPageIndex = 0;
 
 const Launcher: React.FC = () => {
   const { openApp, characters, activeCharacterId, theme, updateTheme, lastMsgTimestamp, isDataLoaded, unreadMessages, apiConfig, addToast, userProfile } = useOS();
+  const localDateKey = useLocalDateKey();
 
   // Local state for widget data to prevent context trashing
   const [widgetChar, setWidgetChar] = useState<CharacterProfile | null>(null);
@@ -674,9 +677,8 @@ const Launcher: React.FC = () => {
 
   useEffect(() => {
       if (!scheduleChar || !isDataLoaded) return;
-      const today = new Date().toISOString().split('T')[0];
-      DB.getDailySchedule(scheduleChar.id, today).then(s => setScheduleData(s)).catch(() => {});
-  }, [scheduleChar, isDataLoaded]);
+      getLocalDailySchedule(scheduleChar.id).then(s => setScheduleData(s)).catch(() => {});
+  }, [scheduleChar, isDataLoaded, localDateKey]);
 
   // Restore scroll position BEFORE paint to avoid visible flash/slide
   useLayoutEffect(() => {

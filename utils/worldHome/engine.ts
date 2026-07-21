@@ -23,6 +23,7 @@ import { DB } from '../db';
 import { buildChatRequestPayload } from '../chatRequestPayload';
 import { safeFetchJson } from '../safeApi';
 import { processNewMessages } from '../memoryPalace/pipeline';
+import { getLocalDailySchedule } from '../dailySchedule';
 import {
     worldTimeLabel, buildWorldSystemAddendum, buildWorldCharTurn, buildNpcTurn,
     parseCharBeat, parseNpcScene, realObserveTarget, formatRealClock, migrateWorldDaySegs,
@@ -246,8 +247,7 @@ export function buildWorldCardMeta(world: WorldProfile, beat: WorldCharBeat, rou
 async function buildFullDayScheduleBlock(world: WorldProfile, charId: string): Promise<string> {
     if ((world.timeMode ?? 'real') === 'sim') return '';
     try {
-        const today = new Date().toISOString().split('T')[0];
-        const s = await DB.getDailySchedule(charId, today);
+        const s = await getLocalDailySchedule(charId);
         if (!s?.slots?.length) return '';
         const lines = s.slots
             .map(x => `- ${x.startTime} ${x.activity}${x.location ? `（${x.location}）` : ''}`)
