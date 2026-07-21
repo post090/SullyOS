@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LOYAL_RECRUITMENT_CRITERIA_VERSION } from './loyalUserEligibility';
 import {
     LOYAL_RECRUITMENT_ATTEMPT_KEY,
     readLoyalRecruitmentAttempt,
     resetLoyalRecruitmentForTesting,
+    submitQualifiedQQ,
 } from './loyalUserRecruitment';
 
 const LEGACY_ATTEMPT_KEY = 'sullyos_loyal_recruitment_2026-07-20-v1';
@@ -43,6 +44,7 @@ function legacyFailedAttempt(activeDays = 2) {
 
 describe('忠实用户招募规则升级', () => {
     beforeEach(() => localStorage.clear());
+    afterEach(() => vi.unstubAllGlobals());
 
     it('只用旧版已封存摘要将深度用户升级为待填 QQ，不重新读取业务数据', () => {
         localStorage.setItem(LEGACY_ATTEMPT_KEY, JSON.stringify(legacyFailedAttempt()));
@@ -74,5 +76,24 @@ describe('忠实用户招募规则升级', () => {
 
         expect(localStorage.getItem(LEGACY_ATTEMPT_KEY)).toBeNull();
         expect(localStorage.getItem(LOYAL_RECRUITMENT_ATTEMPT_KEY)).toBeNull();
+    });
+
+    it('将服务端未分配结果归一化为不含群信息的最终结果', async () => {
+        vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+            ok: true,
+            allocated: false,
+        }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+        })));
+
+        const result = await submitQualifiedQQ('123456789');
+
+        expect(result).toEqual({
+            granted: false,
+            registered: false,
+            group: '',
+            password: '',
+        });
     });
 });
