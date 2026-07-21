@@ -230,6 +230,19 @@ export interface StreamHooks {
     onReasoningDelta?: (delta: string, fullReasoning: string) => void;
     /** 收到第一个正文增量时回调一次（TTFT 参考点） */
     onFirstDelta?: () => void;
+    /**
+     * 每次进入自动重试前回调一次（与流式无关，只是借用这个 options 入口避免再加参数）。
+     * 触发场景：HTTP 429/500/502/503/504、网络层 TypeError（"Failed to fetch"）、
+     * 超时/Abort、HTML 错误页。调用方常用它来 toast 提示用户"网络抖动，正在重试"。
+     * 不抛错；返回值被忽略。
+     */
+    onRetry?: (info: {
+        attempt: number;       // 即将进入第几次重试（1-based，即 attempt 0 失败后触发 onRetry({attempt:1})）
+        maxRetries: number;    // 配置的最大重试次数
+        reason: string;        // 简短失败原因：'network' | 'timeout' | `http:${status}` | 'html' | 'unknown'
+        message: string;       // 原始 error.message（调试用）
+        delayMs: number;       // 即将等待的退避毫秒数
+    }) => void;
 }
 
 /**
@@ -362,6 +375,7 @@ export async function safeFetchJson(
                 if (retryableStatuses.has(response.status) && attempt < maxRetries) {
                     const delay = Math.pow(2, attempt) * 1000; // 1s, 2s
                     log.warn('HTTP retry', { status: response.status, attempt: attempt + 1, maxRetries, delay });
+                    try { streamHooks?.onRetry?.({ attempt: attempt + 1, maxRetries, reason: `http:${response.status}`, message: `HTTP ${response.status}`, delayMs: delay }); } catch { /* 回调异常不拦截重试 */ }
                     await new Promise(r => setTimeout(r, delay));
                     continue;
                 }
@@ -405,6 +419,7 @@ export async function safeFetchJson(
             if ((e?.name === 'TypeError' || isAbort) && attempt < maxRetries) {
                 const delay = Math.pow(2, attempt) * 1000;
                 log.warn(isAbort ? 'Timeout/Abort retry' : 'Network error retry', { attempt: attempt + 1, maxRetries, delay, message: e?.message });
+                try { streamHooks?.onRetry?.({ attempt: attempt + 1, maxRetries, reason: isAbort ? 'timeout' : 'network', message: e?.message || '', delayMs: delay }); } catch { /* 回调异常不拦截重试 */ }
                 await new Promise(r => setTimeout(r, delay));
                 continue;
             }
@@ -413,6 +428,7 @@ export async function safeFetchJson(
             if (attempt < maxRetries && e?.message?.includes('API返回了HTML')) {
                 const delay = Math.pow(2, attempt) * 1000;
                 log.warn('HTML response retry', { attempt: attempt + 1, maxRetries, delay });
+                try { streamHooks?.onRetry?.({ attempt: attempt + 1, maxRetries, reason: 'html', message: e?.message || '', delayMs: delay }); } catch { /* 回调异常不拦截重试 */ }
                 await new Promise(r => setTimeout(r, delay));
                 continue;
             }

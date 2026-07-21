@@ -3,7 +3,7 @@ import { useState, useRef, useEffect, MutableRefObject } from 'react';
 import { CharacterProfile, UserProfile, Message, Emoji, EmojiCategory, GroupProfile, RealtimeConfig, CharacterBuff } from '../types';
 import { DB } from '../utils/db';
 import { ChatPrompts } from '../utils/chatPrompts';
-import { safeFetchJson, safeResponseJson } from '../utils/safeApi';
+import { safeFetchJson, safeResponseJson, type StreamHooks } from '../utils/safeApi';
 import { KeepAlive } from '../utils/keepAlive';
 import { ProactiveChat } from '../utils/proactiveChat';
 import { ContextBuilder } from '../utils/context';
@@ -1039,6 +1039,21 @@ export const useChatAI = ({
                 if (combined) streamThinkingShown = true;
                 setStreamingThinking(prev => prev === combined ? prev : combined);
             };
+            // 本轮发送的重试 toast 是否已提示过——同一轮只 toast 一次，避免重试 2 次刷屏。
+            // 最终成功不额外 toast（用户看到回复正常就是反馈）；最终失败走下面的
+            // [回复处理失败: ...] 系统消息，不再叠加 toast。
+            let retryToastShown = false;
+            const handleRetry: NonNullable<StreamHooks['onRetry']> = (info) => {
+                if (retryToastShown) return;
+                retryToastShown = true;
+                const reasonText =
+                    info.reason === 'network' ? '网络连接失败'
+                    : info.reason === 'timeout' ? '请求超时'
+                    : info.reason.startsWith('http:') ? `服务器返回 ${info.reason.slice(5)}`
+                    : info.reason === 'html' ? '中转返回 HTML 错误页'
+                    : '请求失败';
+                addToast(`${char.name}：网络抖动（${reasonText}），正在自动重试…`, 'info');
+            };
             const streamHooks = (streamPreviewEligible || streamThinkingEligible) ? {
                 onDelta: (_delta: string, fullText: string) => {
                     if (streamPreviewEligible) {
@@ -1059,7 +1074,8 @@ export const useChatAI = ({
                     latestNativeReasoning = fullReasoning;
                     publishStreamingThinking();
                 },
-            } : undefined;
+                onRetry: handleRetry,
+            } : { onRetry: handleRetry };
 
             // 主请求即将发出 → 立即并行发射情绪评估（错峰延迟已按用户要求取消，见定义处注释）。
             fireLocalEmotionEval?.();
@@ -1069,7 +1085,7 @@ export const useChatAI = ({
                 data = await safeFetchJson(`${baseUrl}/chat/completions`, {
                     method: 'POST', headers,
                     body: JSON.stringify(baseReqBody)
-                }, 2, 0, { appName: '消息', charId: char.id, charName: char.name, purpose: '聊天回复' }, streamHooks);
+                }, 2, 120_000, { appName: '消息', charId: char.id, charName: char.name, purpose: '聊天回复' }, streamHooks);
             } catch (e) {
                 // 仅通用 MCP、且没有和其他工具模式混用时降级。部分 OpenAI 兼容中转
                 // 会对携带 tools 的请求直接回 4xx，而不是忽略参数；去掉 tools 后让
@@ -1082,7 +1098,7 @@ export const useChatAI = ({
                 data = await safeFetchJson(`${baseUrl}/chat/completions`, {
                     method: 'POST', headers,
                     body: JSON.stringify(fallbackBody)
-                }, 0, 0, { appName: '消息', charId: char.id, charName: char.name, purpose: 'MCP tools 兼容重试' });
+                }, 0, 120_000, { appName: '消息', charId: char.id, charName: char.name, purpose: 'MCP tools 兼容重试' });
             }
             console.log(`⏱ [API call] ${Math.round(performance.now() - apiT0)}ms`);
             updateTokenUsage(data, historyMsgCount, 'initial');

@@ -771,6 +771,21 @@ const CallApp: React.FC = () => {
       ? buildCallPrompt(userName, selectedChar.name, coreContext, voiceLang || undefined)
       : buildCallPrompt(userName, undefined, undefined, voiceLang || undefined);
     const messages = await buildHistoryMessages(input, skipDbId);
+    // 通话场景重试 toast：同一通通话只提示一次，避免刷屏
+    let retryToastShown = false;
+    const callStreamHooks = {
+      onRetry: (info: { attempt: number; reason: string }) => {
+        if (retryToastShown) return;
+        retryToastShown = true;
+        const reasonText =
+          info.reason === 'network' ? '网络连接失败'
+          : info.reason === 'timeout' ? '请求超时'
+          : info.reason.startsWith('http:') ? `服务器返回 ${info.reason.slice(5)}`
+          : info.reason === 'html' ? '中转返回 HTML 错误页'
+          : '请求失败';
+        addToast(`${selectedChar?.name || '对方'}：网络抖动（${reasonText}），正在重试…`, 'info');
+      },
+    };
     const chatData = await safeFetchJson(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiConfig.apiKey || 'sk-none'}` },
@@ -783,7 +798,7 @@ const CallApp: React.FC = () => {
         max_tokens: 8000,
         stream: false,
       }),
-    }, 2, 0, { appName: '电话', charId: selectedChar?.id, charName: selectedChar?.name, purpose: '语音通话' });
+    }, 2, 120_000, { appName: '电话', charId: selectedChar?.id, charName: selectedChar?.name, purpose: '语音通话' }, callStreamHooks);
     const assistantText = chatData?.choices?.[0]?.message?.content?.trim() || '';
     if (!assistantText) throw new Error('文本接口返回为空');
     return assistantText;
