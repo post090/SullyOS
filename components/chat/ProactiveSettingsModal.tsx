@@ -22,6 +22,23 @@ const INTERVAL_OPTIONS = [
     { label: '24 小时', value: 1440 },
 ];
 
+// 把分钟数（0-1439）格式化成 "HH:MM"
+const minutesToHHMM = (m: number): string => {
+    const h = Math.floor(m / 60) % 24;
+    const min = m % 60;
+    return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+};
+// 把 "HH:MM" 解析成分钟数；非法返回默认值
+const hhmmToMinutes = (s: string | undefined, fallback: number): number => {
+    if (!s) return fallback;
+    const m = s.trim().match(/^(\d{1,2}):(\d{2})$/);
+    if (!m) return fallback;
+    const h = parseInt(m[1], 10);
+    const min = parseInt(m[2], 10);
+    if (h < 0 || h > 23 || min < 0 || min > 59) return fallback;
+    return h * 60 + min;
+};
+
 const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
     isOpen, onClose, char, isProactiveActive, onSave, onStop
 }) => {
@@ -33,6 +50,11 @@ const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
     const [secKey, setSecKey] = useState(saved?.secondaryApi?.apiKey ?? '');
     const [secModel, setSecModel] = useState(saved?.secondaryApi?.model ?? '');
     const [showApiSection, setShowApiSection] = useState(saved?.useSecondaryApi ?? false);
+    // 睡眠窗口（存分钟数 0-1439，每 30 分钟一档；默认 23:00 入睡 / 07:00 起床）
+    const [sleepStartMin, setSleepStartMin] = useState(hhmmToMinutes(saved?.sleepStart, 23 * 60));
+    const [sleepEndMin, setSleepEndMin] = useState(hhmmToMinutes(saved?.sleepEnd, 7 * 60));
+    // 主动联系倾向 0-100，默认 50
+    const [proactiveness, setProactiveness] = useState(saved?.proactiveness ?? 50);
 
     // Reset form when modal opens with new char data
     useEffect(() => {
@@ -45,6 +67,9 @@ const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
             setSecKey(s?.secondaryApi?.apiKey ?? '');
             setSecModel(s?.secondaryApi?.model ?? '');
             setShowApiSection(s?.useSecondaryApi ?? false);
+            setSleepStartMin(hhmmToMinutes(s?.sleepStart, 23 * 60));
+            setSleepEndMin(hhmmToMinutes(s?.sleepEnd, 7 * 60));
+            setProactiveness(s?.proactiveness ?? 50);
         }
     }, [isOpen, char.id]);
 
@@ -58,6 +83,9 @@ const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
                 apiKey: secKey,
                 model: secModel,
             } : undefined,
+            sleepStart: minutesToHHMM(sleepStartMin),
+            sleepEnd: minutesToHHMM(sleepEndMin),
+            proactiveness,
         });
         onClose();
     };
@@ -127,6 +155,82 @@ const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
                                         {opt.label}
                                     </button>
                                 ))}
+                            </div>
+                        </div>
+
+                        {/* 睡眠窗口 */}
+                        <div className="pt-2 border-t border-slate-100">
+                            <label className="text-sm font-bold text-slate-700 block mb-1">睡眠窗口</label>
+                            <p className="text-[11px] text-slate-400 leading-relaxed mb-3">
+                                睡眠时段内 {char.name} 不会主动发消息（除非思念值攒满，思念优先）。
+                                支持跨日，如入睡 23:00 / 起床 07:00。
+                            </p>
+                            <div className="space-y-3 bg-slate-50 rounded-2xl p-3">
+                                <div>
+                                    <div className="flex items-center justify-between mb-1">
+                                        <span className="text-xs text-slate-500 font-medium">入睡时间</span>
+                                        <span className="text-sm font-bold text-violet-600 tabular-nums">{minutesToHHMM(sleepStartMin)}</span>
+                                    </div>
+                                    <input
+                                        type="range"
+                                        min={0}
+                                        max={1439}
+                                        step={30}
+                                        value={sleepStartMin}
+                                        onChange={e => setSleepStartMin(parseInt(e.target.value, 10))}
+                                        className="w-full accent-violet-500"
+                                    />
+                                </div>
+                                <div>
+                                    <div className="flex items-center justify-between mb-1">
+                                        <span className="text-xs text-slate-500 font-medium">起床时间</span>
+                                        <span className="text-sm font-bold text-violet-600 tabular-nums">{minutesToHHMM(sleepEndMin)}</span>
+                                    </div>
+                                    <input
+                                        type="range"
+                                        min={0}
+                                        max={1439}
+                                        step={30}
+                                        value={sleepEndMin}
+                                        onChange={e => setSleepEndMin(parseInt(e.target.value, 10))}
+                                        className="w-full accent-violet-500"
+                                    />
+                                </div>
+                                {sleepStartMin === sleepEndMin && (
+                                    <p className="text-[11px] text-amber-600 leading-relaxed">
+                                        入睡和起床时间相同，等于全天都在睡 — 这通常不是你想要的，请调整。
+                                    </p>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* 主动联系倾向 */}
+                        <div className="pt-2 border-t border-slate-100">
+                            <label className="text-sm font-bold text-slate-700 block mb-1">主动联系倾向</label>
+                            <p className="text-[11px] text-slate-400 leading-relaxed mb-3">
+                                每次到点 {char.name} 会"扔骰子"决定要不要找你。滑块越高，越爱主动找你。
+                                连续 5 次没找你 → 思念值攒满，下次必定找你（保底）。
+                            </p>
+                            <div className="bg-slate-50 rounded-2xl p-3">
+                                <div className="flex items-center justify-between mb-1">
+                                    <span className="text-xs text-slate-500 font-medium">高冷 ←</span>
+                                    <span className="text-sm font-bold text-violet-600 tabular-nums">{proactiveness}%</span>
+                                    <span className="text-xs text-slate-500 font-medium">→ 黏人</span>
+                                </div>
+                                <input
+                                    type="range"
+                                    min={0}
+                                    max={100}
+                                    step={5}
+                                    value={proactiveness}
+                                    onChange={e => setProactiveness(parseInt(e.target.value, 10))}
+                                    className="w-full accent-violet-500"
+                                />
+                                <div className="flex justify-between mt-1 text-[10px] text-slate-400">
+                                    <span>几乎不主动</span>
+                                    <span>平均 2 次到点发 1 次</span>
+                                    <span>每次都主动</span>
+                                </div>
                             </div>
                         </div>
 

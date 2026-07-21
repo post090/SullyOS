@@ -9,7 +9,8 @@ import { isLegacyDefaultWallpaper } from '../utils/wallpaperCompat';
 import { migrateSharkpanAssets } from '../utils/sharkpanAssetMigration';
 import { writeV2Backup, assembleV2Backup, type BackupManifest, type ZipFileWriter, type ZipFileReader } from '../utils/backupFormat';
 import { encodeVectorsForBackup } from '../utils/memoryPalace/db';
-import { ProactiveChat } from '../utils/proactiveChat';
+import { ProactiveChat, getMissCount, incrementMissCount, resetMissCount, MISS_THRESHOLD } from '../utils/proactiveChat';
+import { isInTimeWindow } from '../utils/timeWindow';
 import { VRScheduler } from '../utils/vrWorld/scheduler';
 import { runVRSession } from '../utils/vrWorld/runSession';
 import { VR_DEFAULT_INTERVAL_MIN } from '../utils/vrWorld/constants';
@@ -1959,6 +1960,48 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               return;
           }
 
+          // ─── 主动消息决策链（睡眠 + 思念值保底 + 概率 roll）─────────────────────
+          // 设计目标：避免到点必发的机械感，同时保证不会太久不发消息。
+          //   1) 睡眠窗口检查：在窗口内 → 默认 skip，不攒思念值（她在睡觉谈不上想念）。
+          //      但若思念值已攒满（MISS_THRESHOLD）→ 强制发（思念优先，这么想怎么睡得着）。
+          //   2) 思念值保底：清醒时段 roll 失败攒思念值，攒满 5 次 → 强制发，清零。
+          //   3) 概率 roll：proactiveness/100 作为概率阈值，roll 小于它才发。
+          // 思念值持久化在 proactiveChat.ts 的 localStorage（跟 lastFire 并排）。
+          const pCfgForDecision = char.proactiveConfig;
+          const sleepStart = pCfgForDecision?.sleepStart;
+          const sleepEnd = pCfgForDecision?.sleepEnd;
+          const proactiveness = pCfgForDecision?.proactiveness ?? 50; // 默认 50%
+          const inSleepWindow = isInTimeWindow(new Date(), sleepStart, sleepEnd);
+          const currentMissCount = getMissCount(charId);
+          const missSaturated = currentMissCount >= MISS_THRESHOLD;
+
+          if (inSleepWindow && !missSaturated) {
+              // 在睡眠窗口内且思念值没满 → 静默 skip，不攒思念（她在睡觉）
+              drainQueuedProactive();
+              console.log(`🔇 [Proactive/Global] Skipped for ${char.name}: 睡眠窗口 ${sleepStart}-${sleepEnd}, miss=${currentMissCount}`);
+              return;
+          }
+
+          if (missSaturated) {
+              // 思念值保底触发：强制发消息（即便在睡眠窗口内 — 思念优先）
+              console.log(`💖 [Proactive/Global] 思念值保底触发 for ${char.name}: miss=${currentMissCount}/${MISS_THRESHOLD}${inSleepWindow ? ' (无视睡眠窗口)' : ''}`);
+              // 走到下面的正常发送流程；发完会在 dispatchEvent 后 resetMissCount
+          } else if (inSleepWindow && missSaturated) {
+              // 极端分支：睡眠窗口内思念值刚好满 — 上面 missSaturated 已处理，这分支不会到
+              // 留这个注释只是说明逻辑完整性。
+          } else {
+              // 清醒时段 + 思念值未满 → 概率 roll
+              const roll = Math.random() * 100; // 0-100
+              if (roll >= proactiveness) {
+                  // roll 失败：攒思念值，本轮 skip
+                  const newMiss = incrementMissCount(charId);
+                  drainQueuedProactive();
+                  console.log(`🎲 [Proactive/Global] Roll 失败 skip for ${char.name}: roll=${roll.toFixed(1)} >= proactiveness=${proactiveness}, miss=${newMiss}/${MISS_THRESHOLD}`);
+                  return;
+              }
+              console.log(`🎲 [Proactive/Global] Roll 成功 for ${char.name}: roll=${roll.toFixed(1)} < proactiveness=${proactiveness}, miss=${currentMissCount}/${MISS_THRESHOLD}`);
+          }
+
           // Determine which API to use
           const pCfg = char.proactiveConfig;
           const useSecondary = pCfg?.useSecondaryApi && pCfg.secondaryApi?.baseUrl;
@@ -2299,6 +2342,8 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                   window.dispatchEvent(new CustomEvent('proactive-message-sent', {
                       detail: { charId, charName: char.name, body: preview }
                   }));
+                  // 7. 主动消息真的发出去了 → 清零思念值（保底/roll 成功都算"已发"）
+                  resetMissCount(charId);
               }
           } catch (err) {
               console.error(`[Proactive/Global] Error for ${char.name}:`, err);

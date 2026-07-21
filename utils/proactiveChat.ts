@@ -34,6 +34,14 @@ type LastFireMap = Record<string, number>;
 
 const STORAGE_KEY = 'proactive_schedules';
 const LAST_FIRE_KEY = 'proactive_last_fire_map';
+/**
+ * 思念值（missCount）持久化 map。每个角色独立计数 0-MISS_THRESHOLD。
+ * roll 失败 +1，发出消息清零。到 MISS_THRESHOLD 时下次到点强制发（保底）。
+ * 思念值只在清醒时段攒；睡眠窗口内被 skip 不攒（她在睡觉，谈不上想念）。
+ */
+const MISS_COUNT_KEY = 'proactive_miss_count_map';
+/** 思念值阈值：攒满 5 次（连续 5 次 roll 失败/清醒时段 skip）→ 保底强制发 */
+export const MISS_THRESHOLD = 5;
 const LEGACY_STORAGE_KEY = 'proactive_schedule';
 const LEGACY_LAST_FIRE_KEY = 'proactive_last_fire';
 
@@ -113,6 +121,55 @@ function removeLastFireTime(charId: string) {
   const lastFireMap = loadLastFireTimes();
   delete lastFireMap[charId];
   saveLastFireTimes(lastFireMap);
+}
+
+// --- 思念值（missCount）持久化 ---
+// 跟 lastFire 并排存独立 localStorage key。runProactive 决策时读/写。
+
+type MissCountMap = Record<string, number>;
+
+function loadMissCounts(): MissCountMap {
+  try {
+    const raw = localStorage.getItem(MISS_COUNT_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as MissCountMap;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveMissCounts(map: MissCountMap) {
+  const entries = Object.entries(map);
+  if (entries.length === 0) {
+    localStorage.removeItem(MISS_COUNT_KEY);
+    return;
+  }
+  localStorage.setItem(MISS_COUNT_KEY, JSON.stringify(map));
+}
+
+export function getMissCount(charId: string): number {
+  return loadMissCounts()[charId] || 0;
+}
+
+export function incrementMissCount(charId: string): number {
+  const map = loadMissCounts();
+  const next = Math.min((map[charId] || 0) + 1, MISS_THRESHOLD);
+  map[charId] = next;
+  saveMissCounts(map);
+  return next;
+}
+
+export function resetMissCount(charId: string) {
+  const map = loadMissCounts();
+  if (map[charId] !== undefined) {
+    delete map[charId];
+    saveMissCounts(map);
+  }
+}
+
+export function removeMissCount(charId: string) {
+  resetMissCount(charId);
 }
 
 function postToSW(msg: any) {
@@ -218,8 +275,17 @@ function schedulePreciseTimer() {
   }
   if (!Number.isFinite(nextDue)) return;
 
+  // 检查时机打散：在原始 due 基础上加 ±20% 抖动，避免每天精确整点发消息的机械感。
+  // 60min 间隔 → 实际下次检查在 due-12min ~ due+12min 之间随机（即 48~72min 后）。
+  // jitter 只影响"下次检查时刻"，不影响 lastFire（lastFire 仍按真实触发时刻写）。
+  // 用所有 schedule 里最小的 intervalMs 算抖动范围（避免多角色时被长间隔主导）。
+  const minIntervalMs = Math.min(...schedules.map(s => s.intervalMs));
+  const jitterRange = minIntervalMs * 0.2;
+  const jitter = (Math.random() * 2 - 1) * jitterRange; // -range ~ +range
+  const jitteredDue = nextDue + jitter;
+
   // Clamp: at least 500ms to avoid tight loops, at most ~24d to fit a 32-bit timer.
-  const delay = Math.min(Math.max(nextDue - now, 500), 2_147_000_000);
+  const delay = Math.min(Math.max(jitteredDue - now, 500), 2_147_000_000);
   preciseTimer = setTimeout(() => {
     preciseTimer = null;
     checkOverdueSchedules();
@@ -326,6 +392,7 @@ export const ProactiveChat = {
     delete schedules[charId];
     saveSchedules(schedules);
     removeLastFireTime(charId);
+    removeMissCount(charId);
     syncSchedulesToSW();
 
     if (isPushConfigReady(loadPushConfig())) {

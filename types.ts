@@ -2278,6 +2278,18 @@ export interface CharacterProfile {
       apiKey: string;
       model: string;
     };
+    /**
+     * 睡眠窗口（HH:MM）。sleepStart > sleepEnd 视为跨日（如 23:00-07:00）。
+     * 睡眠窗口内：正常 roll 路径直接 skip（不攒思念值）；思念值已攒满时强制发
+     * （思念优先，这么想怎么睡得着）。两者都未配置时视为无睡眠窗口。
+     */
+    sleepStart?: string;
+    sleepEnd?: string;
+    /**
+     * 主动联系倾向 0-100。每次到点 roll 一个 0-1 随机数，小于此值/100 才发消息。
+     * 默认 50。同时受思念值保底制约：连续 roll 失败攒思念值到 5 时强制发。
+     */
+    proactiveness?: number;
   };
 
   // 情绪Buff系统
