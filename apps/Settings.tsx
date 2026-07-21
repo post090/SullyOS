@@ -2982,19 +2982,19 @@ const Settings: React.FC = () => {
                               {rtRssEditingIdx !== null && (
                                   <div className="space-y-1.5 bg-amber-50 border border-amber-200 rounded-xl p-2">
                                       <p className="text-[10px] font-bold text-amber-700">编辑自定义源</p>
-                                      <div className="flex gap-1.5">
+                                      <div className="flex flex-col gap-1.5">
                                           <input
                                               type="text"
                                               value={rtRssEditName}
                                               onChange={e => setRtRssEditName(e.target.value)}
-                                              className="flex-1 bg-white/90 border border-amber-200 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-700"
-                                              placeholder="源名字（如：文京区区报）"
+                                              className="w-full bg-white/90 border border-amber-200 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-700"
+                                              placeholder="源名称"
                                           />
                                           <input
                                               type="url"
                                               value={rtRssEditUrl}
                                               onChange={e => setRtRssEditUrl(e.target.value)}
-                                              className="flex-[2] bg-white/90 border border-amber-200 rounded-lg px-2.5 py-1.5 text-[11px] font-mono text-slate-600"
+                                              className="w-full bg-white/90 border border-amber-200 rounded-lg px-2.5 py-1.5 text-[11px] font-mono text-slate-600"
                                               placeholder="https://... 或 /rss/xxx"
                                           />
                                       </div>
@@ -3031,51 +3031,17 @@ const Settings: React.FC = () => {
                                   </div>
                               )}
 
-                              {/* 添加新自定义源：名字 + URL 两栏 + 添加按钮 */}
+                              {/* 添加新自定义源：名字 + URL 两行 + 添加按钮 */}
                               {rtRssEditingIdx === null && (
                                   <>
-                                      <div className="flex gap-1.5">
-                                          <input
-                                              type="text"
-                                              value={rtRssCustomName}
-                                              onChange={e => setRtRssCustomName(e.target.value)}
-                                              onKeyDown={e => {
-                                                  if (e.key === 'Enter') {
-                                                      e.preventDefault();
-                                                      const name = rtRssCustomName.trim();
-                                                      const url = rtRssCustomUrl.trim();
-                                                      if (name && url && /^https?:\/\//i.test(url) && !rtRssCustom.some(c => c.url === url) && !RealtimeContextManager.RSS_BUILTIN_SOURCES.some(s => s.url === url)) {
-                                                          setRtRssCustom(prev => [...prev, { name, url }]);
-                                                          setRtRssCustomName('');
-                                                          setRtRssCustomUrl('');
-                                                      }
-                                                  }
-                                              }}
-                                              className="flex-1 bg-white/80 border border-blue-200 rounded-xl px-3 py-1.5 text-[11px] text-slate-600"
-                                              placeholder="源名字（如：文京区区报）"
-                                          />
-                                          <input
-                                              type="url"
-                                              value={rtRssCustomUrl}
-                                              onChange={e => setRtRssCustomUrl(e.target.value)}
-                                              onKeyDown={e => {
-                                                  if (e.key === 'Enter') {
-                                                      e.preventDefault();
-                                                      const name = rtRssCustomName.trim();
-                                                      const url = rtRssCustomUrl.trim();
-                                                      if (name && url && /^https?:\/\//i.test(url) && !rtRssCustom.some(c => c.url === url) && !RealtimeContextManager.RSS_BUILTIN_SOURCES.some(s => s.url === url)) {
-                                                          setRtRssCustom(prev => [...prev, { name, url }]);
-                                                          setRtRssCustomName('');
-                                                          setRtRssCustomUrl('');
-                                                      }
-                                                  }
-                                              }}
-                                              className="flex-[2] bg-white/80 border border-blue-200 rounded-xl px-3 py-1.5 text-[11px] font-mono text-slate-600"
-                                              placeholder="https://example.com/feed.xml"
-                                          />
-                                          <button
-                                              type="button"
-                                              onClick={() => {
+                                  <div className="flex flex-col gap-1.5">
+                                      <input
+                                          type="text"
+                                          value={rtRssCustomName}
+                                          onChange={e => setRtRssCustomName(e.target.value)}
+                                          onKeyDown={e => {
+                                              if (e.key === 'Enter') {
+                                                  e.preventDefault();
                                                   const name = rtRssCustomName.trim();
                                                   const url = rtRssCustomUrl.trim();
                                                   if (name && url && /^https?:\/\//i.test(url) && !rtRssCustom.some(c => c.url === url) && !RealtimeContextManager.RSS_BUILTIN_SOURCES.some(s => s.url === url)) {
@@ -3083,10 +3049,44 @@ const Settings: React.FC = () => {
                                                       setRtRssCustomName('');
                                                       setRtRssCustomUrl('');
                                                   }
-                                              }}
-                                              className="px-3 py-1.5 bg-blue-500 text-white text-[11px] font-bold rounded-xl active:scale-95 transition-transform shrink-0"
-                                          >添加</button>
-                                      </div>
+                                              }
+                                          }}
+                                          className="w-full bg-white/80 border border-blue-200 rounded-xl px-3 py-1.5 text-[11px] text-slate-600"
+                                          placeholder="源名称"
+                                      />
+                                      <input
+                                          type="url"
+                                          value={rtRssCustomUrl}
+                                          onChange={e => setRtRssCustomUrl(e.target.value)}
+                                          onKeyDown={e => {
+                                              if (e.key === 'Enter') {
+                                                  e.preventDefault();
+                                                  const name = rtRssCustomName.trim();
+                                                  const url = rtRssCustomUrl.trim();
+                                                  if (name && url && /^https?:\/\//i.test(url) && !rtRssCustom.some(c => c.url === url) && !RealtimeContextManager.RSS_BUILTIN_SOURCES.some(s => s.url === url)) {
+                                                      setRtRssCustom(prev => [...prev, { name, url }]);
+                                                      setRtRssCustomName('');
+                                                      setRtRssCustomUrl('');
+                                                  }
+                                              }
+                                          }}
+                                          className="w-full bg-white/80 border border-blue-200 rounded-xl px-3 py-1.5 text-[11px] font-mono text-slate-600"
+                                          placeholder="https://example.com/feed.xml"
+                                      />
+                                      <button
+                                          type="button"
+                                          onClick={() => {
+                                              const name = rtRssCustomName.trim();
+                                              const url = rtRssCustomUrl.trim();
+                                              if (name && url && /^https?:\/\//i.test(url) && !rtRssCustom.some(c => c.url === url) && !RealtimeContextManager.RSS_BUILTIN_SOURCES.some(s => s.url === url)) {
+                                                  setRtRssCustom(prev => [...prev, { name, url }]);
+                                                  setRtRssCustomName('');
+                                                  setRtRssCustomUrl('');
+                                              }
+                                          }}
+                                          className="self-end px-3 py-1.5 bg-blue-500 text-white text-[11px] font-bold rounded-xl active:scale-95 transition-transform shrink-0"
+                                      >添加</button>
+                                  </div>
                                       {rtRssCustomUrl && !/^https?:\/\//i.test(rtRssCustomUrl) && (
                                           <p className="text-[10px] text-rose-400">URL 必须以 http:// 或 https:// 开头</p>
                                       )}
