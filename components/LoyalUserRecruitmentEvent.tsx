@@ -24,7 +24,7 @@ import {
     type LoyalRecruitmentAttempt,
 } from '../utils/loyalUserRecruitment';
 
-type Phase = 'intro' | 'qq' | 'scanning' | 'submitting' | 'technical' | 'failed' | 'pending' | 'success';
+type Phase = 'intro' | 'qq' | 'scanning' | 'submitting' | 'technical' | 'failed' | 'pending' | 'not_selected' | 'success';
 
 const DISCORD_COMMUNITY_URL = 'https://discord.gg/rvqBaTUgR';
 
@@ -53,7 +53,7 @@ const DebugResult: React.FC<{ result: LoyalEligibilityResult | null }> = ({ resu
                 ACTIVE {result.breakdown.recentActivity}/50 · CHAR {result.breakdown.customCharacter}/15 · MEMORY {result.breakdown.neuralMemory}/25 · PALACE {result.breakdown.memoryPalace}/10
             </div>
             <div>
-                DAYS {result.metrics.recentActiveDays} · WEEKS {result.metrics.recentActiveWeeks} · MSG {result.metrics.recentUserMessages} · MEM {result.metrics.memoryUnits} · NODE {result.metrics.palaceNodes}
+                DAYS {result.metrics.recentActiveDays} · WEEKS {result.metrics.recentActiveWeeks} · MSG {result.metrics.recentUserMessages} · CHAR DAYS {result.metrics.maxPreCutoffCharacterActiveDays ?? 'LEGACY'} · MEM {result.metrics.memoryUnits} · NODE {result.metrics.palaceNodes}
             </div>
         </div>
     );
@@ -117,6 +117,7 @@ export const LoyalUserRecruitmentController: React.FC<LoyalUserRecruitmentContro
     const [phase, setPhase] = useState<Phase>(() => {
         if (savedAttempt?.status === 'registered') return 'success';
         if (savedAttempt?.status === 'passed_pending') return 'pending';
+        if (savedAttempt?.status === 'not_selected') return 'not_selected';
         if (savedAttempt?.status === 'qualified_pending_qq') return 'qq';
         if (savedAttempt?.status === 'failed') return 'failed';
         return 'intro';
@@ -136,6 +137,17 @@ export const LoyalUserRecruitmentController: React.FC<LoyalUserRecruitmentContro
         setError('');
         try {
             const registration = await submitQualifiedQQ(attempt.qq || '');
+            if (!registration.granted) {
+                const notSelectedAttempt: LoyalRecruitmentAttempt = {
+                    status: 'not_selected',
+                    criteriaVersion: attempt.criteriaVersion,
+                    evaluatedAt: attempt.evaluatedAt,
+                    evaluation: attempt.evaluation,
+                };
+                writeLoyalRecruitmentAttempt(notSelectedAttempt);
+                setPhase('not_selected');
+                return;
+            }
             const registeredAttempt: LoyalRecruitmentAttempt = {
                 ...attempt,
                 status: 'registered',
@@ -339,19 +351,24 @@ export const LoyalUserRecruitmentController: React.FC<LoyalUserRecruitmentContro
         );
     }
 
-    if (phase === 'failed') {
+    if (phase === 'failed' || phase === 'not_selected') {
+        const isFinalAllocation = phase === 'not_selected';
         return (
             <TerminalFrame eyebrow="RESULT SEALED · ACCESS NOT GRANTED">
                 <div className="font-mono text-[10px] tracking-[0.18em] text-rose-300/65">FINAL RESULT / 01</div>
                 <h2 className="mt-4 text-[26px] font-black leading-tight text-white">未获取本次进群名额</h2>
                 <p className="mt-3 text-[12px] leading-6 text-emerald-50/50">
-                    谢谢你愿意留下来。按照截止时间前的本机存档，本次结果暂未满足新 QQ 小群的入口条件。这不是对你或使用方式的评价，QQ 也没有上传。
+                    {isFinalAllocation
+                        ? '谢谢你愿意留下来。本次小群名额状态已经确认，目前未获取本次新 QQ 小群名额。这不是对你或使用方式的评价。'
+                        : '谢谢你愿意留下来。按照截止时间前的本机存档，本次结果暂未满足新 QQ 小群的入口条件。这不是对你或使用方式的评价，QQ 也没有上传。'}
                 </p>
                 <div className="mt-5 border-l-2 border-emerald-300/35 pl-3 text-[11px] leading-5 text-emerald-50/48">
                     Discord 社区仍然完整开放，公告、反馈、交流与之后的社区活动都会继续在那里。欢迎来找我们。
                 </div>
-                <p className="mt-3 font-mono text-[9px] leading-4 text-emerald-50/28">QQ 未上传 · 本次结果已封存，不再复检</p>
-                <DebugResult result={evaluation} />
+                <p className="mt-3 font-mono text-[9px] leading-4 text-emerald-50/28">
+                    {isFinalAllocation ? 'QQ 未登记 · 本次名额状态已封存' : 'QQ 未上传 · 本次结果已封存，不再复检'}
+                </p>
+                {!isFinalAllocation && <DebugResult result={evaluation} />}
                 <a
                     href={DISCORD_COMMUNITY_URL}
                     target="_blank"

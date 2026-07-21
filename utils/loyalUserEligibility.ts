@@ -9,15 +9,15 @@ import type { MemoryNode } from './memoryPalace/types';
  * 时间全部写明 +08:00，不能跟随设备所在时区。传统 MemoryFragment 只有日期、没有
  * 时分，因此截止日（7 月 20 日）整天不计；其它带 timestamp/createdAt 的数据精确计到 19:00。
  */
-export const LOYAL_RECRUITMENT_CRITERIA_VERSION = '2026-07-20-v2';
+export const LOYAL_RECRUITMENT_CRITERIA_VERSION = '2026-07-20-v3';
 export const LOYAL_RECRUITMENT_CUTOFF_ISO = '2026-07-20T19:00:00+08:00';
 export const LOYAL_RECRUITMENT_RECENT_START_ISO = '2026-06-20T19:00:00+08:00';
 export const LOYAL_RECRUITMENT_CUTOFF_AT = Date.parse(LOYAL_RECRUITMENT_CUTOFF_ISO);
 export const LOYAL_RECRUITMENT_RECENT_START_AT = Date.parse(LOYAL_RECRUITMENT_RECENT_START_ISO);
 export const LOYAL_RECRUITMENT_PASS_SCORE = 65;
-export const LOYAL_RECRUITMENT_DEEP_MIN_MESSAGES = 20;
-export const LOYAL_RECRUITMENT_DEEP_MIN_ACTIVE_DAYS = 2;
-export const LOYAL_RECRUITMENT_DEEP_MIN_HISTORY_SCORE = 35;
+export const LOYAL_RECRUITMENT_DEEP_MIN_CHARACTER_ACTIVE_DAYS = 3;
+export const LOYAL_RECRUITMENT_DEEP_MEMORY_THRESHOLD = 20;
+export const LOYAL_RECRUITMENT_DEEP_PALACE_THRESHOLD = 20;
 
 const BEIJING_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -47,6 +47,8 @@ export interface LoyalEligibilityMetrics {
     recentUserMessages: number;
     recentActiveDays: number;
     recentActiveWeeks: number;
+    /** 任意单个角色在截止日前累计的最大活跃日数；旧封存结果可能没有此字段。 */
+    maxPreCutoffCharacterActiveDays?: number;
     hasQualifiedCustomCharacter: boolean;
     memoryUnits: number;
     recentMemoryUnits: number;
@@ -61,7 +63,6 @@ export interface LoyalEligibilityResult {
     cutoffAt: number;
     hardGatePassed: boolean;
     deepUserChannelPassed: boolean;
-    deepHistoryScore: number;
     qualificationPath: 'standard' | 'deep' | null;
     passed: boolean;
     score: number;
@@ -81,20 +82,21 @@ type ReclassifiableEligibilityResult = Pick<
 export function reclassifyLoyalEligibilityResult(
     result: ReclassifiableEligibilityResult,
 ): LoyalEligibilityResult {
-    const deepHistoryScore = result.breakdown.customCharacter
-        + result.breakdown.neuralMemory
-        + result.breakdown.memoryPalace;
     const standardPassed = result.hardGatePassed && result.score >= LOYAL_RECRUITMENT_PASS_SCORE;
-    const deepUserChannelPassed = result.metrics.recentUserMessages >= LOYAL_RECRUITMENT_DEEP_MIN_MESSAGES
-        && result.metrics.recentActiveDays >= LOYAL_RECRUITMENT_DEEP_MIN_ACTIVE_DAYS
-        && deepHistoryScore >= LOYAL_RECRUITMENT_DEEP_MIN_HISTORY_SCORE;
+    // v1/v2 没有按角色累计历史活跃日；迁移时用已封存的近期活跃日作保守兼容证据。
+    const characterActiveDays = result.metrics.maxPreCutoffCharacterActiveDays
+        ?? result.metrics.recentActiveDays;
+    const deepUserChannelPassed = result.metrics.hasQualifiedCustomCharacter && (
+        characterActiveDays >= LOYAL_RECRUITMENT_DEEP_MIN_CHARACTER_ACTIVE_DAYS
+        || result.metrics.memoryUnits > LOYAL_RECRUITMENT_DEEP_MEMORY_THRESHOLD
+        || result.metrics.palaceNodes > LOYAL_RECRUITMENT_DEEP_PALACE_THRESHOLD
+    );
 
     return {
         ...result,
         criteriaVersion: LOYAL_RECRUITMENT_CRITERIA_VERSION,
         cutoffAt: LOYAL_RECRUITMENT_CUTOFF_AT,
         deepUserChannelPassed,
-        deepHistoryScore,
         qualificationPath: standardPassed ? 'standard' : deepUserChannelPassed ? 'deep' : null,
         passed: standardPassed || deepUserChannelPassed,
     };
@@ -241,6 +243,26 @@ function isEligibleUserMessage(message: Message): boolean {
     return typeof message.content === 'string' && message.content.trim().length > 0;
 }
 
+function getMaxPreCutoffCharacterActiveDays(messages: Message[]): number {
+    const perCharacter = new Map<string, Map<string, number>>();
+    for (const message of messages) {
+        if (message.timestamp > LOYAL_RECRUITMENT_CUTOFF_AT || !isEligibleUserMessage(message)) continue;
+        const charId = String(message.charId || '');
+        if (!charId) continue;
+        const day = beijingDayKey(message.timestamp);
+        const perDay = perCharacter.get(charId) || new Map<string, number>();
+        perDay.set(day, (perDay.get(day) || 0) + 1);
+        perCharacter.set(charId, perDay);
+    }
+
+    let maxDays = 0;
+    for (const perDay of perCharacter.values()) {
+        const activeDays = [...perDay.values()].filter(count => count >= 3).length;
+        maxDays = Math.max(maxDays, activeDays);
+    }
+    return maxDays;
+}
+
 function hasPreCutoffCharacterEvidence(
     char: CharacterProfile,
     messages: Message[],
@@ -282,6 +304,7 @@ export function evaluateLoyalUserEligibility(snapshot: LoyalEligibilitySnapshot)
         .filter(([, count]) => count >= 3)
         .map(([day]) => day);
     const activeWeeks = new Set(activeDayKeys.map(day => beijingWeekKey(atBeijingNoon(day))));
+    const maxPreCutoffCharacterActiveDays = getMaxPreCutoffCharacterActiveDays(snapshot.messages);
 
     const recentActivity = Math.min(50,
         scoreActiveDays(activeDayKeys.length)
@@ -343,6 +366,7 @@ export function evaluateLoyalUserEligibility(snapshot: LoyalEligibilitySnapshot)
             recentUserMessages: recentMessages.length,
             recentActiveDays: activeDayKeys.length,
             recentActiveWeeks: activeWeeks.size,
+            maxPreCutoffCharacterActiveDays,
             hasQualifiedCustomCharacter,
             memoryUnits,
             recentMemoryUnits,

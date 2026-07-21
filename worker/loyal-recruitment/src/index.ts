@@ -216,7 +216,7 @@ const adminPage = () => new Response(ADMIN_PAGE, {
     },
 });
 
-const CRITERIA_VERSIONS = new Set(['2026-07-20-v1', '2026-07-20-v2']);
+const CRITERIA_VERSIONS = new Set(['2026-07-20-v1', '2026-07-20-v2', '2026-07-20-v3']);
 const CUTOFF_AT = Date.parse('2026-07-20T19:00:00+08:00');
 const RATE_WINDOW_MS = 60 * 60_000;
 const DEFAULT_GROUP_ID = '892128017';

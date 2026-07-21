@@ -175,7 +175,7 @@ var adminPage = () => new Response(ADMIN_PAGE, {
     "X-Frame-Options": "DENY"
   }
 });
-var CRITERIA_VERSIONS = /* @__PURE__ */ new Set(["2026-07-20-v1", "2026-07-20-v2"]);
+var CRITERIA_VERSIONS = /* @__PURE__ */ new Set(["2026-07-20-v1", "2026-07-20-v2", "2026-07-20-v3"]);
 var CUTOFF_AT = Date.parse("2026-07-20T19:00:00+08:00");
 var RATE_WINDOW_MS = 60 * 6e4;
 var DEFAULT_GROUP_ID = "892128017";

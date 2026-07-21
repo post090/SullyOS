@@ -21,7 +21,7 @@ const makeEnv = () => ({
 }) as any;
 
 describe('loyal recruitment admin export', () => {
-    it('accepts v1/v2 sealed contracts during migration and rejects unknown versions', async () => {
+    it('accepts v1/v2/v3 sealed contracts during migration and rejects unknown versions', async () => {
         const acceptedV2 = await worker.fetch(new Request('https://example.com/recruit/submit', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -48,6 +48,17 @@ describe('loyal recruitment admin export', () => {
             }),
         }), makeEnv());
         expect(acceptedV1.status).toBe(200);
+
+        const acceptedV3 = await worker.fetch(new Request('https://example.com/recruit/submit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                qq: '123456789',
+                criteriaVersion: '2026-07-20-v3',
+                cutoffAt: Date.parse('2026-07-20T19:00:00+08:00'),
+            }),
+        }), makeEnv());
+        expect(acceptedV3.status).toBe(200);
 
         const rejected = await worker.fetch(new Request('https://example.com/recruit/submit', {
             method: 'POST',

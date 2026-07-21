@@ -10,10 +10,11 @@ export const LOYAL_RECRUITMENT_EVENT = 'sullyos-loyal-recruitment-change';
 export const LOYAL_RECRUITMENT_DEFAULT_BASE = 'https://noir2.cc.cd/recruit';
 const LOYAL_RECRUITMENT_BASE_KEY = 'sullyos_loyal_recruitment_base';
 const LOYAL_RECRUITMENT_LEGACY_ATTEMPT_KEYS = [
+    'sullyos_loyal_recruitment_2026-07-20-v2',
     'sullyos_loyal_recruitment_2026-07-20-v1',
 ];
 
-export type LoyalRecruitmentStatus = 'declined' | 'failed' | 'qualified_pending_qq' | 'passed_pending' | 'registered';
+export type LoyalRecruitmentStatus = 'declined' | 'failed' | 'qualified_pending_qq' | 'passed_pending' | 'not_selected' | 'registered';
 
 export interface LoyalRecruitmentAttempt {
     status: LoyalRecruitmentStatus;
@@ -27,6 +28,7 @@ export interface LoyalRecruitmentAttempt {
 }
 
 export interface RecruitmentRegistrationResult {
+    granted: boolean;
     registered: boolean;
     group: string;
     password: string;
@@ -55,7 +57,7 @@ export function readLoyalRecruitmentAttempt(): LoyalRecruitmentAttempt | null {
             const raw = localStorage.getItem(key);
             if (!raw) continue;
             const parsed = JSON.parse(raw) as LoyalRecruitmentAttempt;
-            if (!parsed || !['declined', 'failed', 'qualified_pending_qq', 'passed_pending', 'registered'].includes(parsed.status)) continue;
+            if (!parsed || !['declined', 'failed', 'qualified_pending_qq', 'passed_pending', 'not_selected', 'registered'].includes(parsed.status)) continue;
 
             // v2 只重算旧结果里已经封存的数字，绝不重新读取截止日后的本地数据。
             const evaluation = parsed.evaluation
@@ -112,6 +114,7 @@ export async function submitQualifiedQQ(qqInput: string): Promise<RecruitmentReg
     const data = await response.json().catch(() => ({})) as {
         ok?: boolean;
         registered?: boolean;
+        allocated?: boolean;
         group?: string;
         password?: string;
         error?: string;
@@ -119,8 +122,12 @@ export async function submitQualifiedQQ(qqInput: string): Promise<RecruitmentReg
     if (!response.ok || data.ok === false) {
         throw new Error(data.error || `登记服务暂不可用（HTTP ${response.status}）`);
     }
+    if (data.allocated === false) {
+        return { granted: false, registered: false, group: '', password: '' };
+    }
     if (!data.group || !data.password) throw new Error('登记成功，但群信息尚未配置');
     return {
+        granted: true,
         registered: data.registered !== false,
         group: data.group,
         password: data.password,

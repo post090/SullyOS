@@ -79,36 +79,84 @@ describe('忠实用户一次性资格检测', () => {
         expect(result.passed).toBe(true);
     });
 
-    it('深度用户可凭两天近期活跃和足够历史沉淀通过，且不强制要求记忆宫殿', () => {
-        const deepMemories: CharacterProfile['memories'] = [
-            { id: 'm01', date: '2026-01-01', summary: 'old' },
-            { id: 'm02', date: '2026-02-01', summary: 'old' },
-            { id: 'm03', date: '2026-03-01', summary: 'old' },
-            { id: 'm04', date: '2026-04-01', summary: 'old' },
-            { id: 'm05', date: '2026-05-01', summary: 'old' },
-            { id: 'm06', date: '2026-05-15', summary: 'old' },
-            { id: 'm07', date: '2026-05-30', summary: 'old' },
-            { id: 'm08', date: '2026-06-10', summary: 'old' },
-            { id: 'm09', date: '2026-06-21', summary: 'recent' },
-            { id: 'm10', date: '2026-06-28', summary: 'recent' },
-            { id: 'm11', date: '2026-07-05', summary: 'recent' },
-            { id: 'm12', date: '2026-07-12', summary: 'recent' },
-        ];
+    it('有非默认角色时，任意单个角色在截止日前累计三个活跃日即可走深度通道', () => {
         const result = evaluateLoyalUserEligibility(snapshot({
-            characters: [character('preset-sully-v2'), character('char-custom', deepMemories)],
-            messages: userMessages([10, 11], 18, 'char-custom'),
+            characters: [
+                character('preset-sully-v2'),
+                character('char-custom', [{ id: 'evidence', date: '2026-05-01', summary: 'used' }]),
+            ],
+            messages: userMessages([-120, -60, -10], 3, 'preset-sully-v2'),
         }));
 
-        expect(result.metrics.recentUserMessages).toBe(36);
-        expect(result.metrics.recentActiveDays).toBe(2);
+        expect(result.metrics.recentUserMessages).toBe(0);
+        expect(result.metrics.maxPreCutoffCharacterActiveDays).toBe(3);
         expect(result.hardGatePassed).toBe(false);
-        expect(result.breakdown.customCharacter).toBe(15);
-        expect(result.breakdown.neuralMemory).toBe(25);
-        expect(result.breakdown.memoryPalace).toBe(0);
-        expect(result.deepHistoryScore).toBe(40);
         expect(result.deepUserChannelPassed).toBe(true);
         expect(result.qualificationPath).toBe('deep');
         expect(result.passed).toBe(true);
+    });
+
+    it('有非默认角色时，神经链接有效记忆超过二十即可走深度通道', () => {
+        const memories: CharacterProfile['memories'] = Array.from({ length: 21 }, (_, index) => ({
+            id: `m-${index}`,
+            date: '2026-05-01',
+            summary: `memory-${index}`,
+        }));
+        const result = evaluateLoyalUserEligibility(snapshot({
+            characters: [character('preset-sully-v2'), character('char-custom', memories)],
+        }));
+
+        expect(result.metrics.memoryUnits).toBe(21);
+        expect(result.deepUserChannelPassed).toBe(true);
+        expect(result.qualificationPath).toBe('deep');
+    });
+
+    it('有非默认角色时，记忆宫殿有效节点超过二十即可走深度通道', () => {
+        const nodes = Array.from({ length: 21 }, (_, index) => node(
+            `n-${index}`,
+            'living_room',
+            LOYAL_RECRUITMENT_CUTOFF_AT - (index + 1) * DAY,
+        ));
+        const result = evaluateLoyalUserEligibility(snapshot({
+            characters: [
+                character('preset-sully-v2'),
+                character('char-custom', [{ id: 'evidence', date: '2026-05-01', summary: 'used' }]),
+            ],
+            memoryNodes: nodes,
+        }));
+
+        expect(result.metrics.palaceNodes).toBe(21);
+        expect(result.deepUserChannelPassed).toBe(true);
+        expect(result.qualificationPath).toBe('deep');
+    });
+
+    it('没有非默认角色时，即使记忆宫殿超过二十也不进入深度通道', () => {
+        const nodes = Array.from({ length: 21 }, (_, index) => node(
+            `n-${index}`,
+            'living_room',
+            LOYAL_RECRUITMENT_CUTOFF_AT - (index + 1) * DAY,
+        ));
+        const result = evaluateLoyalUserEligibility(snapshot({ memoryNodes: nodes }));
+
+        expect(result.metrics.hasQualifiedCustomCharacter).toBe(false);
+        expect(result.deepUserChannelPassed).toBe(false);
+        expect(result.passed).toBe(false);
+    });
+
+    it('三个角色各活跃一天不能冒充任意单个角色活跃三天', () => {
+        const messages = [
+            ...userMessages([-30], 3, 'preset-sully-v2'),
+            ...userMessages([-20], 3, 'char-a'),
+            ...userMessages([-10], 3, 'char-b'),
+        ];
+        const result = evaluateLoyalUserEligibility(snapshot({
+            characters: [character('preset-sully-v2'), character('char-a'), character('char-b')],
+            messages,
+        }));
+
+        expect(result.metrics.maxPreCutoffCharacterActiveDays).toBe(1);
+        expect(result.deepUserChannelPassed).toBe(false);
+        expect(result.passed).toBe(false);
     });
 
     it('一天内集中刷消息无法跨过最近一个月活跃硬门槛', () => {
