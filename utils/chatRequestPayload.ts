@@ -279,6 +279,8 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
         !!isListeningTogether,
         musicCfg,
         recentTrackSwitch,
+        // 单聊场景：开启备忘录管理能力（教 AI 用 [[MEMO_ADD/EDIT/DEL:...]] 标签）
+        { memoManagement: true },
     );
     let systemPrompt = parts.stable;
     let volatileTail = parts.volatileState;

@@ -35,6 +35,7 @@ export enum AppID {
   Handbook = 'handbook', // 手账 — 跨角色聚合的生活留痕本（LLM 代笔 + 角色生活流陪伴）
   QQBridge = 'qq_bridge', // QQ 桥接 — 通过 NapCat 把 QQ 私聊接入当前角色，共享 IndexedDB 上下文
   HotNews = 'hot_news', // 热点 — 分时段召回的多平台热榜可视化（决定角色可能聊起的话题）
+  Memo = 'memo', // 备忘录 — 每个角色独立的随手记/待办（AI 在单聊里可读写，用户视角可看可改可删）
   VRWorld = 'vrworld', // 彼方 — 角色自主登入的虚拟世界（定时驱动，房间里看小说/听歌/留言，产出活动卡注入聊天+记忆）
   CharCreatorDev = 'char_creator_dev', // 捏脸系统开发模式 — 仅开发模式可见，向捏人器指定类目追加自定义部件
   WorldHome = 'world_home', // 家园 — 同世界观多角色共同生活的大世界（观测驱动演绎，每角色独立 LLM 调用 + NPC 世界引擎）
@@ -391,6 +392,29 @@ export interface CharacterBuff {
   emoji?: string;
   color?: string;    // hex, e.g. '#f87171'
   description?: string;  // 用户可读的简短说明（给用户看的，不是给AI的）
+}
+
+/**
+ * 角色备忘录 —— AI 自己的随手记 / 待办，每个角色独立存一份，上限 10 条。
+ * - 单聊场景：AI 能看到自己的备忘录，也能用 [[MEMO_ADD/EDIT/DEL:...]] 标签增删改
+ * - 主动消息 / 通话 / 小小窝：AI 只读看得到，不能改（标签在这些场景不执行）
+ * - 用户视角：新建独立「备忘录」App，可看可改可删（不区分场景）
+ *
+ * 字段：
+ *   - content: 短句，限 200 字（AI 写超长时后处理管线会截断）
+ *   - type:    note=常规短句 / todo=待办
+ *   - status:  active=进行中 / done=已划掉
+ *   - tags:    自由文本数组，AI/用户都能加
+ *   - createdAt/updatedAt: 时间戳，AI 看到的「最后修改时间」取自 updatedAt
+ */
+export interface CharacterMemo {
+  id: string;
+  content: string;
+  type: 'note' | 'todo';
+  status: 'active' | 'done';
+  tags: string[];
+  createdAt: number;
+  updatedAt: number;
 }
 
 // 实时上下文配置 - 让AI角色感知真实世界
@@ -2208,6 +2232,10 @@ export interface CharacterProfile {
   // 让角色强化时间观念、主动匹配现实世界时间。关掉后不再注入这组提示词
   // （注意：历史消息本身仍带时间戳，关掉后弱化程度取决于模型自身理解）。
   timeAwarenessEnabled?: boolean;
+
+  /** 角色自己的备忘录（最多 10 条）。AI 在单聊里可读写，其他场景只读。
+   *  详见 CharacterMemo 接口注释。用户在「备忘录」App 里可看可改可删。 */
+  memos?: CharacterMemo[];
 
   // 自定义时区（异国恋 / 角色身处异国等场景）。与「时间感知强化」完全独立、可任意组合：
   // 开启后，注入给该角色的「当前时间 / 消息时间戳 / 夜间判断」都按 customTimezone 折算，

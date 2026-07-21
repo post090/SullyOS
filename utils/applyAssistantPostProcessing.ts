@@ -30,6 +30,7 @@ import { DB } from './db';
 import { ChatParser } from './chatParser';
 import { NotionManager, FeishuManager, XhsNote } from './realtimeContext';
 import { enqueuePendingDiary, removePendingDiary } from './pendingDiary';
+import { parseMemoDirectives, applyMemoDirectives, stripMemoTags } from './memos';
 import { XhsMcpClient } from './xhsMcpClient';
 import { safeFetchJson } from './safeApi';
 import { extractHtmlBlocks } from './htmlPrompt';
@@ -1176,6 +1177,35 @@ export async function applyAssistantPostProcessing(
     }
 
     aiContent = aiContent.replace(/\[\[READ_NOTE:.*?\]\]/g, '').trim();
+
+    // 5.9c Handle Memos (角色备忘录增删改)
+    // 仅单聊路径会注入「标签使用说明」(chatPrompts.buildSystemPromptParts options.memoManagement=true)，
+    // 主动消息 / 通话 / 小小窝路径都不会教 AI 用这些标签，理论上不会在这里出现。
+    // 但保险起见：检测到标签就执行（哪怕非单聊场景也执行——AI 主动写就让它写，不破坏角色一致性）。
+    // skipSecondPassLLM=true (push 路径) 时也执行：备忘录是纯本地副作用，不需要二轮 LLM。
+    const memoDirectives = parseMemoDirectives(aiContent);
+    if (memoDirectives.length > 0) {
+        try {
+            const before = char.memos || [];
+            const result = applyMemoDirectives(before, memoDirectives);
+            // 落库
+            char.memos = result.newMemos;
+            await DB.saveCharacter(char);
+            // 日志（用户面板不可见，开发者可见）
+            const summary = `+${result.added} ~${result.edited} -${result.deleted}` +
+                (result.rejected.length > 0 ? ` (rejected ${result.rejected.length})` : '');
+            console.log(`🗒️ [Memo] ${char.name} 备忘录变更: ${summary}`);
+            if (result.added > 0 || result.edited > 0 || result.deleted > 0) {
+                addToast(`🗒️ ${char.name} 更新了备忘录`, 'success');
+            }
+            result.rejected.forEach(r => {
+                console.warn(`🗒️ [Memo] 拒绝指令:`, r.directive, '→', r.reason);
+            });
+        } catch (e) {
+            console.error('🗒️ [Memo] 处理失败:', e);
+        }
+    }
+    aiContent = stripMemoTags(aiContent);
 
     // 5.10 Handle XHS (小红书) Actions
     const xhsConf = resolveXhsConfig(char, realtimeConfig);

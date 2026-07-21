@@ -17,6 +17,7 @@ import { resolveCharTimeZone, nowInTimeZone } from './timezone';
 import { buildLifeRecordInjection } from './lifeRecords';
 import { buildTaskSupervisionContext, buildTaskCommandGuide } from './taskContextInjector';
 import { getCharNameById } from './charNameRegistry';
+import { renderMemosForPrompt, MEMO_MAX_COUNT } from './memos';
 
 // 语音格式指导按当前 TTS 服务商三选一：用 MiniMax 才注入 MiniMax 那套（含 <#秒#> 停顿标记），
 // 用鱼声注入鱼声版（方括号 cue [laughing]/[whispering]…），用 ElevenLabs 注入 v3 版（[laugh]/[whisper]…）。
@@ -205,7 +206,8 @@ export const ChatPrompts = {
         // 任务监督注入粒度控制：
         //  - undefined / { taskCommandGuide: true }（默认）：注入任务状态 + 操作命令说明（私聊用）
         //  - { taskCommandGuide: false }：只注入任务状态，不教 LLM 命令语法（主动消息用，省 token）
-        options?: { taskCommandGuide?: boolean },
+        //  - { memoManagement: true }：注入备忘录管理能力说明（仅单聊用；其他场景只读不教）
+        options?: { taskCommandGuide?: boolean; memoManagement?: boolean },
     ): Promise<{ stable: string; volatileState: string; recencyTail: string }> => {
         // ── 分段计时（定位瓶颈用）──
         const perfT0 = performance.now();
@@ -471,6 +473,12 @@ ${groupLogStr}\n`;
         baseSystemPrompt += feishuDiaryText;
         baseSystemPrompt += notionNotesText;
         baseSystemPrompt += lifeRecordText;
+
+        // 备忘录管理能力（仅单聊场景注入；其他场景只读，由 buildCoreContext 注入列表本身）
+        // 空备忘录也注入——让 AI 知道这个能力存在、什么时候想用就用
+        if (options?.memoManagement) {
+            baseSystemPrompt += `\n${renderMemoInstructionsOnly()}\n\n`;
+        }
 
         // 彼方常驻设定：仅对启用了「彼方」的角色注入。让角色在聊天里始终知道彼方是什么，
         // 不再依赖累积的 vr_card 动态 / 记忆总结（那些会被压缩、丢掉"彼方=VR游戏"的框定，
