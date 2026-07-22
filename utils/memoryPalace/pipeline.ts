@@ -315,7 +315,7 @@ export async function retrieveMemories(
     userName?: string,
     remoteVectorConfig?: RemoteVectorConfig,
     charName?: string,
-): Promise<string> {
+): Promise<import('./formatter').ExpandAndFormatResult> {
     // ── 分段计时：定位 memoryPalace 到底是网络慢还是计算慢 ──
     // tag: NET = 远端 API RTT；IDB = IndexedDB 读写；CPU = 纯本地计算
     const perfRetrieveT0 = performance.now();
@@ -426,7 +426,7 @@ export async function retrieveMemories(
                   .join('\n')
                   .slice(0, 2000);
 
-        if (effectiveSpikes.length === 0 && !contextQuery.trim() && !fallbackQuery.trim()) return '';
+        if (effectiveSpikes.length === 0 && !contextQuery.trim() && !fallbackQuery.trim()) return { text: '', items: [] };
 
         // ─── 调试日志：打印所有 query ─────────────────────────
         console.groupCollapsed(`🏰 [Retrieve] ═══ 检索开始 ═══`);
@@ -767,7 +767,7 @@ export async function retrieveMemories(
 
         if (results.length === 0) {
             console.log(`🏰 [Retrieve] 混合搜索 + 日期路径均无结果，跳过记忆注入`);
-            return '';
+            return { text: '', items: [] };
         }
 
         // 3. 扩散激活
@@ -898,11 +898,11 @@ export async function retrieveMemories(
             .join(' ');
         console.log(`⏱ [retrieveMemories] total=${perfTotal}ms | NET=${byKind.NET}ms IDB=${byKind.IDB}ms CPU=${byKind.CPU}ms | ${detail}`);
 
-        return formatted;
+        return formatted; // ExpandAndFormatResult { text, items }
 
     } catch (err: any) {
         console.error(`❌ [Retrieve] 检索记忆失败:`, err.message);
-        return '';
+        return { text: '', items: [] };
     }
 }
 
@@ -938,7 +938,7 @@ function getEmbeddingConfig(charEmbeddingConfig?: any): EmbeddingConfig | null {
 }
 
 export async function injectMemoryPalace(
-    char: { memoryPalaceEnabled?: boolean; embeddingConfig?: any; activeBuffs?: any[]; personalityStyle?: string; ruminationTendency?: number; id: string; name?: string; memoryPalaceInjection?: string; roomPlatesInjection?: string },
+    char: { memoryPalaceEnabled?: boolean; embeddingConfig?: any; activeBuffs?: any[]; personalityStyle?: string; ruminationTendency?: number; id: string; name?: string; memoryPalaceInjection?: string; roomPlatesInjection?: string; memoryPalaceRecalled?: import('./formatter').RecalledMemoryItem[] },
     recentMessages?: Message[],
     queryHint?: string,
     userName?: string,
@@ -976,8 +976,11 @@ export async function injectMemoryPalace(
             getRemoteVectorConfig(),
             char.name,
         );
+        // retrieveMemories 返回 { text, items }；空结果（没召回任何东西）时
+        // 旧 memoryPalaceInjection 残留必须被冲掉，所以空字符串也赋值。
         if (context) {
-            char.memoryPalaceInjection = context;
+            char.memoryPalaceInjection = context.text;
+            char.memoryPalaceRecalled = context.items;
         }
     } catch (e: any) {
         console.warn(`🏰 [MemoryPalace] injectMemoryPalace failed: ${e.message}`);
@@ -1541,7 +1544,7 @@ export async function processNewMessages(
 ): Promise<PipelineResult | null> {
     // 并发锁：同一角色同时只能跑一次
     if (processingLocks.has(charId)) {
-        console.warn(`🏰 [Pipeline] 跳过：${charName} 已有处理任务在运行`);
+        console.log(`🏰 [Pipeline] 跳过：${charName} 已有处理任务在运行`);
         return makeSkipResult('lock');
     }
     processingLocks.add(charId);
@@ -1558,7 +1561,7 @@ export async function processNewMessages(
         const totalCount = textMessages.length;
 
         if (totalCount <= HOT_ZONE_SIZE) {
-            console.warn(`🏰 [Pipeline] 跳过：消息总数 ${totalCount} <= 热区 ${HOT_ZONE_SIZE}，无需处理`);
+            console.log(`🏰 [Pipeline] 跳过：消息总数 ${totalCount} <= 热区 ${HOT_ZONE_SIZE}，无需处理`);
             return makeSkipResult('hot_zone');
         }
 
@@ -1572,7 +1575,7 @@ export async function processNewMessages(
 
         const minThreshold = force ? 10 : BUFFER_THRESHOLD;
         if (buffer.length < minThreshold) {
-            console.warn(`🏰 [Pipeline] 跳过：缓冲区 ${buffer.length} 条 < 阈值 ${minThreshold}（hwm=${lastProcessedId}, hotZone起始id=${hotZoneStartId}）`);
+            console.log(`🏰 [Pipeline] 跳过：缓冲区 ${buffer.length} 条 < 阈值 ${minThreshold}（hwm=${lastProcessedId}, hotZone起始id=${hotZoneStartId}）`);
             return makeSkipResult('threshold');
         }
 

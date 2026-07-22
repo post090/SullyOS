@@ -1117,7 +1117,7 @@ export const useChatAI = ({
                 data = await safeFetchJson(`${baseUrl}/chat/completions`, {
                     method: 'POST', headers,
                     body: JSON.stringify(baseReqBody)
-                }, 2, 120_000, { appName: '消息', charId: char.id, charName: char.name, purpose: '聊天回复' }, streamHooks);
+                }, 2, 120_000, { appName: '消息', charId: char.id, charName: char.name, purpose: '聊天回复', recalledMemories: charForGen.memoryPalaceRecalled?.slice() }, streamHooks);
             } catch (e) {
                 // 仅通用 MCP、且没有和其他工具模式混用时降级。部分 OpenAI 兼容中转
                 // 会对携带 tools 的请求直接回 4xx，而不是忽略参数；去掉 tools 后让

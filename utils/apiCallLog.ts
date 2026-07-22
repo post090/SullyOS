@@ -29,6 +29,19 @@ export interface ApiCallMeta {
     charName?: string;
     /** 具体用途，如 '聊天回复' / '情绪评估' / '记忆提取'，可空 */
     purpose?: string;
+    /** 本次请求向量化记忆宫殿召回了哪些条目（仅 memoryPalace 开启的聊天请求才有） */
+    recalledMemories?: RecalledMemorySnapshot[];
+}
+
+/** 记忆召回快照（进 API 调用详情面板展示用，不进 prompt）。 */
+export interface RecalledMemorySnapshot {
+    id: string;
+    room: string;
+    preview: string;
+    score: number;
+    importance: number;
+    isBox: boolean;
+    isPinned: boolean;
 }
 
 /** 落库的一条记录。 */

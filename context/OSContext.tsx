@@ -2025,7 +2025,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           const missSaturatedPre = currentMissCountPre >= MISS_THRESHOLD;
           if (!missSaturatedPre && sinceUserContact < intervalMs) {
               drainQueuedProactive();
-              console.warn(`🔇 [Proactive/Global] 间隔闸 skip for ${char.name}: 用户 ${Math.round(sinceUserContact/60000)}min 前刚联系过，间隔 ${Math.round(intervalMs/60000)}min 未满`);
+              console.log(`🔇 [Proactive/Global] 间隔闸 skip for ${char.name}: 用户 ${Math.round(sinceUserContact/60000)}min 前刚联系过，间隔 ${Math.round(intervalMs/60000)}min 未满`);
               return;
           }
 
@@ -2035,7 +2035,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           if (maxAttempts > 0 && noResponseCount >= maxAttempts) {
               // 再确认用户确实没回（用户回了会在 sendMessage 里清零 noResponseCount，这里双保险）
               drainQueuedProactive();
-              console.warn(`🛑 [Proactive/Global] 节制闸 stop for ${char.name}: 已找 ${noResponseCount}/${maxAttempts} 次用户未回应，停止直到用户再说话`);
+              console.log(`🛑 [Proactive/Global] 节制闸 stop for ${char.name}: 已找 ${noResponseCount}/${maxAttempts} 次用户未回应，停止直到用户再说话`);
               return;
           }
 
@@ -2049,7 +2049,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           if (inSleepWindow && !missSaturated) {
               // 在睡眠窗口内且思念值没满 → 静默 skip，不攒思念（她在睡觉）
               drainQueuedProactive();
-              console.warn(`🔇 [Proactive/Global] Skipped for ${char.name}: 睡眠窗口 ${sleepStart}-${sleepEnd}, miss=${currentMissCount}`);
+              console.log(`🔇 [Proactive/Global] Skipped for ${char.name}: 睡眠窗口 ${sleepStart}-${sleepEnd}, miss=${currentMissCount}`);
               return;
           }
 

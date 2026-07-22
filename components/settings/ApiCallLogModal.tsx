@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import Modal from '../os/Modal';
 import { DB } from '../../utils/db';
 import { isSameCoreModel, isFixedPromptBlockLabel } from '../../utils/apiCallLog';
-import type { ApiCallLogEntry, PromptBlockStat } from '../../utils/apiCallLog';
+import type { ApiCallLogEntry, PromptBlockStat, RecalledMemorySnapshot } from '../../utils/apiCallLog';
 
 interface ApiCallLogModalProps {
     isOpen: boolean;
@@ -224,6 +224,9 @@ const ApiCallLogModal: React.FC<ApiCallLogModalProps> = ({ isOpen, onClose }) =>
                                 {expanded && e.promptBreakdown && (
                                     <PromptBreakdownView blocks={e.promptBreakdown} promptTokens={e.promptTokens} />
                                 )}
+                                {expanded && e.recalledMemories && e.recalledMemories.length > 0 && (
+                                    <RecalledMemoriesView items={e.recalledMemories} />
+                                )}
                             </div>
                         );
                     })}
@@ -298,5 +301,52 @@ const Field: React.FC<{ label: string; value?: string; accent?: boolean; mono?: 
         </span>
     </div>
 );
+
+/** 房间名 → 中文显示名（和记忆宫殿 App 的房间标签一致）。 */
+const ROOM_LABELS: Record<string, string> = {
+    living: '客厅',
+    bedroom: '卧室',
+    attic: '阁楼',
+    self_room: '自我',
+    windowsill: '窗台',
+    yard: '院子',
+    kitchen: '厨房',
+};
+
+/** 记忆召回列表：展开后展示本次请求向量化召回了哪些条目，不进 prompt、仅供排查。 */
+const RecalledMemoriesView: React.FC<{ items: RecalledMemorySnapshot[] }> = ({ items }) => {
+    const sorted = [...items].sort((a, b) => {
+        // 便利贴置顶最前，其余按 score 降序
+        if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
+        return b.score - a.score;
+    });
+    return (
+        <div className="mt-2 pt-2 border-t border-slate-100 space-y-1" onClick={(ev) => ev.stopPropagation()}>
+            <div className="flex items-baseline justify-between">
+                <span className="text-[10px] font-bold text-slate-400">
+                    🏰 向量记忆召回 · 共 {items.length} 条
+                </span>
+                <span className="text-[9px] text-slate-300">按综合得分排序</span>
+            </div>
+            {sorted.map((m, i) => {
+                const roomLabel = ROOM_LABELS[m.room] || m.room;
+                const tag = m.isPinned ? '📌 置顶' : m.isBox ? '📦 事件盒' : '记忆';
+                return (
+                    <div key={`${m.id}-${i}`} className="min-w-0 rounded-lg bg-slate-50/80 px-2 py-1.5">
+                        <div className="flex items-baseline justify-between gap-2 min-w-0 mb-0.5">
+                            <span className="text-[10px] font-bold text-slate-500 shrink-0">
+                                #{i + 1} [{roomLabel}] {tag}
+                            </span>
+                            <span className="text-[9px] font-mono text-slate-400 shrink-0">
+                                {m.isPinned ? '—' : `分 ${m.score}`} · 重要 {m.importance}
+                            </span>
+                        </div>
+                        <p className="text-[10px] text-slate-600 leading-relaxed line-clamp-2">{m.preview}</p>
+                    </div>
+                );
+            })}
+        </div>
+    );
+};
 
 export default ApiCallLogModal;

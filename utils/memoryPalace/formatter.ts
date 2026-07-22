@@ -46,6 +46,30 @@ interface RenderItem {
  *    - 独立记忆 → 单条展开
  * 3. 占用 MAX_OUTPUT_ITEMS 个名额，按 score 排序后按房间渲染
  */
+export interface RecalledMemoryItem {
+    /** 节点 id（盒子里第一个命中的活节点 id；便利贴是 pinned 节点 id） */
+    id: string;
+    /** 房间 key（客厅/卧室/阁楼/自我/窗台/院子/厨房） */
+    room: string;
+    /** 内容预览（前 60 字，超出截断加 …） */
+    preview: string;
+    /** 综合得分（0-1） */
+    score: number;
+    /** 重要性 1-10 */
+    importance: number;
+    /** 是否事件盒（true=盒子摘要+活节点合并，false=独立节点） */
+    isBox: boolean;
+    /** 是否便利贴置顶 */
+    isPinned: boolean;
+}
+
+export interface ExpandAndFormatResult {
+    /** 注入 prompt 的完整 markdown 文本（向后兼容旧 string 用法） */
+    text: string;
+    /** 召回条目摘要（用于 API 调用详情展示，不进 prompt） */
+    items: RecalledMemoryItem[];
+}
+
 export async function expandAndFormat(
     results: ScoredMemory[],
     charId: string,
@@ -53,7 +77,7 @@ export async function expandAndFormat(
     userName?: string,
     /** 注入上限。rerank 启用时传 15 + topN，让 rerank 额外召回的不被切。 */
     maxOutputItems: number = DEFAULT_MAX_OUTPUT_ITEMS,
-): Promise<string> {
+): Promise<ExpandAndFormatResult> {
     const MAX_OUTPUT_ITEMS = maxOutputItems;
     // 0. 加载便利贴置顶记忆（pinnedUntil > now，不占 15 条名额）
     const now = Date.now();
@@ -234,7 +258,38 @@ export async function expandAndFormat(
 
     const trimmed = output.trim();
     console.log(`🏰 [MemoryPalace] 本次召回 ${finalItems.length} 条 (${boxHits.size} 个 box + ${standaloneItems.length} 条独立)，${trimmed.length} 字`);
-    return trimmed;
+
+    // 构建召回摘要：finalItems（已含独立+盒子，按 score 排序）+ pinnedNodes（便利贴）
+    const previewText = (s: string): string => {
+        const clean = (s || '').replace(/\s+/g, ' ').trim();
+        return clean.length > 60 ? clean.slice(0, 60) + '…' : clean;
+    };
+    const items: RecalledMemoryItem[] = finalItems.map(it => {
+        const isBox = it.debugLabel.startsWith('box ');
+        return {
+            id: it.sourceIds[0] || it.debugLabel,
+            room: it.room,
+            preview: previewText(it.body),
+            score: Math.round(it.score * 1000) / 1000,
+            importance: it.importance,
+            isBox,
+            isPinned: false,
+        };
+    });
+    // 便利贴置顶条目（不占 15 名额，单独标注）
+    for (const p of pinnedNodes) {
+        items.push({
+            id: p.id,
+            room: p.room,
+            preview: previewText(p.content),
+            score: 1, // 便利贴置顶不参与打分排序
+            importance: p.importance,
+            isBox: false,
+            isPinned: true,
+        });
+    }
+
+    return { text: trimmed, items };
 }
 
 // ─── 子渲染：单条独立记忆 ──────────────────────────────

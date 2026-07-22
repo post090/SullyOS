@@ -2349,6 +2349,8 @@ export interface CharacterProfile {
   ruminationTendency?: number;  // 反刍倾向 0-1，默认 0.3
   memoryPalaceInjection?: string;  // 记忆宫殿检索结果，注入到 System Prompt（运行时填充，不持久化）
   roomPlatesInjection?: string;    // 房间门牌（常驻语义层），注入到 System Prompt（运行时填充，来源 room_plates 表）
+  /** 记忆宫殿召回条目摘要（运行时填充，不持久化）。供 API 调用详情面板展示"召回了哪些条目"，不进 prompt。 */
+  memoryPalaceRecalled?: import('./utils/memoryPalace/formatter').RecalledMemoryItem[];
 
   // 自我领悟词条【已冻结，只读遗留】：旧版消化把 self_room 领悟追加到这里，
   // 只进不出、无上限、无合并。新领悟的归宿已改为 self_room 门牌（room_plates），
