@@ -90,6 +90,11 @@ export function setApiCallAmbientContext(meta: ApiCallMeta): void {
     ambientMeta = meta || {};
 }
 
+/** Snapshot the current fallback context when a request starts. */
+export function getApiCallAmbientContext(): ApiCallMeta {
+    return { ...ambientMeta };
+}
+
 function hasMeta(meta?: ApiCallMeta): boolean {
     return !!meta && Object.values(meta).some((v) => v != null && v !== '');
 }

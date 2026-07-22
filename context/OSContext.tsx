@@ -18,7 +18,7 @@ import { runWorldEpisode, rerollWorldCharBeat } from '../utils/worldHome/engine'
 import { migrateWorldDaySegs } from '../utils/worldHome/prompts';
 import { ChatParser } from '../utils/chatParser';
 import { safeFetchJson } from '../utils/safeApi';
-import { recordApiCall, setApiCallAmbientContext } from '../utils/apiCallLog';
+import { getApiCallAmbientContext, recordApiCall, setApiCallAmbientContext } from '../utils/apiCallLog';
 import { isGlobalStreamEnabled, upgradeChatBodyToStream, assembleUpgradedResponse } from '../utils/streamUpgrade';
 import { rewriteStaleWorkerUrl } from '../utils/proxyWorker';
 import { INSTALLED_APPS } from '../constants';
@@ -936,6 +936,10 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           
           const urlStr = String(resource);
           const fetchStartedAt = Date.now();
+          // Bare fetch calls do not carry explicit metadata. Snapshot the active
+          // App now; reading the ambient value after a long response would label
+          // the request as whichever App the user navigated to in the meantime.
+          const ambientMetaAtStart = getApiCallAmbientContext();
 
           // 采样参数兼容层（详见 utils/samplingParamCompat.ts）：
           // 某些模型废弃了 temperature/top_p/top_k，带上直接 400。这里在所有 /chat/completions
@@ -1012,7 +1016,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               // 正文 44s 才灌完，卡片却记成 6.5s（实测误导排查）。clone 与调用方并行消费同一
               // 条流，text() 完成时刻 ≈ 真实收完时刻。
               if (urlStr.includes('/chat/completions')) {
-                  const meta = (config as any)?.__sullyMeta;
+                  const meta = (config as any)?.__sullyMeta || ambientMetaAtStart;
                   const body = (sendArgs[1] as any)?.body;
                   const status = response.status;
                   const ok = response.ok;
@@ -1072,7 +1076,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           } catch (err: any) {
               // Network Failure
               if (urlStr.includes('/chat/completions')) {
-                  recordApiCall({ url: urlStr, body: (sendArgs[1] as any)?.body, ok: false, meta: (config as any)?.__sullyMeta, durationMs: Date.now() - fetchStartedAt });
+                  recordApiCall({ url: urlStr, body: (sendArgs[1] as any)?.body, ok: false, meta: (config as any)?.__sullyMeta || ambientMetaAtStart, durationMs: Date.now() - fetchStartedAt });
               }
               setSystemLogs(prev => [{
                   id: `log-${Date.now()}`,
