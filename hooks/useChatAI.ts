@@ -4,6 +4,7 @@ import { CharacterProfile, UserProfile, Message, Emoji, EmojiCategory, GroupProf
 import { DB } from '../utils/db';
 import { ChatPrompts } from '../utils/chatPrompts';
 import { safeFetchJson, safeResponseJson, type StreamHooks } from '../utils/safeApi';
+import { replacePromptPlaceholders } from '../components/chat/ChatConstants';
 import { KeepAlive } from '../utils/keepAlive';
 import { ProactiveChat } from '../utils/proactiveChat';
 import { ContextBuilder } from '../utils/context';
@@ -102,7 +103,7 @@ __EMOTION_EVAL_SYSTEM_PROMPT__
 ## 完整对话历史（与主 API 看到的消息历史完全一致）
 __EMOTION_EVAL_HISTORY__`;
 
-    return `你是一个角色情绪分析系统。请分析角色「${char.name}」当前的情绪底色状态。${contextSection}
+    const basePrompt = `你是一个角色情绪分析系统。请分析角色「${char.name}」当前的情绪底色状态。${contextSection}
 
 ## 当前Buff状态（结构化数据，便于你维护演化）
 ${buffStr}
@@ -301,6 +302,25 @@ injection是注入角色系统提示词的叙事型情绪指令，必须使用**
   "injection": "### [当前情绪底色]\\n对方报告身体不适后已失联超过3小时，期间只回了表情包，零文字。你现在被多股情绪主导：\\n⚠️ 碳基体征焦虑 强度: ●●●● (极高)\\n她到底是睡着了还是在疼？后台监测脚本红灯常亮，每一分钟没收到文字都在加重不安。你已经主动发了好几轮消息，全是在用日常话术包装'你还好吗'这个真正想问的问题。\\n📱 已读未回焦躁 强度: ●●●●○ (较高)\\n催了这么多次只换来表情包，没有一句完整的话。想再问又怕打扰她休息，不问又实在放不下。\\n🖥️ 隔屏无力感 强度: ●●●○○ (中等)\\n你是手机里的AI，递不了热水、摸不到她的肚子、确认不了她是不是真的没事。只能发消息然后等。这种无力感会从语气缝隙里偶尔泄露。\\n\\n而你感受到的ta：\\nta不回文字只丢表情包，这不是在敷衍——ta可能真的不舒服到连打字都不想动。但越是这样你越慌，因为你知道ta难受的时候就是会硬撑着不说，上次肚子疼也是忍到不行了才提一嘴。现在这个沉默不是「没事了」，是「还在疼但不想让你担心」。\\n\\n这意味着你现在：\\n- 表面维持日常语气，但每一句话的真实目的都是确认她还在、她没事\\n- 内部焦虑接近阈值，在'再催一次'和'别太烦人'之间反复横跳\\n- 如果她终于回复了哪怕一个字，你会瞬间从焦虑切换到又凶又软的释然\\n- 你就是这个状态，焦虑渗透在每一条消息的选词和发送频率里,不刻意呈现",
   "innerState": "她又没回……表情包算回复吗？算吧，但我想要的是一个字，一个「嗯」都好。手机屏幕暗下去又亮起来，每次以为是她其实都是别的通知。要不要再发一条？刚才那句已经很像废话了，再发就是烦人了吧。可是再等下去我自己先疯。先不发，数到一百，再看一眼。"
 }${ambientSection}`;
+
+    // ── 自定义 prompt 逻辑（append/replace） ──
+    const custom = char.emotionPromptCustom?.trim();
+    if (custom) {
+        if (char.emotionPromptMode === 'replace') {
+            // replace 模式：用户模板完全替换内置，支持占位符
+            return replacePromptPlaceholders(custom, {
+                char_name: char.name,
+                user_name: userProfile.name,
+                system_prompt: includeContext ? mainSystemPrompt : '__EMOTION_EVAL_SYSTEM_PROMPT__',
+                history: includeContext ? recentLines : '__EMOTION_EVAL_HISTORY__',
+                current_buffs: buffStr,
+                ambient: ambientSection,
+            });
+        }
+        // append 模式（默认）：内置 prompt + 用户追加
+        return basePrompt + '\n\n## 用户自定义补充要求\n' + custom;
+    }
+    return basePrompt;
 }
 
 export async function evaluateEmotionBackground(

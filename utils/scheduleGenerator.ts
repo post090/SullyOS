@@ -6,6 +6,7 @@ import { safeResponseJson, extractContent, extractJson } from './safeApi';
 import { injectMemoryPalace } from './memoryPalace/pipeline';
 import { getLocalDateKey } from './localDate';
 import { getLocalDailySchedule } from './dailySchedule';
+import { replacePromptPlaceholders } from '../components/chat/ChatConstants';
 
 interface ApiConfig {
     baseUrl: string;
@@ -77,7 +78,7 @@ function buildLifestylePrompt(
     dayOfWeek: string,
     chatHistoryBlock: string,
 ): string {
-    return `${baseContext}
+    const basePrompt = `${baseContext}
 ${chatHistoryBlock}
 ## Task: 生成角色的今日日程 + 意识流独白
 
@@ -154,6 +155,22 @@ ${chatHistoryBlock ? `**重要：上面给了你最近和「${user.name}」的�
 }
 
 仅输出JSON，不要其他内容。`;
+
+    // ── 自定义 prompt 逻辑（append/replace） ──
+    const custom = char.schedulePromptCustom?.trim();
+    if (custom) {
+        if (char.schedulePromptMode === 'replace') {
+            return replacePromptPlaceholders(custom, {
+                char_name: char.name,
+                user_name: user.name,
+                date: today,
+                day_of_week: dayOfWeek,
+                chat_history: chatHistoryBlock,
+            });
+        }
+        return basePrompt + '\n\n## 用户自定义补充要求\n' + custom;
+    }
+    return basePrompt;
 }
 
 /**
@@ -169,7 +186,7 @@ function buildMindfulPrompt(
     dayOfWeek: string,
     chatHistoryBlock: string,
 ): string {
-    return `${baseContext}
+    const basePrompt = `${baseContext}
 ${chatHistoryBlock}
 ## Task: 生成角色的今日思绪 + 意识流独白
 
@@ -226,6 +243,22 @@ ${chatHistoryBlock ? `**重要：上面给了你最近和「${user.name}」的�
 }
 
 仅输出JSON，不要其他内容。`;
+
+    // ── 自定义 prompt 逻辑（append/replace） ──
+    const custom = char.schedulePromptCustom?.trim();
+    if (custom) {
+        if (char.schedulePromptMode === 'replace') {
+            return replacePromptPlaceholders(custom, {
+                char_name: char.name,
+                user_name: user.name,
+                date: today,
+                day_of_week: dayOfWeek,
+                chat_history: chatHistoryBlock,
+            });
+        }
+        return basePrompt + '\n\n## 用户自定义补充要求\n' + custom;
+    }
+    return basePrompt;
 }
 
 /**

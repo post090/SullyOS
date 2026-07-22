@@ -127,6 +127,8 @@ interface ChatModalsProps {
     onAddApiPreset?: (name: string, config: APIConfig) => void;
     onSaveEmotion?: (config: NonNullable<CharacterProfile['emotionConfig']>) => void;
     onClearBuffs?: () => void;
+    /** 保存角色字段（用于 prompt 自定义） */
+    onUpdateCharacter?: (patch: Partial<CharacterProfile>) => void;
 }
 
 interface TranslationLanguagePickerProps {
@@ -236,7 +238,7 @@ const ChatModals: React.FC<ChatModalsProps> = ({
     onScheduleStyleChange, onPlayTheater,
     isScheduleFeatureEnabled, onToggleScheduleFeature,
     isMemoryPalaceEnabled, isVectorizing, vectorizePendingCount, vectorizeProgress, onForceVectorize,
-    apiPresets, onAddApiPreset, onSaveEmotion, onClearBuffs,
+    apiPresets, onAddApiPreset, onSaveEmotion, onClearBuffs, onUpdateCharacter,
 }) => {
     const bgInputRef = useRef<HTMLInputElement>(null);
     const [visibilitySelection, setVisibilitySelection] = useState<Set<string>>(new Set());
@@ -1045,6 +1047,7 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                                     addApiPreset={onAddApiPreset}
                                     onSave={onSaveEmotion}
                                     onClearBuffs={onClearBuffs}
+                                    onUpdateCharacter={onUpdateCharacter}
                                 />
                             )}
                         </>

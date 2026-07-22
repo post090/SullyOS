@@ -2923,6 +2923,10 @@ const Chat: React.FC = () => {
                     updateCharacter(char.id, { activeBuffs: [], buffInjection: '' });
                     addToast('情绪状态已清除', 'info');
                 }}
+                onUpdateCharacter={(patch) => {
+                    updateCharacter(char.id, patch);
+                    addToast('提示词已保存', 'success');
+                }}
              />
 
              {/* 小剧场播放器：窥视某个日程时段的角色行为演出 */}

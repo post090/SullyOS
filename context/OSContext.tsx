@@ -3409,6 +3409,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               chatActiveArchivePromptId: (mode === 'text_only' || mode === 'full') ? (localStorage.getItem('chat_active_archive_prompt_id') || undefined) : undefined,
               characterRefinePrompts: (mode === 'text_only' || mode === 'full') ? (() => { try { const s = localStorage.getItem('character_refine_prompts'); return s ? JSON.parse(s) : undefined; } catch { return undefined; } })() : undefined,
               characterActiveRefinePromptId: (mode === 'text_only' || mode === 'full') ? (localStorage.getItem('character_active_refine_prompt_id') || undefined) : undefined,
+              promptTemplates: (mode === 'text_only' || mode === 'full') ? (() => { try { const s = localStorage.getItem('os_prompt_templates'); return s ? JSON.parse(s) : undefined; } catch { return undefined; } })() : undefined,
 
               // UI / 偏好
               scheduleAppTheme: (mode === 'text_only' || mode === 'full') ? (localStorage.getItem('schedule_app_theme') || undefined) : undefined,
@@ -4103,6 +4104,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           if (typeof data.chatActiveArchivePromptId === 'string') localStorage.setItem('chat_active_archive_prompt_id', data.chatActiveArchivePromptId);
           if (data.characterRefinePrompts !== undefined) localStorage.setItem('character_refine_prompts', JSON.stringify(data.characterRefinePrompts));
           if (typeof data.characterActiveRefinePromptId === 'string') localStorage.setItem('character_active_refine_prompt_id', data.characterActiveRefinePromptId);
+          if (data.promptTemplates !== undefined) localStorage.setItem('os_prompt_templates', JSON.stringify(data.promptTemplates));
 
           // Restore UI / 偏好
           if (typeof data.scheduleAppTheme === 'string') localStorage.setItem('schedule_app_theme', data.scheduleAppTheme);

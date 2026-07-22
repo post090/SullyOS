@@ -145,3 +145,70 @@ export const DEFAULT_ARCHIVE_PROMPTS = [
 \${rawLog}`
     }
 ];
+
+// ── 情绪/日程 prompt 自定义：占位符替换 + 默认规则概要 ──
+
+/**
+ * 把用户写的 prompt 模板里的 {{占位符}} 替换成实际值。
+ * replace 模式下用。
+ */
+export function replacePromptPlaceholders(
+    template: string,
+    vars: Record<string, string>,
+): string {
+    return template.replace(/\{\{(\w+)\}\}/g, (match, key: string) => {
+        return Object.prototype.hasOwnProperty.call(vars, key) ? vars[key] : match;
+    });
+}
+
+/** 情绪 prompt 占位符说明（UI 展示给用户） */
+export const EMOTION_PROMPT_PLACEHOLDERS: { key: string; desc: string }[] = [
+    { key: '{{char_name}}', desc: '角色名' },
+    { key: '{{user_name}}', desc: '用户名' },
+    { key: '{{system_prompt}}', desc: '主 API 的完整 system prompt（角色设定+印象档案+世界书+记忆宫殿等）' },
+    { key: '{{history}}', desc: '完整对话历史（与主 API 看到的消息历史一致）' },
+    { key: '{{current_buffs}}', desc: '当前 buff 状态 JSON' },
+    { key: '{{ambient}}', desc: '小屋生活动态段（可选）' },
+];
+
+/** 日程 prompt 占位符说明（UI 展示给用户） */
+export const SCHEDULE_PROMPT_PLACEHOLDERS: { key: string; desc: string }[] = [
+    { key: '{{char_name}}', desc: '角色名' },
+    { key: '{{user_name}}', desc: '用户名' },
+    { key: '{{date}}', desc: '今天日期（如 2026-07-22）' },
+    { key: '{{day_of_week}}', desc: '星期几（如 周三）' },
+    { key: '{{chat_history}}', desc: '近期聊天历史摘要' },
+];
+
+/** 情绪 prompt 默认规则概要（append 模式下供用户参考，非完整 prompt） */
+export const EMOTION_PROMPT_RULES_SUMMARY = `内置情绪评估 prompt 包含以下规则段：
+
+1. 上下文注入：主 API 的完整 system prompt + 完整对话历史
+2. 当前 Buff 状态：结构化 JSON
+3. 任务说明：评估情绪底色 + 感受对方情绪 + 写内心独白（innerState 50-150字）
+4. 风格专属规则：意识系（不虚构物理活动）/ 生活系（独立个体不围着用户转）
+5. 情绪模式识别：镜像型（愤怒/委屈）→ 跟进情绪；锚定型（焦虑/恐惧）→ 事实+稳定；承接型（抑郁/疲惫）→ 陪伴不催
+6. 语气转折信号清单：降温信号（变短/标点变化/替代回复）+ 升温信号（重复担忧/灾难化）
+7. 禁止阴谋论式解读（红线）：不把简单需求过度解读成隐藏动机
+8. 关心边界：普通不完美选择不进说教模式；同一关心点整会话最多触达一次
+9. 找补机制：判越界看对方怎么接，不看角色说了什么
+10. Buff 生命周期：克制新增/主动淡化/融合异化/总量上限5/intensity随对话变化
+11. 输出格式：changed + buffs + injection + innerState 的 JSON
+
+追加模式下，你的补充要求会拼在这些规则之后。`;
+
+/** 日程 prompt 默认规则概要（append 模式下供用户参考） */
+export const SCHEDULE_PROMPT_RULES_SUMMARY = `内置日程生成 prompt 包含以下规则段：
+
+1. 上下文注入：角色设定 + 近期聊天历史 + 今天日期/星期
+2. 任务：生成 5-7 个时间段的日程表（startTime/activity/description/emoji）
+3. 关键要求：
+   - 紧贴角色设定和近期经历
+   - 丰富不套路，允许无所事事
+   - 严禁 user 主语 slot（日程是角色的，不是围着用户转）
+4. 意识流独白：morning/afternoon/evening 三段，60-120 字
+5. 风格差异：生活系有完整日常活动；意识系不虚构物理活动
+6. 输出格式：slots 数组 + flowNarrative 对象的 JSON
+
+追加模式下，你的补充要求会拼在这些规则之后。`;
+

@@ -386,6 +386,15 @@ export interface ApiPreset {
   config: APIConfig;
 }
 
+/** 情绪/日程提示词模板（全局共通，存 localStorage） */
+export interface PromptTemplate {
+  id: string;
+  name: string;
+  type: 'emotion' | 'schedule';
+  mode: 'append' | 'replace';
+  content: string;
+}
+
 export interface CharacterBuff {
   id: string;
   name: string;      // internal key, e.g. 'reconciliation_fragile'
@@ -2306,6 +2315,14 @@ export interface CharacterProfile {
       model: string;
     };
   };
+  /** 情绪评估 prompt 自定义模式：append=在内置后追加（默认），replace=完全替换（用占位符） */
+  emotionPromptMode?: 'append' | 'replace';
+  /** 情绪评估 prompt 自定义内容（append 模式=追加文本，replace 模式=含占位符的完整模板） */
+  emotionPromptCustom?: string;
+  /** 日程生成 prompt 自定义模式：append=在内置后追加（默认），replace=完全替换（用占位符） */
+  schedulePromptMode?: 'append' | 'replace';
+  /** 日程生成 prompt 自定义内容 */
+  schedulePromptCustom?: string;
 
   // 记忆宫殿 (Memory Palace)
   memoryPalaceEnabled?: boolean;
