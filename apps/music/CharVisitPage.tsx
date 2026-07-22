@@ -603,30 +603,39 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
           </div>
         )}
 
-        {/* 偏爱艺人（starred=灵魂艺人，头像左上角金星；有 picUrl 显示真人头像） */}
+        {/* 偏爱艺人（starred=灵魂艺人，头像底部金星勋章；有 picUrl 显示真人头像） */}
         {initialized && (profile?.signatureArtists?.length || 0) > 0 && (
           <div className="mx-4 mt-4">
             <SectionTitle>钟爱的人</SectionTitle>
             <div className="flex items-center gap-2 overflow-x-auto pb-2 shizuku-scrollbar">
               {profile!.signatureArtists.map((a, i) => (
-                <div key={i} className="shrink-0 text-center relative">
-                  <button
-                    onClick={() => setEditingEntry({ kind: 'artist', index: i })}
-                    className="w-14 h-14 rounded-full flex items-center justify-center text-white mx-auto relative overflow-hidden active:scale-95 transition-transform"
-                    style={{ background: gradientFor(`gradient-0${(i % 6) + 1}`) }}
-                  >
-                    {a.picUrl ? (
-                      <img src={toHttps(a.picUrl)} alt={a.name} className="w-full h-full object-cover" />
-                    ) : (
-                      <span className="text-lg font-semibold" style={{ fontFamily: `'Noto Serif', serif` }}>
-                        {a.name.slice(0, 1)}
-                      </span>
-                    )}
+                <div key={i} className="shrink-0 text-center relative pt-1">
+                  {/* 头像 + 星星：星星是 button 外的兄弟元素，绝对定位贴头像底边中央，
+                      不受 button 的 overflow-hidden 裁切，也不跟底下名字抢位置 */}
+                  <div className="relative w-14 h-14 mx-auto">
+                    <button
+                      onClick={() => setEditingEntry({ kind: 'artist', index: i })}
+                      className="w-full h-full rounded-full flex items-center justify-center text-white relative overflow-hidden active:scale-95 transition-transform"
+                      style={{ background: gradientFor(`gradient-0${(i % 6) + 1}`) }}
+                    >
+                      {a.picUrl ? (
+                        <img src={toHttps(a.picUrl)} alt={a.name} className="w-full h-full object-cover" />
+                      ) : (
+                        <span className="text-lg font-semibold" style={{ fontFamily: `'Noto Serif', serif` }}>
+                          {a.name.slice(0, 1)}
+                        </span>
+                      )}
+                    </button>
                     {a.starred && (
-                      <Star size={14} weight="fill" className="absolute top-0.5 left-0.5 text-amber-300 drop-shadow-sm z-10" />
+                      <div className="absolute left-1/2 -translate-x-1/2 -bottom-1.5 z-20 pointer-events-none">
+                        <div className="w-5 h-5 rounded-full flex items-center justify-center"
+                          style={{ background: '#fff', boxShadow: '0 1px 4px rgba(0,0,0,0.15)' }}>
+                          <Star size={13} weight="fill" className="text-amber-400" />
+                        </div>
+                      </div>
                     )}
-                  </button>
-                  <div className="text-[10px] mt-1 max-w-[60px] truncate" style={{ color: C.muted }}>{a.name}</div>
+                  </div>
+                  <div className="text-[10px] mt-2 max-w-[60px] truncate" style={{ color: C.muted }}>{a.name}</div>
                 </div>
               ))}
             </div>
@@ -658,22 +667,31 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
               <SectionTitle>钟爱的原声</SectionTitle>
               <div className="flex items-center gap-2 overflow-x-auto pb-2 shizuku-scrollbar">
                 {profile!.favoriteSoundtracks!.map((s, i) => (
-                  <div key={i} className="shrink-0 text-center relative">
-                    <button
-                      onClick={() => setEditingEntry({ kind: 'soundtrack', index: i })}
-                      className="w-14 h-14 rounded-2xl flex items-center justify-center text-white mx-auto relative overflow-hidden active:scale-95 transition-transform"
-                      style={{ background: gradientFor(`gradient-0${(i % 6) + 1}`) }}
-                    >
-                      {s.coverUrl ? (
-                        <img src={toHttps(s.coverUrl)} alt={s.title} className="w-full h-full object-cover" />
-                      ) : (
-                        <span>{typeIcon(s.type)}</span>
-                      )}
+                  <div key={i} className="shrink-0 text-center relative pt-1">
+                    {/* 封面 + 星星：星星是 button 外的兄弟元素，绝对定位贴封面底边中央，
+                        不受 button 的 overflow-hidden 裁切，也不跟底下名字抢位置 */}
+                    <div className="relative w-14 h-14 mx-auto">
+                      <button
+                        onClick={() => setEditingEntry({ kind: 'soundtrack', index: i })}
+                        className="w-full h-full rounded-2xl flex items-center justify-center text-white relative overflow-hidden active:scale-95 transition-transform"
+                        style={{ background: gradientFor(`gradient-0${(i % 6) + 1}`) }}
+                      >
+                        {s.coverUrl ? (
+                          <img src={toHttps(s.coverUrl)} alt={s.title} className="w-full h-full object-cover" />
+                        ) : (
+                          <span>{typeIcon(s.type)}</span>
+                        )}
+                      </button>
                       {s.starred && (
-                        <Star size={14} weight="fill" className="absolute top-0.5 left-0.5 text-amber-300 drop-shadow-sm z-10" />
+                        <div className="absolute left-1/2 -translate-x-1/2 -bottom-1.5 z-20 pointer-events-none">
+                          <div className="w-5 h-5 rounded-full flex items-center justify-center"
+                            style={{ background: '#fff', boxShadow: '0 1px 4px rgba(0,0,0,0.15)' }}>
+                            <Star size={13} weight="fill" className="text-amber-400" />
+                          </div>
+                        </div>
                       )}
-                    </button>
-                    <div className="text-[10px] mt-1 max-w-[72px] truncate" style={{ color: C.muted }}>{s.title}</div>
+                    </div>
+                    <div className="text-[10px] mt-2 max-w-[72px] truncate" style={{ color: C.muted }}>{s.title}</div>
                     <div className="text-[8px] tracking-wider" style={{ color: C.muted, opacity: 0.6 }}>{typeLabel(s.type)}</div>
                   </div>
                 ))}
