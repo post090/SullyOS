@@ -1238,6 +1238,28 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               detail: stacks || objDump || msg
           }, ...prev.slice(0, 49)]);
       };
+
+      // ── warn 捕获：只抓"自动化子系统"标签的 warn，进用户可见日志面板 ──
+      // 背景：记忆宫殿/主动消息等自动化子系统静默 skip 时只打 console.log/warn，
+      // APK 用户没法 logcat，出问题（如"自动没处理 260 条对话"）完全无从排查。
+      // 全量 warn 太噪（React/Capacitor 库 warn 一堆），只抓业务标签的：
+      //   [Pipeline] 记忆宫殿、[Proactive 主动消息、[Embedding]、[Vector]、[EventBox]、[Digestion]
+      // 这些 warn 已经走 originalConsoleWarn，这里只是额外镜像进面板。
+      const originalConsoleWarn = console.warn;
+      const AUTO_SUBSYS_TAG_RE = /\[(Pipeline|Proactive|Embedding|Vector|EventBox|Digestion|Consolidation|Palace)/;
+      console.warn = (...args) => {
+          originalConsoleWarn(...args);
+          const msg = args.map(toStringSafe).join(' ');
+          if (!AUTO_SUBSYS_TAG_RE.test(msg)) return;
+          setSystemLogs(prev => [{
+              id: `log-${Date.now()}-${Math.random()}`,
+              timestamp: Date.now(),
+              type: 'warn',
+              source: 'Automation',
+              message: msg.substring(0, 100),
+              detail: msg
+          }, ...prev.slice(0, 49)]);
+      };
   }, []);
 
   const clearLogs = () => setSystemLogs([]);
@@ -2003,7 +2025,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           const missSaturatedPre = currentMissCountPre >= MISS_THRESHOLD;
           if (!missSaturatedPre && sinceUserContact < intervalMs) {
               drainQueuedProactive();
-              console.log(`🔇 [Proactive/Global] 间隔闸 skip for ${char.name}: 用户 ${Math.round(sinceUserContact/60000)}min 前刚联系过，间隔 ${Math.round(intervalMs/60000)}min 未满`);
+              console.warn(`🔇 [Proactive/Global] 间隔闸 skip for ${char.name}: 用户 ${Math.round(sinceUserContact/60000)}min 前刚联系过，间隔 ${Math.round(intervalMs/60000)}min 未满`);
               return;
           }
 
@@ -2013,7 +2035,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           if (maxAttempts > 0 && noResponseCount >= maxAttempts) {
               // 再确认用户确实没回（用户回了会在 sendMessage 里清零 noResponseCount，这里双保险）
               drainQueuedProactive();
-              console.log(`🛑 [Proactive/Global] 节制闸 stop for ${char.name}: 已找 ${noResponseCount}/${maxAttempts} 次用户未回应，停止直到用户再说话`);
+              console.warn(`🛑 [Proactive/Global] 节制闸 stop for ${char.name}: 已找 ${noResponseCount}/${maxAttempts} 次用户未回应，停止直到用户再说话`);
               return;
           }
 
@@ -2027,7 +2049,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           if (inSleepWindow && !missSaturated) {
               // 在睡眠窗口内且思念值没满 → 静默 skip，不攒思念（她在睡觉）
               drainQueuedProactive();
-              console.log(`🔇 [Proactive/Global] Skipped for ${char.name}: 睡眠窗口 ${sleepStart}-${sleepEnd}, miss=${currentMissCount}`);
+              console.warn(`🔇 [Proactive/Global] Skipped for ${char.name}: 睡眠窗口 ${sleepStart}-${sleepEnd}, miss=${currentMissCount}`);
               return;
           }
 

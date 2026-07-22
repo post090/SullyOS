@@ -142,7 +142,7 @@ const StatusBar: React.FC = () => {
                       <div key={log.id} className="border-b border-white/10 pb-2 mb-2 last:border-0 last:mb-0 last:pb-0">
                           <div className="flex justify-between items-start text-white/50 mb-1">
                               <span>[{new Date(log.timestamp).toLocaleTimeString()}]</span>
-                              <span className={`uppercase font-bold ${log.type === 'error' ? 'text-red-400' : 'text-orange-400'}`}>{log.type}</span>
+                              <span className={`uppercase font-bold ${log.type === 'error' ? 'text-red-400' : log.type === 'warn' ? 'text-amber-400' : 'text-orange-400'}`}>{log.type}</span>
                           </div>
                           <div className="text-white font-bold mb-1 break-words">{log.message}</div>
                           {log.detail && (

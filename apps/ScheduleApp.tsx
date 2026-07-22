@@ -753,10 +753,16 @@ const ScheduleApp: React.FC = () => {
                             {form.frequency === 'monthly' && (
                                 <div>
                                     <label className={`text-[10px] font-bold uppercase tracking-widest ${theme.textSub} block mb-2`}>每月几号</label>
-                                    <div className={`flex items-center gap-2 px-3 py-2.5 rounded-xl ${currentThemeMode === 'minimal' ? 'bg-[#eef2f6] shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff]' : currentThemeMode === 'soft' ? 'bg-pink-50 border border-pink-100' : 'bg-slate-800'}`}>
-                                        <span className={`text-xs ${theme.textSub}`}>每月</span>
-                                        <input type="number" min="1" max="31" value={form.monthlyDay} onChange={e => setForm({ ...form, monthlyDay: Math.max(1, Math.min(31, parseInt(e.target.value) || 1)) })} className={`flex-1 bg-transparent text-sm focus:outline-none ${theme.text} w-full`} />
-                                        <span className={`text-xs ${theme.textSub}`}>号（1-31，大月没 31 号的月份自动跳过）</span>
+                                    <p className={`text-[10px] ${theme.textSub} mb-2 leading-relaxed`}>选某号；2 月或小月没 30/31 号时自动跳过该月。</p>
+                                    <div className="grid grid-cols-7 gap-1.5">
+                                        {Array.from({ length: 31 }, (_, i) => i + 1).map(d => {
+                                            const active = form.monthlyDay === d;
+                                            return (
+                                                <button key={d} onClick={() => setForm({ ...form, monthlyDay: d })} className={`aspect-square rounded-lg text-xs font-bold transition-all ${active ? (currentThemeMode === 'minimal' ? 'shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff] text-indigo-600' : currentThemeMode === 'soft' ? 'bg-pink-400 text-white' : 'bg-cyan-500 text-slate-950') : theme.buttonGhost}`}>
+                                                    {d}
+                                                </button>
+                                            );
+                                        })}
                                     </div>
                                 </div>
                             )}

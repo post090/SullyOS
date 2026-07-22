@@ -44,7 +44,7 @@ export enum AppID {
 export interface SystemLog {
     id: string;
     timestamp: number;
-    type: 'error' | 'network' | 'system';
+    type: 'error' | 'network' | 'system' | 'warn';
     source: string;
     message: string;
     detail?: string;
