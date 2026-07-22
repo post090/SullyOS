@@ -193,8 +193,9 @@ const ScheduleApp: React.FC = () => {
     const [form, setForm] = useState<{
         title: string;
         type: 'recurring' | 'oneshot';
-        frequency: 'daily' | 'weekly' | 'custom';
+        frequency: 'daily' | 'weekly' | 'monthly' | 'custom';
         customDays: number[];
+        monthlyDay: number;
         targetCount: number;
         deadline: string;
         supervisorId: string;
@@ -207,6 +208,7 @@ const ScheduleApp: React.FC = () => {
         type: 'recurring',
         frequency: 'daily',
         customDays: [1, 3, 5],
+        monthlyDay: 1,
         targetCount: 7,
         deadline: '',
         supervisorId: '',
@@ -337,7 +339,8 @@ const ScheduleApp: React.FC = () => {
             type: form.type,
             frequency: form.type === 'recurring' ? form.frequency : undefined,
             targetCount: form.frequency === 'weekly' ? form.targetCount : undefined,
-            customDays: form.frequency === 'custom' ? form.customDays : undefined,
+            customDays: form.type === 'recurring' && (form.frequency === 'weekly' || form.frequency === 'custom') ? form.customDays : undefined,
+            monthlyDay: form.type === 'recurring' && form.frequency === 'monthly' ? form.monthlyDay : undefined,
             deadline: form.type === 'oneshot' ? form.deadline : undefined,
             history: [],
             rewardCoins: Math.max(0, form.rewardCoins),
@@ -358,7 +361,7 @@ const ScheduleApp: React.FC = () => {
     const resetForm = () => {
         setForm({
             title: '', type: 'recurring', frequency: 'daily',
-            customDays: [1, 3, 5], targetCount: 7, deadline: '',
+            customDays: [1, 3, 5], monthlyDay: 1, targetCount: 7, deadline: '',
             supervisorId: '', reminderEnabled: true, reminderTime: '20:00',
             rewardCoins: 10, penaltyCoins: 3,
         });
@@ -398,6 +401,18 @@ const ScheduleApp: React.FC = () => {
         setTasks(prev => prev.map(t => t.id === task.id ? updated : t));
         addToast('已归档', 'info');
         syncTaskReminders().catch(err => console.warn('[ScheduleApp] syncTaskReminders after archive failed:', err));
+    };
+
+    /** 更新已有契约的字段（截止时间、提醒时间等）。保留 history 不动。 */
+    const handleUpdateTask = async (taskId: string, patch: Partial<TaskV2>) => {
+        const task = tasks.find(t => t.id === taskId);
+        if (!task) return;
+        const updated: TaskV2 = { ...task, ...patch };
+        await DB.saveTaskV2(updated);
+        setTasks(prev => prev.map(t => t.id === taskId ? updated : t));
+        setDetailTask(updated);
+        addToast('契约已更新', 'success');
+        syncTaskReminders().catch(err => console.warn('[ScheduleApp] syncTaskReminders after update failed:', err));
     };
 
     const handleDelete = async (id: string) => {
@@ -708,16 +723,21 @@ const ScheduleApp: React.FC = () => {
                             <div>
                                 <label className={`text-[10px] font-bold uppercase tracking-widest ${theme.textSub} block mb-2`}>频率</label>
                                 <div className="flex gap-2">
-                                    {(['daily', 'weekly', 'custom'] as const).map(f => (
+                                    {(['daily', 'weekly', 'monthly'] as const).map(f => (
                                         <button key={f} onClick={() => setForm({ ...form, frequency: f })} className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${form.frequency === f ? (currentThemeMode === 'minimal' ? 'shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff] text-indigo-600' : currentThemeMode === 'soft' ? 'bg-pink-100 text-pink-600' : 'bg-cyan-900/40 text-cyan-400') : theme.textSub}`}>
-                                            {f === 'daily' ? '每天' : f === 'weekly' ? '每周' : '自定义'}
+                                            {f === 'daily' ? '每天' : f === 'weekly' ? '每周' : '每月'}
                                         </button>
                                     ))}
                                 </div>
                             </div>
-                            {form.frequency === 'custom' && (
+                            {form.frequency === 'weekly' && (
                                 <div>
                                     <label className={`text-[10px] font-bold uppercase tracking-widest ${theme.textSub} block mb-2`}>每周哪几天</label>
+                                    <div className="flex gap-1.5 mb-2">
+                                        <button onClick={() => setForm({ ...form, customDays: [1, 2, 3, 4, 5] })} className={`px-2 py-1 rounded-md text-[10px] font-bold transition-all ${theme.buttonGhost}`}>工作日</button>
+                                        <button onClick={() => setForm({ ...form, customDays: [0, 6] })} className={`px-2 py-1 rounded-md text-[10px] font-bold transition-all ${theme.buttonGhost}`}>周末</button>
+                                        <button onClick={() => setForm({ ...form, customDays: [0, 1, 2, 3, 4, 5, 6] })} className={`px-2 py-1 rounded-md text-[10px] font-bold transition-all ${theme.buttonGhost}`}>全选</button>
+                                    </div>
                                     <div className="flex gap-1.5">
                                         {[['一', 1], ['二', 2], ['三', 3], ['四', 4], ['五', 5], ['六', 6], ['日', 0]].map(([label, dow]) => {
                                             const active = form.customDays.includes(dow as number);
@@ -727,6 +747,16 @@ const ScheduleApp: React.FC = () => {
                                                 </button>
                                             );
                                         })}
+                                    </div>
+                                </div>
+                            )}
+                            {form.frequency === 'monthly' && (
+                                <div>
+                                    <label className={`text-[10px] font-bold uppercase tracking-widest ${theme.textSub} block mb-2`}>每月几号</label>
+                                    <div className={`flex items-center gap-2 px-3 py-2.5 rounded-xl ${currentThemeMode === 'minimal' ? 'bg-[#eef2f6] shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff]' : currentThemeMode === 'soft' ? 'bg-pink-50 border border-pink-100' : 'bg-slate-800'}`}>
+                                        <span className={`text-xs ${theme.textSub}`}>每月</span>
+                                        <input type="number" min="1" max="31" value={form.monthlyDay} onChange={e => setForm({ ...form, monthlyDay: Math.max(1, Math.min(31, parseInt(e.target.value) || 1)) })} className={`flex-1 bg-transparent text-sm focus:outline-none ${theme.text} w-full`} />
+                                        <span className={`text-xs ${theme.textSub}`}>号（1-31，大月没 31 号的月份自动跳过）</span>
                                     </div>
                                 </div>
                             )}
@@ -813,6 +843,7 @@ const ScheduleApp: React.FC = () => {
                         now={now}
                         onSkip={() => { handleSkip(detailTask); setDetailTaskId(null); }}
                         onArchive={() => { handleArchive(detailTask); setDetailTaskId(null); }}
+                        onUpdate={(patch) => handleUpdateTask(detailTask.id, patch)}
                     />
                 )}
             </Modal>
@@ -875,7 +906,10 @@ const TaskCard: React.FC<{
     const streak = task.type === 'recurring' ? computeCurrentStreak(task, now) : 0;
     const weekDone = task.type === 'recurring' ? computeThisWeekDoneCount(task, now) : 0;
     const weekTarget = task.type === 'recurring'
-        ? (task.frequency === 'custom' ? (task.customDays?.length || 0) : (task.targetCount || 7))
+        ? (task.frequency === 'weekly' ? (task.customDays?.length || 7)
+            : task.frequency === 'custom' ? (task.customDays?.length || 0)
+            : task.frequency === 'monthly' ? 1
+            : (task.targetCount || 7))
         : 0;
 
     // 进度条：recurring 显示本周进度；oneshot 显示距离 deadline 还剩几天
@@ -889,7 +923,13 @@ const TaskCard: React.FC<{
     let metaLine = '';
     if (task.type === 'recurring') {
         if (task.frequency === 'daily') metaLine = '每天';
-        else if (task.frequency === 'weekly') metaLine = `每周目标 ${task.targetCount || 7} 次`;
+        else if (task.frequency === 'weekly') {
+            const names = ['日', '一', '二', '三', '四', '五', '六'];
+            metaLine = task.customDays?.length
+                ? '周' + task.customDays.map(d => names[d]).join('·')
+                : `每周目标 ${task.targetCount || 7} 次`;
+        }
+        else if (task.frequency === 'monthly') metaLine = `每月 ${task.monthlyDay || 1} 号`;
         else if (task.frequency === 'custom') {
             const names = ['日', '一', '二', '三', '四', '五', '六'];
             metaLine = '周' + (task.customDays || []).map(d => names[d]).join('·');
@@ -1039,7 +1079,8 @@ const TaskDetail: React.FC<{
     now: Date;
     onSkip: () => void;
     onArchive: () => void;
-}> = ({ task, theme, themeMode, supervisor, now, onSkip, onArchive }) => {
+    onUpdate: (patch: Partial<TaskV2>) => void;
+}> = ({ task, theme, themeMode, supervisor, now, onSkip, onArchive, onUpdate }) => {
     const streak = computeCurrentStreak(task, now);
     const best = computeBestStreak(task);
     const recent30 = useMemo(() => {
@@ -1059,6 +1100,21 @@ const TaskDetail: React.FC<{
         return [...task.history].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8);
     }, [task]);
 
+    // 行内编辑截止时间 / 提醒开关 + 提醒时间
+    const [editingDeadline, setEditingDeadline] = useState(false);
+    const [draftDeadline, setDraftDeadline] = useState(task.deadline || '');
+    const [editingReminder, setEditingReminder] = useState(false);
+    const [draftReminderEnabled, setDraftReminderEnabled] = useState(task.reminderEnabled);
+    const [draftReminderTime, setDraftReminderTime] = useState(task.reminderTime || '20:00');
+
+    // 频率展示行
+    const freqLine = task.type === 'recurring'
+        ? (task.frequency === 'daily' ? '每天'
+            : task.frequency === 'weekly' ? (task.customDays?.length ? '周' + task.customDays.map(d => '日一二三四五六'[d]).join('·') : `每周目标 ${task.targetCount || 7} 次`)
+            : task.frequency === 'monthly' ? `每月 ${task.monthlyDay || 1} 号`
+            : task.customDays?.length ? '周' + task.customDays.map(d => '日一二三四五六'[d]).join('·') : '自定义')
+        : '';
+
     return (
         <div className="space-y-5">
             {/* 头部 */}
@@ -1066,6 +1122,71 @@ const TaskDetail: React.FC<{
                 <div className={`text-base font-bold ${theme.text}`}>{task.title}</div>
                 <div className={`text-[10px] ${theme.textSub} mt-1`}>
                     {supervisor?.name || '—'} 监督 · 创建于 {new Date(task.createdAt).toLocaleDateString()}
+                </div>
+            </div>
+
+            {/* 频率 + 截止时间 + 提醒时间（行内可编辑） */}
+            <div className={`space-y-3 p-3 rounded-xl ${themeMode === 'minimal' ? 'shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff]' : themeMode === 'soft' ? 'bg-pink-50/60' : 'bg-slate-800/60'}`}>
+                {/* 频率 */}
+                {task.type === 'recurring' && (
+                    <div className="flex items-center justify-between">
+                        <span className={`text-[10px] font-bold uppercase tracking-widest ${theme.textSub}`}>频率</span>
+                        <span className={`text-xs ${theme.text}`}>{freqLine}</span>
+                    </div>
+                )}
+
+                {/* 截止时间（oneshot 可编辑） */}
+                {task.type === 'oneshot' && (
+                    <div>
+                        <div className="flex items-center justify-between">
+                            <span className={`text-[10px] font-bold uppercase tracking-widest ${theme.textSub}`}>截止时间</span>
+                            {!editingDeadline ? (
+                                <button onClick={() => { setDraftDeadline(task.deadline || ''); setEditingDeadline(true); }} className={`text-xs ${theme.text} underline`}>
+                                    {task.deadline ? new Date(task.deadline).toLocaleString() : '未设置 · 点此修改'}
+                                </button>
+                            ) : (
+                                <div className="flex items-center gap-2">
+                                    <input type="datetime-local" value={draftDeadline} onChange={e => setDraftDeadline(e.target.value)} className={`px-2 py-1 text-xs rounded-lg focus:outline-none ${themeMode === 'minimal' ? 'bg-[#eef2f6] shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff]' : themeMode === 'soft' ? 'bg-white border border-pink-100' : 'bg-slate-900 border border-slate-700'}`} />
+                                    <button onClick={() => { onUpdate({ deadline: draftDeadline || undefined }); setEditingDeadline(false); }} className={`px-2 py-1 text-[10px] font-bold rounded-md ${theme.buttonPrimary}`}>保存</button>
+                                    <button onClick={() => setEditingDeadline(false)} className={`px-2 py-1 text-[10px] font-bold rounded-md ${theme.buttonGhost}`}>取消</button>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
+
+                {/* 提醒（可编辑） */}
+                <div>
+                    {!editingReminder ? (
+                        <div className="flex items-center justify-between">
+                            <span className={`text-[10px] font-bold uppercase tracking-widest ${theme.textSub}`}>到点提醒</span>
+                            <button onClick={() => { setDraftReminderEnabled(task.reminderEnabled); setDraftReminderTime(task.reminderTime || '20:00'); setEditingReminder(true); }} className={`text-xs ${theme.text} underline`}>
+                                {task.reminderEnabled ? `每天 ${task.reminderTime}` : '关闭 · 点此修改'}
+                            </button>
+                        </div>
+                    ) : (
+                        <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                                <span className={`text-[10px] font-bold uppercase tracking-widest ${theme.textSub}`}>到点提醒</span>
+                                <button onClick={() => setDraftReminderEnabled(!draftReminderEnabled)} className={`relative w-10 h-6 rounded-full transition-colors ${draftReminderEnabled ? (themeMode === 'soft' ? 'bg-pink-400' : themeMode === 'minimal' ? 'bg-indigo-400' : 'bg-cyan-500') : 'bg-slate-400/40'}`}>
+                                    <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform ${draftReminderEnabled ? 'translate-x-4' : ''}`} />
+                                </button>
+                            </div>
+                            {draftReminderEnabled && (
+                                <div className="flex items-center gap-2">
+                                    <input type="time" value={draftReminderTime} onChange={e => setDraftReminderTime(e.target.value)} className={`px-2 py-1 text-xs rounded-lg focus:outline-none ${themeMode === 'minimal' ? 'bg-[#eef2f6] shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff]' : themeMode === 'soft' ? 'bg-white border border-pink-100' : 'bg-slate-900 border border-slate-700'}`} />
+                                    <button onClick={() => { onUpdate({ reminderEnabled: draftReminderEnabled, reminderTime: draftReminderEnabled ? draftReminderTime : undefined }); setEditingReminder(false); }} className={`px-2 py-1 text-[10px] font-bold rounded-md ${theme.buttonPrimary}`}>保存</button>
+                                    <button onClick={() => setEditingReminder(false)} className={`px-2 py-1 text-[10px] font-bold rounded-md ${theme.buttonGhost}`}>取消</button>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+
+                {/* 奖惩（只读展示） */}
+                <div className="flex items-center justify-between">
+                    <span className={`text-[10px] font-bold uppercase tracking-widest ${theme.textSub}`}>奖惩</span>
+                    <span className={`text-xs ${theme.text}`}>完成 +{task.rewardCoins} · 漏做 -{task.penaltyCoins}</span>
                 </div>
             </div>
 

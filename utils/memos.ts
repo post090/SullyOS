@@ -242,11 +242,14 @@ export function applyMemoDirectives(
     edited: number;
     deleted: number;
     rejected: { directive: MemoDirective; reason: string }[];
+    /** 本轮成功的变更明细（前 5 条供卡片展示） */
+    changedItems: { op: 'add' | 'edit' | 'del'; content: string; status?: string }[];
 } {
     const rejected: { directive: MemoDirective; reason: string }[] = [];
     // 工作副本（renderMemosForPrompt 按 updatedAt 倒序展示，所以序号也按这个排序）
     const sorted = [...(memos || [])].sort((a, b) => b.updatedAt - a.updatedAt);
     let added = 0, edited = 0, deleted = 0;
+    const changedItems: { op: 'add' | 'edit' | 'del'; content: string; status?: string }[] = [];
 
     for (const d of directives) {
         if (d.kind === 'add') {
@@ -265,6 +268,7 @@ export function applyMemoDirectives(
                 updatedAt: now,
             });
             added++;
+            changedItems.push({ op: 'add', content: d.content, status: 'active' });
         } else if (d.kind === 'edit') {
             const target = sorted[d.index - 1];
             if (!target) {
@@ -277,14 +281,16 @@ export function applyMemoDirectives(
             if (d.tags !== undefined) target.tags = d.tags;
             target.updatedAt = Date.now();
             edited++;
+            changedItems.push({ op: 'edit', content: target.content, status: target.status });
         } else if (d.kind === 'del') {
             const idx = d.index - 1;
             if (idx < 0 || idx >= sorted.length) {
                 rejected.push({ directive: d, reason: `序号 ${d.index} 不存在` });
                 continue;
             }
-            sorted.splice(idx, 1);
+            const removed = sorted.splice(idx, 1)[0];
             deleted++;
+            changedItems.push({ op: 'del', content: removed.content });
         }
     }
 
@@ -294,6 +300,7 @@ export function applyMemoDirectives(
         edited,
         deleted,
         rejected,
+        changedItems,
     };
 }
 

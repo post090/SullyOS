@@ -2959,11 +2959,13 @@ export interface TaskV2 {
     type: 'recurring' | 'oneshot';
 
     // 重复任务字段（type=recurring 时生效）
-    frequency?: 'daily' | 'weekly' | 'custom';
+    frequency?: 'daily' | 'weekly' | 'monthly' | 'custom';
     /** weekly 时一个自然周（周一到周日）的目标次数，默认 7（即每天）；custom 时由 customDays 决定 */
     targetCount?: number;
-    /** custom 时指定周几该做：0=周日、1=周一 ... 6=周六（跟 Date.getDay() 对齐） */
+    /** weekly/custom 时指定周几该做：0=周日、1=周一 ... 6=周六（跟 Date.getDay() 对齐） */
     customDays?: number[];
+    /** monthly 时指定每月几号该做：1-31（大月没 31 号的月份自动跳过） */
+    monthlyDay?: number;
 
     // 一次性任务字段（type=oneshot 时生效）
     deadline?: string;        // ISO 字符串 'YYYY-MM-DDTHH:mm'

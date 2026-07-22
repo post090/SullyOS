@@ -695,10 +695,10 @@ export const useChatAI = ({
         // 解耦，用户切走 Chat 也能看到生成还活着。finally 里派发 end（两条路径都经过）。
         announceChatGen(CHAT_GEN_EVENTS.replyStart, { charId: char.id, charName: char.name });
 
-        // Keep the Service Worker alive while we make potentially long AI calls
-        await KeepAlive.start();
-
         try {
+            // Keep the Service Worker alive while we make potentially long AI calls
+            // 放 try 内：若抛错，finally 仍会派发 replyEnd 清横幅，避免卡 6 分钟 TTL
+            await KeepAlive.start();
             const baseUrl = effectiveApi.baseUrl.replace(/\/+$/, '');
             const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${effectiveApi.apiKey || 'sk-none'}` };
 
@@ -862,6 +862,9 @@ export const useChatAI = ({
                         charId: char.id, charName: char.name,
                         reason: '云端情绪评估超时无回音——worker 可能是旧版（不支持情绪评估），请到 设置→Instant 消息设置 更新 worker 后重试',
                     });
+                    // ChatBroadcast 只监听 emotionEnd 不监听 emotionFailed，
+                    // 不补这行的话横幅会卡住显示"正在感受"直到 2 分钟 TTL 兜底才消失
+                    announceChatGen(CHAT_GEN_EVENTS.emotionEnd, { charId: char.id, charName: char.name });
                 }, 90_000);  // 安全网: 正常情况下 worker 推回 emotion_update 会 fire 'instant-emotion-done' 提前熄灭; 只在 worker 旧版/被杀/推送丢失时兜底.
             }
 

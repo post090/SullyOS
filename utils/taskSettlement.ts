@@ -81,6 +81,11 @@ async function generateSupervisorReaction(
         // 去掉首尾引号 + 括号说明 + 舞台指示
         text = text.replace(/^["'"「『]+|["'"」』]+$/g, '');
         text = text.replace(/[（(][^）)]{0,40}[）)]/g, '').trim();
+        // 过滤 prompt 指令泄漏：弱模型会把约束文本本身当输出回吐
+        // （如"≤30字""一句话（≤30字）""不超过30字""30 characters"），塞进聊天会显示成乱码
+        if (/(?:不超过|≤\s*\d|\d+\s*(?:字|characters?|chars?)|一句话|常用语言|不要有引号|舞台指示|输出要求|must use|one sentence|no quotes)/i.test(text)) {
+            return '';
+        }
         // 截断到 60 字（prompt 要求 30 字，留点宽容度）
         if (text.length > 60) text = text.slice(0, 60);
         return text;
@@ -125,21 +130,23 @@ async function applyCoinDelta(
     }
 }
 
-/** 把监督人的台词塞进对应角色的聊天记录（system 消息，便于用户回看）。 */
-async function injectReactionIntoChat(
-    charId: string,
-    userName: string,
-    taskTitle: string,
-    reaction: string,
-    sceneLabel: string,
-): Promise<void> {
-    if (!reaction) return;
+/**
+ * 把契约事件塞进监督人聊天记录（role=system，带结构化 metadata 供 UI 渲染卡片）。
+ * content 保留可读文本兜底；metadata.source='task-event' 触发卡片渲染。
+ * role=system + type=text → 开启「隐藏系统日志」时自动隐藏。
+ */
+async function injectTaskEventIntoChat(msg: {
+    charId: string;
+    content: string;
+    metadata: Record<string, any>;
+}): Promise<void> {
     try {
         await DB.saveMessage({
-            charId,
+            charId: msg.charId,
             role: 'system',
             type: 'text',
-            content: `[系统: ${sceneLabel} | 契约"${taskTitle}" | ${userName} | 监督人: ${reaction}]`,
+            content: msg.content,
+            metadata: msg.metadata,
         });
     } catch (err) {
         console.warn('[TaskSettlement] inject chat failed:', err);
@@ -173,7 +180,7 @@ export async function runSettlementForTask(
     let coinDelta = 0;
     let archived = false;
     let archiveReason: 'completed' | 'expired' | 'manual' | undefined;
-    const sceneLabels: { charId: string; reaction: string; sceneLabel: string }[] = [];
+    const sceneLabels: { charId: string; reaction: string; sceneLabel: string; coinDelta: number; taskKind: string }[] = [];
 
     const supervisor = characters.find(c => c.id === task.supervisorId);
 
@@ -226,7 +233,7 @@ export async function runSettlementForTask(
 
             // 准备塞聊天 system 消息
             const sceneLabel = sceneLabelByScene(scene);
-            sceneLabels.push({ charId: supervisor.id, reaction, sceneLabel });
+            sceneLabels.push({ charId: supervisor.id, reaction, sceneLabel, coinDelta: amount, taskKind: scene });
         }
         working = applySettlement(working, missedEntries, reactionByDate);
         // 收集新条目（已生成 reaction 的）
@@ -257,18 +264,32 @@ export async function runSettlementForTask(
             await applyCoinDelta(amount, `契约"${task.title}" - 超期失效`, now);
             const e = working.history.find(h => h.date === archive.missedEntry!.date);
             if (e) newEntries.push(e);
-            sceneLabels.push({ charId: supervisor.id, reaction, sceneLabel: '一次性契约超期失效' });
+            sceneLabels.push({ charId: supervisor.id, reaction, sceneLabel: '一次性契约超期失效', coinDelta: -task.penaltyCoins, taskKind: 'oneshot_expired' });
         }
         working = archiveTask(working, 'expired');
         archived = true;
         archiveReason = 'expired';
     }
 
-    // 3. 落库 + 塞聊天 system 消息
+    // 3. 落库 + 塞聊天 system 消息（结构化 metadata，UI 渲染卡片）
     if (newEntries.length || archived) {
         await DB.saveTaskV2(working);
         for (const sl of sceneLabels) {
-            await injectReactionIntoChat(sl.charId, user.name, task.title, sl.reaction, sl.sceneLabel);
+            await injectTaskEventIntoChat({
+                charId: sl.charId,
+                content: `[系统: ${sl.sceneLabel} | 契约"${task.title}" | 监督人 ${supervisor?.name || ''}: ${sl.reaction}]`,
+                metadata: {
+                    source: 'task-event',
+                    taskKind: sl.taskKind,
+                    taskTitle: task.title,
+                    supervisorName: supervisor?.name || '',
+                    supervisorAvatar: supervisor?.avatar,
+                    userName: user.name,
+                    sceneLabel: sl.sceneLabel,
+                    reaction: sl.reaction,
+                    coinDelta: sl.coinDelta,
+                },
+            });
         }
     }
 
@@ -331,10 +352,25 @@ export async function markTaskDone(
         };
     }
 
-    // 6. 落库 + 聊天 system 消息
+    // 6. 落库 + 聊天 system 消息（结构化 metadata，UI 渲染卡片）
     await DB.saveTaskV2(working);
     if (supervisor) {
-        await injectReactionIntoChat(supervisor.id, user.name, task.title, reaction, sceneLabelByScene(scene!));
+        const sl = sceneLabelByScene(scene!);
+        await injectTaskEventIntoChat({
+            charId: supervisor.id,
+            content: `[系统: ${sl} | 契约"${task.title}" | 监督人 ${supervisor.name}: ${reaction}]`,
+            metadata: {
+                source: 'task-event',
+                taskKind: scene,
+                taskTitle: task.title,
+                supervisorName: supervisor.name,
+                supervisorAvatar: supervisor.avatar,
+                userName: user.name,
+                sceneLabel: sl,
+                reaction,
+                coinDelta: amount,
+            },
+        });
     }
 
     const todayStr = `${now.getFullYear()}-${(now.getMonth()+1).toString().padStart(2,'0')}-${now.getDate().toString().padStart(2,'0')}`;
@@ -377,6 +413,8 @@ export async function archiveTaskManual(task: TaskV2): Promise<TaskV2> {
 export async function createTask(
     task: TaskV2,
     userName: string,
+    supervisorName?: string,
+    supervisorAvatar?: string,
 ): Promise<TaskV2> {
     await DB.saveTaskV2(task);
     // 塞一条 system 消息进监督人聊天，让 ta 之后开口时知道这个新契约存在
@@ -388,7 +426,21 @@ export async function createTask(
             charId: task.supervisorId,
             role: 'system',
             type: 'text',
-            content: `[系统: 新契约已建立 | "${task.title}" | 监督人: ${userName} | ${typeText} | 奖励 +${task.rewardCoins} / 漏做 -${task.penaltyCoins}]`,
+            content: `[系统: 新契约已建立 | "${task.title}" | 监督人 ${supervisorName || '？'} 监督 ${userName} | ${typeText} | 奖励 +${task.rewardCoins} / 漏做 -${task.penaltyCoins}]`,
+            metadata: {
+                source: 'task-event',
+                taskKind: 'created',
+                taskTitle: task.title,
+                supervisorName: supervisorName || '',
+                supervisorAvatar,
+                userName,
+                sceneLabel: '新契约已建立',
+                reaction: '',
+                coinDelta: 0,
+                typeText,
+                rewardCoins: task.rewardCoins,
+                penaltyCoins: task.penaltyCoins,
+            },
         });
     } catch (err) {
         console.warn('[TaskSettlement] createTask inject chat failed:', err);

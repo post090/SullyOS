@@ -1198,6 +1198,36 @@ export async function applyAssistantPostProcessing(
             console.log(`🗒️ [Memo] ${char.name} 备忘录变更: ${summary}`);
             if (result.added > 0 || result.edited > 0 || result.deleted > 0) {
                 addToast(`🗒️ ${char.name} 更新了备忘录`, 'success');
+                // 插一条 system 消息到单聊，带结构化 metadata 供 MessageItem 渲染操作摘要卡片。
+                // role=system + type=text → 开启「隐藏系统日志」时自动隐藏。
+                // 列出本轮变更的项目（前 5 条），超过省略。
+                const changes: { op: 'add' | 'edit' | 'del'; content: string; status?: string }[] = [];
+                result.changedItems?.forEach(it => changes.push(it));
+                const changesPreview = changes.slice(0, 5);
+                const moreCount = changes.length - changesPreview.length;
+                const opLabel = (op: string) => op === 'add' ? '新增' : op === 'edit' ? '修改' : '删除';
+                const partsText = changesPreview.map((c, i) => `${i + 1}. [${opLabel(c.op)}] ${c.content}${c.status === 'done' ? ' ✓' : ''}`).join('\n');
+                const fullText = moreCount > 0 ? `${partsText}\n…还有 ${moreCount} 条` : partsText;
+                try {
+                    await DB.saveMessage({
+                        charId: char.id,
+                        role: 'system',
+                        type: 'text',
+                        content: `[系统: ${char.name} 更新了备忘录 | +${result.added} ~${result.edited} -${result.deleted}]`,
+                        metadata: {
+                            source: 'memo-event',
+                            charName: char.name,
+                            charAvatar: char.avatar,
+                            added: result.added,
+                            edited: result.edited,
+                            deleted: result.deleted,
+                            changes: changesPreview,
+                            moreCount,
+                        },
+                    });
+                } catch (msgErr) {
+                    console.warn('🗒️ [Memo] saveMessage for card failed:', msgErr);
+                }
             }
             result.rejected.forEach(r => {
                 console.warn(`🗒️ [Memo] 拒绝指令:`, r.directive, '→', r.reason);

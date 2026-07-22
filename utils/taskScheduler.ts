@@ -55,12 +55,11 @@ export function historyHasEntryFor(history: TaskHistoryEntry[], dateStr: string)
 }
 
 /**
- * 判断 recurring 任务在某天（周几 = date.getDay()）是否"该做"。
+ * 判断 recurring 任务在某天是否"该做"。
  *  - daily：每天都该做
- *  - weekly：每天都该做（targetCount 默认 7）；如果 targetCount < 7，
- *    现在用"该周前几天做"的简单策略——周一到 targetCount 天做（用户设定具体哪几天
- *    的话应该走 custom，weekly 是"每天做但允许漏 targetCount 个"的简化模型）。
- *  - custom：仅 customDays 包含的周几该做
+ *  - weekly：customDays 指定周几该做（0=周日…6=周六）；customDays 为空时默认每天
+ *  - monthly：monthlyDay 指定每月几号该做（大月没 31 号的月份自动跳过）
+ *  - custom：仅 customDays 包含的周几该做（旧数据兼容，UI 不再产生 custom）
  *
  * 注：oneshot 不调用本函数（oneshot 不按日历催，只看 deadline）。
  */
@@ -71,8 +70,11 @@ export function isScheduledDay(task: TaskV2, date: Date): boolean {
         case 'daily':
             return true;
         case 'weekly':
-            // weekly 简化：默认每天都该做，targetCount 仅作"每周目标"显示用
-            return true;
+            // weekly 看自定义周几；没配 customDays 默认每天（兼容旧数据）
+            if (!Array.isArray(task.customDays) || task.customDays.length === 0) return true;
+            return task.customDays.includes(dow);
+        case 'monthly':
+            return typeof task.monthlyDay === 'number' && date.getDate() === task.monthlyDay;
         case 'custom':
             return Array.isArray(task.customDays) && task.customDays.includes(dow);
         default:

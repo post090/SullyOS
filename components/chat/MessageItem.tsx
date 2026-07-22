@@ -1665,6 +1665,137 @@ const MessageItem = React.memo(({
             );
         }
 
+        // 时光契约事件卡片：监督人头像 + 场景标签 + 契约标题 + reaction 台词 + 币变动
+        if (m.metadata?.source === 'task-event') {
+            const meta = m.metadata as any;
+            const supervisorName = String(meta.supervisorName || charName || '—');
+            const supervisorAvatar = String(meta.supervisorAvatar || charAvatar || '');
+            const taskTitle = String(meta.taskTitle || '');
+            const sceneLabel = String(meta.sceneLabel || '');
+            const reaction = String(meta.reaction || '');
+            const coinDelta = Number(meta.coinDelta || 0);
+            const taskKind = String(meta.taskKind || '');
+            // 颜色 + emoji 按场景定调
+            const isPositive = taskKind === 'complete' || taskKind === 'milestone' || taskKind === 'oneshot_complete' || taskKind === 'created';
+            const isNegative = taskKind === 'missed' || taskKind === 'missed_streak' || taskKind === 'oneshot_expired';
+            const accentRing = isPositive ? 'ring-emerald-200' : isNegative ? 'ring-rose-200' : 'ring-amber-200';
+            const accentBorder = isPositive ? 'border-emerald-100' : isNegative ? 'border-rose-100' : 'border-amber-100';
+            const accentBg = isPositive ? 'from-emerald-50 to-white' : isNegative ? 'from-rose-50 to-white' : 'from-amber-50 to-white';
+            const sceneEmoji = taskKind === 'created' ? '📜'
+                : taskKind === 'complete' ? '✅'
+                : taskKind === 'milestone' ? '🏆'
+                : taskKind === 'missed' ? '⚠️'
+                : taskKind === 'missed_streak' ? '⚠️'
+                : taskKind === 'oneshot_expired' ? '⌛'
+                : taskKind === 'oneshot_complete' ? '🎯'
+                : '📜';
+            const coinText = coinDelta > 0 ? `+${coinDelta}` : coinDelta < 0 ? `${coinDelta}` : '';
+            const coinColor = coinDelta > 0 ? 'text-emerald-600' : coinDelta < 0 ? 'text-rose-500' : 'text-slate-400';
+
+            return (
+                <div className={`flex items-center w-full ${selectionMode ? 'pl-8' : ''} animate-fade-in relative transition-[padding] duration-300`}>
+                    {selectionMode && (
+                        <div className="absolute left-2 top-1/2 -translate-y-1/2 cursor-pointer z-20" onClick={() => onToggleSelect(m.id)}>
+                            <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors ${isSelected ? 'bg-primary border-primary' : 'border-slate-300 bg-white/80'}`}>
+                                {isSelected && <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>}
+                            </div>
+                        </div>
+                    )}
+                    <div className="w-full px-5 my-2.5" {...interactionProps}>
+                        <div className={`mx-auto max-w-[300px] rounded-2xl bg-gradient-to-br ${accentBg} border ${accentBorder} p-3 shadow-sm`}>
+                            <div className="flex items-center gap-2.5">
+                                {supervisorAvatar
+                                    ? <img src={supervisorAvatar} alt={supervisorName} className={`h-8 w-8 rounded-full object-cover ring-2 ${accentRing}`} loading="lazy" decoding="async" />
+                                    : <div className={`h-8 w-8 rounded-full bg-white/80 flex items-center justify-center text-base ring-2 ${accentRing}`}>{sceneEmoji}</div>}
+                                <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-1.5">
+                                        <span className="text-[10px]">{sceneEmoji}</span>
+                                        <span className="text-[11px] font-bold text-slate-600 truncate">{sceneLabel}</span>
+                                    </div>
+                                    <div className="text-[11px] text-slate-500 truncate mt-0.5">契约「{taskTitle}」</div>
+                                </div>
+                                {coinText && (
+                                    <div className={`text-xs font-bold ${coinColor} shrink-0`}>{coinText}</div>
+                                )}
+                            </div>
+                            {reaction && (
+                                <div className="mt-2 rounded-xl bg-white/70 border border-white/60 px-3 py-2 text-[12px] italic leading-relaxed text-slate-600">
+                                    {reaction}
+                                </div>
+                            )}
+                            <div className="mt-1.5 text-[10px] text-slate-400 text-right">{supervisorName} 监督</div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // 备忘录操作摘要卡片：角色头像 + 变更计数 + 变更明细列表
+        if (m.metadata?.source === 'memo-event') {
+            const meta = m.metadata as any;
+            const mCharName = String(meta.charName || charName || '—');
+            const mCharAvatar = String(meta.charAvatar || charAvatar || '');
+            const added = Number(meta.added || 0);
+            const edited = Number(meta.edited || 0);
+            const deleted = Number(meta.deleted || 0);
+            const changes: { op: string; content: string; status?: string }[] = Array.isArray(meta.changes) ? meta.changes : [];
+            const moreCount = Number(meta.moreCount || 0);
+            const opMeta = (op: string) => op === 'add' ? { label: '新增', color: 'text-emerald-600', dot: 'bg-emerald-400' }
+                : op === 'edit' ? { label: '修改', color: 'text-amber-600', dot: 'bg-amber-400' }
+                : { label: '删除', color: 'text-rose-500', dot: 'bg-rose-400' };
+            const summaryParts: string[] = [];
+            if (added) summaryParts.push(`+${added}`);
+            if (edited) summaryParts.push(`~${edited}`);
+            if (deleted) summaryParts.push(`-${deleted}`);
+
+            return (
+                <div className={`flex items-center w-full ${selectionMode ? 'pl-8' : ''} animate-fade-in relative transition-[padding] duration-300`}>
+                    {selectionMode && (
+                        <div className="absolute left-2 top-1/2 -translate-y-1/2 cursor-pointer z-20" onClick={() => onToggleSelect(m.id)}>
+                            <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors ${isSelected ? 'bg-primary border-primary' : 'border-slate-300 bg-white/80'}`}>
+                                {isSelected && <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>}
+                            </div>
+                        </div>
+                    )}
+                    <div className="w-full px-5 my-2.5" {...interactionProps}>
+                        <div className="mx-auto max-w-[300px] rounded-2xl bg-gradient-to-br from-sky-50 to-white border border-sky-100 p-3 shadow-sm">
+                            <div className="flex items-center gap-2.5">
+                                {mCharAvatar
+                                    ? <img src={mCharAvatar} alt={mCharName} className="h-8 w-8 rounded-full object-cover ring-2 ring-sky-100" loading="lazy" decoding="async" />
+                                    : <div className="h-8 w-8 rounded-full bg-white/80 flex items-center justify-center text-base ring-2 ring-sky-100">🗒️</div>}
+                                <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-1.5">
+                                        <span className="text-[10px]">🗒️</span>
+                                        <span className="text-[11px] font-bold text-slate-600 truncate">{mCharName} 更新了备忘录</span>
+                                    </div>
+                                    <div className="text-[11px] text-slate-500 mt-0.5">{summaryParts.join(' · ')}</div>
+                                </div>
+                            </div>
+                            {changes.length > 0 && (
+                                <div className="mt-2 space-y-1">
+                                    {changes.map((c, i) => {
+                                        const om = opMeta(c.op);
+                                        return (
+                                            <div key={i} className="flex items-start gap-1.5 rounded-lg bg-white/70 border border-white/60 px-2.5 py-1.5">
+                                                <span className={`mt-0.5 inline-block w-1.5 h-1.5 rounded-full shrink-0 ${om.dot}`} />
+                                                <div className="min-w-0 flex-1">
+                                                    <span className={`text-[10px] font-bold ${om.color} mr-1`}>[{om.label}]</span>
+                                                    <span className={`text-[12px] text-slate-600 ${c.status === 'done' ? 'line-through opacity-60' : ''}`}>{c.content}</span>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                    {moreCount > 0 && (
+                                        <div className="text-[10px] text-slate-400 text-center pt-0.5">…还有 {moreCount} 条</div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
         return (
             <div className={`flex items-center w-full ${selectionMode ? 'pl-8' : ''} animate-fade-in relative transition-[padding] duration-300`}>
                 {selectionMode && (

@@ -61,28 +61,17 @@ const fmtRelative = (ts: number): string => {
 const TypeBadge: React.FC<{ memo: CharacterMemo }> = ({ memo }) => {
     const isTodo = memo.type === 'todo';
     const isDone = memo.status === 'done';
+    const base = 'shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border bg-slate-100 text-slate-500 border-slate-200';
     if (isTodo) {
         return (
-            <span
-                className={`shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                    isDone
-                        ? 'bg-emerald-50 text-emerald-600 border-emerald-200'
-                        : 'bg-amber-50 text-amber-700 border-amber-200'
-                }`}
-            >
+            <span className={`${base} ${isDone ? 'line-through opacity-60' : ''}`}>
                 {isDone ? <CheckCircle size={11} weight="fill" /> : <Circle size={11} />}
                 {isDone ? '已完成' : '待办'}
             </span>
         );
     }
     return (
-        <span
-            className={`shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                isDone
-                    ? 'bg-slate-100 text-slate-400 border-slate-200 line-through'
-                    : 'bg-sky-50 text-sky-600 border-sky-200'
-            }`}
-        >
+        <span className={`${base} ${isDone ? 'line-through opacity-60' : ''}`}>
             <NotePencil size={11} weight="fill" />
             备忘
         </span>
@@ -254,9 +243,9 @@ const MemoApp: React.FC = () => {
                     onChange={setGroupFilter}
                 />
             </div>
-            <div className="px-4 pb-6 space-y-2.5">
+            <div className="pb-6">
                 {filteredChars.length === 0 && (
-                    <div className="text-center text-stone-400 text-sm py-12 font-serif">
+                    <div className="text-center text-stone-400 text-sm py-12">
                         没有角色
                     </div>
                 )}
@@ -270,7 +259,7 @@ const MemoApp: React.FC = () => {
                         <button
                             key={c.id}
                             onClick={() => handleSelectChar(c)}
-                            className="w-full bg-[#fbf7ec] hover:bg-[#f7f0df] active:scale-[0.98] transition-all rounded-2xl border border-stone-300/60 shadow-sm px-4 py-3 text-left"
+                            className="w-full bg-white hover:bg-slate-50 active:bg-slate-100 transition-colors border-b border-slate-100 px-4 py-3 text-left"
                         >
                             <div className="flex items-center gap-3">
                                 {c.avatar ? (
@@ -309,7 +298,7 @@ const MemoApp: React.FC = () => {
                     );
                 })}
             </div>
-            <div className="px-4 pb-6 text-center text-[11px] text-stone-400 font-serif">
+            <div className="px-4 pb-6 text-center text-[11px] text-stone-400">
                 每个角色独立备忘录 · 上限 {MEMO_MAX_COUNT} 条 · AI 在单聊里可读写
             </div>
         </div>
@@ -324,7 +313,7 @@ const MemoApp: React.FC = () => {
         return (
             <div className="flex-1 overflow-y-auto">
                 {/* 角色头部 */}
-                <div className="px-4 pt-3 pb-3 bg-[#f4efe4] border-b border-stone-300/50">
+                <div className="px-4 pt-3 pb-3 bg-white border-b border-slate-200">
                     <div className="flex items-center gap-3">
                         {selectedChar.avatar ? (
                             <img
@@ -356,9 +345,9 @@ const MemoApp: React.FC = () => {
                 </div>
 
                 {/* 备忘录列表 */}
-                <div className="px-4 pt-4 pb-6 space-y-2.5">
+                <div className="pt-4 pb-6">
                     {memos.length === 0 && (
-                        <div className="text-center text-stone-400 py-12 font-serif">
+                        <div className="text-center text-stone-400 py-12">
                             <Notebook size={40} weight="thin" className="mx-auto mb-2 opacity-50" />
                             还没有任何备忘录
                             <div className="text-[11px] mt-1 text-stone-400">
@@ -369,7 +358,7 @@ const MemoApp: React.FC = () => {
                     {memos.map((m, idx) => (
                         <div
                             key={m.id}
-                            className="bg-[#fbf7ec] rounded-2xl border border-stone-300/60 shadow-sm p-3.5"
+                            className="bg-white border-b border-slate-100 px-4 py-3.5"
                         >
                             <div className="flex items-start gap-2.5">
                                 {/* 待办勾选圆点 */}
@@ -380,12 +369,12 @@ const MemoApp: React.FC = () => {
                                         title={m.status === 'done' ? '标记为未完成' : '标记为已完成'}
                                     >
                                         {m.status === 'done'
-                                            ? <CheckCircle size={18} weight="fill" className="text-emerald-500" />
-                                            : <Circle size={18} weight="regular" className="text-stone-400" />}
+                                            ? <div className="w-[18px] h-[18px] rounded-full bg-yellow-400 border-2 border-yellow-400 flex items-center justify-center text-white text-[10px] font-bold leading-none">✓</div>
+                                            : <div className="w-[18px] h-[18px] rounded-full border-2 border-slate-300" />}
                                     </button>
                                 ) : (
                                     <span className="shrink-0 mt-0.5 w-[18px] h-[18px] flex items-center justify-center">
-                                        <NotePencil size={14} weight="fill" className="text-sky-400" />
+                                        <NotePencil size={14} weight="fill" className="text-slate-400" />
                                     </span>
                                 )}
                                 <div className="flex-1 min-w-0">
@@ -424,14 +413,14 @@ const MemoApp: React.FC = () => {
                                 <div className="flex flex-col gap-1 shrink-0">
                                     <button
                                         onClick={() => openEditEditor(m)}
-                                        className="p-1.5 rounded-full hover:bg-stone-200/60 active:scale-90 transition-transform"
+                                        className="p-1.5 rounded-full hover:bg-slate-100 active:scale-90 transition-transform"
                                         title="编辑"
                                     >
                                         <PencilSimple size={14} weight="bold" className="text-stone-500" />
                                     </button>
                                     <button
                                         onClick={() => setDeletingId(m.id)}
-                                        className="p-1.5 rounded-full hover:bg-red-50 active:scale-90 transition-transform"
+                                        className="p-1.5 rounded-full hover:bg-slate-100 active:scale-90 transition-transform"
                                         title="删除"
                                     >
                                         <Trash size={14} weight="bold" className="text-stone-400 hover:text-red-500" />
@@ -459,13 +448,13 @@ const MemoApp: React.FC = () => {
                     <>
                         <button
                             onClick={() => setEditorOpen(false)}
-                            className="flex-1 py-2.5 bg-stone-100 text-stone-500 font-bold rounded-2xl active:scale-95 transition-transform"
+                            className="flex-1 py-2.5 bg-stone-100 text-stone-500 font-bold rounded-xl active:scale-95 transition-transform"
                         >
                             取消
                         </button>
                         <button
                             onClick={handleSaveEditor}
-                            className="flex-1 py-2.5 bg-stone-800 text-white font-bold rounded-2xl active:scale-95 transition-transform"
+                            className="flex-1 py-2.5 bg-stone-800 text-white font-bold rounded-xl active:scale-95 transition-transform"
                         >
                             保存
                         </button>
@@ -566,13 +555,13 @@ const MemoApp: React.FC = () => {
                 <>
                     <button
                         onClick={() => setDeletingId(null)}
-                        className="flex-1 py-2.5 bg-stone-100 text-stone-500 font-bold rounded-2xl active:scale-95 transition-transform"
+                        className="flex-1 py-2.5 bg-stone-100 text-stone-500 font-bold rounded-xl active:scale-95 transition-transform"
                     >
                         取消
                     </button>
                     <button
                         onClick={handleConfirmDelete}
-                        className="flex-1 py-2.5 bg-red-500 text-white font-bold rounded-2xl active:scale-95 transition-transform"
+                        className="flex-1 py-2.5 bg-red-500 text-white font-bold rounded-xl active:scale-95 transition-transform"
                     >
                         删除
                     </button>
@@ -588,7 +577,7 @@ const MemoApp: React.FC = () => {
     // ─── 顶栏 ──────────────────────────────────
     const renderHeader = () => (
         <div
-            className="bg-[#f4efe4] border-b-2 border-stone-800 shrink-0 sticky top-0 z-10"
+            className="bg-white border-b border-slate-200 shrink-0 sticky top-0 z-10"
             style={{ paddingTop: 'var(--safe-top)' }}
         >
             <div className="flex items-center px-4 py-2">
@@ -609,7 +598,7 @@ const MemoApp: React.FC = () => {
                         </button>
                     )}
                     <h1 className="text-xl font-bold tracking-wide text-stone-800 flex items-center gap-2">
-                        <Notebook size={22} weight="fill" className="text-amber-700" />
+                        <Notebook size={22} weight="fill" className="text-yellow-500" />
                         {mode === 'detail' && selectedChar ? `${selectedChar.name} · 备忘录` : '备忘录'}
                     </h1>
                 </div>
@@ -618,7 +607,7 @@ const MemoApp: React.FC = () => {
     );
 
     return (
-        <div className="h-full w-full bg-[#f4efe4] flex flex-col font-serif text-stone-900">
+        <div className="h-full w-full bg-white flex flex-col text-stone-900">
             {renderHeader()}
             {mode === 'list' ? renderList() : renderDetail()}
             {renderEditor()}
