@@ -54,6 +54,7 @@ import { isInstantConfigReady, loadInstantConfig } from '../utils/instantPushCli
 import { resolveActiveSound, playWhiteboxSound, unlockWhiteboxAudio, parseWhiteboxSound, upsertWhiteboxSound, stripWhiteboxSoundDirective, WhiteboxSound } from '../utils/whiteboxSound';
 import WhiteboxSoundEditor from '../components/chat/WhiteboxSoundEditor';
 import { normalizeTranslationLangLabel } from '../utils/translationLang';
+import { resetNoResponseCount } from '../utils/proactiveChat';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
 
 const VOICE_LANG_LABELS: Record<string, string> = { en: 'English', ja: '日本語', ko: '한국어', fr: 'Français', es: 'Español' };
@@ -980,6 +981,9 @@ const Chat: React.FC = () => {
         }
 
         const savedUserMsgId = await DB.saveMessage(msgPayload);
+
+        // 用户主动发消息 → 清零该角色的"无回应计数"（节制模式：用户回了就重新开始计数）
+        if (char.id) resetNoResponseCount(char.id);
 
         // 小红书链接 → xhs_card。主路径不依赖任何后端：小红书分享文案自带标题（【标题】）
         // 和笔记 id/token，直接解析就能建卡，让「没部署小红书 MCP」的用户也能让角色看到分享了哪篇笔记。

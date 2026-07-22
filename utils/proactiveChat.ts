@@ -172,6 +172,57 @@ export function removeMissCount(charId: string) {
   resetMissCount(charId);
 }
 
+/**
+ * 无回应计数（noResponseCount）持久化 map。每个角色独立。
+ * 主动消息发出后 +1（用户没回又找一次）；用户回消息→清零。
+ * 找满 maxAttempts 次用户仍没回→停止主动消息直到用户再说话。
+ */
+const NO_RESPONSE_COUNT_KEY = 'proactive_no_response_count_map';
+
+function loadNoResponseCounts(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(NO_RESPONSE_COUNT_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch { return {}; }
+}
+
+function saveNoResponseCounts(map: Record<string, number>) {
+  const entries = Object.entries(map);
+  if (entries.length === 0) {
+    localStorage.removeItem(NO_RESPONSE_COUNT_KEY);
+    return;
+  }
+  localStorage.setItem(NO_RESPONSE_COUNT_KEY, JSON.stringify(map));
+}
+
+export function getNoResponseCount(charId: string): number {
+  return loadNoResponseCounts()[charId] || 0;
+}
+
+/** 主动消息发出后调用，+1。返回新值。 */
+export function incrementNoResponseCount(charId: string): number {
+  const map = loadNoResponseCounts();
+  const next = (map[charId] || 0) + 1;
+  map[charId] = next;
+  saveNoResponseCounts(map);
+  return next;
+}
+
+/** 用户回消息时调用，清零。 */
+export function resetNoResponseCount(charId: string) {
+  const map = loadNoResponseCounts();
+  if (map[charId] !== undefined) {
+    delete map[charId];
+    saveNoResponseCounts(map);
+  }
+}
+
+export function removeNoResponseCount(charId: string) {
+  resetNoResponseCount(charId);
+}
+
 function postToSW(msg: any) {
   if (!('serviceWorker' in navigator) || !navigator.serviceWorker.controller) return;
   navigator.serviceWorker.controller.postMessage(msg);

@@ -2301,6 +2301,13 @@ export interface CharacterProfile {
      * 默认 50。同时受思念值保底制约：连续 roll 失败攒思念值到 5 时强制发。
      */
     proactiveness?: number;
+    /**
+     * 节制模式：用户没回应时最多反复找几次。0=无限（不建议，可能刷屏）。
+     * 用户回消息→计数清零；找满 maxAttempts 次用户仍没回→停止主动消息直到用户再说话。
+     */
+    maxAttempts?: number;
+    /** 主动消息 hint 自定义内容（替换默认 hint 文案） */
+    hintCustom?: string;
   };
 
   // 情绪Buff系统

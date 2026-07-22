@@ -17,10 +17,32 @@ const INTERVAL_OPTIONS = [
     { label: '1 小时', value: 60 },
     { label: '2 小时', value: 120 },
     { label: '4 小时', value: 240 },
+    { label: '5 小时', value: 300 },
+    { label: '6 小时', value: 360 },
     { label: '8 小时', value: 480 },
     { label: '12 小时', value: 720 },
     { label: '24 小时', value: 1440 },
 ];
+
+// maxAttempts 选项：0=无限（不建议），1-10
+const MAX_ATTEMPTS_OPTIONS = [
+    { label: '无限', value: 0, warn: true },
+    { label: '1 次', value: 1 },
+    { label: '2 次', value: 2 },
+    { label: '3 次', value: 3 },
+    { label: '4 次', value: 4 },
+    { label: '5 次', value: 5 },
+    { label: '6 次', value: 6 },
+    { label: '8 次', value: 8 },
+    { label: '10 次', value: 10 },
+];
+
+/**
+ * 默认 hint 参考文案（含占位符）。点"显示默认"按钮填入 textarea 供用户参考/修改。
+ * 注意：默认运行时有两个分支——刚见面 / 常规。这里给的是常规分支的占位符版本。
+ * 自定义后会完全替换默认（包括刚见面分支），用户需自行处理见面场景（如不需要可忽略）。
+ */
+const DEFAULT_HINT_REFERENCE = `[系统提示（非{{user_name}}发言）: 现在是 {{time}}。{{time_since_user}}这是系统给你的一次主动发消息机会——{{user_name}}并没有在跟你说话，是你想主动找{{user_name}}。像真人一样随意地发条消息吧，比如：随手拍了张照片想分享、刚看到个有趣的事想说、突然想到个冷知识、吐槽今天的天气/食物/见闻、或者就是单纯想找{{user_name}}聊几句。不要刻意，不要像在"汇报近况"，就像你真的拿起手机随手发了条消息。一两句话就好。]`;
 
 // 把分钟数（0-1439）格式化成 "HH:MM"
 const minutesToHHMM = (m: number): string => {
@@ -55,6 +77,11 @@ const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
     const [sleepEndMin, setSleepEndMin] = useState(hhmmToMinutes(saved?.sleepEnd, 7 * 60));
     // 主动联系倾向 0-100，默认 50
     const [proactiveness, setProactiveness] = useState(saved?.proactiveness ?? 50);
+    // 节制模式：无回应最多找几次。0=无限（不建议）。默认 3。
+    const [maxAttempts, setMaxAttempts] = useState(saved?.maxAttempts ?? 3);
+    // hint 自定义
+    const [hintCustom, setHintCustom] = useState(saved?.hintCustom ?? '');
+    const [showHintEditor, setShowHintEditor] = useState(false);
 
     // Reset form when modal opens with new char data
     useEffect(() => {
@@ -70,6 +97,9 @@ const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
             setSleepStartMin(hhmmToMinutes(s?.sleepStart, 23 * 60));
             setSleepEndMin(hhmmToMinutes(s?.sleepEnd, 7 * 60));
             setProactiveness(s?.proactiveness ?? 50);
+            setMaxAttempts(s?.maxAttempts ?? 3);
+            setHintCustom(s?.hintCustom ?? '');
+            setShowHintEditor(false);
         }
     }, [isOpen, char.id]);
 
@@ -86,6 +116,8 @@ const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
             sleepStart: minutesToHHMM(sleepStartMin),
             sleepEnd: minutesToHHMM(sleepEndMin),
             proactiveness,
+            maxAttempts,
+            hintCustom: hintCustom.trim() || undefined,
         });
         onClose();
     };
@@ -115,7 +147,8 @@ const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
             <div className="space-y-5">
                 {/* Description */}
                 <p className="text-xs text-slate-400 leading-relaxed">
-                    开启后，{char.name} 会按照设定的间隔主动给你发消息，就像真人一样随手发来一条。
+                    开启后，如果你一段时间没主动联系 {char.name}，TA 会按设定间隔主动找你，
+                    就像真人随手发来一条。你回消息后间隔重新计时。
                 </p>
 
                 {/* Enable Toggle */}
@@ -141,7 +174,10 @@ const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
                 {enabled && (
                     <>
                         <div>
-                            <label className="text-sm font-bold text-slate-700 block mb-2">发送间隔</label>
+                            <label className="text-sm font-bold text-slate-700 block mb-1">触发间隔</label>
+                            <p className="text-[11px] text-slate-400 leading-relaxed mb-2">
+                                你多久没联系 {char.name}，TA 才会开始主动找你。你回消息后重新计时。
+                            </p>
                             <div className="grid grid-cols-3 gap-2">
                                 {INTERVAL_OPTIONS.map(opt => (
                                     <button
@@ -232,6 +268,87 @@ const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
                                     <span>每次都主动</span>
                                 </div>
                             </div>
+                        </div>
+
+                        {/* 节制模式：无回应最多找几次 */}
+                        <div className="pt-2 border-t border-slate-100">
+                            <label className="text-sm font-bold text-slate-700 block mb-1">无回应节制</label>
+                            <p className="text-[11px] text-slate-400 leading-relaxed mb-3">
+                                间隔 = 用户多久没联系{char.name}才会主动找你。如果{char.name}主动找你后你没回，
+                                会按相同间隔再找，最多找这么多次；找满后停止，直到你再说话才会重新开始（计数清零）。
+                                选「无限」会一直找（不建议，容易刷屏）。
+                            </p>
+                            <div className="grid grid-cols-3 gap-2">
+                                {MAX_ATTEMPTS_OPTIONS.map(opt => (
+                                    <button
+                                        key={opt.value}
+                                        onClick={() => setMaxAttempts(opt.value)}
+                                        className={`py-2 px-3 rounded-xl text-xs font-bold transition-all ${maxAttempts === opt.value
+                                            ? opt.warn
+                                                ? 'bg-amber-500 text-white shadow-md'
+                                                : 'bg-violet-500 text-white shadow-md'
+                                            : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                                        }`}
+                                    >
+                                        {opt.label}{opt.warn ? ' ⚠' : ''}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* hint 自定义 */}
+                        <div className="pt-2 border-t border-slate-100">
+                            <div className="flex items-center justify-between mb-1">
+                                <span className="text-sm font-bold text-slate-700">主动消息提示词</span>
+                                <button
+                                    onClick={() => setShowHintEditor(!showHintEditor)}
+                                    className="text-[10px] text-slate-400"
+                                >
+                                    {showHintEditor ? '收起 ▲' : '展开 ▼'}
+                                </button>
+                            </div>
+                            <p className="text-[11px] text-slate-400 leading-relaxed mb-3">
+                                自定义后完全替换默认提示词（包括刚见面特殊分支）。留空=用默认。
+                                支持占位符：<code className="text-violet-500">{'{{char_name}}'}</code>、<code className="text-violet-500">{'{{user_name}}'}</code>、<code className="text-violet-500">{'{{time}}'}</code>、<code className="text-violet-500">{'{{time_since_user}}'}</code>。
+                            </p>
+
+                            {showHintEditor && (
+                                <div className="space-y-2 bg-slate-50 rounded-2xl p-3">
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-[10px] text-slate-500 font-medium">
+                                            {hintCustom.trim() ? '已自定义' : '使用默认'}
+                                        </span>
+                                        <div className="flex gap-2">
+                                            <button
+                                                onClick={() => setHintCustom(DEFAULT_HINT_REFERENCE)}
+                                                className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-white text-violet-600 border border-violet-200 active:scale-95 transition-transform"
+                                            >
+                                                显示默认
+                                            </button>
+                                            {hintCustom.trim() && (
+                                                <button
+                                                    onClick={() => setHintCustom('')}
+                                                    className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-white text-slate-400 border border-slate-200 active:scale-95 transition-transform"
+                                                >
+                                                    清空（用默认）
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                    <textarea
+                                        value={hintCustom}
+                                        onChange={e => setHintCustom(e.target.value)}
+                                        rows={8}
+                                        placeholder={DEFAULT_HINT_REFERENCE}
+                                        className="w-full px-3 py-2 bg-white rounded-xl text-xs text-slate-700 border border-slate-200 focus:border-violet-300 focus:outline-none transition-colors resize-y font-mono leading-relaxed"
+                                    />
+                                    <p className="text-[10px] text-slate-400 leading-relaxed">
+                                        提示：{'{{time_since_user}}'} 在用户从未联系时会替换为空字符串。
+                                        默认提示词里还有"刚见面"特殊分支（见面后 3 小时内换语境），
+                                        自定义后会丢失这个分支——如需保留见面场景，请在文案里自行处理。
+                                    </p>
+                                </div>
+                            )}
                         </div>
 
                         {/* Secondary API Toggle */}

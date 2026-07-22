@@ -9,7 +9,8 @@ import { LEGACY_DEFAULT_WALLPAPER, isLegacyDefaultWallpaper, shouldPreserveLegac
 import { migrateSharkpanAssets } from '../utils/sharkpanAssetMigration';
 import { writeV2Backup, assembleV2Backup, type BackupManifest, type ZipFileWriter, type ZipFileReader } from '../utils/backupFormat';
 import { encodeVectorsForBackup } from '../utils/memoryPalace/db';
-import { ProactiveChat, getMissCount, incrementMissCount, resetMissCount, MISS_THRESHOLD } from '../utils/proactiveChat';
+import { ProactiveChat, getMissCount, incrementMissCount, resetMissCount, MISS_THRESHOLD, getNoResponseCount, incrementNoResponseCount, resetNoResponseCount } from '../utils/proactiveChat';
+import { replacePromptPlaceholders } from '../components/chat/ChatConstants';
 import { isInTimeWindow } from '../utils/timeWindow';
 import { VRScheduler } from '../utils/vrWorld/scheduler';
 import { runVRSession } from '../utils/vrWorld/runSession';
@@ -1975,14 +1976,47 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               return;
           }
 
-          // ─── 主动消息决策链（睡眠 + 思念值保底 + 概率 roll）─────────────────────
-          // 设计目标：避免到点必发的机械感，同时保证不会太久不发消息。
+          // ─── 主动消息决策链（间隔闸 + 节制闸 + 睡眠 + 思念值保底 + 概率 roll）─────
+          // 设计目标：
+          //   0) 间隔闸：intervalMinutes 语义是"用户多久没联系才找"。用户在间隔内有联系→skip。
+          //   0b) 节制闸：用户没回应反复找，找满 maxAttempts 次用户仍没回→停止直到用户再说话。
           //   1) 睡眠窗口检查：在窗口内 → 默认 skip，不攒思念值（她在睡觉谈不上想念）。
           //      但若思念值已攒满（MISS_THRESHOLD）→ 强制发（思念优先，这么想怎么睡得着）。
           //   2) 思念值保底：清醒时段 roll 失败攒思念值，攒满 5 次 → 强制发，清零。
           //   3) 概率 roll：proactiveness/100 作为概率阈值，roll 小于它才发。
-          // 思念值持久化在 proactiveChat.ts 的 localStorage（跟 lastFire 并排）。
           const pCfgForDecision = char.proactiveConfig;
+          const intervalMs = (pCfgForDecision?.intervalMinutes || 60) * 60_000;
+          const maxAttempts = pCfgForDecision?.maxAttempts ?? 0; // 0=无限
+
+          // 读最近消息算"用户上次真实联系时间"——间隔闸和节制闸都要用
+          const recentMsgsForGate = await DB.getRecentMessagesByCharId(charId, 200);
+          const lastRealUserMsgForGate = [...recentMsgsForGate].reverse().find(
+              m => m.role === 'user' && !m.metadata?.proactiveHint
+          );
+          const nowMs = Date.now();
+          const lastUserContactMs = lastRealUserMsgForGate?.timestamp || 0;
+          const sinceUserContact = nowMs - lastUserContactMs;
+
+          // 间隔闸：用户在间隔内有联系→skip（间隔=用户多久没联系才找）
+          // 但思念值保底触发时无视此闸（思念优先）
+          const currentMissCountPre = getMissCount(charId);
+          const missSaturatedPre = currentMissCountPre >= MISS_THRESHOLD;
+          if (!missSaturatedPre && sinceUserContact < intervalMs) {
+              drainQueuedProactive();
+              console.log(`🔇 [Proactive/Global] 间隔闸 skip for ${char.name}: 用户 ${Math.round(sinceUserContact/60000)}min 前刚联系过，间隔 ${Math.round(intervalMs/60000)}min 未满`);
+              return;
+          }
+
+          // 节制闸：用户没回应反复找，找满 maxAttempts 次用户仍没回→停止
+          // 判断"用户没回应"= 用户上次联系时间 < 上次主动消息发出时间（即主动消息发出后用户没回）
+          const noResponseCount = getNoResponseCount(charId);
+          if (maxAttempts > 0 && noResponseCount >= maxAttempts) {
+              // 再确认用户确实没回（用户回了会在 sendMessage 里清零 noResponseCount，这里双保险）
+              drainQueuedProactive();
+              console.log(`🛑 [Proactive/Global] 节制闸 stop for ${char.name}: 已找 ${noResponseCount}/${maxAttempts} 次用户未回应，停止直到用户再说话`);
+              return;
+          }
+
           const sleepStart = pCfgForDecision?.sleepStart;
           const sleepEnd = pCfgForDecision?.sleepEnd;
           const proactiveness = pCfgForDecision?.proactiveness ?? 50; // 默认 50%
@@ -2061,9 +2095,20 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               const justMetOffline = lastRealMsgRaw?.metadata?.source === 'date'
                   && (now.getTime() - lastRealMsgRaw.timestamp) < DATE_AFTERGLOW_MS;
 
-              const hintContent = justMetOffline
+              // 默认 hint 两个分支：刚见面 / 常规。用户在设置里可写 hintCustom 完全替换。
+              const defaultHint = justMetOffline
                       ? `[系统提示（非${userName}发言）: 现在是 ${timeStr}。你和${userName}刚刚在线下见过面（如果上下文里有标着 [约会] 的内容，那就是你们见面时发生的事），现在你们暂时分开了，你拿起手机想给${userName}发条消息。请基于刚才的见面来发——可以回味见面里的某个细节、补一句当时没说出口的话、关心${userName}到家了没，或者就是刚分开就有点想念。绝对不要表现得好像很久没联系，更不要对刚才的见面毫不知情。一两句话就好。]`
                       : `[系统提示（非${userName}发言）: 现在是 ${timeStr}。${timeSinceUser ? `${userName}已经 ${timeSinceUser} 没有找你说话了。` : ''}这是系统给你的一次主动发消息机会——${userName}并没有在跟你说话，是你想主动找${userName}。像真人一样随意地发条消息吧，比如：随手拍了张照片想分享、刚看到个有趣的事想说、突然想到个冷知识、吐槽今天的天气/食物/见闻、或者就是单纯想找${userName}聊几句。不要刻意，不要像在"汇报近况"，就像你真的拿起手机随手发了条消息。一两句话就好。${timeSinceUser && parseInt(timeSinceUser) > 2 ? `（${userName}挺久没找你了，你也可以表达想念、好奇${userName}在干嘛、或者小小地抱怨一下。）` : ''}]`;
+
+              const hintCustomRaw = char.proactiveConfig?.hintCustom?.trim();
+              const hintContent = hintCustomRaw
+                  ? replacePromptPlaceholders(hintCustomRaw, {
+                      char_name: char.name || '',
+                      user_name: userName,
+                      time: timeStr,
+                      time_since_user: timeSinceUser,
+                  })
+                  : defaultHint;
 
               await DB.saveMessage({
                   charId,
@@ -2359,6 +2404,11 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                   }));
                   // 7. 主动消息真的发出去了 → 清零思念值（保底/roll 成功都算"已发"）
                   resetMissCount(charId);
+                  // 节制模式：无回应计数 +1（用户回消息时会在 sendMessage 里清零）
+                  const newNoResp = incrementNoResponseCount(charId);
+                  if (maxAttempts > 0) {
+                      console.log(`📊 [Proactive/Global] 无回应计数 for ${char.name}: ${newNoResp}/${maxAttempts}`);
+                  }
               }
           } catch (err) {
               console.error(`[Proactive/Global] Error for ${char.name}:`, err);
