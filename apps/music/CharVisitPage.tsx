@@ -19,7 +19,7 @@ import { computeCurrentListening } from '../../utils/charMusicSchedule';
 import { removeSongsFromPlaylist } from '../../utils/charPlaylistEdit';
 import { DB } from '../../utils/db';
 import { C, Sparkle, MizuHeader, BokehBg, MiniPlayer } from './MusicUI';
-import { ArrowLeft, MusicNote, Heart, Plus, MagnifyingGlass, Trash, Check } from '@phosphor-icons/react';
+import { ArrowLeft, MusicNote, Heart, Plus, MagnifyingGlass, Trash, Check, Star, FilmSlate, GameController, Popcorn, MonitorPlay } from '@phosphor-icons/react';
 import { getLocalDailySchedule } from '../../utils/dailySchedule';
 import { useLocalDateKey } from '../../hooks/useLocalDateKey';
 
@@ -206,11 +206,13 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
     exitSelectMode();
   };
 
-  /** 让 char 用偏爱艺人作为关键词去搜歌 → 自动填充空歌单
+  /** 让 char 用偏爱艺人 + OST 标题作为关键词去搜歌 → 自动填充空歌单
    *  关键：每个歌单走一组**不同**的关键词，否则三个歌单会搜出一模一样的歌。
-   *  - 用歌单自己的 title / mood 作为主关键词（区别度最高）
-   *  - 再按歌单 index 旋转 signatureArtists 取一段，保证不同歌单艺人不重叠
-   *  - 还要去掉本角色其它歌单已经有的歌，避免跨歌单撞曲
+   *  - searchHints 优先（LLM 产出的艺人名+曲风词 / OST 标题）
+   *  - 兜底：歌单 title + mood 中文词 + signatureArtists 轮换
+   *  - OST 标题按 type 加搜索后缀（game→OST、musical→选段…），搜出来的是原声而非翻唱
+   *  - starred 的关键词搜出来取更多条（灵魂艺人/最爱 OST 占比更高），非 starred 取少
+   *  - 去掉本角色其它歌单已经有的歌，避免跨歌单撞曲
    */
   const fillPlaylistFromTaste = useCallback(async (pl: CharPlaylist) => {
     if (!char || !profile || fillingPl) return;
@@ -222,41 +224,77 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
       };
 
       const plIndex = Math.max(0, profile.playlists.findIndex(p => p.id === pl.id));
-      const allArtists = profile.signatureArtists.map(a => a.name).filter(Boolean);
+      const allArtists = profile.signatureArtists.map(a => ({ name: a.name, starred: a.starred === true })).filter(a => !!a.name);
       const allGenres = profile.genreTags.filter(Boolean);
 
+      // OST/影视标题表：title 归一化 → { type, starred }，用于识别 searchHints 里的 OST 关键词
+      const ostMap = new Map<string, { type: string; starred: boolean }>();
+      (profile.favoriteSoundtracks || []).forEach(s => {
+        if (s?.title) ostMap.set(s.title.trim().toLowerCase(), { type: s.type, starred: s.starred === true });
+      });
+
+      // 按 type 给 OST 标题加搜索后缀，确保搜到原声带而非翻唱
+      const ostSuffix = (type: string): string => {
+        switch (type) {
+          case 'game': return ' OST';
+          case 'musical': return ' 选段';
+          case 'film': return ' 原声';
+          case 'anime': return ' 原声';
+          case 'ost': return ' OST';
+          default: return ' OST';
+        }
+      };
+
+      // 关键词带元信息：是否 starred（决定取条数）
+      type Kw = { kw: string; starred: boolean };
+      const pushKw = (list: Kw[], raw: string, starred = false) => {
+        const k = raw.trim();
+        if (!k) return;
+        // 如果命中 OST 表，加后缀 + 继承 starred
+        const ost = ostMap.get(k.toLowerCase());
+        if (ost) {
+          list.push({ kw: k + ostSuffix(ost.type), starred: ost.starred || starred });
+        } else {
+          list.push({ kw: k, starred });
+        }
+      };
+
       // 按歌单序号轮换艺人/曲风，让 A/B/C 三个歌单永远拿到不同切片
-      const rotate = (arr: string[], offset: number, take: number): string[] => {
+      const rotate = <T,>(arr: T[], offset: number, take: number): T[] => {
         if (arr.length === 0) return [];
-        const out: string[] = [];
+        const out: T[] = [];
         for (let i = 0; i < take && i < arr.length; i++) {
           out.push(arr[(offset + i) % arr.length]);
         }
         return out;
       };
 
-      const keywords: string[] = [];
-      // 1) LLM 给的 searchHints 优先 — 艺人名+曲风词组合，能搜到更对味的歌
+      const kws: Kw[] = [];
+      // 1) LLM 给的 searchHints 优先 — 艺人名+曲风词组合 / OST 标题，能搜到更对味的歌
       if (pl.searchHints && pl.searchHints.length > 0) {
-          keywords.push(...pl.searchHints);
+          pl.searchHints.forEach(h => pushKw(kws, h));
       }
       // 2) 兜底：旧逻辑（歌单 title + mood 中文词 + 艺人轮换）
       //    searchHints 缺失或不足时补足，保证老角色也能填
-      if (keywords.length < 2) {
+      if (kws.length < 2) {
           // 歌单自己的 title 直接当关键词 — 这是最能拉开差异的一项
           const cleanTitle = (pl.title || '').trim();
-          if (cleanTitle && !/^歌单\s*\d*$/.test(cleanTitle)) keywords.push(cleanTitle);
+          if (cleanTitle && !/^歌单\s*\d*$/.test(cleanTitle)) pushKw(kws, cleanTitle);
           // mood → 中文搜索词
-          if (pl.mood && moodKeywordMap[pl.mood]) keywords.push(moodKeywordMap[pl.mood]);
-          // 旋转后的艺人（每歌单 2 个，错开起点）
-          keywords.push(...rotate(allArtists, plIndex * 2, 2));
+          if (pl.mood && moodKeywordMap[pl.mood]) pushKw(kws, moodKeywordMap[pl.mood]);
+          // 旋转后的艺人（每歌单 2 个，错开起点），继承 starred
+          rotate(allArtists, plIndex * 2, 2).forEach(a => pushKw(kws, a.name, a.starred));
           // 没艺人就用旋转后的曲风兜底
-          if (allArtists.length === 0) keywords.push(...rotate(allGenres, plIndex, 2));
+          if (allArtists.length === 0) rotate(allGenres, plIndex, 2).forEach(g => pushKw(kws, g));
       }
 
-      // 去重 + 去空
-      const uniqKeywords = Array.from(new Set(keywords.map(k => k.trim()).filter(Boolean)));
-      if (uniqKeywords.length === 0) {
+      // 去重（按 kw 字符串）+ 去空，保留 starred
+      const seenKw = new Set<string>();
+      const uniqKws: Kw[] = [];
+      for (const k of kws) {
+        if (!seenKw.has(k.kw)) { seenKw.add(k.kw); uniqKws.push(k); }
+      }
+      if (uniqKws.length === 0) {
         addToast('还没有足够的品味数据，先初始化一下吧', 'info');
         return;
       }
@@ -270,11 +308,13 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
 
       const picked: CharPlaylistSong[] = [];
       const seen = new Set<number>();
-      for (const kw of uniqKeywords) {
+      for (const { kw, starred } of uniqKws) {
         if (picked.length >= 8) break;
         try {
           const r = await musicApi.search(cfg, kw);
-          const songs: Song[] = (r?.result?.songs || []).slice(0, 4).map(songFromSearch);
+          // starred 关键词取前 6 条（灵魂艺人/最爱 OST 占比高），非 starred 取前 3 条
+          const take = starred ? 6 : 3;
+          const songs: Song[] = (r?.result?.songs || []).slice(0, take).map(songFromSearch);
           for (const s of songs) {
             if (seen.has(s.id) || usedInOthers.has(s.id)) continue;
             seen.add(s.id);
@@ -447,18 +487,21 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
           </div>
         )}
 
-        {/* 偏爱艺人 */}
+        {/* 偏爱艺人（starred=灵魂艺人，头像左上角金星） */}
         {initialized && (profile?.signatureArtists?.length || 0) > 0 && (
           <div className="mx-4 mt-4">
             <SectionTitle>钟爱的人</SectionTitle>
             <div className="flex items-center gap-2 overflow-x-auto pb-2 shizuku-scrollbar">
               {profile!.signatureArtists.map((a, i) => (
-                <div key={i} className="shrink-0 text-center">
-                  <div className="w-14 h-14 rounded-full flex items-center justify-center text-white mx-auto"
+                <div key={i} className="shrink-0 text-center relative">
+                  <div className="w-14 h-14 rounded-full flex items-center justify-center text-white mx-auto relative"
                     style={{ background: gradientFor(`gradient-0${(i % 6) + 1}`) }}>
                     <span className="text-lg font-semibold" style={{ fontFamily: `'Noto Serif', serif` }}>
                       {a.name.slice(0, 1)}
                     </span>
+                    {a.starred && (
+                      <Star size={14} weight="fill" className="absolute -top-1 -left-1 text-amber-300 drop-shadow-sm" />
+                    )}
                   </div>
                   <div className="text-[10px] mt-1 max-w-[60px] truncate" style={{ color: C.muted }}>{a.name}</div>
                 </div>
@@ -466,6 +509,48 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
             </div>
           </div>
         )}
+
+        {/* 钟爱的原声（影视 / 音乐剧 / 游戏 OST / 动画原声，独立于纯音乐艺人） */}
+        {initialized && (profile?.favoriteSoundtracks?.length || 0) > 0 && (() => {
+          const typeIcon = (t: string) => {
+            switch (t) {
+              case 'game': return <GameController size={11} weight="fill" />;
+              case 'musical': return <Popcorn size={11} weight="fill" />;
+              case 'film': return <FilmSlate size={11} weight="fill" />;
+              case 'anime': return <MonitorPlay size={11} weight="fill" />;
+              default: return <MusicNote size={11} weight="fill" />;
+            }
+          };
+          const typeLabel = (t: string) => {
+            switch (t) {
+              case 'game': return '游戏';
+              case 'musical': return '音乐剧';
+              case 'film': return '电影';
+              case 'anime': return '动画';
+              default: return 'OST';
+            }
+          };
+          return (
+            <div className="mx-4 mt-4">
+              <SectionTitle>钟爱的原声</SectionTitle>
+              <div className="flex items-center gap-2 overflow-x-auto pb-2 shizuku-scrollbar">
+                {profile!.favoriteSoundtracks!.map((s, i) => (
+                  <div key={i} className="shrink-0 text-center relative">
+                    <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-white mx-auto relative"
+                      style={{ background: gradientFor(`gradient-0${(i % 6) + 1}`) }}>
+                      <span className="text-base">{typeIcon(s.type)}</span>
+                      {s.starred && (
+                        <Star size={14} weight="fill" className="absolute -top-1 -left-1 text-amber-300 drop-shadow-sm" />
+                      )}
+                    </div>
+                    <div className="text-[10px] mt-1 max-w-[72px] truncate" style={{ color: C.muted }}>{s.title}</div>
+                    <div className="text-[8px] tracking-wider" style={{ color: C.muted, opacity: 0.6 }}>{typeLabel(s.type)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
 
         {/* 歌单 */}
         {initialized && (profile?.playlists?.length || 0) > 0 && (

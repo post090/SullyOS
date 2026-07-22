@@ -2114,8 +2114,10 @@ export interface CharMusicProfile {
     bio: string;
     /** 曲风标签（可随听歌演化） */
     genreTags: string[];
-    /** 偏爱的艺人 */
-    signatureArtists: { name: string; artistId?: number }[];
+    /** 偏爱的艺人。starred=true 为「灵魂艺人」，填充歌单时权重更高（搜出来取更多条） */
+    signatureArtists: { name: string; artistId?: number; starred?: boolean }[];
+    /** 偏爱的影视/音乐剧/游戏 OST 等（独立于纯音乐艺人，填充歌单时按类型加搜索后缀） */
+    favoriteSoundtracks?: { title: string; type: 'ost' | 'musical' | 'film' | 'game' | 'anime'; starred?: boolean }[];
     /** 本地歌单列表 */
     playlists: CharPlaylist[];
     /** 仿 likelist */

@@ -127,18 +127,57 @@ const scavengeFields = (text: string): Partial<PersonaDraft> => {
             .filter(Boolean).slice(0, 8);
     }
 
-    // signatureArtists — 形如 [{"name": "..."}] 或纯字符串数组
+    // signatureArtists — 形如 [{"name": "...", "starred": true}] 或纯字符串数组
     const artistBlock = text.match(/"?signature[aA]rtists"?\s*[:：]\s*\[([\s\S]*?)\]/);
     if (artistBlock) {
         const inner = artistBlock[1];
-        const names: string[] = [];
-        const nameRe = /["“]([^"”\n]{1,30})["”]/g;
-        let m: RegExpExecArray | null;
-        while ((m = nameRe.exec(inner)) !== null) {
-            const n = m[1].trim();
-            if (n && !['name', 'artistId'].includes(n)) names.push(n);
+        // 按对象分块（每个 {...} 是一个艺人）
+        const objRe = /\{([^{}]*)\}/g;
+        const objs: string[] = [];
+        let om: RegExpExecArray | null;
+        while ((om = objRe.exec(inner)) !== null) objs.push(om[1]);
+        if (objs.length > 0) {
+            const artists: { name: string; starred?: boolean }[] = [];
+            for (const o of objs) {
+                const nameM = o.match(/"?name"?\s*[:：]\s*["“]([^"”\n]{1,30})["”]/);
+                if (!nameM) continue;
+                const starredM = o.match(/"?starred"?\s*[:：]\s*(true|false)/i);
+                artists.push({ name: nameM[1].trim(), starred: starredM ? starredM[1].toLowerCase() === 'true' : undefined });
+            }
+            if (artists.length) out.signatureArtists = artists.slice(0, 10);
+        } else {
+            // 退化：纯字符串数组 ["...", "..."]
+            const names: string[] = [];
+            const nameRe = /["“]([^"”\n]{1,30})["”]/g;
+            let m: RegExpExecArray | null;
+            while ((m = nameRe.exec(inner)) !== null) {
+                const n = m[1].trim();
+                if (n && !['name', 'artistId', 'starred'].includes(n)) names.push(n);
+            }
+            if (names.length) out.signatureArtists = names.slice(0, 10).map(n => ({ name: n }));
         }
-        if (names.length) out.signatureArtists = names.slice(0, 6).map(n => ({ name: n }));
+    }
+
+    // favoriteSoundtracks — 形如 [{"title": "...", "type": "game", "starred": true}]
+    const ostBlock = text.match(/"?favorite[sS]oundtracks"?\s*[:：]\s*\[([\s\S]*?)\]/);
+    if (ostBlock) {
+        const inner = ostBlock[1];
+        const objRe = /\{([^{}]*)\}/g;
+        const objs: string[] = [];
+        let om: RegExpExecArray | null;
+        while ((om = objRe.exec(inner)) !== null) objs.push(om[1]);
+        const validTypes = ['ost', 'musical', 'film', 'game', 'anime'];
+        const soundtracks: { title: string; type: 'ost' | 'musical' | 'film' | 'game' | 'anime'; starred?: boolean }[] = [];
+        for (const o of objs) {
+            const titleM = o.match(/"?title"?\s*[:：]\s*["“]([^"”\n]{1,40})["”]/);
+            if (!titleM) continue;
+            const typeM = o.match(/"?type"?\s*[:：]\s*["“]?(ost|musical|film|game|anime)["”]?\s*/i);
+            const type = typeM ? typeM[1].toLowerCase() as any : 'ost';
+            if (!validTypes.includes(type)) continue;
+            const starredM = o.match(/"?starred"?\s*[:：]\s*(true|false)/i);
+            soundtracks.push({ title: titleM[1].trim(), type, starred: starredM ? starredM[1].toLowerCase() === 'true' : undefined });
+        }
+        if (soundtracks.length) out.favoriteSoundtracks = soundtracks.slice(0, 6);
     }
 
     // playlists — 最省事：找若干 title 字符串
@@ -191,7 +230,8 @@ const scavengeFields = (text: string): Partial<PersonaDraft> => {
 interface PersonaDraft {
     bio: string;
     genreTags: string[];
-    signatureArtists: { name: string; artistId?: number }[];
+    signatureArtists: { name: string; artistId?: number; starred?: boolean }[];
+    favoriteSoundtracks?: { title: string; type: 'ost' | 'musical' | 'film' | 'game' | 'anime'; starred?: boolean }[];
     playlists: { title: string; description: string; mood?: string; coverStyle?: string; language?: string; searchHints?: string[] }[];
 }
 
@@ -217,25 +257,41 @@ const buildPersonaPrompt = (char: CharacterProfile, user: UserProfile): { sys: s
    - 角色背景（出身/国籍/文化圈）作为次要参考：只有当设定里没提音乐爱好时，才按背景推断（日本角色→jp、欧美角色→en、中国角色→cn、韩国角色→kr）
    - 跨文化角色（如留学背景、混血）可以有一个歌单为 "mixed"，但至少两个歌单要贴合角色的核心语言偏好
 7. 艺人选择要和歌单 language 匹配 —— 如果歌单 language 是 jp，signatureArtists 里就要有能搜到日语歌的艺人；language 是 en 就要有英语艺人。不强制所有艺人都同一语种，但要保证后续按艺人搜歌能搜到对应语言的歌
-8. 每个歌单给 2-4 个 searchHints —— 这是**真实可搜的关键词**，用于后续在网易云搜歌填充歌单：
-   - 优先用艺人名（如 "椎名林檎"）
-   - 可以加曲风词组合（如 "my bloody valentine shoegaze"）
-   - 可以加场景词组合（如 "陈绮贞 深夜"）但**必须和艺人名组合**，不要单独用泛词（严禁单独搜"快乐"/"悲伤"/"氛围"）
-   - searchHints 要能搜到**符合歌单 language** 的歌（jp 歌单的 searchHints 应该能搜到日语歌）
-   - 跨歌单 searchHints 尽量不重复
+
+**艺人池（重要，避免歌单撞车）**:
+8. signatureArtists 给 **6-10 个**真实艺人（不限国家语种）。池子越大，后续填充歌单时撞车概率越低
+9. 其中标 1-2 个 "starred": true —— 这是角色的**灵魂艺人**（最核心的偏爱），后续填充歌单时灵魂艺人搜出来的歌会占更高比例
+10. 艺人尽量分散在不同曲风 / 年代 / 地区，避免清一色同一拨人
+
+**影视 / 音乐剧 / 游戏 OST 偏好（独立维度）**:
+11. favoriteSoundtracks 给 **2-4 个**角色偏爱的影视原声 / 音乐剧 / 游戏 OST / 动画原声。这跟纯音乐艺人是**两个独立维度** ——
+    一个角色可能不追星但特别迷塞尔达 OST，或反过来到处听百老汇选段。必须从角色设定里真实推断，不要硬塞
+12. 每项要标 "type"：ost（泛原声带）/ musical（音乐剧歌剧）/ film（电影）/ game（游戏）/ anime（动画）
+13. 其中标 1 个 "starred": true —— 角色最爱的那部，后续填充歌单时会优先搜
+14. 必须是真实存在、网易云能搜到的作品（如"塞尔达传说 旷野之息""歌剧魅影""银翼杀手2049""新世纪福音战士"）
+
+**searchHints（填充歌单用的搜索关键词）**:
+15. 每个歌单给 2-4 个 searchHints —— 这是**真实可搜的关键词**，用于后续在网易云搜歌填充歌单：
+    - 可以用艺人名（如 "椎名林檎"）
+    - 可以用艺人名 + 曲风词组合（如 "my bloody valentine shoegaze"）
+    - 可以用 OST/影视标题（如 "歌剧魅影"、"塞尔达 旷野之息"）—— 系统会按 type 自动加搜索后缀（game→OST、musical→选段），你只要给干净的作品名
+    - 可以用艺人名 + 场景词组合（如 "陈绮贞 深夜"）但**必须和艺人名组合**，不要单独用泛词（严禁单独搜"快乐"/"悲伤"/"氛围"）
+16. searchHints 要能搜到**符合歌单 language** 的歌（jp 歌单的 searchHints 应该能搜到日语歌）
+17. 跨歌单 searchHints 尽量不重复 —— 利用 6-10 个艺人的大池子 + OST 标题来保证多样性
 
 只输出 JSON，不要任何解释:
 {
   "bio": "(一句话，角色第一人称)",
   "genreTags": ["...", "...", "...(3-5个)"],
-  "signatureArtists": [{"name":"真实艺人名"}, ... (3-6个)],
+  "signatureArtists": [{"name":"真实艺人名","starred":false}, ... (6-10个，其中1-2个starred=true)],
+  "favoriteSoundtracks": [{"title":"真实作品名","type":"game|musical|film|anime|ost","starred":false}, ... (2-4个，其中1个starred=true)],
   "playlists": [
     {
       "title":"歌单A(短·独特场景)",
       "description":"(角色口吻, 1-2句, 说清楚什么时候听 / 为什么)",
       "mood":"从下面8个里选一个: happy|sad|romantic|angry|chill|epic|nostalgic|dreamy",
       "language":"jp|cn|en|kr|mixed",
-      "searchHints":["艺人名", "艺人名 曲风词", ... 2-4个]
+      "searchHints":["艺人名", "艺人名 曲风词", "OST作品名", ... 2-4个]
     },
     {"title":"歌单B(短·和A完全不同的场景/心境)", "description":"...", "mood":"必须和A不同", "language":"...", "searchHints":[...]},
     {"title":"歌单C(短·和A、B都不同)", "description":"...", "mood":"必须和A、B都不同", "language":"...", "searchHints":[...]}
@@ -289,7 +345,7 @@ export const CharMusicPersona = {
 
         // 解析：结构化 parse 优先；不行就 scavenge（逐字段正则抠）
         // 两条线结果合并 — 任何字段单项 OK 都先收下
-        const structured = extractJson<PersonaDraft>(rawText) || {};
+        const structured = (extractJson<PersonaDraft>(rawText) || {}) as Partial<PersonaDraft>;
         const scavenged = scavengeFields(rawText);
         const draft: Partial<PersonaDraft> = {
             bio: sanitizeStr(structured.bio) || sanitizeStr(scavenged.bio),
@@ -298,19 +354,38 @@ export const CharMusicPersona = {
                 structured.signatureArtists,
                 scavenged.signatureArtists as PersonaDraft['signatureArtists'],
             ),
+            favoriteSoundtracks: firstArray(
+                structured.favoriteSoundtracks,
+                scavenged.favoriteSoundtracks as PersonaDraft['favoriteSoundtracks'],
+            ),
             playlists: firstArray(structured.playlists, scavenged.playlists as PersonaDraft['playlists']),
         };
 
-        // 艺人字段：兼容三种形态 — [{name:"..."}] / ["..."] / 混合
+        // 艺人字段：兼容三种形态 — [{name:"...",starred:true}] / [{name:"..."}] / ["..."] / 混合
         const artistsIn = draft.signatureArtists || [];
         const artists = artistsIn
             .map((a: any) => {
                 if (typeof a === 'string') return { name: a.trim() };
-                if (a && typeof a === 'object' && typeof a.name === 'string') return { name: a.name.trim() };
+                if (a && typeof a === 'object' && typeof a.name === 'string') {
+                    return { name: a.name.trim(), starred: a.starred === true ? true : undefined };
+                }
                 return null;
             })
-            .filter((a): a is { name: string } => !!a && !!a.name)
-            .slice(0, 8);
+            .filter((a): a is { name: string; starred?: boolean } => !!a && !!a.name)
+            .slice(0, 10);
+
+        // OST/影视偏好：兼容 type 缺省 + 校验
+        type SoundtrackEntry = { title: string; type: 'ost' | 'musical' | 'film' | 'game' | 'anime'; starred?: boolean };
+        const validTypes = ['ost', 'musical', 'film', 'game', 'anime'] as const;
+        const soundtracksIn = draft.favoriteSoundtracks || [];
+        const soundtracks: SoundtrackEntry[] = soundtracksIn
+            .map((s: any): SoundtrackEntry | null => {
+                if (!s || typeof s !== 'object' || typeof s.title !== 'string') return null;
+                const t = typeof s.type === 'string' && (validTypes as readonly string[]).includes(s.type) ? s.type : 'ost';
+                return { title: s.title.trim(), type: t as SoundtrackEntry['type'], starred: s.starred === true ? true : undefined };
+            })
+            .filter((s): s is SoundtrackEntry => !!s && !!s.title)
+            .slice(0, 6);
 
         const genres = (draft.genreTags || [])
             .filter((t: any) => typeof t === 'string' && t.trim())
@@ -351,6 +426,7 @@ export const CharMusicPersona = {
             bio: sanitizeStr(draft.bio) || `${char.name} 的音乐角落`,
             genreTags: genres,
             signatureArtists: artists,
+            favoriteSoundtracks: soundtracks.length > 0 ? soundtracks : undefined,
             playlists,
             likedSongIds: [],
             recentPlays: [],
