@@ -19,7 +19,7 @@ import { computeCurrentListening } from '../../utils/charMusicSchedule';
 import { removeSongsFromPlaylist } from '../../utils/charPlaylistEdit';
 import { DB } from '../../utils/db';
 import { C, Sparkle, MizuHeader, BokehBg, MiniPlayer } from './MusicUI';
-import { ArrowLeft, MusicNote, Heart, Plus, MagnifyingGlass, Trash, Check, Star, FilmSlate, GameController, Popcorn, MonitorPlay } from '@phosphor-icons/react';
+import { ArrowLeft, MusicNote, Heart, Plus, MagnifyingGlass, Trash, Check, Star, FilmSlate, GameController, Popcorn, MonitorPlay, ArrowClockwise, PencilSimple, X } from '@phosphor-icons/react';
 import { getLocalDailySchedule } from '../../utils/dailySchedule';
 import { useLocalDateKey } from '../../hooks/useLocalDateKey';
 
@@ -66,6 +66,11 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
   const [initializing, setInitializing] = useState(false);
   const [expandedPl, setExpandedPl] = useState<string | null>(null);
   const [fillingPl, setFillingPl] = useState<string | null>(null);
+
+  // 编辑艺人/OST 名字弹窗：null=关闭，否则记录正在编辑哪一项
+  const [editingEntry, setEditingEntry] = useState<{ kind: 'artist' | 'soundtrack'; index: number } | null>(null);
+  // 顶栏批量匹配图片（艺人头像 + OST 封面）
+  const [refreshingArt, setRefreshingArt] = useState(false);
 
   // 选择模式：长按或点「选择」进入，可勾选多首歌一起删
   const [selectingPl, setSelectingPl] = useState<string | null>(null);
@@ -185,6 +190,105 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
     }
   }, [char, initializing, userProfile, apiConfig, updateCharacter, addToast]);
 
+  /**
+   * 顶栏刷新按钮：根据艺人名搜艺人、OST 标题搜专辑，匹配头像/封面并写回 profile 持久化。
+   * - 艺人走 /search type=100，取 result.artists[0].img1v1Url（1:1 头像）
+   * - OST 走 /search type=10，取 result.albums[0].picUrl（专辑封面）
+   * - 单个失败不阻塞，最后统一 toast 统计
+   */
+  const refreshArtImages = useCallback(async () => {
+    if (!char || !profile || refreshingArt) return;
+    setRefreshingArt(true);
+    let artistHits = 0, artistMiss = 0, ostHits = 0, ostMiss = 0;
+    try {
+      // 拷贝一份避免中间态错乱
+      const nextArtists = [...profile.signatureArtists];
+      const nextOsts = [...(profile.favoriteSoundtracks || [])];
+
+      // 艺人：搜艺人（type=100），取 img1v1Url
+      for (let i = 0; i < nextArtists.length; i++) {
+        const a = nextArtists[i];
+        if (!a?.name) continue;
+        try {
+          const r: any = await musicApi.call(cfg, '/search', { keyword: a.name, limit: 5, offset: 0, type: 100 });
+          const hit = r?.result?.artists?.[0];
+          if (hit?.img1v1Url) {
+            nextArtists[i] = { ...a, artistId: hit.id, picUrl: hit.img1v1Url };
+            artistHits++;
+          } else {
+            artistMiss++;
+          }
+        } catch {
+          artistMiss++;
+        }
+      }
+
+      // OST：搜专辑（type=10），取 picUrl
+      for (let i = 0; i < nextOsts.length; i++) {
+        const s = nextOsts[i];
+        if (!s?.title) continue;
+        try {
+          const r: any = await musicApi.call(cfg, '/search', { keyword: s.title, limit: 5, offset: 0, type: 10 });
+          const hit = r?.result?.albums?.[0];
+          if (hit?.picUrl) {
+            nextOsts[i] = { ...s, coverUrl: hit.picUrl };
+            ostHits++;
+          } else {
+            ostMiss++;
+          }
+        } catch {
+          ostMiss++;
+        }
+      }
+
+      updateCharacter(char.id, {
+        musicProfile: {
+          ...profile,
+          signatureArtists: nextArtists,
+          favoriteSoundtracks: nextOsts,
+          updatedAt: Date.now(),
+        },
+      });
+      const total = artistHits + artistMiss + ostHits + ostMiss;
+      const hits = artistHits + ostHits;
+      addToast(hits > 0 ? `已匹配 ${hits}/${total}（艺人 ${artistHits} · OST ${ostHits}）` : '没匹配到图片，改改名字再试？', hits > 0 ? 'success' : 'info');
+    } catch (e: any) {
+      addToast(`匹配失败：${e.message || '未知错误'}`, 'error');
+    } finally {
+      setRefreshingArt(false);
+    }
+  }, [char, profile, cfg, refreshingArt, updateCharacter, addToast]);
+
+  /**
+   * 编辑弹窗保存：改艺人名或 OST 标题，同时清掉旧的 picUrl/coverUrl（名字变了旧图失效）。
+   */
+  const saveEntryName = useCallback((newName: string) => {
+    if (!char || !profile || !editingEntry) return;
+    const clean = newName.trim();
+    if (!clean) return;
+    if (editingEntry.kind === 'artist') {
+      const next = [...profile.signatureArtists];
+      const old = next[editingEntry.index];
+      if (!old) return;
+      // 名字变了才清 picUrl（没图也不重复写）
+      const nameChanged = old.name !== clean;
+      next[editingEntry.index] = { ...old, name: clean, picUrl: nameChanged ? undefined : old.picUrl };
+      updateCharacter(char.id, {
+        musicProfile: { ...profile, signatureArtists: next, updatedAt: Date.now() },
+      });
+    } else {
+      const next = [...(profile.favoriteSoundtracks || [])];
+      const old = next[editingEntry.index];
+      if (!old) return;
+      const nameChanged = old.title !== clean;
+      next[editingEntry.index] = { ...old, title: clean, coverUrl: nameChanged ? undefined : old.coverUrl };
+      updateCharacter(char.id, {
+        musicProfile: { ...profile, favoriteSoundtracks: next, updatedAt: Date.now() },
+      });
+    }
+    setEditingEntry(null);
+  }, [char, profile, editingEntry, updateCharacter]);
+
   const togglePlaylist = (plId: string) => {
     setExpandedPl(prev => (prev === plId ? null : plId));
     exitSelectMode(); // 收起或切到别的歌单时，退出选择模式
@@ -299,7 +403,8 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
         return;
       }
 
-      // 跨歌单去重：本角色其它歌单已经有的歌不要再塞进来
+      // 跨歌单去重 + 本歌单已有歌去重（追加模式不能塞已有的回来）
+      const existingIds = new Set(pl.songs.map(s => s.id));
       const usedInOthers = new Set<number>();
       for (const other of profile.playlists) {
         if (other.id === pl.id) continue;
@@ -316,7 +421,7 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
           const take = starred ? 6 : 3;
           const songs: Song[] = (r?.result?.songs || []).slice(0, take).map(songFromSearch);
           for (const s of songs) {
-            if (seen.has(s.id) || usedInOthers.has(s.id)) continue;
+            if (existingIds.has(s.id) || seen.has(s.id) || usedInOthers.has(s.id)) continue;
             seen.add(s.id);
             picked.push(toPlaylistSong(s));
             if (picked.length >= 8) break;
@@ -325,12 +430,13 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
       }
 
       if (picked.length === 0) {
-        addToast('没搜到合适的歌', 'error');
+        addToast(pl.songs.length > 0 ? '没搜到新歌（已有的都重复了）' : '没搜到合适的歌', 'error');
         return;
       }
+      // 追加到末尾，不覆盖原有歌曲
       const updatedPl: CharPlaylist = {
         ...pl,
-        songs: picked,
+        songs: [...pl.songs, ...picked],
         coverStyle: pl.coverStyle,
         updatedAt: Date.now(),
       };
@@ -340,7 +446,7 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
         updatedAt: Date.now(),
       };
       updateCharacter(char.id, { musicProfile: updatedProfile });
-      addToast(`已为《${pl.title}》填入 ${picked.length} 首歌`, 'success');
+      addToast(`已为《${pl.title}》新增 ${picked.length} 首（共 ${updatedPl.songs.length}）`, 'success');
     } catch (e: any) {
       addToast(`填充失败：${e.message}`, 'error');
     } finally {
@@ -374,6 +480,16 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
       <MizuHeader
         title={`拜访 · ${char.name}`}
         onBack={onBack}
+        right={
+          <button
+            onClick={refreshArtImages}
+            disabled={refreshingArt || !initialized}
+            title="根据名字匹配艺人头像 / OST 封面"
+            className="p-1.5 rounded-full hover:bg-black/5 active:scale-90 transition-transform disabled:opacity-40"
+          >
+            <ArrowClockwise size={18} weight="bold" style={{ color: C.muted }} className={refreshingArt ? 'animate-spin' : ''} />
+          </button>
+        }
       />
 
       <div className="flex-1 overflow-y-auto relative z-10 shizuku-scrollbar pb-20">
@@ -487,22 +603,29 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
           </div>
         )}
 
-        {/* 偏爱艺人（starred=灵魂艺人，头像左上角金星） */}
+        {/* 偏爱艺人（starred=灵魂艺人，头像左上角金星；有 picUrl 显示真人头像） */}
         {initialized && (profile?.signatureArtists?.length || 0) > 0 && (
           <div className="mx-4 mt-4">
             <SectionTitle>钟爱的人</SectionTitle>
             <div className="flex items-center gap-2 overflow-x-auto pb-2 shizuku-scrollbar">
               {profile!.signatureArtists.map((a, i) => (
                 <div key={i} className="shrink-0 text-center relative">
-                  <div className="w-14 h-14 rounded-full flex items-center justify-center text-white mx-auto relative"
-                    style={{ background: gradientFor(`gradient-0${(i % 6) + 1}`) }}>
-                    <span className="text-lg font-semibold" style={{ fontFamily: `'Noto Serif', serif` }}>
-                      {a.name.slice(0, 1)}
-                    </span>
-                    {a.starred && (
-                      <Star size={14} weight="fill" className="absolute -top-1 -left-1 text-amber-300 drop-shadow-sm" />
+                  <button
+                    onClick={() => setEditingEntry({ kind: 'artist', index: i })}
+                    className="w-14 h-14 rounded-full flex items-center justify-center text-white mx-auto relative overflow-hidden active:scale-95 transition-transform"
+                    style={{ background: gradientFor(`gradient-0${(i % 6) + 1}`) }}
+                  >
+                    {a.picUrl ? (
+                      <img src={toHttps(a.picUrl)} alt={a.name} className="w-full h-full object-cover" />
+                    ) : (
+                      <span className="text-lg font-semibold" style={{ fontFamily: `'Noto Serif', serif` }}>
+                        {a.name.slice(0, 1)}
+                      </span>
                     )}
-                  </div>
+                    {a.starred && (
+                      <Star size={14} weight="fill" className="absolute top-0.5 left-0.5 text-amber-300 drop-shadow-sm z-10" />
+                    )}
+                  </button>
                   <div className="text-[10px] mt-1 max-w-[60px] truncate" style={{ color: C.muted }}>{a.name}</div>
                 </div>
               ))}
@@ -514,11 +637,11 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
         {initialized && (profile?.favoriteSoundtracks?.length || 0) > 0 && (() => {
           const typeIcon = (t: string) => {
             switch (t) {
-              case 'game': return <GameController size={11} weight="fill" />;
-              case 'musical': return <Popcorn size={11} weight="fill" />;
-              case 'film': return <FilmSlate size={11} weight="fill" />;
-              case 'anime': return <MonitorPlay size={11} weight="fill" />;
-              default: return <MusicNote size={11} weight="fill" />;
+              case 'game': return <GameController size={22} weight="fill" />;
+              case 'musical': return <Popcorn size={22} weight="fill" />;
+              case 'film': return <FilmSlate size={22} weight="fill" />;
+              case 'anime': return <MonitorPlay size={22} weight="fill" />;
+              default: return <MusicNote size={22} weight="fill" />;
             }
           };
           const typeLabel = (t: string) => {
@@ -536,13 +659,20 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
               <div className="flex items-center gap-2 overflow-x-auto pb-2 shizuku-scrollbar">
                 {profile!.favoriteSoundtracks!.map((s, i) => (
                   <div key={i} className="shrink-0 text-center relative">
-                    <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-white mx-auto relative"
-                      style={{ background: gradientFor(`gradient-0${(i % 6) + 1}`) }}>
-                      <span className="text-base">{typeIcon(s.type)}</span>
-                      {s.starred && (
-                        <Star size={14} weight="fill" className="absolute -top-1 -left-1 text-amber-300 drop-shadow-sm" />
+                    <button
+                      onClick={() => setEditingEntry({ kind: 'soundtrack', index: i })}
+                      className="w-14 h-14 rounded-2xl flex items-center justify-center text-white mx-auto relative overflow-hidden active:scale-95 transition-transform"
+                      style={{ background: gradientFor(`gradient-0${(i % 6) + 1}`) }}
+                    >
+                      {s.coverUrl ? (
+                        <img src={toHttps(s.coverUrl)} alt={s.title} className="w-full h-full object-cover" />
+                      ) : (
+                        <span>{typeIcon(s.type)}</span>
                       )}
-                    </div>
+                      {s.starred && (
+                        <Star size={14} weight="fill" className="absolute top-0.5 left-0.5 text-amber-300 drop-shadow-sm z-10" />
+                      )}
+                    </button>
                     <div className="text-[10px] mt-1 max-w-[72px] truncate" style={{ color: C.muted }}>{s.title}</div>
                     <div className="text-[8px] tracking-wider" style={{ color: C.muted, opacity: 0.6 }}>{typeLabel(s.type)}</div>
                   </div>
@@ -589,60 +719,66 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
 
                     {isExpanded && (
                       <div className="px-3 pb-3 border-t" style={{ borderColor: `${C.faint}30` }}>
-                        {pl.songs.length === 0 ? (
-                          <div className="text-center py-3">
-                            <div className="text-[10px] italic mb-2" style={{ color: C.faint }}>
-                              还空着。让 {char.name} 根据品味挑几首？
-                            </div>
-                            <button
-                              onClick={() => fillPlaylistFromTaste(pl)}
-                              disabled={isFilling}
-                              className="text-[10px] px-3 py-1.5 rounded-full shizuku-glass disabled:opacity-60"
-                              style={{ color: C.primary, border: `1px solid ${C.primary}30` }}
-                            >
-                              <MagnifyingGlass size={10} weight="bold" className="inline mr-1" />
-                              {isFilling ? '正在挑…' : '让 ta 挑几首'}
-                            </button>
+                        <div className="pt-2">
+                          {/* 操作条：平时显示「选择」+「挑几首」；选择模式下变成 取消 · 已选 N · 删除 */}
+                          <div className="flex items-center justify-between px-2 pb-1.5">
+                            {selectingPl === pl.id ? (
+                              <>
+                                <button
+                                  onClick={exitSelectMode}
+                                  className="text-[11px] px-1 py-0.5"
+                                  style={{ color: C.muted }}
+                                >
+                                  取消
+                                </button>
+                                <span className="text-[10px]" style={{ color: C.faint }}>
+                                  已选 {selectedSongIds.size} 首
+                                </span>
+                                <button
+                                  onClick={() => deleteSelected(pl)}
+                                  disabled={selectedSongIds.size === 0}
+                                  className="text-[11px] px-1 py-0.5 flex items-center gap-1 disabled:opacity-40"
+                                  style={{ color: C.vip }}
+                                >
+                                  <Trash size={12} weight="bold" />
+                                  删除
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <span className="text-[10px]" style={{ color: C.faint }}>
+                                  {pl.songs.length > 0 ? `${pl.songs.length} 首` : '还空着'}
+                                </span>
+                                <div className="flex items-center gap-2">
+                                  {pl.songs.length > 0 && (
+                                    <button
+                                      onClick={() => enterSelectMode(pl.id)}
+                                      className="text-[11px] px-1 py-0.5"
+                                      style={{ color: C.primary }}
+                                    >
+                                      选择
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={() => fillPlaylistFromTaste(pl)}
+                                    disabled={isFilling}
+                                    className="text-[11px] px-2 py-0.5 rounded-full disabled:opacity-60 flex items-center gap-1"
+                                    style={{ color: C.primary, border: `1px solid ${C.primary}30` }}
+                                    title={pl.songs.length > 0 ? '根据品味再挑几首新的（追加）' : '根据品味挑几首'}
+                                  >
+                                    <Plus size={10} weight="bold" />
+                                    {isFilling ? '挑歌中…' : (pl.songs.length > 0 ? '追加' : '挑几首')}
+                                  </button>
+                                </div>
+                              </>
+                            )}
                           </div>
-                        ) : (
-                          <div className="pt-2">
-                            {/* 操作条：平时显示「选择」；选择模式下变成 取消 · 已选 N · 删除 */}
-                            <div className="flex items-center justify-between px-2 pb-1.5">
-                              {selectingPl === pl.id ? (
-                                <>
-                                  <button
-                                    onClick={exitSelectMode}
-                                    className="text-[11px] px-1 py-0.5"
-                                    style={{ color: C.muted }}
-                                  >
-                                    取消
-                                  </button>
-                                  <span className="text-[10px]" style={{ color: C.faint }}>
-                                    已选 {selectedSongIds.size} 首
-                                  </span>
-                                  <button
-                                    onClick={() => deleteSelected(pl)}
-                                    disabled={selectedSongIds.size === 0}
-                                    className="text-[11px] px-1 py-0.5 flex items-center gap-1 disabled:opacity-40"
-                                    style={{ color: C.vip }}
-                                  >
-                                    <Trash size={12} weight="bold" />
-                                    删除
-                                  </button>
-                                </>
-                              ) : (
-                                <>
-                                  <span className="text-[10px]" style={{ color: C.faint }}>{pl.songs.length} 首</span>
-                                  <button
-                                    onClick={() => enterSelectMode(pl.id)}
-                                    className="text-[11px] px-1 py-0.5"
-                                    style={{ color: C.primary }}
-                                  >
-                                    选择
-                                  </button>
-                                </>
-                              )}
+                          {/* 歌曲列表（空歌单不渲染，只显示一行提示） */}
+                          {pl.songs.length === 0 ? (
+                            <div className="text-center text-[10px] italic py-3" style={{ color: C.faint }}>
+                              让 {char.name} 根据品味挑几首？
                             </div>
+                          ) : (
                             <div className="space-y-1">
                               {pl.songs.map((s, i) => {
                                 const selecting = selectingPl === pl.id;
@@ -683,8 +819,8 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
                                 );
                               })}
                             </div>
-                          </div>
-                        )}
+                          )}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -796,6 +932,25 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
           onNext={nextSong}
         />
       )}
+
+      {/* 编辑艺人/OST 名字弹窗 */}
+      {editingEntry && (() => {
+        const isArtist = editingEntry.kind === 'artist';
+        const entry = isArtist
+          ? profile?.signatureArtists?.[editingEntry.index]
+          : profile?.favoriteSoundtracks?.[editingEntry.index];
+        const original = isArtist ? (entry as any)?.name : (entry as any)?.title;
+        return (
+          <EditNameModal
+            title={isArtist ? '编辑艺人名' : '编辑 OST 名'}
+            original={original || ''}
+            onCancel={() => setEditingEntry(null)}
+            onSave={saveEntryName}
+            onMatchImage={refreshArtImages}
+            matching={refreshingArt}
+          />
+        );
+      })()}
     </div>
   );
 };
@@ -816,6 +971,95 @@ const SectionTitle: React.FC<{ children: React.ReactNode }> = ({ children }) => 
     </span>
   </div>
 );
+
+/**
+ * 编辑艺人/OST 名字弹窗。
+ * - 改完名字保存会清掉旧 picUrl/coverUrl（名字变了旧图失效）
+ * - 「匹配图片」按钮直接调顶栏的批量匹配（先保存当前编辑内容更顺手，但用户可能只改名不刷新，
+ *   所以这个按钮只在名字没改时才可用 —— 改了名字先存再刷新）
+ * 弹窗内部用独立 input state，关闭时丢弃未保存内容。
+ */
+const EditNameModal: React.FC<{
+  title: string;
+  original: string;
+  onCancel: () => void;
+  onSave: (newName: string) => void;
+  onMatchImage: () => void;
+  matching: boolean;
+}> = ({ title, original, onCancel, onSave, onMatchImage, matching }) => {
+  const [value, setValue] = useState(original);
+  const trimmed = value.trim();
+  const changed = trimmed !== original.trim() && trimmed.length > 0;
+  // 自动聚焦 + 选中
+  const inputRef = React.useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const t = setTimeout(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }, 50);
+    return () => clearTimeout(t);
+  }, []);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-6"
+      style={{ background: 'rgba(0,0,0,0.4)' }}
+      onClick={onCancel}
+    >
+      <div
+        className="w-full max-w-sm rounded-2xl p-4 shizuku-glass-strong"
+        style={{ background: '#fffcf5' }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold" style={{ color: C.text, fontFamily: `'Noto Serif', serif` }}>
+            <PencilSimple size={14} weight="bold" className="inline mr-1.5" style={{ color: C.primary }} />
+            {title}
+          </h3>
+          <button onClick={onCancel} className="p-1 rounded-full hover:bg-black/5">
+            <X size={16} weight="bold" style={{ color: C.muted }} />
+          </button>
+        </div>
+        <input
+          ref={inputRef}
+          type="text"
+          value={value}
+          onChange={e => setValue(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter' && changed) onSave(trimmed);
+            if (e.key === 'Escape') onCancel();
+          }}
+          className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+          style={{ background: '#fff', border: `1px solid ${C.faint}40`, color: C.text }}
+          placeholder="输入名字"
+        />
+        <div className="flex items-center gap-2 mt-3">
+          <button
+            onClick={() => onSave(trimmed)}
+            disabled={!changed}
+            className="flex-1 py-2 rounded-lg text-xs font-medium disabled:opacity-40"
+            style={{ background: C.primary, color: '#fff' }}
+          >
+            <Check size={12} weight="bold" className="inline mr-1" />
+            保存
+          </button>
+          <button
+            // 名字没改时才允许直接匹配图片（改了名字要先存再匹配，否则匹配的还是旧名）
+            onClick={onMatchImage}
+            disabled={changed || matching}
+            title={changed ? '先保存改名再匹配' : '根据当前名字匹配图片'}
+            className="px-3 py-2 rounded-lg text-xs disabled:opacity-40"
+            style={{ background: `${C.primary}18`, color: C.primary }}
+          >
+            <ArrowClockwise size={12} weight="bold" className={`inline mr-1 ${matching ? 'animate-spin' : ''}`} />
+            {matching ? '匹配中' : '匹配图片'}
+          </button>
+        </div>
+        <p className="text-[9px] mt-2 leading-relaxed" style={{ color: C.faint }}>
+          改名保存后旧的匹配图片会清掉。点「匹配图片」会根据当前名字去网易云搜头像/封面。
+        </p>
+      </div>
+    </div>
+  );
+};
 
 /** 语言小标签 —— 贴在歌单信息行末尾，低饱和药丸，不破坏 shizuku 美感。 */
 const LANG_LABELS: Record<string, string> = {
