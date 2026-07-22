@@ -2069,6 +2069,10 @@ export interface CharPlaylist {
     coverStyle: string;         // 渐变色标识 or 第一首歌封面
     songs: CharPlaylistSong[];
     mood?: SongMood;
+    /** 歌单主要语言（LLM 判断，综合角色爱好>背景）。jp/cn/en/kr/mixed */
+    language?: 'jp' | 'cn' | 'en' | 'kr' | 'mixed';
+    /** LLM 推荐的搜索关键词（2-4 个），填歌单时优先用这些，兜底走旧轮换逻辑 */
+    searchHints?: string[];
     createdAt: number;
     updatedAt: number;
 }

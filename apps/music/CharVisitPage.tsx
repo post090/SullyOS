@@ -236,15 +236,23 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
       };
 
       const keywords: string[] = [];
-      // 1) 歌单自己的 title 直接当关键词 — 这是最能拉开差异的一项
-      const cleanTitle = (pl.title || '').trim();
-      if (cleanTitle && !/^歌单\s*\d*$/.test(cleanTitle)) keywords.push(cleanTitle);
-      // 2) mood → 中文搜索词
-      if (pl.mood && moodKeywordMap[pl.mood]) keywords.push(moodKeywordMap[pl.mood]);
-      // 3) 旋转后的艺人（每歌单 2 个，错开起点）
-      keywords.push(...rotate(allArtists, plIndex * 2, 2));
-      // 4) 没艺人就用旋转后的曲风兜底
-      if (allArtists.length === 0) keywords.push(...rotate(allGenres, plIndex, 2));
+      // 1) LLM 给的 searchHints 优先 — 艺人名+曲风词组合，能搜到更对味的歌
+      if (pl.searchHints && pl.searchHints.length > 0) {
+          keywords.push(...pl.searchHints);
+      }
+      // 2) 兜底：旧逻辑（歌单 title + mood 中文词 + 艺人轮换）
+      //    searchHints 缺失或不足时补足，保证老角色也能填
+      if (keywords.length < 2) {
+          // 歌单自己的 title 直接当关键词 — 这是最能拉开差异的一项
+          const cleanTitle = (pl.title || '').trim();
+          if (cleanTitle && !/^歌单\s*\d*$/.test(cleanTitle)) keywords.push(cleanTitle);
+          // mood → 中文搜索词
+          if (pl.mood && moodKeywordMap[pl.mood]) keywords.push(moodKeywordMap[pl.mood]);
+          // 旋转后的艺人（每歌单 2 个，错开起点）
+          keywords.push(...rotate(allArtists, plIndex * 2, 2));
+          // 没艺人就用旋转后的曲风兜底
+          if (allArtists.length === 0) keywords.push(...rotate(allGenres, plIndex, 2));
+      }
 
       // 去重 + 去空
       const uniqKeywords = Array.from(new Set(keywords.map(k => k.trim()).filter(Boolean)));
@@ -486,9 +494,10 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
                         <div className="text-[10px] truncate mt-0.5" style={{ color: C.muted }}>
                           {pl.description || '—'}
                         </div>
-                        <div className="text-[9px] mt-0.5" style={{ color: C.faint }}>
-                          {pl.songs.length > 0 ? `${pl.songs.length} 首` : '（空歌单）'}
-                          {pl.mood && ` · ${pl.mood}`}
+                        <div className="text-[9px] mt-0.5 flex items-center gap-1" style={{ color: C.faint }}>
+                          <span>{pl.songs.length > 0 ? `${pl.songs.length} 首` : '（空歌单）'}</span>
+                          {pl.mood && <span>· {pl.mood}</span>}
+                          {pl.language && <LangBadge lang={pl.language} />}
                         </div>
                       </div>
                     </button>
@@ -722,5 +731,25 @@ const SectionTitle: React.FC<{ children: React.ReactNode }> = ({ children }) => 
     </span>
   </div>
 );
+
+/** 语言小标签 —— 贴在歌单信息行末尾，低饱和药丸，不破坏 shizuku 美感。 */
+const LANG_LABELS: Record<string, string> = {
+  jp: '日语', cn: '华语', en: '英语', kr: '韩语', mixed: '混合',
+};
+const LangBadge: React.FC<{ lang: string }> = ({ lang }) => {
+  const label = LANG_LABELS[lang] || lang;
+  return (
+    <span
+      className="px-1 py-0 rounded-full text-[8px] font-medium leading-[1.4]"
+      style={{
+        background: `${C.primary}18`,
+        color: C.primary,
+        border: `0.5px solid ${C.primary}30`,
+      }}
+    >
+      {label}
+    </span>
+  );
+};
 
 export default CharVisitPage;

@@ -153,6 +153,38 @@ const scavengeFields = (text: string): Partial<PersonaDraft> => {
         }));
     }
 
+    // language — 找 "language":"jp|cn|en|kr|mixed"
+    const langRe = /"?language"?\s*[:：]\s*["“](jp|cn|en|kr|mixed)["”]/gi;
+    const langs: string[] = [];
+    let lm: RegExpExecArray | null;
+    while ((lm = langRe.exec(text)) !== null) langs.push(lm[1].toLowerCase());
+    if (out.playlists && langs.length > 0) {
+        out.playlists.forEach((p, i) => {
+            if (langs[i]) (p as any).language = langs[i];
+        });
+    }
+
+    // searchHints — 找形如 "searchHints":["...", "..."] 的数组
+    const hintsRe = /"?search[hH]ints"?\s*[:：]\s*\[([^\]]+)\]/g;
+    const hintsPerPl: string[][] = [];
+    let hm: RegExpExecArray | null;
+    while ((hm = hintsRe.exec(text)) !== null) {
+        const inner = hm[1];
+        const hints: string[] = [];
+        const hintRe = /["“]([^"”\n]{1,40})["”]/g;
+        let im: RegExpExecArray | null;
+        while ((im = hintRe.exec(inner)) !== null) {
+            const h = im[1].trim();
+            if (h) hints.push(h);
+        }
+        if (hints.length > 0) hintsPerPl.push(hints.slice(0, 4));
+    }
+    if (out.playlists && hintsPerPl.length > 0) {
+        out.playlists.forEach((p, i) => {
+            if (hintsPerPl[i]) (p as any).searchHints = hintsPerPl[i];
+        });
+    }
+
     return out;
 };
 
@@ -160,7 +192,7 @@ interface PersonaDraft {
     bio: string;
     genreTags: string[];
     signatureArtists: { name: string; artistId?: number }[];
-    playlists: { title: string; description: string; mood?: string; coverStyle?: string }[];
+    playlists: { title: string; description: string; mood?: string; coverStyle?: string; language?: string; searchHints?: string[] }[];
 }
 
 const buildPersonaPrompt = (char: CharacterProfile, user: UserProfile): { sys: string; usr: string } => {
@@ -168,7 +200,7 @@ const buildPersonaPrompt = (char: CharacterProfile, user: UserProfile): { sys: s
     const sys = `你是一个"音乐人格生成器"。根据给定的角色设定，为这个角色设计一份网易云音乐个人主页的品味档案。
 
 要求:
-1. 艺人必须是真实存在、可以在网易云搜到的华语 / 日系 / 英语 / 韩语艺人（不要虚构）
+1. 艺人必须是真实存在、可以在网易云搜到的艺人（不要虚构）。不限国家语种 —— 只要网易云能搜到就行
 2. 曲风标签要具体 (shoegaze / city-pop / post-rock / 民谣 / trip-hop / R&B / 后朋克 ...)，避免泛泛 ("流行"/"摇滚")
 3. **3 个歌单必须主题彻底不同** —— 不是"3 个差不多但换了名字"，而是 3 个**真正不同的场景 / 心境 / 用途**，
    彼此 mood、曲风、使用场合都要分开。可以参考维度 (任选 3 个不同的)：
@@ -179,15 +211,34 @@ const buildPersonaPrompt = (char: CharacterProfile, user: UserProfile): { sys: s
 4. 歌单标题 / 描述 / mood 都要从角色精神内核出发，不要套路化（不要"我的最爱"/"循环单"这种通用名）
 5. bio 用角色自己的口吻写（第一人称），一句话即可，不超过30字
 
+**语言判断（重要）**:
+6. 每个歌单要标注主要 language (jp/cn/en/kr/mixed)。判断优先级：
+   - **角色爱好 > 角色背景**：如果角色设定里明确提及喜欢某种语言/地区的音乐（如"喜欢听日语 vocaloid""迷恋欧美 indie"），优先按爱好定 language
+   - 角色背景（出身/国籍/文化圈）作为次要参考：只有当设定里没提音乐爱好时，才按背景推断（日本角色→jp、欧美角色→en、中国角色→cn、韩国角色→kr）
+   - 跨文化角色（如留学背景、混血）可以有一个歌单为 "mixed"，但至少两个歌单要贴合角色的核心语言偏好
+7. 艺人选择要和歌单 language 匹配 —— 如果歌单 language 是 jp，signatureArtists 里就要有能搜到日语歌的艺人；language 是 en 就要有英语艺人。不强制所有艺人都同一语种，但要保证后续按艺人搜歌能搜到对应语言的歌
+8. 每个歌单给 2-4 个 searchHints —— 这是**真实可搜的关键词**，用于后续在网易云搜歌填充歌单：
+   - 优先用艺人名（如 "椎名林檎"）
+   - 可以加曲风词组合（如 "my bloody valentine shoegaze"）
+   - 可以加场景词组合（如 "陈绮贞 深夜"）但**必须和艺人名组合**，不要单独用泛词（严禁单独搜"快乐"/"悲伤"/"氛围"）
+   - searchHints 要能搜到**符合歌单 language** 的歌（jp 歌单的 searchHints 应该能搜到日语歌）
+   - 跨歌单 searchHints 尽量不重复
+
 只输出 JSON，不要任何解释:
 {
   "bio": "(一句话，角色第一人称)",
   "genreTags": ["...", "...", "...(3-5个)"],
   "signatureArtists": [{"name":"真实艺人名"}, ... (3-6个)],
   "playlists": [
-    {"title":"歌单A(短·独特场景)", "description":"(角色口吻, 1-2句, 说清楚什么时候听 / 为什么)", "mood":"从下面8个里选一个: happy|sad|romantic|angry|chill|epic|nostalgic|dreamy"},
-    {"title":"歌单B(短·和A完全不同的场景/心境)", "description":"...", "mood":"必须和A不同"},
-    {"title":"歌单C(短·和A、B都不同)", "description":"...", "mood":"必须和A、B都不同"}
+    {
+      "title":"歌单A(短·独特场景)",
+      "description":"(角色口吻, 1-2句, 说清楚什么时候听 / 为什么)",
+      "mood":"从下面8个里选一个: happy|sad|romantic|angry|chill|epic|nostalgic|dreamy",
+      "language":"jp|cn|en|kr|mixed",
+      "searchHints":["艺人名", "艺人名 曲风词", ... 2-4个]
+    },
+    {"title":"歌单B(短·和A完全不同的场景/心境)", "description":"...", "mood":"必须和A不同", "language":"...", "searchHints":[...]},
+    {"title":"歌单C(短·和A、B都不同)", "description":"...", "mood":"必须和A、B都不同", "language":"...", "searchHints":[...]}
   ]
 }`;
 
@@ -267,6 +318,7 @@ export const CharMusicPersona = {
             .slice(0, 8);
 
         const playlistsIn = (draft.playlists || []).slice(0, 3);
+        const validLangs = ['jp', 'cn', 'en', 'kr', 'mixed'] as const;
         const playlists: CharPlaylist[] = playlistsIn.map((p, i) => ({
             id: `pl-${now}-${i}`,
             title: sanitizeStr(p?.title) || `歌单 ${i + 1}`,
@@ -275,6 +327,11 @@ export const CharMusicPersona = {
             songs: [],
             mood: (typeof p?.mood === 'string' && ['happy','sad','romantic','angry','chill','epic','nostalgic','dreamy'].includes(p.mood))
                 ? (p.mood as any) : undefined,
+            language: (typeof p?.language === 'string' && (validLangs as readonly string[]).includes(p.language))
+                ? (p.language as CharPlaylist['language']) : undefined,
+            searchHints: Array.isArray(p?.searchHints)
+                ? p.searchHints.map(h => sanitizeStr(h)).filter(Boolean).slice(0, 4)
+                : undefined,
             createdAt: now,
             updatedAt: now,
         }));
