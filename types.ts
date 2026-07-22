@@ -439,6 +439,11 @@ export interface RealtimeConfig {
   newsEnabled: boolean;
   newsApiKey?: string;
   newsPlatforms?: string[];  // hot_news 热榜平台 key 列表（默认主源，免鉴权），留空用内置默认
+  // RSS 订阅源：内置勾选走 rssUrls（URL 数组，label 从内置表查），
+  // 用户自定义源走 rssCustom（带名字，可启用切换）。两批都走 worker /rss 代理抓取，
+  // 跟 orz.ai 热榜混合存入同一份分时段快照。
+  rssUrls?: string[];
+  rssCustom?: { url: string; name: string; enabled?: boolean }[];
 
   // Notion 配置
   notionEnabled: boolean;
@@ -467,6 +472,7 @@ export interface HotNewsItem {
   source?: string;  // 平台展示名，如「微博」
   url?: string;
   desc?: string;    // 热点简介（API 的 desc 字段，可能为空）
+  origin?: string;  // 源标识：hot_news 平台 key（如 'weibo'）或 RSS URL，用于角色级订阅过滤 / 占比加权
 }
 
 // 分时段热点快照：每天每时段（0-8/8-16/16-24）最多拉一次，全角色共享
@@ -478,7 +484,7 @@ export interface HotNewsSnapshot {
   items: HotNewsItem[];
   platforms: string[]; // 本次召回用的平台 key 列表
   rssUrls?: string[];  // 本次召回用的内置 RSS 勾选 URL 列表
-  rssCustom?: { url: string; name: string }[];  // 本次召回用的自定义 RSS 源（带名字，可编辑）
+  rssCustom?: { url: string; name: string; enabled?: boolean }[];  // 本次召回用的自定义 RSS 源（带名字，可启用切换）
   fetchedAt: number;   // 拉取时间戳
 }
 
@@ -2257,6 +2263,26 @@ export interface CharacterProfile {
   // 让 ta 活在自己的本地时间里，并知道与用户之间存在时差。
   customTimezoneEnabled?: boolean;
   customTimezone?: string; // IANA 时区 id，如 'Asia/Tokyo'
+
+  // ─── 角色级「地区与热点」覆盖（神经链接下方独立模块）───
+  // 留空 / 未设置 → 跟随全局「实时感知」设置；填了 → 在全局池子内做角色级过滤 / 加权。
+  // 快照仍全角色共享（getSlottedHotNews 一次性拉全部勾选平台 + 全部 RSS），
+  // 角色级覆盖只作用于「注入 prompt 前的过滤 + 加权抽样」阶段。
+  regionConfig?: {
+    // 角色自己所在的城市。设置后每轮聊天除「用户城市天气」外，
+    // 也会告诉角色「TA 自己所在城市」的实时天气——异国 / 异地恋场景用。
+    // 留空则只注入全局 weatherCity 一份天气。
+    city?: string;
+    // 角色订阅的热点平台 key 子集（从全局 newsPlatforms 里挑）。
+    // 留空 → 跟随全局全部 platforms；非空 → 注入前用这个清单过滤池子。
+    subscribedPlatforms?: string[];
+    // 角色订阅的 RSS URL 子集（从全局 rssUrls + rssCustom.url 里挑）。
+    // 留空 → 跟随全局全部 RSS；非空 → 注入前用这个清单过滤池子。
+    subscribedRssUrls?: string[];
+    // 各订阅源的占比权重。key = hot_news 平台 key（如 'weibo'）或 RSS URL；
+    // value = 权重数（默认 1，越大越常出现在抽样里）。不在此 map 的源默认权重 1。
+    sourceRatios?: Record<string, number>;
+  };
 
   // 线下时间感知（约会 / 见面 App）：开启（默认）时向见面 system prompt 注入「当前真实时间」。
   // 关掉后见面场景不再注入时间，让剧情脱离现实时间线。独立开关。

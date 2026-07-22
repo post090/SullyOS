@@ -21,8 +21,20 @@ export interface WeatherData {
 export interface NewsItem {
     title: string;
     source?: string;
+    origin?: string;  // 源标识：hot_news 平台 key（如 'weibo'）或 RSS URL，用于角色级订阅过滤 / 占比加权
     url?: string;
     desc?: string;
+}
+
+/**
+ * 角色级「地区与热点」覆盖参数（buildFullContext 用）。
+ * 所有字段都可选——未设置即跟随全局 config；设置了则在全局池子里做过滤 / 加权。
+ */
+export interface CharRegionOverride {
+    city?: string;                       // 角色所在城市，触发第二份天气注入
+    subscribedPlatforms?: string[];      // 平台 key 白名单（hot_news），空数组=该角色不订阅任何平台
+    subscribedRssUrls?: string[];        // RSS URL 白名单（内置 + 自定义），空数组=该角色不订阅任何 RSS
+    sourceRatios?: Record<string, number>; // key = 平台 key 或 RSS URL，value = 权重（默认 1）
 }
 
 export interface SearchResult {
@@ -42,10 +54,10 @@ export interface RealtimeConfig {
     newsApiKey?: string;    // 可选，Brave Search 回落源用
     newsPlatforms?: string[]; // hot_news 热榜平台 key（默认主源，免鉴权），留空用内置默认
     // RSS 订阅源：内置勾选走 rssUrls（URL 数组，label 从 RSS_BUILTIN_SOURCES 查），
-    // 用户自定义源走 rssCustom（带名字，可编辑 / 删除）。
+    // 用户自定义源走 rssCustom（带名字，可编辑 / 删除 / 启用切换）。
     // 两批都走 worker /rss 代理抓取，跟 orz.ai 热榜混合存入同一份分时段快照。
     rssUrls?: string[];
-    rssCustom?: { url: string; name: string }[];
+    rssCustom?: { url: string; name: string; enabled?: boolean }[];
 
     // Notion 配置
     notionEnabled: boolean;
@@ -92,7 +104,9 @@ export const defaultRealtimeConfig: RealtimeConfig = {
 };
 
 // 缓存
-let weatherCache: { data: WeatherData | null; timestamp: number } = { data: null, timestamp: 0 };
+// 天气按城市名分桶缓存——多个角色配了多个城市时不会互相覆盖。
+// key 是归一化后的城市名（trim + 小写），value 含原始返回（带正确大小写的 city 名）。
+let weatherCacheMap = new Map<string, { data: WeatherData; timestamp: number }>();
 let newsCache: { data: NewsItem[]; timestamp: number } = { data: [], timestamp: 0 };
 
 // Open-Meteo 地名解析缓存：城市名 → 坐标，避免每次取天气都多打一次 geocoding
@@ -208,29 +222,103 @@ const SPECIAL_DATES: Record<string, string> = {
     '12-25': '圣诞节'
 };
 
+/**
+ * 按 origin 的 ratio 做加权不放回抽样。
+ * - ratios 的 key 是 origin 标识（platform key / RSS URL），value 是权重；缺省=1。
+ * - ratios 全空 / 全 0 时退化成等概率 Fisher-Yates。
+ * - weight 大的源条目被选中的概率更高，但同一条不会重复出现。
+ */
+const pickNewsByRatio = (items: NewsItem[], ratios: Record<string, number> | undefined, count: number): NewsItem[] => {
+    if (items.length <= count) return [...items];
+    if (!ratios || Object.keys(ratios).length === 0) {
+        // 等概率 Fisher-Yates 抽 count 条
+        const pool = [...items];
+        for (let i = pool.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [pool[i], pool[j]] = [pool[j], pool[i]];
+        }
+        return pool.slice(0, count);
+    }
+    const pool = items.map(it => ({ it, w: Math.max(0, ratios[it.origin || ''] ?? 1) }));
+    const picks: NewsItem[] = [];
+    while (picks.length < count && pool.length > 0) {
+        const totalW = pool.reduce((s, x) => s + x.w, 0);
+        let idx: number;
+        if (totalW <= 0) {
+            // 全是 0 权重 → 退化成等概率
+            idx = Math.floor(Math.random() * pool.length);
+        } else {
+            let r = Math.random() * totalW;
+            idx = pool.length - 1;
+            for (let i = 0; i < pool.length; i++) {
+                r -= pool[i].w;
+                if (r <= 0) { idx = i; break; }
+            }
+        }
+        picks.push(pool[idx].it);
+        pool.splice(idx, 1);
+    }
+    return picks;
+};
+
+/**
+ * 角色级「地区与热点」过滤：在全局快照池子里，按角色订阅白名单挑出 ta 该看到的子集。
+ * - subscribedPlatforms / subscribedRssUrls 都是 undefined 时返回原池子（跟随全局）。
+ * - 任一非 undefined（包括空数组）即视为该角色已显式订阅，按白名单过滤对应 origin。
+ *   空数组 = 该角色不订阅该类源（返回时该类被完全滤掉）。
+ * - 内置 fallback 源（Brave / Hacker News）的 origin 用 `__brave__` / `__hackernews__`，
+ *   不会被任何角色白名单命中——这是有意的：角色订阅了 hot_news / RSS 才有定制效果，
+ *   fallback 是兜底，不该被白名单吃掉。
+ */
+const filterByCharRegion = (items: NewsItem[], region: CharRegionOverride | undefined): NewsItem[] => {
+    if (!region) return items;
+    const hasPlatformFilter = Array.isArray(region.subscribedPlatforms);
+    const hasRssFilter = Array.isArray(region.subscribedRssUrls);
+    if (!hasPlatformFilter && !hasRssFilter) return items;
+    const platforms = new Set(region.subscribedPlatforms || []);
+    const rssUrls = new Set(region.subscribedRssUrls || []);
+    return items.filter(it => {
+        const o = it.origin || '';
+        // RSS URL 直接比对
+        if (/^https?:\/\//i.test(o) || o.startsWith('/rss/')) {
+            return hasRssFilter ? rssUrls.has(o) : true;
+        }
+        // hot_news 平台 key
+        if (hasPlatformFilter) {
+            return platforms.has(o);
+        }
+        return true;
+    });
+};
+
 export const RealtimeContextManager = {
 
     /**
      * 获取天气信息。填了 OpenWeatherMap key 优先走 OWM，失败或没填 key 时回落免费的 Open-Meteo。
+     * cityOverride 传城市名时按该城市查询（用于角色级「地区」覆盖），不传则用 config.weatherCity。
+     * 缓存按城市名分桶，多角色多城市互不覆盖。
      */
-    fetchWeather: async (config: RealtimeConfig): Promise<WeatherData | null> => {
-        if (!config.weatherEnabled || !config.weatherCity) {
+    fetchWeather: async (config: RealtimeConfig, cityOverride?: string): Promise<WeatherData | null> => {
+        const city = (cityOverride && cityOverride.trim()) || config.weatherCity;
+        if (!config.weatherEnabled || !city) {
             return null;
         }
 
         const now = Date.now();
         const cacheMs = config.cacheMinutes * 60 * 1000;
+        const cacheKey = city.trim().toLowerCase();
 
         // 检查缓存
-        if (weatherCache.data && (now - weatherCache.timestamp) < cacheMs) {
-            return weatherCache.data;
+        const cached = weatherCacheMap.get(cacheKey);
+        if (cached && (now - cached.timestamp) < cacheMs) {
+            return cached.data;
         }
 
         let weather: WeatherData | null = null;
 
         if (config.weatherApiKey) {
             try {
-                weather = await fetchOwmWeather(config.weatherCity, config.weatherApiKey);
+                weather = await fetchOwmWeather(city, config.weatherApiKey);
             } catch (e) {
                 console.warn('OpenWeatherMap 失败，回落 Open-Meteo:', e);
             }
@@ -238,7 +326,7 @@ export const RealtimeContextManager = {
 
         if (!weather) {
             try {
-                weather = await fetchOpenMeteoWeather(config.weatherCity);
+                weather = await fetchOpenMeteoWeather(city);
             } catch (e) {
                 console.error('Failed to fetch weather:', e);
                 return null;
@@ -246,7 +334,7 @@ export const RealtimeContextManager = {
         }
 
         // 更新缓存
-        weatherCache = { data: weather, timestamp: now };
+        weatherCacheMap.set(cacheKey, { data: weather, timestamp: now });
 
         return weather;
     },
@@ -296,14 +384,15 @@ export const RealtimeContextManager = {
      */
     fetchRssNews: async (
         urls: string[],
-        custom?: { url: string; name: string }[],
+        custom?: { url: string; name: string; enabled?: boolean }[],
         perSource = 10,
         total = 120,
     ): Promise<NewsItem[]> => {
         // 合并内置 + 自定义源，去重（同一 URL 只拉一次，自定义源 name 优先）
+        // 自定义源 enabled !== false 才参与（undefined 视为启用，向后兼容老数据）
         const customMap = new Map<string, string>();
         (custom || []).forEach(c => {
-            if (c?.url && c?.name && !customMap.has(c.url)) customMap.set(c.url, c.name);
+            if (c?.url && c?.name && c.enabled !== false && !customMap.has(c.url)) customMap.set(c.url, c.name);
         });
         const allUrls = Array.from(new Set([
             ...(urls || []).filter(u => typeof u === 'string' && u.trim()),
@@ -348,6 +437,7 @@ export const RealtimeContextManager = {
                         return {
                             title: String(it.title).trim(),
                             source: label,
+                            origin: rawUrl,
                             url: typeof it.link === 'string' ? it.link : undefined,
                             desc: desc && desc !== it.title ? desc.slice(0, 280) : undefined,
                         };
@@ -398,7 +488,7 @@ export const RealtimeContextManager = {
                     .slice(0, perPlatform)
                     .map(it => {
                         const desc = typeof it.desc === 'string' ? it.desc.replace(/\s+/g, ' ').trim() : '';
-                        return { title: String(it.title), source: label, url: it.url, desc: desc || undefined };
+                        return { title: String(it.title), source: label, origin: p, url: it.url, desc: desc || undefined };
                     });
                 const withDesc = picked.filter(x => x.desc).length;
                 console.log(`[hot_news] ${label}(${p}) ✓ 取 ${picked.length}/${items.length} 条（含简介 ${withDesc} 条）`);
@@ -455,7 +545,7 @@ export const RealtimeContextManager = {
             : RealtimeContextManager.DEFAULT_HOTNEWS_PLATFORMS;
         const rssUrls = Array.isArray(config.rssUrls) ? config.rssUrls.filter(u => typeof u === 'string' && u.trim()) : [];
         const rssCustom = Array.isArray(config.rssCustom)
-            ? config.rssCustom.filter(c => c && typeof c.url === 'string' && c.url.trim() && typeof c.name === 'string' && c.name.trim())
+            ? config.rssCustom.filter(c => c && typeof c.url === 'string' && c.url.trim() && typeof c.name === 'string' && c.name.trim() && c.enabled !== false)
             : [];
         const sameSet = (a: string[] = [], b: string[] = []) =>
             a.length === b.length && [...a].sort().join(',') === [...b].sort().join(',');
@@ -560,6 +650,7 @@ export const RealtimeContextManager = {
                 return data.results.slice(0, 5).map((item: any) => ({
                     title: item.title,
                     source: item.meta_url?.netloc || item.source || 'Brave新闻',
+                    origin: '__brave__',
                     url: item.url
                 }));
             }
@@ -634,6 +725,7 @@ export const RealtimeContextManager = {
             return stories.map((s: any) => ({
                 title: s.title,
                 source: 'Hacker News',
+                origin: '__hackernews__',
                 url: s.url
             }));
         } catch (e) {
@@ -749,7 +841,7 @@ export const RealtimeContextManager = {
     /**
      * 构建完整的实时上下文（注入到系统提示词）
      */
-    buildFullContext: async (config: RealtimeConfig, tz?: string): Promise<string> => {
+    buildFullContext: async (config: RealtimeConfig, tz?: string, charRegion?: CharRegionOverride): Promise<string> => {
         const parts: string[] = [];
 
         // 开头强调：这是真实世界的信息
@@ -769,28 +861,52 @@ export const RealtimeContextManager = {
         }
 
         // 3. 天气信息（有没有 OWM key 都能取：无 key 走 Open-Meteo）
+        //    角色级 charRegion.city 设置且与用户城市不同 → 注入双城市，让角色也知道自己所在城市的天气。
         if (config.weatherEnabled) {
-            const weather = await RealtimeContextManager.fetchWeather(config);
-            if (weather) {
+            const userCityRaw = config.weatherCity;
+            const charCityRaw = charRegion?.city?.trim();
+            const sameCity = !charCityRaw || charCityRaw.toLowerCase() === userCityRaw.toLowerCase();
+            const userWeather = await RealtimeContextManager.fetchWeather(config);
+            let charWeather: WeatherData | null = null;
+            if (!sameCity) {
+                charWeather = await RealtimeContextManager.fetchWeather(config, charCityRaw);
+            }
+            if (userWeather || charWeather) {
                 parts.push('');
-                parts.push(`🌤️ 【${weather.city}实时天气】`);
-                parts.push(`现在外面: ${weather.description}，气温 ${weather.temp}°C（体感 ${weather.feelsLike}°C），湿度 ${weather.humidity}%`);
-                parts.push(`你的建议: ${RealtimeContextManager.generateWeatherAdvice(weather)}`);
+                if (sameCity) {
+                    // 单城市：保持原措辞
+                    const w = userWeather!;
+                    parts.push(`🌤️ 【${w.city}实时天气】`);
+                    parts.push(`现在外面: ${w.description}，气温 ${w.temp}°C（体感 ${w.feelsLike}°C），湿度 ${w.humidity}%`);
+                    parts.push(`你的建议: ${RealtimeContextManager.generateWeatherAdvice(w)}`);
+                } else {
+                    // 双城市：你和对方分别在哪
+                    parts.push(`🌤️ 【实时天气】`);
+                    if (userWeather) {
+                        parts.push(`对方所在 ${userWeather.city}: ${userWeather.description}，气温 ${userWeather.temp}°C（体感 ${userWeather.feelsLike}°C），湿度 ${userWeather.humidity}%`);
+                    }
+                    if (charWeather) {
+                        parts.push(`你所在 ${charWeather.city}: ${charWeather.description}，气温 ${charWeather.temp}°C（体感 ${charWeather.feelsLike}°C），湿度 ${charWeather.humidity}%`);
+                    } else if (charCityRaw) {
+                        // 取不到角色城市天气时也告诉一声，免得模型懵
+                        parts.push(`你所在 ${charCityRaw}: 天气暂未取到，可以靠常识感受。`);
+                    }
+                    if (userWeather) {
+                        parts.push(`关心对方的小提示: ${RealtimeContextManager.generateWeatherAdvice(userWeather)}`);
+                    }
+                }
             }
         }
 
         // 4. 新闻热点（背景认知）
-        //    完整快照存 IndexedDB 给「热点」App；这里每轮随机抽 5 条打散注入，控 token + 保持新鲜感。
+        //    完整快照存 IndexedDB 给「热点」App；这里每轮按角色订阅过滤 + 按 ratio 加权抽样后注入 5 条，
+        //    控 token + 保持新鲜感 + 实现角色级定制兴趣。
         if (config.newsEnabled) {
             const news = await RealtimeContextManager.fetchNews(config);
-            if (news.length > 0) {
-                // Fisher–Yates 打散后抽前 5（每轮回复都重新 roll，平台全混）
-                const pool = [...news];
-                for (let i = pool.length - 1; i > 0; i--) {
-                    const j = Math.floor(Math.random() * (i + 1));
-                    [pool[i], pool[j]] = [pool[j], pool[i]];
-                }
-                const picks = pool.slice(0, 5);
+            // 角色级过滤：用白名单挑出 ta 该看到的子集
+            const filtered = filterByCharRegion(news, charRegion);
+            if (filtered.length > 0) {
+                const picks = pickNewsByRatio(filtered, charRegion?.sourceRatios, 5);
                 const newsLines: string[] = [];
                 newsLines.push('');
                 newsLines.push(`📰 【最近真实发生的热点 · 你的背景知识】`);
@@ -812,10 +928,10 @@ export const RealtimeContextManager = {
                 try {
                     const block = newsLines.join('\n');
                     const pickDesc = picks.filter(n => n.desc).length;
-                    const poolDesc = news.filter(n => n.desc).length;
-                    console.groupCollapsed(`%c[hot_news] 本轮注入 prompt：${picks.length} 条热点（带简介 ${pickDesc}）· ${block.length} 字（池子共 ${news.length} 条，带简介 ${poolDesc}）`, 'color:#7c3aed;font-weight:bold');
+                    const poolDesc = filtered.filter(n => n.desc).length;
+                    console.groupCollapsed(`%c[hot_news] 本轮注入 prompt：${picks.length} 条热点（带简介 ${pickDesc}）· ${block.length} 字（池子共 ${filtered.length} 条，带简介 ${poolDesc}${charRegion ? ` · 全局池 ${news.length}` : ''}）`, 'color:#7c3aed;font-weight:bold');
                     if (typeof console.table === 'function') {
-                        console.table(picks.map((n, i) => ({ '#': i + 1, 平台: n.source || '', 标题: n.title, 简介: n.desc || '—' })));
+                        console.table(picks.map((n, i) => ({ '#': i + 1, 平台: n.source || '', origin: n.origin || '', 标题: n.title, 简介: n.desc || '—' })));
                     }
                     console.log(block);
                     console.groupEnd();
@@ -837,7 +953,7 @@ export const RealtimeContextManager = {
         tips.forEach((t, i) => parts.push(`${i + 1}. ${t}`));
 
         const fullContext = parts.join('\n');
-        console.log(`%c[hot_news] 实时感知整段注入 ${fullContext.length} 字（含时间/天气/热点/指令）`, 'color:#7c3aed');
+        console.log(`%c[hot_news] 实时感知整段注入 ${fullContext.length} 字（含时间/天气/热点/指令${charRegion?.city ? ' · 双城市' : ''}）`, 'color:#7c3aed');
         return fullContext;
     },
 
@@ -845,7 +961,7 @@ export const RealtimeContextManager = {
      * 清除缓存
      */
     clearCache: () => {
-        weatherCache = { data: null, timestamp: 0 };
+        weatherCacheMap.clear();
         newsCache = { data: [], timestamp: 0 };
         geocodeCache.clear();
     },

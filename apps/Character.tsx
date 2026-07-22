@@ -23,6 +23,7 @@ import { resolveMiniMaxApiKey } from '../utils/minimaxApiKey';
 import { normalizeUserImpression } from '../utils/impression';
 import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
 import { COMMON_TIMEZONES } from '../utils/timezone';
+import { RealtimeContextManager } from '../utils/realtimeContext';
 import { toMountedWorldbook } from '../utils/worldbook';
 import { stripSensitiveCardFields } from '../utils/characterCard';
 import { confirmExportSafety } from '../utils/exportGuard';
@@ -81,7 +82,7 @@ const CharacterCard: React.FC<{
 );
 
 const Character: React.FC = () => {
-  const { closeApp, openApp, characters, activeCharacterId, setActiveCharacterId, addCharacter, updateCharacter, deleteCharacter, characterGroups, createCharacterGroup, renameCharacterGroup, deleteCharacterGroup, apiConfig, addToast, userProfile, worldbooks, addWorldbook } = useOS();
+  const { closeApp, openApp, characters, activeCharacterId, setActiveCharacterId, addCharacter, updateCharacter, deleteCharacter, characterGroups, createCharacterGroup, renameCharacterGroup, deleteCharacterGroup, apiConfig, addToast, userProfile, worldbooks, addWorldbook, realtimeConfig } = useOS();
   const launchIntent = characterLaunch.peek();
   const [view, setView] = useState<'list' | 'detail'>(() => launchIntent ? 'detail' : 'list');
   const [charPage, setCharPage] = useState(0); // 角色列表分页（每页 6 个，仅未建分组时）
@@ -1385,6 +1386,186 @@ ${isInitialGeneration ? `
                                            <div className={`absolute top-0.5 w-6 h-6 bg-white rounded-full shadow-md transition-transform ${formData.dateTimeAwarenessEnabled !== false ? 'translate-x-5' : 'translate-x-0.5'}`}></div>
                                        </button>
                                    </div>
+                               </div>
+                           </div>
+
+                           {/* 地区与热点：角色级覆盖（天气加角色自己城市 / 热点订阅池 + 占比） */}
+                           <div className="bg-white rounded-3xl p-4 shadow-sm border border-slate-100 space-y-4">
+                               <div>
+                                   <label className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest block">地区与热点</label>
+                                   <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                                       角色级覆盖。留空 = 跟随全局「实时感知」设置；填了 = 在全局池子内做角色级过滤 / 加权。
+                                       {!realtimeConfig.weatherEnabled && !realtimeConfig.newsEnabled && (
+                                           <span className="text-amber-500"> ⚠️ 当前全局未开启天气 / 热点，配置先存着，开启后才会生效。</span>
+                                       )}
+                                   </p>
+                               </div>
+
+                               {/* 1. 角色所在城市 */}
+                               <div className="border-t border-slate-100 pt-3">
+                                   <p className="text-xs font-bold text-slate-700">角色所在城市</p>
+                                   <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">
+                                       设置后每轮聊天除「对方所在城市」的实时天气外，也会告诉角色 TA 自己所在城市的天气——异国 / 异地恋场景用。留空则只注入一份天气。
+                                   </p>
+                                   <input
+                                       type="text"
+                                       value={formData.regionConfig?.city || ''}
+                                       onChange={(e) => {
+                                           const v = e.target.value;
+                                           const base = formData.regionConfig || {};
+                                           handleChange('regionConfig', { ...base, city: v || undefined });
+                                       }}
+                                       placeholder="如：东京 / Tokyo / 文京区 / Bunkyo-ku"
+                                       className="mt-3 w-full bg-slate-50 rounded-2xl px-3 py-2.5 text-xs border border-slate-200 outline-none focus:ring-1 focus:ring-emerald-400/30"
+                                   />
+                                   <p className="text-[10px] text-slate-400/80 mt-1.5 leading-relaxed">
+                                       💡 识别口径：支持中文 / 英文 / 部分日文区名。中文如「北京」「文京区」；英文如「Tokyo」「Bunkyo-ku」。
+                                       走 Open-Meteo 地名服务（免 key），填了 OpenWeatherMap key 也会优先用 OWM。
+                                       填不识别时角色那行会显示「天气暂未取到」，留空最稳。
+                                   </p>
+                               </div>
+
+                               {/* 2. 热点订阅池 */}
+                               <div className="border-t border-slate-100 pt-3">
+                                   <div className="flex items-center justify-between gap-2">
+                                       <p className="text-xs font-bold text-slate-700">热点订阅池</p>
+                                       {(formData.regionConfig?.subscribedPlatforms || formData.regionConfig?.subscribedRssUrls) && (
+                                           <button
+                                               onClick={() => {
+                                                   const base = { ...(formData.regionConfig || {}) };
+                                                   delete base.subscribedPlatforms;
+                                                   delete base.subscribedRssUrls;
+                                                   handleChange('regionConfig', base);
+                                               }}
+                                               className="text-[10px] text-emerald-500 active:scale-95 transition-transform"
+                                           >
+                                               ↺ 回到跟随全局
+                                           </button>
+                                       )}
+                                   </div>
+                                   <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">
+                                       从全局已选的平台 / RSS 里挑出该角色自己订阅的源。<b>一旦勾了任何一项，该角色就只看勾选的源</b>（其余被过滤掉）；不勾任何 = 跟随全局全部。
+                                   </p>
+
+                                   {(() => {
+                                       // 全局已选 platforms：未配则回落到内置默认清单
+                                       const globalPlatforms = (realtimeConfig.newsPlatforms && realtimeConfig.newsPlatforms.length > 0)
+                                           ? realtimeConfig.newsPlatforms
+                                           : RealtimeContextManager.DEFAULT_HOTNEWS_PLATFORMS;
+                                       // 全局已选 RSS：内置勾选 + 自定义（且 enabled !== false）
+                                       const globalRss: { url: string; label: string }[] = [];
+                                       const builtinMap = new Map(RealtimeContextManager.RSS_BUILTIN_SOURCES.map(s => [s.url, s.label]));
+                                       (realtimeConfig.rssUrls || []).forEach(u => {
+                                           if (typeof u !== 'string' || !u.trim()) return;
+                                           globalRss.push({ url: u, label: builtinMap.get(u) || (() => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return u; } })() });
+                                       });
+                                       (realtimeConfig.rssCustom || []).forEach(c => {
+                                           if (!c?.url || !c?.name || c.enabled === false) return;
+                                           globalRss.push({ url: c.url, label: c.name });
+                                       });
+
+                                       if (globalPlatforms.length === 0 && globalRss.length === 0) {
+                                           return (
+                                               <p className="mt-3 text-[10px] text-rose-500/80 leading-relaxed">
+                                                   全局还没勾选任何热点平台 / RSS 源。先去「设置 → 实时感知 → 新闻热点」里勾选全局池子，再回这里挑角色订阅。
+                                               </p>
+                                           );
+                                       }
+
+                                       const subPlatforms = formData.regionConfig?.subscribedPlatforms;
+                                       const subRss = formData.regionConfig?.subscribedRssUrls;
+                                       const ratios = formData.regionConfig?.sourceRatios || {};
+                                       const isPlatformSub = (k: string) => subPlatforms ? subPlatforms.includes(k) : false;
+                                       const isRssSub = (u: string) => subRss ? subRss.includes(u) : false;
+                                       const ratioOf = (k: string) => ratios[k] ?? 1;
+                                       const cycleRatio = (k: string) => {
+                                           const base = { ...(formData.regionConfig || {}) };
+                                           const r = { ...(base.sourceRatios || {}) };
+                                           const cur = r[k] ?? 1;
+                                           const next = cur >= 4 ? 1 : cur + 1;
+                                           if (next === 1) delete r[k]; else r[k] = next;
+                                           base.sourceRatios = r;
+                                           handleChange('regionConfig', base);
+                                       };
+                                       const togglePlatform = (k: string) => {
+                                           const base = { ...(formData.regionConfig || {}) };
+                                           const cur = base.subscribedPlatforms ? [...base.subscribedPlatforms] : [];
+                                           const i = cur.indexOf(k);
+                                           if (i >= 0) cur.splice(i, 1); else cur.push(k);
+                                           base.subscribedPlatforms = cur;
+                                           handleChange('regionConfig', base);
+                                       };
+                                       const toggleRss = (u: string) => {
+                                           const base = { ...(formData.regionConfig || {}) };
+                                           const cur = base.subscribedRssUrls ? [...base.subscribedRssUrls] : [];
+                                           const i = cur.indexOf(u);
+                                           if (i >= 0) cur.splice(i, 1); else cur.push(u);
+                                           base.subscribedRssUrls = cur;
+                                           handleChange('regionConfig', base);
+                                       };
+
+                                       const SubRow: React.FC<{ label: string; origin: string; sub: boolean; onToggle: () => void }> = ({ label, origin, sub, onToggle }) => (
+                                           <div className="flex items-center gap-2 py-1">
+                                               <button
+                                                   onClick={onToggle}
+                                                   className={`shrink-0 w-5 h-5 rounded-md border flex items-center justify-center transition-colors active:scale-90 ${sub ? 'bg-emerald-500 border-emerald-500 text-white' : 'bg-white border-slate-300 text-transparent'}`}
+                                               >
+                                                   <svg viewBox="0 0 16 16" className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="3"><path d="M3 8l3 3 7-7" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                                               </button>
+                                               <span className={`flex-1 min-w-0 truncate text-[11px] ${sub ? 'text-slate-700 font-medium' : 'text-slate-400'}`} title={label}>{label}</span>
+                                               <button
+                                                   onClick={() => sub && cycleRatio(origin)}
+                                                   disabled={!sub}
+                                                   className={`shrink-0 w-7 h-7 rounded-full text-[11px] font-bold flex items-center justify-center transition-colors ${sub ? 'bg-emerald-50 text-emerald-600 border border-emerald-200 active:scale-90' : 'bg-slate-50 text-slate-300 border border-slate-100 cursor-not-allowed'}`}
+                                                   title={sub ? '占比权重，点击循环 1→2→3→4→1' : '先勾选才能调占比'}
+                                               >
+                                                   {sub ? `×${ratioOf(origin)}` : '—'}
+                                               </button>
+                                           </div>
+                                       );
+
+                                       return (
+                                           <div className="mt-3 space-y-3">
+                                               {globalPlatforms.length > 0 && (
+                                                   <div>
+                                                       <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">热点平台</p>
+                                                       <div className="divide-y divide-slate-50">
+                                                           {globalPlatforms.map(k => (
+                                                               <SubRow
+                                                                   key={k}
+                                                                   label={RealtimeContextManager.HOTNEWS_PLATFORM_LABELS[k] || k}
+                                                                   origin={k}
+                                                                   sub={isPlatformSub(k)}
+                                                                   onToggle={() => togglePlatform(k)}
+                                                               />
+                                                           ))}
+                                                       </div>
+                                                   </div>
+                                               )}
+                                               {globalRss.length > 0 && (
+                                                   <div>
+                                                       <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">RSS 订阅源</p>
+                                                       <div className="divide-y divide-slate-50">
+                                                           {globalRss.map(r => (
+                                                               <SubRow
+                                                                   key={r.url}
+                                                                   label={r.label}
+                                                                   origin={r.url}
+                                                                   sub={isRssSub(r.url)}
+                                                                   onToggle={() => toggleRss(r.url)}
+                                                               />
+                                                           ))}
+                                                       </div>
+                                                   </div>
+                                               )}
+                                               <p className="text-[10px] text-slate-400/80 leading-relaxed pt-1">
+                                                   💡 <b>占比权重</b>：右上角小徽章 ×N，点击在 1→2→3→4→1 之间循环。
+                                                   N 越大该源被抽进 prompt 的概率越高（同一条不会重复出现）。默认 ×1。
+                                                   <b> 勾了任一项</b> = 该角色只看勾选的源；<b>不勾任何</b> = 跟随全局。
+                                               </p>
+                                           </div>
+                                       );
+                                   })()}
                                </div>
                            </div>
 

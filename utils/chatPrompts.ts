@@ -248,10 +248,12 @@ export const ChatPrompts = {
         const charTz = resolveCharTimeZone(char);
 
         // 1. 实时世界信息（天气/新闻/时间）
+        //    角色级「地区与热点」覆盖（char.regionConfig）：城市触发双城市天气；
+        //    订阅白名单 + 占比权重在 buildFullContext 里做过滤 / 加权抽样。
         const realtimePromise: Promise<string> = (async () => {
             try {
                 if (config.weatherEnabled || config.newsEnabled) {
-                    const realtimeContext = await RealtimeContextManager.buildFullContext(config, charTz);
+                    const realtimeContext = await RealtimeContextManager.buildFullContext(config, charTz, char.regionConfig);
                     return `\n${realtimeContext}\n`;
                 }
                 // 基础当前时间 + 时差提示已由 ContextBuilder.buildCoreContext 统一注入（受 timeAwarenessEnabled

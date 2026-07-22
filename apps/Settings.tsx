@@ -440,7 +440,7 @@ const Settings: React.FC = () => {
   const [rtNewsApiKey, setRtNewsApiKey] = useState(realtimeConfig.newsApiKey || '');
   const [rtNewsPlatforms, setRtNewsPlatforms] = useState<string[]>(realtimeConfig.newsPlatforms || ['weibo', 'zhihu', 'baidu', 'bilibili', 'douyin']);
   const [rtRssUrls, setRtRssUrls] = useState<string[]>(realtimeConfig.rssUrls || []);
-  const [rtRssCustom, setRtRssCustom] = useState<{ url: string; name: string }[]>(realtimeConfig.rssCustom || []);
+  const [rtRssCustom, setRtRssCustom] = useState<{ url: string; name: string; enabled?: boolean }[]>(realtimeConfig.rssCustom || []);
   const [rtRssCustomName, setRtRssCustomName] = useState('');
   const [rtRssCustomUrl, setRtRssCustomUrl] = useState('');
   const [rtRssEditingIdx, setRtRssEditingIdx] = useState<number | null>(null);
@@ -2954,10 +2954,18 @@ const Settings: React.FC = () => {
                                           </button>
                                       );
                                   })}
-                                  {/* 自定义源直接拼到内置源后面，点铅笔进编辑面板才能删（避免误触） */}
-                                  {rtRssCustom.map((c, i) => (
-                                      <span key={c.url + i} className="inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full font-bold bg-amber-100 text-amber-700 border border-amber-300">
-                                          {c.name}
+                                  {/* 自定义源直接拼到内置源后面，点 chip 切换启用/禁用，点铅笔进编辑面板才能删（避免误触） */}
+                                  {rtRssCustom.map((c, i) => {
+                                      const active = c.enabled !== false; // undefined 视为启用（向后兼容）
+                                      return (
+                                      <span key={c.url + i} className={`inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full font-bold transition-colors active:scale-95 ${active ? 'bg-amber-100 text-amber-700 border border-amber-300' : 'bg-white/60 text-slate-400 border border-slate-200 line-through'}`}>
+                                          <button
+                                              type="button"
+                                              onClick={() => setRtRssCustom(prev => prev.map((cc, idx) => idx === i ? { ...cc, enabled: !active } : cc))}
+                                              title={active ? '点击禁用' : '点击启用'}
+                                          >
+                                              {c.name}
+                                          </button>
                                           <button
                                               type="button"
                                               onClick={() => {
@@ -2969,7 +2977,8 @@ const Settings: React.FC = () => {
                                               title="编辑"
                                           >✎</button>
                                       </span>
-                                  ))}
+                                      );
+                                  })}
                               </div>
 
                               {/* 编辑中的源：展开成两个输入框 + 保存/取消 */}

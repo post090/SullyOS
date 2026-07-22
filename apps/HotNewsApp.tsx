@@ -41,7 +41,7 @@ const HotNewsApp: React.FC = () => {
                 : RealtimeContextManager.DEFAULT_HOTNEWS_PLATFORMS;
             const rssUrls = Array.isArray(realtimeConfig.rssUrls) ? realtimeConfig.rssUrls.filter(u => typeof u === 'string' && u.trim()) : [];
             const rssCustom = Array.isArray(realtimeConfig.rssCustom)
-                ? realtimeConfig.rssCustom.filter(c => c && c.url && c.name)
+                ? realtimeConfig.rssCustom.filter(c => c && c.url && c.name && c.enabled !== false)
                 : [];
             const hasRss = rssUrls.length > 0 || rssCustom.length > 0;
 
