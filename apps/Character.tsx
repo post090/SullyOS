@@ -3,6 +3,8 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useOS } from '../context/OSContext';
 import { AppID, CharacterProfile, CharacterExportData, UserImpression, MemoryFragment } from '../types';
 import { SlidersHorizontal, SpeakerHigh, Books, BookOpen } from '@phosphor-icons/react';
+import { DndContext, DragOverlay, PointerSensor, TouchSensor, useSensor, useSensors, useDraggable, useDroppable, pointerWithin } from '@dnd-kit/core';
+import { CSS } from '@dnd-kit/utilities';
 import Modal from '../components/os/Modal';
 import { processImage } from '../utils/file';
 import { Capacitor } from '@capacitor/core';
@@ -28,6 +30,185 @@ import { toMountedWorldbook } from '../utils/worldbook';
 import { stripSensitiveCardFields } from '../utils/characterCard';
 import { confirmExportSafety } from '../utils/exportGuard';
 import { sortCharacterGroups, GROUP_FILTER_UNGROUPED } from '../components/character/CharacterGroupFilter';
+
+// ── 热点订阅池 · 拖拽分档组件 ──────────────────────────────
+// 把原来的 ×1234 循环点击改成 4 档分类拖拽：
+// 浏览(1) / 关注(2) / 偏爱(3) / 必看(4)，拖 chip 到不同档位区即改权重/订阅。
+// 平时折叠只显示摘要，点「编辑」展开拖拽区。
+
+interface FeedSource {
+    origin: string;       // platform key 或 RSS URL
+    label: string;
+    kind: 'platform' | 'rss';
+}
+
+const FEED_TIERS = [
+    { weight: 4, label: '必看', dot: 'bg-rose-400',    zone: 'bg-rose-50/50 border-rose-200',    chip: 'bg-rose-100 text-rose-700 border-rose-300' },
+    { weight: 3, label: '偏爱', dot: 'bg-orange-400',  zone: 'bg-orange-50/50 border-orange-200', chip: 'bg-orange-100 text-orange-700 border-orange-300' },
+    { weight: 2, label: '关注', dot: 'bg-amber-400',   zone: 'bg-amber-50/50 border-amber-200',   chip: 'bg-amber-100 text-amber-700 border-amber-300' },
+    { weight: 1, label: '浏览', dot: 'bg-emerald-400', zone: 'bg-emerald-50/50 border-emerald-200', chip: 'bg-emerald-100 text-emerald-700 border-emerald-300' },
+] as const;
+
+/** 可拖拽的源 chip */
+const FeedChip: React.FC<{
+    source: FeedSource;
+    tier: number;
+    isOverlay?: boolean;
+}> = ({ source, tier, isOverlay }) => {
+    const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+        id: source.origin,
+        data: { origin: source.origin, kind: source.kind, tier },
+    });
+    const tierCfg = FEED_TIERS.find(t => t.weight === tier);
+    const chipClass = tierCfg ? tierCfg.chip : 'bg-slate-100 text-slate-500 border-slate-200';
+    const style = transform && !isOverlay ? { transform: CSS.Translate.toString(transform) } : undefined;
+    return (
+        <button
+            ref={!isOverlay ? setNodeRef : undefined}
+            style={style}
+            {...(!isOverlay ? attributes : {})}
+            {...(!isOverlay ? listeners : {})}
+            className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-medium border ${chipClass} ${
+                isDragging && !isOverlay ? 'opacity-25' : ''
+            } ${isOverlay ? 'shadow-lg scale-105' : 'active:scale-95'} transition-transform touch-none select-none cursor-grab`}
+        >
+            {source.label}
+        </button>
+    );
+};
+
+/** 可放置的档位区域 */
+const TierZone: React.FC<{
+    tierWeight: number;  // 0 = 未订阅
+    sources: FeedSource[];
+    isOver: boolean;
+    setNodeRef: (el: HTMLElement | null) => void;
+}> = ({ tierWeight, sources, isOver, setNodeRef }) => {
+    const cfg = tierWeight > 0 ? FEED_TIERS.find(t => t.weight === tierWeight) : null;
+    const label = cfg ? cfg.label : '未选';
+    const dotClass = cfg ? cfg.dot : 'bg-slate-300';
+    const zoneClass = cfg ? cfg.zone : 'bg-slate-50/50 border-slate-200';
+    return (
+        <div
+            ref={setNodeRef}
+            className={`rounded-2xl border ${zoneClass} ${isOver ? 'ring-2 ring-violet-300 bg-violet-50/40' : ''} p-2.5 transition-all`}
+        >
+            <div className="flex items-center gap-1.5 mb-1.5">
+                <span className={`w-2 h-2 rounded-full ${dotClass}`} />
+                <span className="text-[10px] font-bold text-slate-600">{label}</span>
+                <span className="text-[10px] text-slate-400">({sources.length})</span>
+            </div>
+            <div className="flex flex-wrap gap-1.5 min-h-[28px]">
+                {sources.length === 0 ? (
+                    <span className="text-[9px] text-slate-300 italic py-1">拖到这里</span>
+                ) : (
+                    sources.map(s => <FeedChip key={s.origin} source={s} tier={tierWeight} />)
+                )}
+            </div>
+        </div>
+    );
+};
+
+/** 热点订阅池编辑器：折叠摘要 + 展开拖拽分档 */
+const FeedPoolEditor: React.FC<{
+    allSources: FeedSource[];
+    tierOf: (s: FeedSource) => number;
+    tierSources: (weight: number) => FeedSource[];
+    onDragEnd: (event: any) => void;
+    hasAnySub: boolean;
+    onReset: () => void;
+}> = ({ allSources, tierOf, tierSources, onDragEnd, hasAnySub, onReset }) => {
+    const [open, setOpen] = useState(false);
+    const [draggingSource, setDraggingSource] = useState<FeedSource | null>(null);
+
+    // 触摸传感器：长按 200ms + 移动容差 5px 才触发拖拽，避免误触
+    const sensors = useSensors(
+        useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+        useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } }),
+    );
+
+    // 各档位数量（折叠摘要用）
+    const counts = FEED_TIERS.map(t => ({ ...t, count: tierSources(t.weight).length }));
+    const unsubCount = allSources.length - allSources.filter(s => tierOf(s) !== 0).length;
+
+    return (
+        <div>
+            <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-bold text-slate-700">热点订阅池</p>
+                <div className="flex items-center gap-3">
+                    {hasAnySub && (
+                        <button onClick={onReset} className="text-[10px] text-emerald-500 active:scale-95 transition-transform">
+                            ↺ 跟随全局
+                        </button>
+                    )}
+                    <button onClick={() => setOpen(!open)} className="text-[10px] text-violet-500 active:scale-95 transition-transform">
+                        {open ? '收起' : '编辑'}
+                    </button>
+                </div>
+            </div>
+
+            {!open ? (
+                /* 折叠态：一行摘要 */
+                <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+                    {counts.filter(c => c.count > 0).map(c => (
+                        <span key={c.weight} className="inline-flex items-center gap-1 text-[10px] text-slate-500">
+                            <span className={`w-1.5 h-1.5 rounded-full ${c.dot}`} />
+                            {c.label} <b className="text-slate-700">{c.count}</b>
+                        </span>
+                    ))}
+                    {unsubCount > 0 && (
+                        <span className="inline-flex items-center gap-1 text-[10px] text-slate-300">
+                            <span className="w-1.5 h-1.5 rounded-full bg-slate-300" />
+                            未选 {unsubCount}
+                        </span>
+                    )}
+                    {!hasAnySub && (
+                        <span className="text-[10px] text-slate-400 italic">跟随全局全部源</span>
+                    )}
+                </div>
+            ) : (
+                /* 展开态：拖拽分档 */
+                <DndContext
+                    sensors={sensors}
+                    collisionDetection={pointerWithin}
+                    onDragStart={(e) => {
+                        const src = (e.active.data.current as any) as FeedSource;
+                        setDraggingSource(src);
+                    }}
+                    onDragEnd={(e) => { onDragEnd(e); setDraggingSource(null); }}
+                    onDragCancel={() => setDraggingSource(null)}
+                >
+                    <p className="text-[10px] text-slate-400 mt-2 mb-2 leading-relaxed">
+                        长按拖动源到不同档位。<b>拖到任一档位</b> = 该角色只看已选的源；<b>全拖回未选</b> = 跟随全局。
+                    </p>
+                    <div className="space-y-2">
+                        {FEED_TIERS.map(t => (
+                            <DroppableTier key={t.weight} tierWeight={t.weight} sources={tierSources(t.weight)} />
+                        ))}
+                        <DroppableTier tierWeight={0} sources={tierSources(0)} />
+                    </div>
+                    <DragOverlay>
+                        {draggingSource && (
+                            <FeedChip source={draggingSource} tier={tierOf(draggingSource)} isOverlay />
+                        )}
+                    </DragOverlay>
+                </DndContext>
+            )}
+        </div>
+    );
+};
+
+/** 包一层 useDroppable 的 TierZone（因为 hooks 不能在条件渲染里调） */
+const DroppableTier: React.FC<{
+    tierWeight: number;
+    sources: FeedSource[];
+}> = ({ tierWeight, sources }) => {
+    const { setNodeRef, isOver } = useDroppable({
+        id: `tier-${tierWeight}`,
+        data: { tier: tierWeight },
+    });
+    return <TierZone tierWeight={tierWeight} sources={sources} isOver={isOver} setNodeRef={setNodeRef} />;
+};
 
 // ── 神经链接 · 列表页视觉件（淡紫留白风）────────────────────
 // 之前的「星点 + 玻璃饰带 + 华丽头像框」看久了眼花、低端机也重绘卡。
@@ -1425,28 +1606,8 @@ ${isInitialGeneration ? `
                                    </p>
                                </div>
 
-                               {/* 2. 热点订阅池 */}
+                               {/* 2. 热点订阅池 —— 拖拽分档（浏览/关注/偏爱/必看），平时折叠 */}
                                <div className="border-t border-slate-100 pt-3">
-                                   <div className="flex items-center justify-between gap-2">
-                                       <p className="text-xs font-bold text-slate-700">热点订阅池</p>
-                                       {(formData.regionConfig?.subscribedPlatforms || formData.regionConfig?.subscribedRssUrls) && (
-                                           <button
-                                               onClick={() => {
-                                                   const base = { ...(formData.regionConfig || {}) };
-                                                   delete base.subscribedPlatforms;
-                                                   delete base.subscribedRssUrls;
-                                                   handleChange('regionConfig', base);
-                                               }}
-                                               className="text-[10px] text-emerald-500 active:scale-95 transition-transform"
-                                           >
-                                               ↺ 回到跟随全局
-                                           </button>
-                                       )}
-                                   </div>
-                                   <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">
-                                       从全局已选的平台 / RSS 里挑出该角色自己订阅的源。<b>一旦勾了任何一项，该角色就只看勾选的源</b>（其余被过滤掉）；不勾任何 = 跟随全局全部。
-                                   </p>
-
                                    {(() => {
                                        // 全局已选 platforms：未配则回落到内置默认清单
                                        const globalPlatforms = (realtimeConfig.newsPlatforms && realtimeConfig.newsPlatforms.length > 0)
@@ -1472,98 +1633,79 @@ ${isInitialGeneration ? `
                                            );
                                        }
 
+                                       // 统一源列表（平台 + RSS 合并）
+                                       const allSources: FeedSource[] = [
+                                           ...globalPlatforms.map(k => ({ origin: k, label: RealtimeContextManager.HOTNEWS_PLATFORM_LABELS[k] || k, kind: 'platform' as const })),
+                                           ...globalRss.map(r => ({ origin: r.url, label: r.label, kind: 'rss' as const })),
+                                       ];
+
                                        const subPlatforms = formData.regionConfig?.subscribedPlatforms;
                                        const subRss = formData.regionConfig?.subscribedRssUrls;
                                        const ratios = formData.regionConfig?.sourceRatios || {};
-                                       const isPlatformSub = (k: string) => subPlatforms ? subPlatforms.includes(k) : false;
-                                       const isRssSub = (u: string) => subRss ? subRss.includes(u) : false;
-                                       const ratioOf = (k: string) => ratios[k] ?? 1;
-                                       const cycleRatio = (k: string) => {
+                                       const isSubscribed = (s: FeedSource) => s.kind === 'platform'
+                                           ? (subPlatforms ? subPlatforms.includes(s.origin) : false)
+                                           : (subRss ? subRss.includes(s.origin) : false);
+                                       const tierOf = (s: FeedSource) => isSubscribed(s) ? (ratios[s.origin] ?? 1) : 0;
+
+                                       // 按档位分组
+                                       const tierSources = (weight: number) => allSources.filter(s => tierOf(s) === weight);
+
+                                       // 拖拽落点处理：拖到某档位 = 订阅 + 设权重；拖到未选 = 取消订阅 + 清权重
+                                       const onDragEnd = (event: any) => {
+                                           const { active, over } = event;
+                                           if (!over) return;
+                                           const src = active.data.current as FeedSource | undefined;
+                                           if (!src) return;
+                                           const targetWeight = over.data.current?.tier as number;
+                                           if (targetWeight === tierOf(src)) return;  // 没变就不写
+
                                            const base = { ...(formData.regionConfig || {}) };
+                                           if (src.kind === 'platform') {
+                                               let arr = base.subscribedPlatforms ? [...base.subscribedPlatforms] : [];
+                                               if (targetWeight === 0) {
+                                                   arr = arr.filter(x => x !== src.origin);
+                                               } else if (!arr.includes(src.origin)) {
+                                                   arr.push(src.origin);
+                                               }
+                                               base.subscribedPlatforms = arr;
+                                           } else {
+                                               let arr = base.subscribedRssUrls ? [...base.subscribedRssUrls] : [];
+                                               if (targetWeight === 0) {
+                                                   arr = arr.filter(x => x !== src.origin);
+                                               } else if (!arr.includes(src.origin)) {
+                                                   arr.push(src.origin);
+                                               }
+                                               base.subscribedRssUrls = arr;
+                                           }
+                                           // 权重：拖到未选清掉，拖到档位设对应值（1 是默认值不存）
                                            const r = { ...(base.sourceRatios || {}) };
-                                           const cur = r[k] ?? 1;
-                                           const next = cur >= 4 ? 1 : cur + 1;
-                                           if (next === 1) delete r[k]; else r[k] = next;
+                                           if (targetWeight === 0 || targetWeight === 1) {
+                                               delete r[src.origin];
+                                           } else {
+                                               r[src.origin] = targetWeight;
+                                           }
                                            base.sourceRatios = r;
                                            handleChange('regionConfig', base);
                                        };
-                                       const togglePlatform = (k: string) => {
-                                           const base = { ...(formData.regionConfig || {}) };
-                                           const cur = base.subscribedPlatforms ? [...base.subscribedPlatforms] : [];
-                                           const i = cur.indexOf(k);
-                                           if (i >= 0) cur.splice(i, 1); else cur.push(k);
-                                           base.subscribedPlatforms = cur;
-                                           handleChange('regionConfig', base);
-                                       };
-                                       const toggleRss = (u: string) => {
-                                           const base = { ...(formData.regionConfig || {}) };
-                                           const cur = base.subscribedRssUrls ? [...base.subscribedRssUrls] : [];
-                                           const i = cur.indexOf(u);
-                                           if (i >= 0) cur.splice(i, 1); else cur.push(u);
-                                           base.subscribedRssUrls = cur;
-                                           handleChange('regionConfig', base);
-                                       };
 
-                                       const SubRow: React.FC<{ label: string; origin: string; sub: boolean; onToggle: () => void }> = ({ label, origin, sub, onToggle }) => (
-                                           <div className="flex items-center gap-2 py-1">
-                                               <button
-                                                   onClick={onToggle}
-                                                   className={`shrink-0 w-5 h-5 rounded-md border flex items-center justify-center transition-colors active:scale-90 ${sub ? 'bg-emerald-500 border-emerald-500 text-white' : 'bg-white border-slate-300 text-transparent'}`}
-                                               >
-                                                   <svg viewBox="0 0 16 16" className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="3"><path d="M3 8l3 3 7-7" strokeLinecap="round" strokeLinejoin="round" /></svg>
-                                               </button>
-                                               <span className={`flex-1 min-w-0 truncate text-[11px] ${sub ? 'text-slate-700 font-medium' : 'text-slate-400'}`} title={label}>{label}</span>
-                                               <button
-                                                   onClick={() => sub && cycleRatio(origin)}
-                                                   disabled={!sub}
-                                                   className={`shrink-0 w-7 h-7 rounded-full text-[11px] font-bold flex items-center justify-center transition-colors ${sub ? 'bg-emerald-50 text-emerald-600 border border-emerald-200 active:scale-90' : 'bg-slate-50 text-slate-300 border border-slate-100 cursor-not-allowed'}`}
-                                                   title={sub ? '占比权重，点击循环 1→2→3→4→1' : '先勾选才能调占比'}
-                                               >
-                                                   {sub ? `×${ratioOf(origin)}` : '—'}
-                                               </button>
-                                           </div>
-                                       );
+                                       const hasAnySub = allSources.some(isSubscribed);
 
                                        return (
-                                           <div className="mt-3 space-y-3">
-                                               {globalPlatforms.length > 0 && (
-                                                   <div>
-                                                       <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">热点平台</p>
-                                                       <div className="divide-y divide-slate-50">
-                                                           {globalPlatforms.map(k => (
-                                                               <SubRow
-                                                                   key={k}
-                                                                   label={RealtimeContextManager.HOTNEWS_PLATFORM_LABELS[k] || k}
-                                                                   origin={k}
-                                                                   sub={isPlatformSub(k)}
-                                                                   onToggle={() => togglePlatform(k)}
-                                                               />
-                                                           ))}
-                                                       </div>
-                                                   </div>
-                                               )}
-                                               {globalRss.length > 0 && (
-                                                   <div>
-                                                       <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">RSS 订阅源</p>
-                                                       <div className="divide-y divide-slate-50">
-                                                           {globalRss.map(r => (
-                                                               <SubRow
-                                                                   key={r.url}
-                                                                   label={r.label}
-                                                                   origin={r.url}
-                                                                   sub={isRssSub(r.url)}
-                                                                   onToggle={() => toggleRss(r.url)}
-                                                               />
-                                                           ))}
-                                                       </div>
-                                                   </div>
-                                               )}
-                                               <p className="text-[10px] text-slate-400/80 leading-relaxed pt-1">
-                                                   💡 <b>占比权重</b>：右上角小徽章 ×N，点击在 1→2→3→4→1 之间循环。
-                                                   N 越大该源被抽进 prompt 的概率越高（同一条不会重复出现）。默认 ×1。
-                                                   <b> 勾了任一项</b> = 该角色只看勾选的源；<b>不勾任何</b> = 跟随全局。
-                                               </p>
-                                           </div>
+                                           <FeedPoolEditor
+                                               allSources={allSources}
+                                               tierOf={tierOf}
+                                               tierSources={tierSources}
+                                               onDragEnd={onDragEnd}
+                                               hasAnySub={hasAnySub}
+                                               onReset={() => {
+                                                   // 修复原 bug：重置时一并清 sourceRatios，避免旧权重复活
+                                                   const base = { ...(formData.regionConfig || {}) };
+                                                   delete base.subscribedPlatforms;
+                                                   delete base.subscribedRssUrls;
+                                                   delete base.sourceRatios;
+                                                   handleChange('regionConfig', base);
+                                               }}
+                                           />
                                        );
                                    })()}
                                </div>
