@@ -144,7 +144,7 @@ const FeedPoolEditor: React.FC<{
                         disabled={autoRanking}
                         className="text-[10px] text-amber-500 active:scale-95 transition-transform disabled:opacity-40"
                     >
-                        {autoRanking ? '排档中…' : '✨ AI 排档'}
+                        {autoRanking ? '确认中…' : '✨ 角色确认订阅方案'}
                     </button>
                     {hasAnySub && (
                         <button onClick={onReset} className="text-[10px] text-emerald-500 active:scale-95 transition-transform">
@@ -1615,12 +1615,11 @@ ${isInitialGeneration ? `
                                            const base = formData.regionConfig || {};
                                            handleChange('regionConfig', { ...base, city: v || undefined });
                                        }}
-                                       placeholder="如：东京 / Tokyo / 文京区 / Bunkyo-ku"
+                                       placeholder="如：东京 / Tokyo / 北京 / Shanghai"
                                        className="mt-3 w-full bg-slate-50 rounded-2xl px-3 py-2.5 text-xs border border-slate-200 outline-none focus:ring-1 focus:ring-emerald-400/30"
                                    />
                                    <p className="text-[10px] text-slate-400/80 mt-1.5 leading-relaxed">
-                                       💡 识别口径：支持中文 / 英文 / 部分日文区名。中文如「北京」「文京区」；英文如「Tokyo」「Bunkyo-ku」。
-                                       走 Open-Meteo 地名服务（免 key），填了 OpenWeatherMap key 也会优先用 OWM。
+                                       💡 支持中文 / 英文城市名。走 Open-Meteo 地名服务（免 key），填了 OpenWeatherMap key 也会优先用 OWM。
                                        填不识别时角色那行会显示「天气暂未取到」，留空最稳。
                                    </p>
                                </div>
@@ -1738,9 +1737,9 @@ ${isInitialGeneration ? `
                                                        base.subscribedRssUrls = rssUrls;
                                                        base.sourceRatios = ratios;
                                                        handleChange('regionConfig', base);
-                                                       addToast(`AI 排档完成：${platforms.length + rssUrls.length}/${allSources.length} 个源已订阅`, 'success');
+                                                       addToast(`订阅方案已确认：${platforms.length + rssUrls.length}/${allSources.length} 个源已订阅`, 'success');
                                                    } catch (e: any) {
-                                                       addToast(`AI 排档失败：${e.message || '未知错误'}`, 'error');
+                                                       addToast(`确认订阅方案失败：${e.message || '未知错误'}`, 'error');
                                                    } finally {
                                                        setAutoRankingFeeds(false);
                                                    }

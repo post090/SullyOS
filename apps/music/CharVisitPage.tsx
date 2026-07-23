@@ -628,9 +628,8 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
                     </button>
                     {a.starred && (
                       <div className="absolute left-1/2 -translate-x-1/2 -bottom-1.5 z-20 pointer-events-none">
-                        <div className="w-5 h-5 rounded-full flex items-center justify-center"
-                          style={{ background: '#fff', boxShadow: '0 1px 4px rgba(0,0,0,0.15)' }}>
-                          <Star size={13} weight="fill" className="text-amber-400" />
+                        <div className="w-5 h-5 rounded-full flex items-center justify-center bg-amber-400">
+                          <Star size={12} weight="fill" className="text-white" />
                         </div>
                       </div>
                     )}
@@ -684,9 +683,8 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
                       </button>
                       {s.starred && (
                         <div className="absolute left-1/2 -translate-x-1/2 -bottom-1.5 z-20 pointer-events-none">
-                          <div className="w-5 h-5 rounded-full flex items-center justify-center"
-                            style={{ background: '#fff', boxShadow: '0 1px 4px rgba(0,0,0,0.15)' }}>
-                            <Star size={13} weight="fill" className="text-amber-400" />
+                          <div className="w-5 h-5 rounded-full flex items-center justify-center bg-amber-400">
+                            <Star size={12} weight="fill" className="text-white" />
                           </div>
                         </div>
                       )}
