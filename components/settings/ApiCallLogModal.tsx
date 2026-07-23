@@ -31,6 +31,9 @@ const ApiCallLogModal: React.FC<ApiCallLogModalProps> = ({ isOpen, onClose }) =>
     const [loading, setLoading] = useState(false);
     const [showHelp, setShowHelp] = useState(false);
     const [expandedId, setExpandedId] = useState<string | null>(null);
+    // 输入构成排序：全局共用，所有展开的记录用同一种排序。token 降序=看哪块肥；
+    // 自然顺序=按 prompt 里实际出现顺序，定位"这块在第几位"。
+    const [breakdownSort, setBreakdownSort] = useState<'natural' | 'tokDesc'>('tokDesc');
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -143,6 +146,18 @@ const ApiCallLogModal: React.FC<ApiCallLogModalProps> = ({ isOpen, onClose }) =>
                 );
             })()}
 
+            {entries.length > 0 && (
+                <div className="mb-3 flex justify-end">
+                    <button
+                        onClick={() => setBreakdownSort(s => s === 'tokDesc' ? 'natural' : 'tokDesc')}
+                        className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-slate-100 text-slate-500 active:scale-95 transition-transform"
+                        title="切换输入构成排序方式"
+                    >
+                        构成排序：{breakdownSort === 'tokDesc' ? 'Token 降序 ↓' : '自然顺序'}
+                    </button>
+                </div>
+            )}
+
             {loading ? (
                 <div className="py-10 text-center text-sm text-slate-400">加载中…</div>
             ) : entries.length === 0 ? (
@@ -222,7 +237,7 @@ const ApiCallLogModal: React.FC<ApiCallLogModalProps> = ({ isOpen, onClose }) =>
                                     </div>
                                 )}
                                 {expanded && e.promptBreakdown && (
-                                    <PromptBreakdownView blocks={e.promptBreakdown} promptTokens={e.promptTokens} />
+                                    <PromptBreakdownView blocks={e.promptBreakdown} promptTokens={e.promptTokens} sort={breakdownSort} />
                                 )}
                                 {expanded && e.recalledMemories && e.recalledMemories.length > 0 && (
                                     <RecalledMemoriesView items={e.recalledMemories} />
@@ -259,9 +274,9 @@ const CATEGORY_META: Record<PromptBlockCategory, { label: string; bg: string; te
  * 附占比条 + 按字符占比折算的 token 估算（分词器差异下只是量级参考，不是精确值）。
  *
  * 每条前面有胶囊标签分类（classifyPromptBlock）；点有 preview 的条目可展开看
- * 前 500 字原文；同时只展开一条（互斥），避免长 preview 撑爆页面。
+ * 原文（存全文，展示层 max-h 控制高度）；同时只展开一条（互斥），避免长内容撑爆页面。
  */
-const PromptBreakdownView: React.FC<{ blocks: PromptBlockStat[]; promptTokens?: number }> = ({ blocks, promptTokens }) => {
+const PromptBreakdownView: React.FC<{ blocks: PromptBlockStat[]; promptTokens?: number; sort: 'natural' | 'tokDesc' }> = ({ blocks, promptTokens, sort }) => {
     const [expandedBlockIdx, setExpandedBlockIdx] = useState<number | null>(null);
     const totalChars = blocks.reduce((sum, b) => sum + b.chars, 0) || 1;
     // 思考链块单独保留（不合并），让人看出思考链占多少；其余 fixed 块
@@ -271,28 +286,29 @@ const PromptBreakdownView: React.FC<{ blocks: PromptBlockStat[]; promptTokens?: 
     const nonFixed = blocks.filter(b => !isFixedPromptBlockLabel(b.label));
     let merged: PromptBlockStat[];
     if (fixedNonThinking.length >= 2) {
-        // 合并块的 preview 也拼一下（每块取一点凑成 500 字），点开能瞥见规则大概长啥样
+        // 合并块的 preview 也拼一下（存全文），点开能看到规则具体内容
         let mergedPreview = '';
         for (const b of fixedNonThinking) {
-            if (mergedPreview.length >= 500) break;
-            mergedPreview += (b.preview || '').slice(0, 500 - mergedPreview.length);
+            mergedPreview += (b.preview || '') + '\n';
         }
         merged = [
             ...nonFixed,
             ...thinking,
-            { label: `固定提示词（规则/格式，共 ${fixedNonThinking.length} 块）`, chars: fixedNonThinking.reduce((s, b) => s + b.chars, 0), preview: mergedPreview || undefined },
+            { label: `固定提示词（规则/格式，共 ${fixedNonThinking.length} 块）`, chars: fixedNonThinking.reduce((s, b) => s + b.chars, 0), preview: mergedPreview.trim() || undefined },
         ];
     } else {
         merged = [...nonFixed, ...thinking, ...fixedNonThinking];
     }
-    const rows = [...merged].sort((a, b) => b.chars - a.chars);
+    // tokDesc：按字符数降序（≈ token 降序，没真 token 时字符数是唯一依据）
+    // natural：保持 prompt 里实际出现顺序（merged 的原始顺序就是出现顺序）
+    const rows = sort === 'tokDesc' ? [...merged].sort((a, b) => b.chars - a.chars) : [...merged];
     const fmt = (n: number) => n.toLocaleString('en-US');
     return (
         <div className="mt-2 pt-2 border-t border-slate-100 space-y-1.5" onClick={(ev) => ev.stopPropagation()}>
             <div className="flex items-baseline justify-between">
                 <span className="text-[10px] font-bold text-slate-400">输入构成 · 共 {fmt(totalChars)} 字符</span>
                 {promptTokens != null && (
-                    <span className="text-[9px] text-slate-300">token 列为按字符占比折算的估算</span>
+                    <span className="text-[9px] text-slate-300">token 为按字符占比的估算</span>
                 )}
             </div>
             {rows.map((b, i) => {
@@ -319,14 +335,14 @@ const PromptBreakdownView: React.FC<{ blocks: PromptBlockStat[]; promptTokens?: 
                                 )}
                             </div>
                             <span className="text-[10px] font-mono text-slate-400 shrink-0">
-                                {fmt(b.chars)} 字{estTok != null ? ` · ~${fmt(estTok)} tok` : ''} · {pct < 1 ? '<1' : Math.round(pct)}%
+                                {estTok != null ? `~${fmt(estTok)} tok · ${pct < 1 ? '<1' : Math.round(pct)}%` : `${fmt(b.chars)} 字 · ${pct < 1 ? '<1' : Math.round(pct)}%`}
                             </span>
                         </div>
                         <div className="h-1 rounded-full bg-slate-100 overflow-hidden">
                             <div className="h-full rounded-full bg-primary/50" style={{ width: `${Math.max(pct, 1.5)}%` }} />
                         </div>
                         {blockExpanded && hasPreview && (
-                            <pre className="mt-1 mb-1 p-2 rounded-lg bg-slate-50 border border-slate-100 text-[10px] text-slate-600 whitespace-pre-wrap break-all max-h-40 overflow-auto leading-relaxed">{b.preview}</pre>
+                            <pre className="mt-1 mb-1 p-2 rounded-lg bg-slate-50 border border-slate-100 text-[10px] text-slate-600 whitespace-pre-wrap break-all max-h-72 overflow-auto leading-relaxed">{b.preview}</pre>
                         )}
                     </div>
                 );

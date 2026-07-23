@@ -87,8 +87,8 @@ export interface PromptBlockStat {
     /** 该块字符数（含标题行与换行） */
     chars: number;
     /**
-     * 块前 500 字截断预览（含块头行），供详情面板点开查看具体内容。
-     * 只存截断不存全文——原文一条几十 KB，5 天日志会撑爆存储。
+     * 块全文预览（含块头行），供详情面板点开查看具体内容。存全文不截断
+     * （用户确认存储空间够）；展示层用 max-h + overflow 控制可视高度。
      * 旧记录没有这个字段，点开显示"无预览"。
      */
     preview?: string;
@@ -284,8 +284,11 @@ function contentToText(content: unknown): string {
 }
 
 const BLOCK_LABEL_MAX = 40;
-/** 每块 preview 截断长度：够看清楚这块塞了什么，又不会让 5 天日志体积失控。 */
-const PREVIEW_MAX_CHARS = 500;
+/**
+ * 块预览存全文（用户确认存储空间够）。展示层用 max-h + overflow 控制可视高度，
+ * 存储侧不再截断。
+ */
+const PREVIEW_MAX_CHARS = Number.MAX_SAFE_INTEGER;
 
 /** 行是块头？返回块名（`## / ### 标题` 或 `[System: …]`），否则 null。 */
 const matchBlockHeader = (line: string): string | null => {
@@ -314,7 +317,7 @@ function splitSystemBlocks(text: string): PromptBlockStat[] {
     const out: PromptBlockStat[] = [];
     let label = '（开头·未分块部分）';
     let chars = 0;
-    let buffer = ''; // 累积当前块原文，结束时截断 500 字存进 preview
+    let buffer = ''; // 累积当前块原文，结束时存全文进 preview
     let sawHeader = false;
     let inFence = false;
     const lines = text.split('\n');
@@ -444,7 +447,7 @@ export function buildPromptBreakdown(body: unknown): PromptBlockStat[] | undefin
 
         const out: PromptBlockStat[] = [];
         let userChars = 0, userCount = 0, asstChars = 0, asstCount = 0, otherChars = 0, otherCount = 0;
-        // 聚合消息的 preview：把多条消息原文拼起来截断 500 字，让点开能看到实际聊了啥
+        // 聚合消息的 preview：把多条消息原文拼起来存全文，让点开能看到实际聊了啥
         let userPreview = '', asstPreview = '', otherPreview = '';
         const appendPreview = (buf: string, text: string): string => {
             if (buf.length >= PREVIEW_MAX_CHARS) return buf;
@@ -503,7 +506,7 @@ export function buildPromptBreakdown(body: unknown): PromptBlockStat[] | undefin
             const head = out.slice(0, MAX_BREAKDOWN_BLOCKS - 1);
             const rest = out.slice(MAX_BREAKDOWN_BLOCKS - 1);
             const restChars = rest.reduce((sum, b) => sum + b.chars, 0);
-            // preview 也合并：每块剩余额度内追加，凑成不超过 500 字
+            // preview 也合并：存全文（展示层控制可视高度）
             let restPreview = '';
             for (const b of rest) {
                 if (restPreview.length >= PREVIEW_MAX_CHARS) break;
