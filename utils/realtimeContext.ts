@@ -266,6 +266,8 @@ const pickNewsByRatio = (items: NewsItem[], ratios: Record<string, number> | und
  * - subscribedPlatforms / subscribedRssUrls 都是 undefined 时返回原池子（跟随全局）。
  * - 任一非 undefined（包括空数组）即视为该角色已显式订阅，按白名单过滤对应 origin。
  *   空数组 = 该角色不订阅该类源（返回时该类被完全滤掉）。
+ * - 未配 subscribedPlatforms / subscribedRssUrls（undefined）= 该角色不看热点
+ *   （只有明确选了订阅池里的源才会注入）。
  * - 内置 fallback 源（Brave / Hacker News）的 origin 用 `__brave__` / `__hackernews__`，
  *   不会被任何角色白名单命中——这是有意的：角色订阅了 hot_news / RSS 才有定制效果，
  *   fallback 是兜底，不该被白名单吃掉。
@@ -274,7 +276,8 @@ const filterByCharRegion = (items: NewsItem[], region: CharRegionOverride | unde
     if (!region) return items;
     const hasPlatformFilter = Array.isArray(region.subscribedPlatforms);
     const hasRssFilter = Array.isArray(region.subscribedRssUrls);
-    if (!hasPlatformFilter && !hasRssFilter) return items;
+    // 未配任何订阅 = 不看热点（返回空，不是跟随全局）
+    if (!hasPlatformFilter && !hasRssFilter) return [];
     const platforms = new Set(region.subscribedPlatforms || []);
     const rssUrls = new Set(region.subscribedRssUrls || []);
     return items.filter(it => {

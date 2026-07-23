@@ -26,6 +26,7 @@ import { normalizeUserImpression } from '../utils/impression';
 import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
 import { COMMON_TIMEZONES } from '../utils/timezone';
 import { RealtimeContextManager } from '../utils/realtimeContext';
+import { rankFeedsForChar } from '../utils/charFeedRanker';
 import { toMountedWorldbook } from '../utils/worldbook';
 import { stripSensitiveCardFields } from '../utils/characterCard';
 import { confirmExportSafety } from '../utils/exportGuard';
@@ -117,7 +118,9 @@ const FeedPoolEditor: React.FC<{
     onDragEnd: (event: any) => void;
     hasAnySub: boolean;
     onReset: () => void;
-}> = ({ allSources, tierOf, tierSources, onDragEnd, hasAnySub, onReset }) => {
+    onAutoRank: () => void;
+    autoRanking: boolean;
+}> = ({ allSources, tierOf, tierSources, onDragEnd, hasAnySub, onReset, onAutoRank, autoRanking }) => {
     const [open, setOpen] = useState(false);
     const [draggingSource, setDraggingSource] = useState<FeedSource | null>(null);
 
@@ -136,9 +139,16 @@ const FeedPoolEditor: React.FC<{
             <div className="flex items-center justify-between gap-2">
                 <p className="text-xs font-bold text-slate-700">热点订阅池</p>
                 <div className="flex items-center gap-3">
+                    <button
+                        onClick={onAutoRank}
+                        disabled={autoRanking}
+                        className="text-[10px] text-amber-500 active:scale-95 transition-transform disabled:opacity-40"
+                    >
+                        {autoRanking ? '排档中…' : '✨ AI 排档'}
+                    </button>
                     {hasAnySub && (
                         <button onClick={onReset} className="text-[10px] text-emerald-500 active:scale-95 transition-transform">
-                            ↺ 跟随全局
+                            ↺ 清空
                         </button>
                     )}
                     <button onClick={() => setOpen(!open)} className="text-[10px] text-violet-500 active:scale-95 transition-transform">
@@ -163,7 +173,7 @@ const FeedPoolEditor: React.FC<{
                         </span>
                     )}
                     {!hasAnySub && (
-                        <span className="text-[10px] text-slate-400 italic">跟随全局全部源</span>
+                        <span className="text-[10px] text-slate-400 italic">未选任何源 — 该角色不看热点</span>
                     )}
                 </div>
             ) : (
@@ -178,9 +188,16 @@ const FeedPoolEditor: React.FC<{
                     onDragEnd={(e) => { onDragEnd(e); setDraggingSource(null); }}
                     onDragCancel={() => setDraggingSource(null)}
                 >
-                    <p className="text-[10px] text-slate-400 mt-2 mb-2 leading-relaxed">
-                        长按拖动源到不同档位。<b>拖到任一档位</b> = 该角色只看已选的源；<b>全拖回未选</b> = 跟随全局。
-                    </p>
+                    <div className="text-[10px] text-slate-400 mt-2 mb-2 leading-relaxed space-y-0.5">
+                        <p>长按拖动源到不同档位。只有选了的源才会注入热点；全拖回未选 = 该角色不看热点。</p>
+                        <p className="text-slate-400/70">
+                            <span className="text-rose-400">必看</span>×4 占比最高 ·
+                            <span className="text-orange-400"> 偏爱</span>×3 ·
+                            <span className="text-amber-400"> 关注</span>×2 ·
+                            <span className="text-emerald-400"> 浏览</span>×1 占比最低 ·
+                            档位越高，该源被抽进 prompt 的概率越大
+                        </p>
+                    </div>
                     <div className="space-y-2">
                         {FEED_TIERS.map(t => (
                             <DroppableTier key={t.weight} tierWeight={t.weight} sources={tierSources(t.weight)} />
@@ -291,6 +308,8 @@ const Character: React.FC = () => {
   const [editingId, setEditingId] = useState<string | null>(() => launchIntent?.charId || null);
   const [formData, setFormData] = useState<CharacterProfile | null>(null);
   const [isCompressing, setIsCompressing] = useState(false);
+  // AI 自动排档热点订阅（loading 态）
+  const [autoRankingFeeds, setAutoRankingFeeds] = useState(false);
   // 头像 URL 输入的 draft, 不逐字 commit 到 formData.avatar —— 否则每输入一个字符,
   // 所有引用 char.avatar 的 <img> 都会拿到不完整字符串当相对路径请求根目录,
   // 导致打字时疯狂 GET / 和满屏破图. 失焦 / 回车才校验 + commit.
@@ -1575,7 +1594,7 @@ ${isInitialGeneration ? `
                                <div>
                                    <label className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest block">地区与热点</label>
                                    <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
-                                       角色级覆盖。留空 = 跟随全局「实时感知」设置；填了 = 在全局池子内做角色级过滤 / 加权。
+                                       角色级覆盖。热点只在「订阅池」里选了源才会注入——不选 = 该角色不看热点。天气照常走全局。
                                        {!realtimeConfig.weatherEnabled && !realtimeConfig.newsEnabled && (
                                            <span className="text-amber-500"> ⚠️ 当前全局未开启天气 / 热点，配置先存着，开启后才会生效。</span>
                                        )}
@@ -1697,6 +1716,35 @@ ${isInitialGeneration ? `
                                                tierSources={tierSources}
                                                onDragEnd={onDragEnd}
                                                hasAnySub={hasAnySub}
+                                               autoRanking={autoRankingFeeds}
+                                               onAutoRank={async () => {
+                                                   if (autoRankingFeeds || !formData) return;
+                                                   setAutoRankingFeeds(true);
+                                                   try {
+                                                       const ranking = await rankFeedsForChar(formData, apiConfig, allSources);
+                                                       // 写回 regionConfig：tier>0 的进订阅 + 设权重，tier=0 的踢出
+                                                       const base = { ...(formData.regionConfig || {}) };
+                                                       const platforms: string[] = [];
+                                                       const rssUrls: string[] = [];
+                                                       const ratios: Record<string, number> = {};
+                                                       for (const s of allSources) {
+                                                           const t = ranking[s.origin] ?? 0;
+                                                           if (t === 0) continue;
+                                                           if (s.kind === 'platform') platforms.push(s.origin);
+                                                           else rssUrls.push(s.origin);
+                                                           if (t > 1) ratios[s.origin] = t;  // 1 是默认值不存
+                                                       }
+                                                       base.subscribedPlatforms = platforms;
+                                                       base.subscribedRssUrls = rssUrls;
+                                                       base.sourceRatios = ratios;
+                                                       handleChange('regionConfig', base);
+                                                       addToast(`AI 排档完成：${platforms.length + rssUrls.length}/${allSources.length} 个源已订阅`, 'success');
+                                                   } catch (e: any) {
+                                                       addToast(`AI 排档失败：${e.message || '未知错误'}`, 'error');
+                                                   } finally {
+                                                       setAutoRankingFeeds(false);
+                                                   }
+                                               }}
                                                onReset={() => {
                                                    // 修复原 bug：重置时一并清 sourceRatios，避免旧权重复活
                                                    const base = { ...(formData.regionConfig || {}) };

@@ -2940,6 +2940,10 @@ const Settings: React.FC = () => {
                                   勾选的 RSS 源会跟 orz.ai 热榜混合，一起存进分时段快照（每 4 小时刷新一次）。
                                   AI 上下文随机抽 5 条注入，「热点」App 里也会跟 orz.ai 平台并列展示。所有 RSS 都走 worker 代理抓取，绕过 CORS。
                               </p>
+                              <p className="text-[10px] text-violet-500/80 leading-relaxed bg-violet-50/50 rounded-lg px-2 py-1.5">
+                                  💡 这里勾选的是<b>全局池子</b>。每个角色在「神经链接 → 地区与热点」里要从池子里挑哪些源、各占多少权重，
+                                  由角色级订阅决定——<b>不在订阅池里选的源该角色不会看到</b>。
+                              </p>
                               <div className="flex flex-wrap gap-1.5">
                                   {RealtimeContextManager.RSS_BUILTIN_SOURCES.map(s => {
                                       const active = rtRssUrls.includes(s.url);
