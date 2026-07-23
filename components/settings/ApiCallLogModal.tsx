@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import Modal from '../os/Modal';
 import { DB } from '../../utils/db';
-import { isSameCoreModel, isFixedPromptBlockLabel } from '../../utils/apiCallLog';
-import type { ApiCallLogEntry, PromptBlockStat, RecalledMemorySnapshot } from '../../utils/apiCallLog';
+import { isSameCoreModel, isFixedPromptBlockLabel, isThinkingChainBlockLabel, classifyPromptBlock } from '../../utils/apiCallLog';
+import type { ApiCallLogEntry, PromptBlockStat, PromptBlockCategory, RecalledMemorySnapshot } from '../../utils/apiCallLog';
 
 interface ApiCallLogModalProps {
     isOpen: boolean;
@@ -237,20 +237,54 @@ const ApiCallLogModal: React.FC<ApiCallLogModalProps> = ({ isOpen, onClose }) =>
 };
 
 /**
+ * 输入构成块的分类 → 胶囊标签 + 颜色映射。
+ * key 来自 classifyPromptBlock（utils/apiCallLog.ts），颜色按"性质"分：
+ * 规则类灰、引导类紫、用户数据类暖色、历史类青、任务类粉。
+ */
+const CATEGORY_META: Record<PromptBlockCategory, { label: string; bg: string; text: string }> = {
+    thinking:          { label: '思考链',    bg: 'bg-violet-100',  text: 'text-violet-600' },
+    rule:              { label: '规则',      bg: 'bg-slate-200',   text: 'text-slate-500' },
+    memory:            { label: '记忆',      bg: 'bg-amber-100',   text: 'text-amber-600' },
+    worldbook:         { label: '世界书',    bg: 'bg-emerald-100', text: 'text-emerald-600' },
+    character:         { label: '角色',      bg: 'bg-sky-100',     text: 'text-sky-600' },
+    history_user:      { label: '历史·用户', bg: 'bg-cyan-100',    text: 'text-cyan-600' },
+    history_assistant: { label: '历史·角色', bg: 'bg-cyan-100',    text: 'text-cyan-600' },
+    history_tool:      { label: '历史·工具', bg: 'bg-cyan-100',    text: 'text-cyan-600' },
+    task:              { label: '任务',      bg: 'bg-rose-100',    text: 'text-rose-600' },
+    other:             { label: '其他',      bg: 'bg-slate-100',   text: 'text-slate-400' },
+};
+
+/**
  * 输入构成面板：按字数降序列出每块（system 的 ### 段落 / 聚合的聊天历史），
  * 附占比条 + 按字符占比折算的 token 估算（分词器差异下只是量级参考，不是精确值）。
+ *
+ * 每条前面有胶囊标签分类（classifyPromptBlock）；点有 preview 的条目可展开看
+ * 前 500 字原文；同时只展开一条（互斥），避免长 preview 撑爆页面。
  */
 const PromptBreakdownView: React.FC<{ blocks: PromptBlockStat[]; promptTokens?: number }> = ({ blocks, promptTokens }) => {
+    const [expandedBlockIdx, setExpandedBlockIdx] = useState<number | null>(null);
     const totalChars = blocks.reduce((sum, b) => sum + b.chars, 0) || 1;
-    // 写死的固定骨架块（行为规范/表达底线/钢印等）合并成一行——它们不随用户数据
-    // 变化、也没有可优化空间，散成一堆小行只会淹没真正有信息量的数据块。
-    const fixed = blocks.filter(b => isFixedPromptBlockLabel(b.label));
-    const merged: PromptBlockStat[] = fixed.length >= 2
-        ? [
-            ...blocks.filter(b => !isFixedPromptBlockLabel(b.label)),
-            { label: `固定提示词（规则/格式，共 ${fixed.length} 块）`, chars: fixed.reduce((s, b) => s + b.chars, 0) },
-        ]
-        : blocks;
+    // 思考链块单独保留（不合并），让人看出思考链占多少；其余 fixed 块
+    // （行为规范/表达底线/钢印）合并成一行——它们不随用户数据变化、散开只会淹没有信息量的块。
+    const thinking = blocks.filter(b => isThinkingChainBlockLabel(b.label));
+    const fixedNonThinking = blocks.filter(b => isFixedPromptBlockLabel(b.label) && !isThinkingChainBlockLabel(b.label));
+    const nonFixed = blocks.filter(b => !isFixedPromptBlockLabel(b.label));
+    let merged: PromptBlockStat[];
+    if (fixedNonThinking.length >= 2) {
+        // 合并块的 preview 也拼一下（每块取一点凑成 500 字），点开能瞥见规则大概长啥样
+        let mergedPreview = '';
+        for (const b of fixedNonThinking) {
+            if (mergedPreview.length >= 500) break;
+            mergedPreview += (b.preview || '').slice(0, 500 - mergedPreview.length);
+        }
+        merged = [
+            ...nonFixed,
+            ...thinking,
+            { label: `固定提示词（规则/格式，共 ${fixedNonThinking.length} 块）`, chars: fixedNonThinking.reduce((s, b) => s + b.chars, 0), preview: mergedPreview || undefined },
+        ];
+    } else {
+        merged = [...nonFixed, ...thinking, ...fixedNonThinking];
+    }
     const rows = [...merged].sort((a, b) => b.chars - a.chars);
     const fmt = (n: number) => n.toLocaleString('en-US');
     return (
@@ -264,10 +298,26 @@ const PromptBreakdownView: React.FC<{ blocks: PromptBlockStat[]; promptTokens?: 
             {rows.map((b, i) => {
                 const pct = (b.chars / totalChars) * 100;
                 const estTok = promptTokens != null ? Math.round(promptTokens * b.chars / totalChars) : null;
+                const cat = classifyPromptBlock(b.label);
+                const catMeta = CATEGORY_META[cat];
+                const hasPreview = !!b.preview;
+                const blockExpanded = expandedBlockIdx === i;
                 return (
                     <div key={i} className="min-w-0">
-                        <div className="flex items-baseline justify-between gap-2 min-w-0">
-                            <span className="text-[10px] text-slate-500 truncate" title={b.label}>{b.label}</span>
+                        <div
+                            className={`flex items-baseline justify-between gap-2 min-w-0 ${hasPreview ? 'cursor-pointer' : ''}`}
+                            onClick={hasPreview ? (ev) => {
+                                ev.stopPropagation();
+                                setExpandedBlockIdx(blockExpanded ? null : i);
+                            } : undefined}
+                        >
+                            <div className="flex items-baseline gap-1.5 min-w-0">
+                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${catMeta.bg} ${catMeta.text}`}>{catMeta.label}</span>
+                                <span className="text-[10px] text-slate-500 truncate" title={b.label}>{b.label}</span>
+                                {hasPreview && (
+                                    <span className="text-[9px] text-slate-300 shrink-0">{blockExpanded ? '▲' : '▼'}</span>
+                                )}
+                            </div>
                             <span className="text-[10px] font-mono text-slate-400 shrink-0">
                                 {fmt(b.chars)} 字{estTok != null ? ` · ~${fmt(estTok)} tok` : ''} · {pct < 1 ? '<1' : Math.round(pct)}%
                             </span>
@@ -275,6 +325,9 @@ const PromptBreakdownView: React.FC<{ blocks: PromptBlockStat[]; promptTokens?: 
                         <div className="h-1 rounded-full bg-slate-100 overflow-hidden">
                             <div className="h-full rounded-full bg-primary/50" style={{ width: `${Math.max(pct, 1.5)}%` }} />
                         </div>
+                        {blockExpanded && hasPreview && (
+                            <pre className="mt-1 mb-1 p-2 rounded-lg bg-slate-50 border border-slate-100 text-[10px] text-slate-600 whitespace-pre-wrap break-all max-h-40 overflow-auto leading-relaxed">{b.preview}</pre>
+                        )}
                     </div>
                 );
             })}
@@ -330,13 +383,19 @@ const RecalledMemoriesView: React.FC<{ items: RecalledMemorySnapshot[] }> = ({ i
             </div>
             {sorted.map((m, i) => {
                 const roomLabel = ROOM_LABELS[m.room] || m.room;
-                const tag = m.isPinned ? '📌 置顶' : m.isBox ? '📦 事件盒' : '记忆';
+                // 类型胶囊：置顶=琥珀、事件盒=紫、普通记忆=青；房间胶囊统一灰，避免颜色太花
+                const typeLabel = m.isPinned ? '置顶' : m.isBox ? '事件盒' : '记忆';
+                const typeClass = m.isPinned
+                    ? 'bg-amber-100 text-amber-600'
+                    : m.isBox ? 'bg-violet-100 text-violet-600' : 'bg-cyan-100 text-cyan-600';
                 return (
                     <div key={`${m.id}-${i}`} className="min-w-0 rounded-lg bg-slate-50/80 px-2 py-1.5">
-                        <div className="flex items-baseline justify-between gap-2 min-w-0 mb-0.5">
-                            <span className="text-[10px] font-bold text-slate-500 shrink-0">
-                                #{i + 1} [{roomLabel}] {tag}
-                            </span>
+                        <div className="flex items-center justify-between gap-2 min-w-0 mb-0.5">
+                            <div className="flex items-center gap-1 min-w-0">
+                                <span className="text-[9px] font-mono text-slate-400 shrink-0">#{i + 1}</span>
+                                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 bg-slate-200 text-slate-500">{roomLabel}</span>
+                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${typeClass}`}>{typeLabel}</span>
+                            </div>
                             <span className="text-[9px] font-mono text-slate-400 shrink-0">
                                 {m.isPinned ? '—' : `分 ${m.score}`} · 重要 {m.importance}
                             </span>

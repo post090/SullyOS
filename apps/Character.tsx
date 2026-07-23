@@ -123,6 +123,22 @@ const FeedPoolEditor: React.FC<{
 }> = ({ allSources, tierOf, tierSources, onDragEnd, hasAnySub, onReset, onAutoRank, autoRanking }) => {
     const [open, setOpen] = useState(false);
     const [draggingSource, setDraggingSource] = useState<FeedSource | null>(null);
+    // 清空订阅的两段式确认：第一次点进入"红底白字确定"态，再点才真清空；
+    // 3 秒内不再点则自动复位，避免按钮一直卡在危险态。
+    const [confirmingReset, setConfirmingReset] = useState(false);
+    const resetConfirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    useEffect(() => () => { if (resetConfirmTimer.current) clearTimeout(resetConfirmTimer.current); }, []);
+    const handleResetClick = () => {
+        if (!confirmingReset) {
+            setConfirmingReset(true);
+            if (resetConfirmTimer.current) clearTimeout(resetConfirmTimer.current);
+            resetConfirmTimer.current = setTimeout(() => setConfirmingReset(false), 3000);
+            return;
+        }
+        if (resetConfirmTimer.current) { clearTimeout(resetConfirmTimer.current); resetConfirmTimer.current = null; }
+        setConfirmingReset(false);
+        onReset();
+    };
 
     // 触摸传感器：长按 200ms + 移动容差 5px 才触发拖拽，避免误触
     const sensors = useSensors(
@@ -146,11 +162,6 @@ const FeedPoolEditor: React.FC<{
                     >
                         {autoRanking ? '确认中…' : '✨ 角色确认订阅方案'}
                     </button>
-                    {hasAnySub && (
-                        <button onClick={onReset} className="text-[10px] text-emerald-500 active:scale-95 transition-transform">
-                            ↺ 清空
-                        </button>
-                    )}
                     <button onClick={() => setOpen(!open)} className="text-[10px] text-violet-500 active:scale-95 transition-transform">
                         {open ? '收起' : '编辑'}
                     </button>
@@ -204,6 +215,21 @@ const FeedPoolEditor: React.FC<{
                         ))}
                         <DroppableTier tierWeight={0} sources={tierSources(0)} />
                     </div>
+                    {hasAnySub && (
+                        <div className="flex justify-end mt-2">
+                            <button
+                                onClick={handleResetClick}
+                                onBlur={() => setConfirmingReset(false)}
+                                className={`text-[10px] font-bold px-3 py-1.5 rounded-full active:scale-95 transition-all ${
+                                    confirmingReset
+                                        ? 'bg-rose-500 text-white shadow-[0_2px_8px_rgba(244,63,94,0.35)]'
+                                        : 'text-slate-400 hover:text-rose-400'
+                                }`}
+                            >
+                                {confirmingReset ? '确定清空？' : '清空所有订阅'}
+                            </button>
+                        </div>
+                    )}
                     <DragOverlay>
                         {draggingSource && (
                             <FeedChip source={draggingSource} tier={tierOf(draggingSource)} isOverlay />

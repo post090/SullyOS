@@ -86,6 +86,12 @@ export interface PromptBlockStat {
     label: string;
     /** 该块字符数（含标题行与换行） */
     chars: number;
+    /**
+     * 块前 500 字截断预览（含块头行），供详情面板点开查看具体内容。
+     * 只存截断不存全文——原文一条几十 KB，5 天日志会撑爆存储。
+     * 旧记录没有这个字段，点开显示"无预览"。
+     */
+    preview?: string;
 }
 
 const PRESETS_STORAGE_KEY = 'os_api_presets';
@@ -278,6 +284,8 @@ function contentToText(content: unknown): string {
 }
 
 const BLOCK_LABEL_MAX = 40;
+/** 每块 preview 截断长度：够看清楚这块塞了什么，又不会让 5 天日志体积失控。 */
+const PREVIEW_MAX_CHARS = 500;
 
 /** 行是块头？返回块名（`## / ### 标题` 或 `[System: …]`），否则 null。 */
 const matchBlockHeader = (line: string): string | null => {
@@ -306,24 +314,35 @@ function splitSystemBlocks(text: string): PromptBlockStat[] {
     const out: PromptBlockStat[] = [];
     let label = '（开头·未分块部分）';
     let chars = 0;
+    let buffer = ''; // 累积当前块原文，结束时截断 500 字存进 preview
     let sawHeader = false;
     let inFence = false;
     const lines = text.split('\n');
     const fenceAt = fenceToggleLines(lines);
+    const flush = () => {
+        if (chars > 0) out.push({ label, chars, preview: buffer.slice(0, PREVIEW_MAX_CHARS) || undefined });
+        chars = 0;
+        buffer = '';
+    };
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         if (fenceAt.has(i)) inFence = !inFence;
         const header = inFence ? null : matchBlockHeader(line);
         if (header) {
-            if (chars > 0) out.push({ label, chars });
+            flush();
             label = header.slice(0, BLOCK_LABEL_MAX);
             chars = line.length + 1;
+            buffer = line + '\n';
             sawHeader = true;
         } else {
             chars += line.length + 1;
+            // preview 还没满才追加，省得 buffer 无限增长
+            if (buffer.length < PREVIEW_MAX_CHARS) {
+                buffer += line + '\n';
+            }
         }
     }
-    if (chars > 0) out.push({ label, chars });
+    flush();
     if (!sawHeader && out.length === 1) {
         const firstLine = text.trimStart().split('\n', 1)[0] || '(空 system)';
         out[0] = { ...out[0], label: firstLine.slice(0, BLOCK_LABEL_MAX) };
@@ -360,6 +379,54 @@ const FIXED_PROMPT_LABEL_PREFIXES = [
 export const isFixedPromptBlockLabel = (label: string): boolean =>
     FIXED_PROMPT_LABEL_PREFIXES.some(prefix => label.startsWith(prefix));
 
+/**
+ * 思考链提示词（thinkingChainPrompt.ts）的章节头前缀。
+ * 这些块虽然是"固定写死的骨架"，但性质跟行为规范/表达底线不同——它们是
+ * 引导模型做内心独白的元规则。构成面板把它们单独拆出来不合并，并打「思考链」
+ * 胶囊标签，让人一眼看出 prompt 里有多少是思考链开销。
+ */
+const THINKING_CHAIN_LABEL_PREFIXES = [
+    '语言铁律',
+    '你不是在演',
+    '起点:你本来在干嘛',
+    '同时被激活的多个东西',
+    '别急着安慰',
+    '别造谣',
+    '温度:脑内比嘴上更吵',
+    'Thinking 写法总则',
+];
+
+export const isThinkingChainBlockLabel = (label: string): boolean =>
+    THINKING_CHAIN_LABEL_PREFIXES.some(prefix => label.startsWith(prefix));
+
+/**
+ * 输入构成块的分类 key（展示层用 CATEGORY_META 映射成胶囊标签 + 颜色）。
+ * 判断顺序很关键：越具体的前缀匹配越要先判，contains 类（记忆/世界书/角色）放最后，
+ * 否则会被"聊天历史·用户消息 ×N"这类聚合标签里的字面词带偏。
+ */
+export type PromptBlockCategory =
+    | 'thinking' | 'rule' | 'memory' | 'worldbook' | 'character'
+    | 'history_user' | 'history_assistant' | 'history_tool'
+    | 'task' | 'other';
+
+export function classifyPromptBlock(label: string): PromptBlockCategory {
+    // 1. 思考链章节（最具体，先判）
+    if (isThinkingChainBlockLabel(label)) return 'thinking';
+    // 2. 合并后的固定块「固定提示词（规则/格式，共 N 块）」或任一 fixed 前缀
+    if (label.startsWith('固定提示词（') || isFixedPromptBlockLabel(label)) return 'rule';
+    // 3. 聚合历史消息（前缀精确匹配，避免 contains 误伤）
+    if (label.startsWith('聊天历史·用户消息')) return 'history_user';
+    if (label.startsWith('聊天历史·角色消息')) return 'history_assistant';
+    if (label.startsWith('其他消息（tool')) return 'history_tool';
+    // 4. 单条任务提示词
+    if (label.startsWith('提示词整体「')) return 'task';
+    // 5. contains 类（放最后）
+    if (/记忆/.test(label)) return 'memory';
+    if (/世界书|世界观/.test(label)) return 'worldbook';
+    if (/角色|档案|人设|设定/.test(label)) return 'character';
+    return 'other';
+}
+
 const MAX_BREAKDOWN_BLOCKS = 48;
 
 /**
@@ -377,6 +444,12 @@ export function buildPromptBreakdown(body: unknown): PromptBlockStat[] | undefin
 
         const out: PromptBlockStat[] = [];
         let userChars = 0, userCount = 0, asstChars = 0, asstCount = 0, otherChars = 0, otherCount = 0;
+        // 聚合消息的 preview：把多条消息原文拼起来截断 500 字，让点开能看到实际聊了啥
+        let userPreview = '', asstPreview = '', otherPreview = '';
+        const appendPreview = (buf: string, text: string): string => {
+            if (buf.length >= PREVIEW_MAX_CHARS) return buf;
+            return buf + text.slice(0, PREVIEW_MAX_CHARS - buf.length) + '\n';
+        };
         // 情绪评估等路径把「完整 system prompt + 展平历史 + 任务说明」整个打包成一条
         // user 消息发送——不拆的话构成面板只会显示「用户消息 ×1 · 100%」，看不出内里。
         // 巨型且含多个块头的 user 消息按 system 同款规则拆块；普通聊天消息不受影响。
@@ -400,11 +473,14 @@ export function buildPromptBreakdown(body: unknown): PromptBlockStat[] | undefin
                     out.push(...splitSystemBlocks(text));
                 } else {
                     userChars += text.length; userCount++;
+                    userPreview = appendPreview(userPreview, text);
                 }
             } else if (msg?.role === 'assistant') {
                 asstChars += text.length; asstCount++;
+                asstPreview = appendPreview(asstPreview, text);
             } else {
                 otherChars += text.length; otherCount++;
+                otherPreview = appendPreview(otherPreview, text);
             }
         }
         if (userCount) {
@@ -415,18 +491,25 @@ export function buildPromptBreakdown(body: unknown): PromptBlockStat[] | undefin
                 ? (contentToText(messages[0]?.content).trimStart().split('\n', 1)[0] || '').slice(0, BLOCK_LABEL_MAX)
                 : '';
             out.push(soloPrompt
-                ? { label: `提示词整体「${firstLine}」`, chars: userChars }
-                : { label: `聊天历史·用户消息 ×${userCount}`, chars: userChars });
+                ? { label: `提示词整体「${firstLine}」`, chars: userChars, preview: userPreview.trim() || undefined }
+                : { label: `聊天历史·用户消息 ×${userCount}`, chars: userChars, preview: userPreview.trim() || undefined });
         }
-        if (asstCount) out.push({ label: `聊天历史·角色消息 ×${asstCount}`, chars: asstChars });
-        if (otherCount) out.push({ label: `其他消息（tool 等）×${otherCount}`, chars: otherChars });
+        if (asstCount) out.push({ label: `聊天历史·角色消息 ×${asstCount}`, chars: asstChars, preview: asstPreview.trim() || undefined });
+        if (otherCount) out.push({ label: `其他消息（tool 等）×${otherCount}`, chars: otherChars, preview: otherPreview.trim() || undefined });
         if (out.length === 0) return undefined;
 
         // 限容：病态多块时合并尾巴，保证单条记录体积可控
         if (out.length > MAX_BREAKDOWN_BLOCKS) {
             const head = out.slice(0, MAX_BREAKDOWN_BLOCKS - 1);
-            const restChars = out.slice(MAX_BREAKDOWN_BLOCKS - 1).reduce((sum, b) => sum + b.chars, 0);
-            head.push({ label: `（其余 ${out.length - (MAX_BREAKDOWN_BLOCKS - 1)} 块合计）`, chars: restChars });
+            const rest = out.slice(MAX_BREAKDOWN_BLOCKS - 1);
+            const restChars = rest.reduce((sum, b) => sum + b.chars, 0);
+            // preview 也合并：每块剩余额度内追加，凑成不超过 500 字
+            let restPreview = '';
+            for (const b of rest) {
+                if (restPreview.length >= PREVIEW_MAX_CHARS) break;
+                restPreview += (b.preview || '').slice(0, PREVIEW_MAX_CHARS - restPreview.length);
+            }
+            head.push({ label: `（其余 ${rest.length} 块合计）`, chars: restChars, preview: restPreview || undefined });
             return head;
         }
         return out;

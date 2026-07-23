@@ -184,7 +184,10 @@ describe('buildPromptBreakdown · 巨型 user 消息拆块', () => {
                 { role: 'user', content: '在吗' },
             ],
         })!;
-        expect(blocks).toEqual([{ label: '聊天历史·用户消息 ×2', chars: '## 今天的计划\n买菜'.length + 2 }]);
+        // 用 toMatchObject：preview 是新加的截断字段（实现细节），本测试只验证
+        // 「两条短消息聚合成一个块、没被拆开」，不该被 preview 内容卡住。
+        expect(blocks).toMatchObject([{ label: '聊天历史·用户消息 ×2', chars: '## 今天的计划\n买菜'.length + 2 }]);
+        expect(blocks).toHaveLength(1);
     });
 });
 
