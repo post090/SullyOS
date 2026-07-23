@@ -266,6 +266,8 @@ const CheckPhone: React.FC = () => {
 
     // 人际关系系统 State
     const [selectedContact, setSelectedContact] = useState<PhoneContact | null>(null);
+    const [identityDraft, setIdentityDraft] = useState('');
+    const [editingIdentity, setEditingIdentity] = useState(false);
     const [noteDraft, setNoteDraft] = useState('');
     const [editingNote, setEditingNote] = useState(false);
     const [showContactModal, setShowContactModal] = useState(false);
@@ -1360,6 +1362,18 @@ ${olderText}
         addToast('备注已保存', 'success');
     };
 
+    // 真人联系人列表显示 identity 作为「备注名」。人工保存后锁定，避免下次扫描被模型覆盖。
+    const handleSaveIdentity = (contact: PhoneContact) => {
+        const identity = identityDraft.trim();
+        mutateContacts(cs => cs.map(c => c.id === contact.id ? {
+            ...c,
+            identity: identity || undefined,
+            identityManual: true,
+        } : c));
+        setEditingIdentity(false);
+        addToast(identity ? '备注名已保存' : '已恢复显示真名', 'success');
+    };
+
     // 彻底移除联系人：连同 TA 的聊天记录 + 私聊里的 phone_card 一起清；
     // 真人联系人（哪怕之前甄别/绑定错了）也把对方手机里的镜像联系人和记录一并删掉。
     const handleRemoveContact = async (contact: PhoneContact) => {
@@ -2254,7 +2268,7 @@ ${olderText}
                                 onClick={() => {
                                     if (lpFired.current) { lpFired.current = false; return; }
                                     if (contactSelectMode) { toggleContactSelect(c.id); return; }
-                                    setSelectedContact(c); setNoteDraft(c.note || ''); setEditingNote(false); setConvExpanded(false); setAffinityDraft(null); setShowProfile(false); exitMsgSelect(); setActiveAppId('contact_detail');
+                                    setSelectedContact(c); setIdentityDraft(c.identity || ''); setEditingIdentity(false); setNoteDraft(c.note || ''); setEditingNote(false); setConvExpanded(false); setAffinityDraft(null); setShowProfile(false); exitMsgSelect(); setActiveAppId('contact_detail');
                                 }}
                                 className={`group relative flex items-center gap-3 rounded-2xl p-3.5 border active:scale-[0.99] transition cursor-pointer animate-fade-in select-none ${selected ? 'bg-pink-500/10 border-pink-400/40' : 'bg-white/[0.035] border-white/[0.06]'} ${dimmed && !selected ? 'opacity-45' : ''}`}>
                                 {contactSelectMode && (
@@ -2644,7 +2658,7 @@ ${olderText}
         const statusLabel = c.status === 'friend' ? '好友' : c.status === 'deleted' ? '已删除' : c.status === 'blocked' ? '已拉黑' : '待定';
         const aff = affinityDraft ?? c.affinity;
         const commitAff = () => { if (affinityDraft != null) { handleSetAffinity(c, affinityDraft); setAffinityDraft(null); } };
-        const closeProfile = () => { setShowProfile(false); setEditingNote(false); };
+        const closeProfile = () => { setShowProfile(false); setEditingIdentity(false); setEditingNote(false); };
         const avatarNode = (size: string, txt: string) => av
             ? <img src={av} alt="" className={`${size} rounded-2xl object-cover shrink-0`} />
             : <div className={`${size} rounded-2xl flex items-center justify-center shrink-0 text-white font-semibold ${txt}`} style={{ background: `linear-gradient(135deg, ${accent}40, ${accent}10)` }}>{c.name[0]}</div>;
@@ -2777,6 +2791,28 @@ ${olderText}
                                     <span className="text-[12px] font-bold tabular-nums shrink-0 w-9 text-right" style={{ color: affColor(aff) }}>{aff > 0 ? '+' : ''}{aff}</span>
                                 </div>
                             </div>
+
+                            {/* 真人联系人列表里显示的备注名 / 关系（可人工锁定，后续扫描不覆盖） */}
+                            {isReal && (
+                                <div className="rounded-2xl p-4 bg-white/[0.04] border border-white/[0.06]">
+                                    <div className="flex items-center justify-between mb-1.5">
+                                        <span className="text-[10px] tracking-[0.2em] uppercase text-white/40">备注名 / 关系</span>
+                                        <button onClick={() => { setEditingIdentity(!editingIdentity); setIdentityDraft(c.identity || ''); }} className="text-white/50 active:scale-90 transition" aria-label="编辑备注名">
+                                            <PencilSimple size={14} weight="bold" />
+                                        </button>
+                                    </div>
+                                    {editingIdentity ? (
+                                        <div className="space-y-2">
+                                            <input value={identityDraft} onChange={e => setIdentityDraft(e.target.value)} placeholder="例如：学长、前任、彼方网友"
+                                                className="w-full bg-white/[0.05] border border-white/[0.08] rounded-xl p-2.5 text-[12px] text-white/90" />
+                                            <button onClick={() => handleSaveIdentity(c)} className="w-full py-2 rounded-xl text-[12px] font-semibold text-white" style={{ background: accent }}>保存</button>
+                                            <p className="text-[9.5px] text-white/30">留空保存会恢复显示真名；人工保存后不会被再次扫描覆盖</p>
+                                        </div>
+                                    ) : (
+                                        <p className="text-[12.5px] text-white/70 leading-relaxed">{c.identity || `（显示真名：${linkedCharOf(c)?.name || c.name}）`}</p>
+                                    )}
+                                </div>
+                            )}
 
                             {/* 备注（事实，可编辑） */}
                             <div className="rounded-2xl p-4 bg-white/[0.04] border border-white/[0.06]">

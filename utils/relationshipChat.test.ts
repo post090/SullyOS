@@ -132,4 +132,21 @@ describe('relationshipChat · 纯函数', () => {
         const after2 = upsertContact(seed, { name: '阿哲', note: 'AI 瞎编的备注' });
         expect(after2[0].note).toBe('欠我钱');
     });
+
+    it('upsertContact 不覆盖用户手动确认的备注名，包括明确留空', () => {
+        const automatic = upsertContact([], { name: '小林', identity: '同事' });
+        expect(upsertContact(automatic, { name: '小林', identity: '学长' })[0].identity).toBe('学长');
+
+        const manual = upsertContact([], {
+            name: '阿哲', kind: 'real', linkedCharId: 'c1', identity: '学长', identityManual: true,
+        });
+        const after = upsertContact(manual, { name: '阿哲', identity: '机主名字' });
+        expect(after[0].identity).toBe('学长');
+        expect(after[0].identityManual).toBe(true);
+
+        const cleared = [{ ...manual[0], identity: undefined, identityManual: true }];
+        const afterCleared = upsertContact(cleared, { name: '阿哲', identity: '同事' });
+        expect(afterCleared[0].identity).toBeUndefined();
+        expect(afterCleared[0].identityManual).toBe(true);
+    });
 });

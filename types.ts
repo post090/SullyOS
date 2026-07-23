@@ -736,6 +736,8 @@ export interface PhoneContact {
     name: string;
     /** 身份/关系标签，如「辅导员」「中间人」 */
     identity?: string;
+    /** identity 是否由用户手动确认；确认后自动扫描不得覆盖（即使用户选择留空） */
+    identityManual?: boolean;
     /** 机主对此人的备注（用户/机主手写的「已确立事实」，对话里当真遵守，不被自动覆盖） */
     note?: string;
     /**

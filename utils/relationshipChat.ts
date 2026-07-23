@@ -87,6 +87,7 @@ export function upsertContact(
             id: incoming.id || `ct-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
             name: incoming.name,
             identity: incoming.identity,
+            identityManual: incoming.identityManual,
             note: incoming.note,
             avatar: incoming.avatar,
             kind: incoming.kind || 'npc',
@@ -109,6 +110,12 @@ export function upsertContact(
     });
     // 备注是机主/用户手动维护的事实，扫描或对话自动回填不得覆盖已有的非空备注（显式编辑走 UI 直接改，不经这里）。
     if (cur.note && cur.note.trim()) merged.note = cur.note;
+    // 用户手动确认过备注名/关系后，后续扫描只能更新好感等模型数据，不能把人工值覆盖回去。
+    // identityManual=true 且 identity 为空也要保留：这代表用户明确选择「显示真名」。
+    if (cur.identityManual) {
+        merged.identity = cur.identity;
+        merged.identityManual = true;
+    }
     merged.affinity = incoming.affinity != null ? clampAffinity(incoming.affinity) : cur.affinity;
     merged.createdAt = cur.createdAt;
     merged.id = cur.id;

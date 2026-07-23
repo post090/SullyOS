@@ -1,5 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { scanSseForLog, coreModelName, isSameCoreModel, buildPromptBreakdown, isFixedPromptBlockLabel } from './apiCallLog';
+import { scanSseForLog, coreModelName, isSameCoreModel, buildPromptBreakdown, isFixedPromptBlockLabel, getApiCallAmbientContext, setApiCallAmbientContext } from './apiCallLog';
+
+describe('API call ambient context snapshots', () => {
+    it('keeps the request-start App even after ambient navigation changes', () => {
+        setApiCallAmbientContext({ appId: 'social', appName: 'Spark' });
+        const requestStart = getApiCallAmbientContext();
+        setApiCallAmbientContext({ appId: 'group_chat', appName: '群聊' });
+        expect(requestStart).toEqual({ appId: 'social', appName: 'Spark' });
+        setApiCallAmbientContext({});
+    });
+});
 
 // 锁住 API 调用记录的 SSE 兜底解析：流式响应 JSON.parse 必然失败，
 // 后端自报 model（首个非空）与 usage（末个非空）从 data: 行里扫出来。
