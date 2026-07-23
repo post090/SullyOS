@@ -19,8 +19,10 @@ import { CHAT_GEN_EVENTS, CHAT_VIEW_CHANGED_EVENT, getChatViewSnapshot } from '.
 type GenKind = 'reply' | 'emotion';
 interface GenEntry { kind: GenKind; charId: string; charName: string; startedAt: number; }
 
-// 兜底过期：主回复对齐 instant 300s 超时 + 本地重试余量；情绪评估对齐 hook 内 90s 安全网
-const TTL_MS: Record<GenKind, number> = { reply: 6 * 60_000, emotion: 2 * 60_000 };
+// 兜底过期：主回复对齐 instant 300s 超时 + 本地重试余量；情绪评估对齐 hook 内 90s 安全网。
+// reply 从 6 分钟缩到 3 分钟——safeFetchJson 已加 60s stall 超时（3 次重试 ≈ 3 分钟），
+// 正常路径不应超过这个时间；缩短 TTL 让卡住场景更快清横幅。
+const TTL_MS: Record<GenKind, number> = { reply: 3 * 60_000, emotion: 2 * 60_000 };
 
 const LABEL: Record<GenKind, string> = { reply: '正在回应', emotion: '正在感受' };
 
@@ -56,13 +58,14 @@ const ChatBroadcast: React.FC = () => {
         // instant 模式情绪评估在 worker 跑，结束信号是 activeMsgRuntime 的既有事件
         window.addEventListener('instant-emotion-done', onEmotionEnd);
         window.addEventListener(CHAT_VIEW_CHANGED_EVENT, onView);
+        // sweeper 间隔从 15s 缩到 10s，让 TTL 兜底更快生效（APK 后台 timer 冻结时减少恢复后的延迟）
         const sweeper = setInterval(() => {
             const now = Date.now();
             setEntries(prev => {
                 const next = prev.filter(x => now - x.startedAt < TTL_MS[x.kind]);
                 return next.length === prev.length ? prev : next;
             });
-        }, 15_000);
+        }, 10_000);
         return () => {
             window.removeEventListener(CHAT_GEN_EVENTS.replyStart, onReplyStart);
             window.removeEventListener(CHAT_GEN_EVENTS.replyEnd, onReplyEnd);

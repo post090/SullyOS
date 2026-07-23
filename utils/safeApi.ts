@@ -287,8 +287,20 @@ async function readBodyWithStreaming(
         for (const line of complete.split(/\r?\n/)) emit(asm.feedLine(line));
     };
 
+    // stall 超时：SSE 流如果超过 60s 没有新数据 chunk，视为连接 stall（网络波动 /
+    // LLM 卡住 / 中转 hang 住），主动 cancel reader 让上层重试。没有这个保护的话
+    // reader.read() 会永远挂住 → safeFetchJson 的 await 不返回 → triggerAI 的 finally
+    // 不跑 → "正在回应"横幅消失不了（只能等 6 分钟 TTL，APK 后台 TTL sweeper 还会被冻结）。
+    const STALL_MS = 60_000;
+    let stalled = false;
     while (true) {
+        const stallTimer = setTimeout(() => {
+            stalled = true;
+            reader.cancel().catch(() => {});
+        }, STALL_MS);
         const { done, value } = await reader.read();
+        clearTimeout(stallTimer);
+        if (stalled) throw new Error('SSE stream stalled (no data for 60s)');
         if (done) break;
         const textChunk = decoder.decode(value, { stream: true });
         raw += textChunk;

@@ -481,6 +481,7 @@ export function recordApiCall(input: {
             charId: meta.charId,
             charName: meta.charName,
             purpose: meta.purpose,
+            recalledMemories: meta.recalledMemories,
         };
         // 动态 import 避开 safeApi ↔ db 的潜在加载顺序问题；写库失败静默吞掉。
         import('./db')
