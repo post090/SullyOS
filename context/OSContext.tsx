@@ -960,11 +960,19 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       if (interceptorsInitialized.current) return;
       interceptorsInitialized.current = true;
 
+      // host 级 native 缓存：某 host 在原生平台被 CORS 拦过一次后，记住它，
+      // 后续该 host 的 /chat/completions 直接走 nativeFetch，跳过 WebView 试探，
+      // 省掉"WebView 失败 + native 重试"的双倍延迟。流式预览在该 host 上不工作
+      // （CapacitorHttp 不支持 SSE），但本来就 CORS 拦了，流式也用不了——零损失。
+      // 暴露重置入口给设置页，万一中转修了 CORS 可以手动清缓存切回 WebView。
+      const corsBlockedHosts = new Set<string>();
+      (window as any).__sullyResetCorsBlockedHosts = () => corsBlockedHosts.clear();
+
       // 1. Monkey Patch Fetch
       const originalFetch = window.fetch;
       const patchedFetch = async (...args: [RequestInfo | URL, RequestInit?]) => {
           const [resource, config] = args;
-          
+
           const urlStr = String(resource);
           const fetchStartedAt = Date.now();
           // Bare fetch calls do not carry explicit metadata. Snapshot the active
@@ -1001,7 +1009,41 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                           }
                       }
                       if (body !== rawBody) sendArgs = [resource, { ...(config as RequestInit), body }];
-                  } catch { /* 非 JSON body：原样放行 */ }
+                } catch { /* 非 JSON body：原样放行 */ }
+            }
+          }
+
+          // host 级 native 缓存命中：已知被 CORS 拦的 host 直接走 native，不试 WebView。
+          // 用经过采样参数摘除（但不流式升级——native 不支持流式）的 sendArgs。
+          // 缓存命中的 host 本来就走不了流式（CORS 拦了），所以去掉 streamUpgraded 的 body 改写。
+          let isNativePlatform = false;
+          try { isNativePlatform = Capacitor.isNativePlatform(); } catch { /* 非 capacitor 环境 */ }
+          if (isNativePlatform && urlStr.includes('/chat/completions')) {
+              let host = '';
+              try { host = new URL(urlStr).host; } catch { /* 非标准 URL 兜底 */ }
+              if (host && corsBlockedHosts.has(host)) {
+                  try {
+                      const response = await nativeFetch(urlStr, sendArgs[1] as RequestInit || {});
+                      try {
+                          const meta = (config as any)?.__sullyMeta;
+                          const body = (sendArgs[1] as any)?.body;
+                          const status = response.status;
+                          const ok = response.ok;
+                          const usageClone = response.clone();
+                          usageClone.text().then((t) => {
+                              const durationMs = Date.now() - fetchStartedAt;
+                              let parsed: any = undefined;
+                              try { parsed = JSON.parse(t); } catch { /* SSE 兜底 */ }
+                              recordApiCall({ url: urlStr, body, status, ok, response: parsed, responseText: parsed === undefined ? t : undefined, meta, durationMs });
+                          }).catch(() => recordApiCall({ url: urlStr, body, status, ok, meta, durationMs: Date.now() - fetchStartedAt }));
+                      } catch { /* clone 失败就跳过记录 */ }
+                      return response;
+                  } catch (nativeErr: any) {
+                      // native 也失败了——host 可能挂了，清掉缓存让下次重新试 WebView
+                      corsBlockedHosts.delete(host);
+                      console.warn('🔁 [NativeCache] 缓存命中但 native 也失败，清除 host 缓存回退 WebView', { host, error: nativeErr?.message });
+                      // 落到下面的 originalFetch 路径继续尝试
+                  }
               }
           }
 
@@ -1118,6 +1160,8 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                   try {
                       const fallbackStartedAt = Date.now();
                       const response = await nativeFetch(urlStr, sendArgs[1] as RequestInit || {});
+                      // fallback 成功 → 记住这个 host，后续直接走 native 不再试 WebView
+                      try { const h = new URL(urlStr).host; if (h) { corsBlockedHosts.add(h); console.warn(`🔁 [NativeCache] 已记住 host ${h} 走 native（WebView CORS 受限）`); } } catch { /* 非标准 URL */ }
                       console.warn('🔁 [NativeFallback] WebView fetch 失败，已切换原生网络栈重试成功', { originalError: err?.message, durationMs: Date.now() - fallbackStartedAt });
                       try { (window as any).__sullyRetryNotifier?.('WebView 网络受限，已自动切换原生网络栈重试'); } catch { /* notifier 异常不影响主流程 */ }
                       // 走 patchedFetch 后续的响应归一化（stream 升级拼回 / API 调用记录 / 错误日志）

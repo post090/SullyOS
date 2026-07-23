@@ -1707,7 +1707,18 @@ const Settings: React.FC = () => {
                 <div className="pt-2">
                      <div className="flex justify-between items-center mb-1.5 pl-1">
                         <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Model</label>
-                        <button onClick={fetchModels} disabled={isLoadingModels} className="text-[10px] text-primary font-bold">{isLoadingModels ? 'Fetching...' : '刷新模型列表'}</button>
+                        <div className="flex items-center gap-3">
+                            <button
+                                onClick={() => {
+                                    try { (window as any).__sullyResetCorsBlockedHosts?.(); addToast('已重置网络路由缓存，下次请求重新探测', 'success'); }
+                                    catch { addToast('重置失败', 'error'); }
+                                }}
+                                className="text-[10px] text-amber-500 font-bold"
+                            >
+                                重置网络路由
+                            </button>
+                            <button onClick={fetchModels} disabled={isLoadingModels} className="text-[10px] text-primary font-bold">{isLoadingModels ? 'Fetching...' : '刷新模型列表'}</button>
+                        </div>
                     </div>
                     
                     <button
