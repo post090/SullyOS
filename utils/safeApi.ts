@@ -12,75 +12,19 @@
 // 后者的 meta 通过下面 safeFetchJson 的第 5 个参数挂到 __sullyMeta 上传出去。
 import { appendDevDebugApiLog, makeDebugLogger } from './devDebug';
 import { recordApiCall, type ApiCallMeta } from './apiCallLog';
-import { enqueueAndWaitNativeHttp } from './runtime/nativeJobQueue';
-import { getNativeChatRuntimeUserEnabled, isNativeRuntimeAvailable, isNativeRuntimeEnabled } from './runtime/nativeRuntime';
-import { isSamplingParamError, modelRejectsSamplingParams, stripSamplingParams } from './samplingParamCompat';
-import { createChatGenerationJob, markChatJobFailed, markChatJobNativeCompleted } from './runtime/chatJobs';
+import {
+    canUseNativeChatRuntime,
+    isNativeSamplingError,
+    markNativeChatCompleted,
+    markNativeChatFailed,
+    sendNativeChatAttempt,
+    stripSamplingFromNativeBody,
+} from './runtime/nativeChatRequest';
 
 const log = makeDebugLogger('api', 'SafeAPI');
 
 function isChatCompletionUrl(url: string): boolean {
     return url.includes('/chat/completions');
-}
-
-function headersInitToRecord(headers?: HeadersInit): Record<string, string> {
-    if (!headers) return {};
-    const out: Record<string, string> = {};
-    try {
-        if (headers instanceof Headers) {
-            headers.forEach((value, key) => { out[key] = value; });
-            return out;
-        }
-    } catch { /* non-browser test env may not expose Headers */ }
-    if (Array.isArray(headers)) {
-        for (const [key, value] of headers) out[String(key)] = String(value);
-        return out;
-    }
-    for (const [key, value] of Object.entries(headers as Record<string, string>)) out[key] = String(value);
-    return out;
-}
-
-function shouldTryNativeRuntime(url: string, options: RequestInit, meta?: ApiCallMeta): boolean {
-    if (!isNativeRuntimeEnabled()) return false;
-    if (!isChatCompletionUrl(url)) return false;
-    // 先只接主聊天回复：旁路任务继续走原 fetch monkey-patch，避免丢失它的流式升级/专项自愈。
-    if (!(meta?.appName === '消息' && meta?.purpose === '聊天回复')) return false;
-    if (!getNativeChatRuntimeUserEnabled()) return false;
-    const method = String(options.method || 'GET').toUpperCase();
-    if (method !== 'POST') return false;
-    if (typeof options.body !== 'string') return false;
-    try {
-        // 现场排查开关：localStorage.sully_native_runtime_chat='0'
-        if (localStorage.getItem('sully_native_runtime_chat') === '0') return false;
-    } catch { /* ignore */ }
-    return true;
-}
-
-function makeNativeJobId(): string {
-    try {
-        const c = globalThis.crypto as Crypto | undefined;
-        if (c?.randomUUID) return `chat-${c.randomUUID()}`;
-    } catch { /* ignore */ }
-    return `chat-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
-function prepareNativeChatBody(body: string): string {
-    try {
-        const parsed = JSON.parse(body);
-        if (modelRejectsSamplingParams(parsed?.model) && stripSamplingParams(parsed)) {
-            return JSON.stringify(parsed);
-        }
-    } catch { /* non-json body: keep original */ }
-    return body;
-}
-
-function stripSamplingFromBody(body: string): string | null {
-    try {
-        const parsed = JSON.parse(body);
-        return stripSamplingParams(parsed) ? JSON.stringify(parsed) : null;
-    } catch {
-        return null;
-    }
 }
 
 /** Parse a fetch Response as JSON safely (text-first, then JSON.parse) */
@@ -473,54 +417,34 @@ export async function safeFetchJson(
         const attemptStartedAt = Date.now();
         let currentChatJobId: string | undefined;
         try {
-            const useNativeRuntime = shouldTryNativeRuntime(urlStr, attemptOptions, meta) && await isNativeRuntimeAvailable();
+            const useNativeRuntime = await canUseNativeChatRuntime(urlStr, attemptOptions, meta);
             if (useNativeRuntime) {
                 if (timeoutHandle) {
                     clearTimeout(timeoutHandle);
                     timeoutHandle = null;
                 }
-                const nativeStartedAt = Date.now();
-                const nativeJobId = makeNativeJobId();
-                const chatJob = meta?.charId ? createChatGenerationJob({
-                    nativeJobId,
-                    charId: meta.charId,
-                    charName: meta.charName,
-                }) : null;
-                currentChatJobId = chatJob?.id;
-                const nativeBody = prepareNativeChatBody(String(attemptOptions.body || ''));
-                const nativeResult = await enqueueAndWaitNativeHttp({
-                    jobId: nativeJobId,
+                const nativeResult = await sendNativeChatAttempt({
                     url: urlStr,
-                    method: String(attemptOptions.method || 'POST').toUpperCase() as 'POST' | 'GET',
-                    headers: headersInitToRecord(attemptOptions.headers),
-                    body: nativeBody,
+                    options: attemptOptions,
                     timeoutMs: timeoutMs || 120_000,
-                    responseType: 'json',
-                    title: meta?.charName ? `${meta.charName} 正在回应你` : 'SullyOS 正在生成回复',
-                    text: meta?.purpose || meta?.appName || '后台请求处理中',
-                    meta: meta ? {
-                        appName: meta.appName,
-                        charId: meta.charId,
-                        charName: meta.charName,
-                        purpose: meta.purpose,
-                    } : undefined,
+                    meta,
                 });
-                const headersMs = Date.now() - nativeStartedAt;
+                currentChatJobId = nativeResult.chatJobId;
                 lastStatus = nativeResult.statusCode;
                 const responseHeaders = nativeResult.headers || {};
 
                 if (nativeResult.statusCode < 200 || nativeResult.statusCode >= 300) {
-                    if (nativeResult.statusCode === 400 && isSamplingParamError(nativeResult.body || '')) {
-                        const strippedBody = stripSamplingFromBody(nativeBody);
-                        if (strippedBody && strippedBody !== nativeBody && attempt < maxRetries) {
-                            if (chatJob) markChatJobFailed(chatJob.id, `HTTP ${nativeResult.statusCode}: sampling params retry`);
+                    if (isNativeSamplingError(nativeResult.statusCode, nativeResult.body || '')) {
+                        const strippedBody = stripSamplingFromNativeBody(nativeResult.requestBody);
+                        if (strippedBody && strippedBody !== nativeResult.requestBody && attempt < maxRetries) {
+                            markNativeChatFailed(nativeResult.chatJobId, `HTTP ${nativeResult.statusCode}: sampling params retry`);
                             try { (window as any).__sullyRetryNotifier?.('采样参数被模型拒收，已自动摘除重试'); } catch { /* ignore */ }
                             forcedBodyOverride = strippedBody;
                             continue;
                         }
                     }
                     if (retryableStatuses.has(nativeResult.statusCode) && attempt < maxRetries) {
-                        if (chatJob) markChatJobFailed(chatJob.id, `HTTP ${nativeResult.statusCode}: retrying`);
+                        markNativeChatFailed(nativeResult.chatJobId, `HTTP ${nativeResult.statusCode}: retrying`);
                         const delay = Math.pow(2, attempt) * 1000;
                         log.warn('Native HTTP retry', { status: nativeResult.statusCode, attempt: attempt + 1, maxRetries, delay });
                         try { streamHooks?.onRetry?.({ attempt: attempt + 1, maxRetries, reason: `http:${nativeResult.statusCode}`, message: `HTTP ${nativeResult.statusCode}`, delayMs: delay }); } catch { /* ignore */ }
@@ -534,26 +458,22 @@ export async function safeFetchJson(
                     } catch (parseErr: any) {
                         errMsg = parseErr?.message || errMsg;
                     }
-                    if (chatJob) markChatJobFailed(chatJob.id, `API Error ${nativeResult.statusCode}: ${errMsg}`);
+                    markNativeChatFailed(nativeResult.chatJobId, `API Error ${nativeResult.statusCode}: ${errMsg}`);
                     throw new Error(`API Error ${nativeResult.statusCode}: ${errMsg}`);
                 }
 
                 const data = parseRawBodyText(nativeResult.body || '', nativeResult.statusCode, responseHeaders['content-type']);
-                if (chatJob && data && typeof data === 'object') {
-                    markChatJobNativeCompleted(chatJob.id);
-                    try { Object.defineProperty(data, '__sullyChatJobId', { value: chatJob.id, enumerable: false }); } catch { (data as any).__sullyChatJobId = chatJob.id; }
-                }
+                markNativeChatCompleted(nativeResult.chatJobId, data);
                 if (isChatCompletionUrl(urlStr)) {
-                    const totalMs = Date.now() - nativeStartedAt;
-                    console.log(`⏱ [API timing] native=1 total=${totalMs}ms${streamHooks ? ' streamed=0(native)' : ''}`);
+                    console.log(`⏱ [API timing] native=1 total=${nativeResult.totalMs}ms${streamHooks ? ' streamed=0(native)' : ''}`);
                     appendDevDebugApiLog({
                         url: urlStr,
                         method: options.method,
                         status: nativeResult.statusCode,
                         requestBody: options.body,
                         response: data,
-                        durationMs: totalMs,
-                        headersMs,
+                        durationMs: nativeResult.totalMs,
+                        headersMs: nativeResult.headersMs,
                     });
                     recordApiCall({
                         url: urlStr,
@@ -563,7 +483,7 @@ export async function safeFetchJson(
                         response: data,
                         responseText: nativeResult.body,
                         meta,
-                        durationMs: totalMs,
+                        durationMs: nativeResult.totalMs,
                     });
                 }
                 return data;
@@ -616,7 +536,7 @@ export async function safeFetchJson(
             if (timeoutHandle) clearTimeout(timeoutHandle);
             lastError = e;
             if (currentChatJobId) {
-                markChatJobFailed(currentChatJobId, e?.message || String(e));
+                markNativeChatFailed(currentChatJobId, e?.message || String(e));
             }
 
             // AbortError（含 timeout）：是否重试看上层策略，先按可重试处理（网络层面）

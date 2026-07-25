@@ -861,3 +861,23 @@ Native Runtime 必须是 APK 优先路径，Web fallback 原样保留。
 1. 完整现场恢复：草稿、当前聊天、滚动位置。
 2. native recovery 质量增强：恢复路径尽量更接近正常回复，但避免重复执行副作用。
 3. 继续拆薄 `safeApi.ts` 里的 native 分支，保持代码干净。
+
+---
+
+## 14. 当前实现进度记录（2026-07-25 / 代码清理）
+
+### 14.1 总体进度估算
+
+当前约 **58%**。
+
+本轮主要不是加新体验，而是把代码边界收干净：
+
+- 从 `safeApi.ts` 拆出 `utils/runtime/nativeChatRequest.ts`；
+- native 主聊天请求的判断、job 创建、采样参数剥离、完成/失败标记集中到 runtime 模块；
+- `safeApi.ts` 只保留调度、重试和响应解析，后续维护风险降低。
+
+### 14.2 验证
+
+- safeApi 相关测试通过；
+- `pnpm run build` 通过；
+- `npx cap add android && npx cap sync android` 能识别 `sully-native-runtime@0.1.0`。
