@@ -100,7 +100,10 @@ export async function markChatJobConsumed(id?: string): Promise<void> {
 
 export function markChatJobFailed(id: string | undefined, error: string): void {
   if (!id) return;
-  patchChatGenerationJob(id, { status: 'failed', error });
+  const job = patchChatGenerationJob(id, { status: 'failed', error });
+  if (job?.nativeJobId) {
+    void clearNativeJob(job.nativeJobId).catch(() => {});
+  }
 }
 
 export function getRecoverableChatJobs(): ChatGenerationJob[] {
