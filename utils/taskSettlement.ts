@@ -370,7 +370,7 @@ export async function markTaskDone(
                 coinDelta: amount,
             },
         });
-        void notifyRoleEvent({ charName: supervisor.name, kind: 'task', name: task.title, tag: `task-${task.id}-${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`, route: `task:${task.id}` }).catch(() => {});
+        void notifyRoleEvent({ charName: supervisor.name, kind: 'task', name: task.title, tag: `task-${task.id}-${now.getTime()}-${Math.random().toString(36).slice(2,6)}`, route: `task:${task.id}` }).catch(() => {});
     }
 
     const todayStr = `${now.getFullYear()}-${(now.getMonth()+1).toString().padStart(2,'0')}-${now.getDate().toString().padStart(2,'0')}`;

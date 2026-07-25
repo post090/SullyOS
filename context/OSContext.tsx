@@ -2733,7 +2733,9 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                       charName: char.name,
                       kind: 'other_side',
                       name: roomName,
-                      tag: `vr-${charId}-${result.room}-${String(result.activity || '').slice(0, 80)}`,
+                      // User wants every visit to notify, even if same room 1h/2h apart. Use timestamp for uniqueness.
+                      // Short-time dedup (e.g., 5min) is left to the OS notification manager grouping, not our tag dedup.
+                      tag: `vr-${charId}-${result.room}-${Date.now()}`,
                       route: `vr:${charId}`,
                   }).catch(() => {});
               }
