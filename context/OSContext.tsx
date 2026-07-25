@@ -923,10 +923,22 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
         console.warn('[NativeRuntime] persistent service start failed:', err);
       });
     }
-    void getNativeLaunchRoute().then(route => {
-      if (!route) return;
-      window.dispatchEvent(new CustomEvent('sully-native-route', { detail: { route } }));
-    });
+    const openRoute = (route: string) => {
+      const value = String(route || '');
+      if (value.startsWith('task:')) {
+        setActiveApp(AppID.Schedule);
+      } else if (value.startsWith('vr:')) {
+        setActiveApp(AppID.VRWorld);
+        setActiveCharacterId(value.slice(3));
+      } else if (value) {
+        setActiveApp(AppID.Chat);
+        setActiveCharacterId(value);
+      }
+    };
+    const onRoute = (event: Event) => openRoute((event as CustomEvent<{ route?: string }>).detail?.route || '');
+    window.addEventListener('sully-native-route', onRoute);
+    void getNativeLaunchRoute().then(route => { if (route) openRoute(route); });
+    return () => window.removeEventListener('sully-native-route', onRoute);
   }, []);
 
   useEffect(() => {
