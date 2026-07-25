@@ -941,3 +941,18 @@ Native Runtime 必须是 APK 优先路径，Web fallback 原样保留。
 - 新增 `utils/runtime/chatJobs.test.ts`，覆盖 job 创建、可恢复队列、终态过滤、容量上限。
 
 这主要是稳定性和可维护性补强，不改变用户可见体验。
+
+---
+
+## 18. 当前实现进度记录（2026-07-25 / 恢复清洗与快照测试）
+
+### 18.1 总体进度估算
+
+当前约 **70%**。
+
+本轮补强：
+
+- recovery 写回聊天前使用终态清洗，避免 XHS/READ_NOTE/HTML/think 等控制标签漏进聊天；
+- 新增 runtime snapshot 测试，覆盖 activeApp、activeCharacterId、非法 appId、挂起通话恢复。
+
+这主要提升“无感恢复”的干净度和可维护性。

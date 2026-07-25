@@ -2,6 +2,7 @@ import { DB } from '../db';
 import { ChatParser } from '../chatParser';
 import { CHAT_GEN_EVENTS, announceChatGen } from '../chatGenEvents';
 import { appendDevDebugLog } from '../devDebug';
+import { sanitizeForNotification } from '../sanitize';
 import { clearNativeJob, getNativeJob } from './nativeRuntime';
 import {
   getRecoverableChatJobs,
@@ -96,7 +97,7 @@ async function saveRecoveredAssistantMessages(job: ChatGenerationJob, raw: strin
       continue;
     }
 
-    const clean = ChatParser.sanitize(part.content).trim();
+    const clean = sanitizeRecoveredText(part.content);
     if (!ChatParser.hasDisplayContent(clean)) continue;
     const chunks = ChatParser.chunkText(clean).filter(chunk => ChatParser.hasDisplayContent(chunk));
     for (const chunk of chunks) {
@@ -114,6 +115,12 @@ async function saveRecoveredAssistantMessages(job: ChatGenerationJob, raw: strin
   }
 
   return saved;
+}
+
+function sanitizeRecoveredText(text: string): string {
+  // 恢复路径不能执行二轮副作用，也不能把原始控制标签漏进聊天。
+  // notification sanitizer 是终态清洗：会剥 XHS/READ_NOTE/HTML/think 等标签并保留可读文本。
+  return ChatParser.sanitize(sanitizeForNotification(text)).trim();
 }
 
 function recoveredMeta(job: ChatGenerationJob): Record<string, unknown> {
