@@ -35,8 +35,10 @@ const MusicApp: React.FC = () => {
     listeningTogetherWith, removeListeningPartner,
     addLocalSong, removeLocalSong, localAlbumSongs,
     playMode, setPlayMode,
+    queue, idx,
     regeneratingId, regeneratingStatus,
   } = useMusic();
+  const [showQueue, setShowQueue] = useState(false);
   const isCurrentRegenerating = !!current && current.id === regeneratingId;
   // 把对轴入口和单曲循环按钮移到 SubActions 里，避免散乱
   // 下载本地生成的歌曲到本地文件系统
@@ -422,6 +424,48 @@ const MusicApp: React.FC = () => {
             <Sparkle size={7} className="absolute top-3 right-[28%]" color={C.lavender} delay={1.2} />
             <PlayControls playing={playing} loading={loadingSong} onPrev={prevSong} onToggle={togglePlay} onNext={nextSong} />
           </div>
+
+          <div className="shrink-0 mt-2 w-full flex items-center justify-center gap-2">
+            <button
+              onClick={() => setShowQueue(v => !v)}
+              className="text-[11px] px-3 py-1.5 rounded-full flex items-center gap-1.5 active:scale-95 transition-transform"
+              style={{ background: showQueue ? C.primary : 'rgba(255,255,255,0.6)', color: showQueue ? 'white' : C.muted, border: `1px solid ${showQueue ? 'transparent' : 'rgba(255,255,255,0.4)'}` }}
+            >
+              <span className="text-[13px]">☰</span> 播放列表 {queue.length > 0 ? `(${queue.length})` : ''}
+            </button>
+            {queue.length > 0 && (
+              <span className="text-[10px]" style={{ color: C.faint }}>
+                {idx >= 0 ? `${idx + 1}/${queue.length}` : ''} {playMode === 'shuffle' ? '· 随机' : playMode === 'single' ? '· 单曲循环' : '· 列表'}
+              </span>
+            )}
+          </div>
+
+          {showQueue && (
+            <div className="mt-3 w-full max-h-[32vh] overflow-y-auto rounded-2xl shizuku-glass p-2 space-y-1 shizuku-scrollbar">
+              <div className="flex items-center justify-between px-2 py-1">
+                <span className="text-[11px] font-bold" style={{ color: C.muted }}>播放队列 · {queue.length} 首</span>
+                <button onClick={() => setShowQueue(false)} className="text-[11px] px-2 py-0.5 rounded-full" style={{ color: C.faint, border: `1px solid ${C.faint}30` }}>收起</button>
+              </div>
+              {queue.map((s, i) => {
+                const active = i === idx;
+                return (
+                  <button
+                    key={`${s.id}-${i}`}
+                    onClick={() => { playSong(s, { replaceQueue: queue, startIdx: i }); }}
+                    className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-xl text-left transition-colors ${active ? 'bg-white/60' : 'hover:bg-white/30'}`}
+                  >
+                    <span className="text-[10px] w-5 shrink-0" style={{ color: active ? C.primary : C.faint }}>{active ? '▶' : i + 1}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[12px] truncate" style={{ color: active ? C.primary : C.text, fontWeight: active ? 600 : 400 }}>{s.name}</div>
+                      <div className="text-[10px] truncate" style={{ color: C.muted }}>{s.artists}</div>
+                    </div>
+                    {active && playing && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />}
+                  </button>
+                );
+              })}
+              {queue.length === 0 && <div className="text-[11px] text-center py-4" style={{ color: C.faint }}>队列是空的，去搜几首吧</div>}
+            </div>
+          )}
 
           <div className="shrink-0 mt-3 w-full">
             <SubActions

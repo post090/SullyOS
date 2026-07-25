@@ -14,11 +14,18 @@
  * 把自己部署的 worker 地址填进「设置 → 网络代理 (Worker)」即可，
  * 以上全部能力会自动切到你的实例，无需改任何代码。
  *
+ * Fork 特化：本 Fork 允许通过环境变量 VITE_PROXY_WORKER / VITE_DEFAULT_WORKER 覆盖默认地址，
+ * 自用时可在 .env.local 或构建时注入自己的 Worker，避免把个人地址硬编码进代码。
+ * 例：VITE_PROXY_WORKER=https://your-worker.your-subdomain.workers.dev
+ *
  * 注意：网易云音乐（MusicContext）和小红书 Lite 各自在自己的 App / 设置里有
  * 独立的 worker 地址输入框，走各自的持久化，不受这里影响。
  */
 
-export const DEFAULT_PROXY_WORKER = 'https://sullymeow.ccwu.cc';
+export const DEFAULT_PROXY_WORKER =
+  (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_PROXY_WORKER) ||
+  (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_DEFAULT_WORKER) ||
+  'https://sullymeow.ccwu.cc';
 
 const LS_KEY = 'sully_proxy_worker_url_v1';
 

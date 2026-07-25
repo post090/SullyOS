@@ -3279,7 +3279,7 @@ const Settings: React.FC = () => {
                                                   e.preventDefault();
                                                   const name = rtRssCustomName.trim();
                                                   const url = rtRssCustomUrl.trim();
-                                                  if (name && url && /^https?:\/\//i.test(url) && !rtRssCustom.some(c => c.url === url) && !RealtimeContextManager.RSS_BUILTIN_SOURCES.some(s => s.url === url)) {
+                                                  if (name && url && (/^https?:\/\//i.test(url) || /^\/rss\//i.test(url)) && !rtRssCustom.some(c => c.url === url) && !RealtimeContextManager.RSS_BUILTIN_SOURCES.some(s => s.url === url)) {
                                                       setRtRssCustom(prev => [...prev, { name, url }]);
                                                       setRtRssCustomName('');
                                                       setRtRssCustomUrl('');
@@ -3298,7 +3298,7 @@ const Settings: React.FC = () => {
                                                   e.preventDefault();
                                                   const name = rtRssCustomName.trim();
                                                   const url = rtRssCustomUrl.trim();
-                                                  if (name && url && /^https?:\/\//i.test(url) && !rtRssCustom.some(c => c.url === url) && !RealtimeContextManager.RSS_BUILTIN_SOURCES.some(s => s.url === url)) {
+                                                  if (name && url && (/^https?:\/\//i.test(url) || /^\/rss\//i.test(url)) && !rtRssCustom.some(c => c.url === url) && !RealtimeContextManager.RSS_BUILTIN_SOURCES.some(s => s.url === url)) {
                                                       setRtRssCustom(prev => [...prev, { name, url }]);
                                                       setRtRssCustomName('');
                                                       setRtRssCustomUrl('');
@@ -3313,7 +3313,7 @@ const Settings: React.FC = () => {
                                           onClick={() => {
                                               const name = rtRssCustomName.trim();
                                               const url = rtRssCustomUrl.trim();
-                                              if (name && url && /^https?:\/\//i.test(url) && !rtRssCustom.some(c => c.url === url) && !RealtimeContextManager.RSS_BUILTIN_SOURCES.some(s => s.url === url)) {
+                                              if (name && url && (/^https?:\/\//i.test(url) || /^\/rss\//i.test(url)) && !rtRssCustom.some(c => c.url === url) && !RealtimeContextManager.RSS_BUILTIN_SOURCES.some(s => s.url === url)) {
                                                   setRtRssCustom(prev => [...prev, { name, url }]);
                                                   setRtRssCustomName('');
                                                   setRtRssCustomUrl('');
@@ -3322,8 +3322,8 @@ const Settings: React.FC = () => {
                                           className="self-end px-3 py-1.5 bg-blue-500 text-white text-[11px] font-bold rounded-xl active:scale-95 transition-transform shrink-0"
                                       >添加</button>
                                   </div>
-                                      {rtRssCustomUrl && !/^https?:\/\//i.test(rtRssCustomUrl) && (
-                                          <p className="text-[10px] text-rose-400">URL 必须以 http:// 或 https:// 开头</p>
+                                      {rtRssCustomUrl && !/^https?:\/\//i.test(rtRssCustomUrl) && !/^\/rss\//i.test(rtRssCustomUrl) && (
+                                          <p className="text-[10px] text-rose-400">URL 必须以 http(s):// 或 /rss/ 开头（/rss/ 是 Worker 内置包装器，如 /rss/bunkyo）</p>
                                       )}
                                       {(rtRssCustomName.trim() && !rtRssCustomUrl.trim()) && (
                                           <p className="text-[10px] text-slate-400">填了名字还得填 URL（回车或点「添加」生效）</p>

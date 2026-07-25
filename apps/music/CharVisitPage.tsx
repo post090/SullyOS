@@ -458,7 +458,14 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
     // 用 char 歌单作为队列，点击的歌作为起点
     const queue: Song[] = pl.songs.map(s => ({ ...s }));
     const startIdx = queue.findIndex(s => s.id === song.id);
-    playSong(queue[startIdx], { replaceQueue: queue, startIdx });
+    playSong(queue[startIdx >= 0 ? startIdx : 0], { replaceQueue: queue, startIdx: startIdx >= 0 ? startIdx : 0 });
+    onOpenPlayer();
+  };
+
+  const playEntirePlaylist = (pl: CharPlaylist) => {
+    if (!pl.songs.length) return;
+    const queue: Song[] = pl.songs.map(s => ({ ...s }));
+    playSong(queue[0], { replaceQueue: queue, startIdx: 0 });
     onOpenPlayer();
   };
 
@@ -767,13 +774,23 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer }) => {
                                 </span>
                                 <div className="flex items-center gap-2">
                                   {pl.songs.length > 0 && (
-                                    <button
-                                      onClick={() => enterSelectMode(pl.id)}
-                                      className="text-[11px] px-1 py-0.5"
-                                      style={{ color: C.primary }}
-                                    >
-                                      选择
-                                    </button>
+                                    <>
+                                      <button
+                                        onClick={() => playEntirePlaylist(pl)}
+                                        className="text-[11px] px-2 py-0.5 rounded-full flex items-center gap-1 text-white"
+                                        style={{ background: C.primary }}
+                                        title="从头播放，替换当前播放列表"
+                                      >
+                                        ▶ 播放全部
+                                      </button>
+                                      <button
+                                        onClick={() => enterSelectMode(pl.id)}
+                                        className="text-[11px] px-1 py-0.5"
+                                        style={{ color: C.primary }}
+                                      >
+                                        选择
+                                      </button>
+                                    </>
                                   )}
                                   <button
                                     onClick={() => fillPlaylistFromTaste(pl)}
