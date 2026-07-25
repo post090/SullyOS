@@ -151,6 +151,22 @@ public class SullyNativeRuntimePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void showEventNotification(PluginCall call) {
+        String title = call.getString("title", "SullyOS");
+        String body = call.getString("body", "");
+        String tag = call.getString("tag", "sully-event");
+        String route = call.getString("route", "");
+        Intent intent = new Intent(getContext(), SullyNativeRuntimeService.class);
+        intent.setAction(SullyNativeRuntimeService.ACTION_EVENT_NOTIFICATION);
+        intent.putExtra("title", title);
+        intent.putExtra("body", body);
+        intent.putExtra("tag", tag);
+        intent.putExtra("route", route);
+        getContext().startService(intent);
+        call.resolve();
+    }
+
+    @PluginMethod
     public void clearJob(PluginCall call) {
         String jobId = call.getString("jobId");
         if (jobId == null || jobId.trim().isEmpty()) {

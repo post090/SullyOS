@@ -36,6 +36,7 @@ public class SullyNativeRuntimeService extends Service {
     public static final String ACTION_STOP_FOREGROUND = "com.sullyos.nativeruntime.STOP_FOREGROUND";
     public static final String ACTION_ENQUEUE_HTTP = "com.sullyos.nativeruntime.ENQUEUE_HTTP";
     public static final String ACTION_CANCEL_JOB = "com.sullyos.nativeruntime.CANCEL_JOB";
+    public static final String ACTION_EVENT_NOTIFICATION = "com.sullyos.nativeruntime.EVENT_NOTIFICATION";
 
     private static final String CHANNEL_ID = "sully_native_runtime";
     private static final int NOTIFICATION_ID = 31090;
@@ -54,6 +55,15 @@ public class SullyNativeRuntimeService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent == null || intent.getAction() == null) return START_NOT_STICKY;
         String action = intent.getAction();
+        if (ACTION_EVENT_NOTIFICATION.equals(action)) {
+            showEventNotification(
+                intent.getStringExtra("title"),
+                intent.getStringExtra("body"),
+                intent.getStringExtra("tag")
+            );
+            stopSelf(startId);
+            return START_NOT_STICKY;
+        }
         if (ACTION_START_FOREGROUND.equals(action)) {
             manualForeground = true;
             startForegroundCompat(
@@ -223,15 +233,29 @@ public class SullyNativeRuntimeService extends Service {
         writeJob(context, jobId, cancelled);
     }
 
+    private void showEventNotification(String title, String body, String tag) {
+        ensureChannel(this);
+        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager == null) return;
+        Notification notification = buildNotification(
+            title == null || title.trim().isEmpty() ? "SullyOS" : title,
+            body == null ? "" : body,
+            false
+        );
+        int id = 32000 + Math.abs((tag == null ? "sully-event" : tag).hashCode() % 10000);
+        manager.notify(tag == null ? "sully-event" : tag, id, notification);
+    }
+
     private void startForegroundCompat(String title, String text) {
         ensureChannel(this);
         startForeground(NOTIFICATION_ID, buildNotification(
             title == null || title.trim().isEmpty() ? "SullyOS 正在运行" : title,
-            text == null || text.trim().isEmpty() ? "正在处理后台任务" : text
+            text == null || text.trim().isEmpty() ? "" : text,
+            true
         ));
     }
 
-    private Notification buildNotification(String title, String text) {
+    private Notification buildNotification(String title, String text, boolean ongoing) {
         Intent launchIntent = getPackageManager().getLaunchIntentForPackage(getPackageName());
         PendingIntent pendingIntent = null;
         if (launchIntent != null) {
@@ -250,7 +274,7 @@ public class SullyNativeRuntimeService extends Service {
             builder.setContentText(text);
         }
         builder
-            .setOngoing(true)
+            .setOngoing(ongoing)
             .setShowWhen(false)
             .setContentIntent(pendingIntent);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {

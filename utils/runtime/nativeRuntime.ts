@@ -38,6 +38,7 @@ interface SullyNativeRuntimePlugin {
   listJobs(): Promise<{ jobs: NativeJobRecord[] }>;
   cancelJob(options: { jobId: string }): Promise<void>;
   clearJob(options: { jobId: string }): Promise<void>;
+  showEventNotification(options: { title: string; body: string; tag?: string; route?: string }): Promise<void>;
 }
 
 const NativeRuntime = registerPlugin<SullyNativeRuntimePlugin>('SullyNativeRuntime');
@@ -121,6 +122,16 @@ export async function startPersistentNativeRuntime(): Promise<void> {
 
 export async function stopPersistentNativeRuntime(): Promise<void> {
   await stopNativeForegroundTask('sully-runtime');
+}
+
+export async function showNativeRoleEventNotification(input: { title: string; body: string; tag?: string; route?: string }): Promise<void> {
+  if (!(await isNativeRuntimeAvailable())) return;
+  await NativeRuntime.showEventNotification({
+    title: String(input.title || 'SullyOS').slice(0, 80),
+    body: String(input.body || '').slice(0, 240),
+    tag: input.tag,
+    route: input.route,
+  });
 }
 
 export async function enqueueNativeHttpJob(options: EnqueueHttpJobInput): Promise<{ jobId: string }> {

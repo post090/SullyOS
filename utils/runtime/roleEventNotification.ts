@@ -1,0 +1,29 @@
+import { showNativeRoleEventNotification } from './nativeRuntime';
+
+export type RoleEventNotificationKind = 'message' | 'other_side' | 'task' | 'event' | 'error';
+
+export interface RoleEventNotificationInput {
+  charName?: string;
+  kind: RoleEventNotificationKind;
+  name?: string;
+  route?: string;
+  tag: string;
+}
+
+export function formatRoleEventNotification(input: RoleEventNotificationInput): { title: string; body: string; tag: string; route?: string } {
+  const title = input.charName?.trim() || 'SullyOS';
+  const name = input.name?.trim();
+  let body: string;
+  switch (input.kind) {
+    case 'message': body = '给你发了一条消息'; break;
+    case 'other_side': body = name ? `刚刚去了「${name}」` : '刚刚去彼方了'; break;
+    case 'task': body = name ? `完成了「${name}」` : '刚刚完成了一件事'; break;
+    case 'event': body = name ? `在「${name}」遇到了一件事` : '刚刚有件事想告诉你'; break;
+    case 'error': body = '刚才没能联系上你'; break;
+  }
+  return { title, body, tag: input.tag, route: input.route };
+}
+
+export async function notifyRoleEvent(input: RoleEventNotificationInput): Promise<void> {
+  await showNativeRoleEventNotification(formatRoleEventNotification(input));
+}
