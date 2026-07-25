@@ -41,6 +41,7 @@ interface SullyNativeRuntimePlugin {
   showEventNotification(options: { title: string; body: string; tag?: string; route?: string }): Promise<void>;
   setPersistentEnabled(options: { enabled: boolean }): Promise<void>;
   getLaunchRoute(): Promise<{ route?: string }>;
+  requestNotificationPermission(): Promise<{ granted: boolean }>;
 }
 
 const NativeRuntime = registerPlugin<SullyNativeRuntimePlugin>('SullyNativeRuntime');
@@ -134,6 +135,11 @@ export async function getNativeLaunchRoute(): Promise<string | null> {
     const result = await NativeRuntime.getLaunchRoute();
     return result?.route || null;
   } catch { return null; }
+}
+
+export async function requestNativeNotificationPermission(): Promise<boolean> {
+  if (!isNativeRuntimePlatform()) return true;
+  try { return !!(await NativeRuntime.requestNotificationPermission())?.granted; } catch { return false; }
 }
 
 export async function showNativeRoleEventNotification(input: { title: string; body: string; tag?: string; route?: string }): Promise<void> {

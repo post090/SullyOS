@@ -30,7 +30,7 @@ import { isPushVapidReady } from '../utils/pushVapid';
 import ApiCallLogModal from '../components/settings/ApiCallLogModal';
 import { DB } from '../utils/db';
 import { getBackupReminderState, setBackupReminderIntervalDays, daysSinceLastBackup, BACKUP_REMINDER_MIN_DAYS, BACKUP_REMINDER_MAX_DAYS } from '../utils/backupReminder';
-import { getNativeChatRuntimeUserEnabled, setNativeChatRuntimeUserEnabled, getNativeRuntimeUserEnabled, setNativeRuntimeUserEnabled, getPersistentNativeRuntimeUserEnabled, setPersistentNativeRuntimeUserEnabled, startPersistentNativeRuntime, stopPersistentNativeRuntime } from '../utils/runtime/nativeRuntime';
+import { getNativeChatRuntimeUserEnabled, setNativeChatRuntimeUserEnabled, getNativeRuntimeUserEnabled, setNativeRuntimeUserEnabled, getPersistentNativeRuntimeUserEnabled, setPersistentNativeRuntimeUserEnabled, startPersistentNativeRuntime, stopPersistentNativeRuntime, requestNativeNotificationPermission } from '../utils/runtime/nativeRuntime';
 
 // hot_news（orz.ai）可选热榜平台。key 必须与 API 的 ?platform= 完全一致。
 const HOTNEWS_PLATFORM_OPTIONS: { key: string; label: string }[] = [
@@ -1640,7 +1640,10 @@ const Settings: React.FC = () => {
                                                 setPersistentNativeRuntimeUserEnabled(next);
                                                 setPersistentRuntimeEnabledState(next);
                                                 try {
-                                                    if (next) await startPersistentNativeRuntime();
+                                                    if (next) {
+                                                        await requestNativeNotificationPermission();
+                                                        await startPersistentNativeRuntime();
+                                                    }
                                                     else await stopPersistentNativeRuntime();
                                                     addToast(next ? 'SullyOS 正在运行' : '已停止后台运行', 'info');
                                                 } catch (err) {

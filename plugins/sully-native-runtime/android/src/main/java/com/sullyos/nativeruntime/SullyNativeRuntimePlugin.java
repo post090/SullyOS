@@ -152,6 +152,40 @@ public class SullyNativeRuntimePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void requestNotificationPermission(PluginCall call) {
+        if (android.os.Build.VERSION.SDK_INT < 33) {
+            JSObject result = new JSObject();
+            result.put("granted", true);
+            call.resolve(result);
+            return;
+        }
+        if (getActivity() == null) { call.resolve(new JSObject()); return; }
+        if (androidx.core.content.ContextCompat.checkSelfPermission(getActivity(), android.Manifest.permission.POST_NOTIFICATIONS)
+                == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            JSObject result = new JSObject();
+            result.put("granted", true);
+            call.resolve(result);
+            return;
+        }
+        savePermissionCall(call);
+        androidx.core.app.ActivityCompat.requestPermissions(getActivity(), new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 31091);
+    }
+
+    private PluginCall pendingPermissionCall;
+
+    private void savePermissionCall(PluginCall call) { pendingPermissionCall = call; }
+
+    @Override
+    protected void handleOnRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.handleOnRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != 31091 || pendingPermissionCall == null) return;
+        JSObject result = new JSObject();
+        result.put("granted", grantResults.length > 0 && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED);
+        pendingPermissionCall.resolve(result);
+        pendingPermissionCall = null;
+    }
+
+    @PluginMethod
     public void getLaunchRoute(PluginCall call) {
         JSObject result = new JSObject();
         String route = getActivity() == null ? null : getActivity().getIntent().getStringExtra("sully_route");
