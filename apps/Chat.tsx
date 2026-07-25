@@ -242,7 +242,7 @@ const Chat: React.FC = () => {
     const draftKey = `chat_draft_${activeCharacterId}`;
     const scrollKey = `chat_scroll_${activeCharacterId}`;
 
-    const loadSavedScrollTop = useCallback((): number | null => {
+    const loadSavedChatViewport = useCallback((): { top: number; visibleCount?: number } | null => {
         if (!activeCharacterId) return null;
         try {
             const raw = localStorage.getItem(scrollKey);
@@ -251,7 +251,12 @@ const Chat: React.FC = () => {
             if (!saved || typeof saved.top !== 'number' || typeof saved.at !== 'number') return null;
             // 只恢复近 24 小时的位置，太旧的位置容易让用户误以为消息丢了。
             if (Date.now() - saved.at > 24 * 60 * 60 * 1000) return null;
-            return Math.max(0, saved.top);
+            return {
+                top: Math.max(0, saved.top),
+                visibleCount: typeof saved.visibleCount === 'number'
+                    ? Math.max(LOAD_BATCH_SIZE, Math.min(1000, Math.floor(saved.visibleCount)))
+                    : undefined,
+            };
         } catch {
             return null;
         }
@@ -266,6 +271,7 @@ const Chat: React.FC = () => {
                 height: el.scrollHeight,
                 at: Date.now(),
                 lastId: messages[messages.length - 1]?.id ?? null,
+                visibleCount: visibleCountRef.current,
             }));
         } catch { /* best-effort */ }
     }, [activeCharacterId, scrollKey, messages]);
@@ -777,8 +783,12 @@ const Chat: React.FC = () => {
             setPlayingMsgId(null);
             if (chatAudioRef.current) { try { chatAudioRef.current.pause(); } catch { /* ignore */ } }
 
-            restoreScrollTopRef.current = loadSavedScrollTop();
-            reloadMessages(LOAD_BATCH_SIZE);
+            const savedViewport = loadSavedChatViewport();
+            const initialVisibleCount = savedViewport?.visibleCount || LOAD_BATCH_SIZE;
+            visibleCountRef.current = initialVisibleCount;
+            setVisibleCount(initialVisibleCount);
+            restoreScrollTopRef.current = savedViewport?.top ?? null;
+            reloadMessages(initialVisibleCount);
             loadEmojiData();
             const savedDraft = localStorage.getItem(draftKey);
             setInput(savedDraft || '');
@@ -807,8 +817,6 @@ const Chat: React.FC = () => {
                 || localStorage.getItem('chat_translate_lang')
                 || '中文') || '中文'
             );
-            setVisibleCount(30);
-            visibleCountRef.current = 30;
             lastMsgIdRef.current = null;
             scrollThrottleRef.current = 0;
             setLastTokenUsage(null);
