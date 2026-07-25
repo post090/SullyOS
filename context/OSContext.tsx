@@ -44,6 +44,7 @@ import { setMinimaxRegion } from '../utils/minimaxEndpoint';
 import { setTtsProvider, setVoicePromptOverrides } from '../utils/ttsProvider';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { Capacitor } from '@capacitor/core';
+import { App as CapApp } from '@capacitor/app';
 import { nativeFetch } from '../utils/nativeFetch';
 import { isTaskReminderNotification, getCharIdFromReminder } from '../utils/taskReminderScheduler';
 import { formatBytes, formatBackupTimestamp } from '../utils/format';
@@ -58,6 +59,7 @@ import { exportLuckinLocal } from '../utils/luckinMcpClient';
 import { exportMcdLocal } from '../utils/mcdMcpClient';
 import { exportDesktopSkinLocal } from '../utils/desktopSkinBackup';
 import { assertSupportedSullyBackup } from '../utils/backupImportPolicy';
+import { getRestorableActiveApp, getRestorableSuspendedCall, patchRuntimeSnapshot } from '../utils/runtime/runtimeState';
 
 interface ProactiveQueueEntry {
   charId: string;
@@ -753,7 +755,7 @@ const OSContext = createContext<OSContextType | undefined>(undefined);
 
 export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // ... (State declarations same as before) ...
-  const [activeApp, setActiveApp] = useState<AppID>(AppID.Launcher);
+  const [activeApp, setActiveApp] = useState<AppID>(() => getRestorableActiveApp());
   const [theme, setTheme] = useState<OSTheme>(defaultTheme);
   const [apiConfig, setApiConfig] = useState<APIConfig>(defaultApiConfig);
   const [isLocked, setIsLocked] = useState(true);
@@ -876,7 +878,35 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   const backHandlerRef = useRef<(() => boolean) | null>(null);
 
   // Call Suspend
-  const [suspendedCall, setSuspendedCall] = useState<{ charId: string; charName: string; charAvatar?: string; startedAt: number; bubbles?: any[]; sessionId?: string; elapsedSeconds?: number; voiceLang?: string } | null>(null);
+  const [suspendedCall, setSuspendedCall] = useState<{ charId: string; charName: string; charAvatar?: string; startedAt: number; bubbles?: any[]; sessionId?: string; elapsedSeconds?: number; voiceLang?: string } | null>(() => getRestorableSuspendedCall());
+
+
+  // APK 运行时现场快照：记录上次所在 App / 角色 / 挂起通话。
+  // 目标是 WebView 被系统回收后重开也能回到接近离开前的位置。
+  useEffect(() => {
+    patchRuntimeSnapshot({ activeApp, activeCharacterId: activeCharacterId || undefined, suspendedCall });
+  }, [activeApp, activeCharacterId, suspendedCall]);
+
+  useEffect(() => {
+    const markVisible = () => patchRuntimeSnapshot({ lastVisibleAt: Date.now() });
+    const markHidden = () => patchRuntimeSnapshot({ lastHiddenAt: Date.now(), activeApp, activeCharacterId: activeCharacterId || undefined, suspendedCall });
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') markHidden();
+      else markVisible();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    let appStateHandle: any = null;
+    if (Capacitor.isNativePlatform()) {
+      CapApp.addListener('appStateChange', ({ isActive }) => {
+        if (isActive) markVisible();
+        else markHidden();
+      }).then(handle => { appStateHandle = handle; }).catch(() => {});
+    }
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      try { appStateHandle?.remove?.(); } catch {}
+    };
+  }, [activeApp, activeCharacterId, suspendedCall]);
   // 聊天「见面」按钮 → 见面：记录目标角色，DateApp 挂载后消费一次并自动进入见面
   const [dateAutoStartCharId, setDateAutoStartCharId] = useState<string | null>(null);
 

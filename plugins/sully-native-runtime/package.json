@@ -1,0 +1,17 @@
+{
+  "name": "sully-native-runtime",
+  "version": "0.1.0",
+  "description": "SullyOS Android native runtime bridge for foreground tasks and resilient HTTP jobs.",
+  "main": "dist/plugin.cjs.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/esm/index.d.ts",
+  "files": ["android", "dist"],
+  "capacitor": {
+    "android": {
+      "src": "android"
+    }
+  },
+  "peerDependencies": {
+    "@capacitor/core": ">=6.0.0"
+  }
+}

@@ -11,12 +11,74 @@
 //   - 全局 fetch 拦截器 + apiCallLog（用户在「设置 → API 调用记录」里看）
 // 后者的 meta 通过下面 safeFetchJson 的第 5 个参数挂到 __sullyMeta 上传出去。
 import { appendDevDebugApiLog, makeDebugLogger } from './devDebug';
-import { type ApiCallMeta } from './apiCallLog';
+import { recordApiCall, type ApiCallMeta } from './apiCallLog';
+import { enqueueAndWaitNativeHttp } from './runtime/nativeJobQueue';
+import { isNativeRuntimeAvailable, isNativeRuntimeEnabled } from './runtime/nativeRuntime';
+import { isSamplingParamError, modelRejectsSamplingParams, stripSamplingParams } from './samplingParamCompat';
 
 const log = makeDebugLogger('api', 'SafeAPI');
 
 function isChatCompletionUrl(url: string): boolean {
     return url.includes('/chat/completions');
+}
+
+function headersInitToRecord(headers?: HeadersInit): Record<string, string> {
+    if (!headers) return {};
+    const out: Record<string, string> = {};
+    try {
+        if (headers instanceof Headers) {
+            headers.forEach((value, key) => { out[key] = value; });
+            return out;
+        }
+    } catch { /* non-browser test env may not expose Headers */ }
+    if (Array.isArray(headers)) {
+        for (const [key, value] of headers) out[String(key)] = String(value);
+        return out;
+    }
+    for (const [key, value] of Object.entries(headers as Record<string, string>)) out[key] = String(value);
+    return out;
+}
+
+function shouldTryNativeRuntime(url: string, options: RequestInit, meta?: ApiCallMeta): boolean {
+    if (!isNativeRuntimeEnabled()) return false;
+    if (!isChatCompletionUrl(url)) return false;
+    // 先只接主聊天回复：旁路任务继续走原 fetch monkey-patch，避免丢失它的流式升级/专项自愈。
+    if (!(meta?.appName === '消息' && meta?.purpose === '聊天回复')) return false;
+    const method = String(options.method || 'GET').toUpperCase();
+    if (method !== 'POST') return false;
+    if (typeof options.body !== 'string') return false;
+    try {
+        // 现场排查开关：localStorage.sully_native_runtime_chat='0'
+        if (localStorage.getItem('sully_native_runtime_chat') === '0') return false;
+    } catch { /* ignore */ }
+    return true;
+}
+
+function makeNativeJobId(): string {
+    try {
+        const c = globalThis.crypto as Crypto | undefined;
+        if (c?.randomUUID) return `chat-${c.randomUUID()}`;
+    } catch { /* ignore */ }
+    return `chat-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function prepareNativeChatBody(body: string): string {
+    try {
+        const parsed = JSON.parse(body);
+        if (modelRejectsSamplingParams(parsed?.model) && stripSamplingParams(parsed)) {
+            return JSON.stringify(parsed);
+        }
+    } catch { /* non-json body: keep original */ }
+    return body;
+}
+
+function stripSamplingFromBody(body: string): string | null {
+    try {
+        const parsed = JSON.parse(body);
+        return stripSamplingParams(parsed) ? JSON.stringify(parsed) : null;
+    } catch {
+        return null;
+    }
 }
 
 /** Parse a fetch Response as JSON safely (text-first, then JSON.parse) */
@@ -386,11 +448,12 @@ export async function safeFetchJson(
     // 把 meta 挂到 RequestInit 上（浏览器忽略未知字段），交给全局 fetch 拦截器统一记录
     // 到「API 调用记录」。这样裸 fetch 和 safeFetchJson 走同一个记录入口，不会重复计。
     const metaOptions: RequestInit = meta ? { ...options, __sullyMeta: meta } as RequestInit : options;
+    let forcedBodyOverride: string | null = null;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
         // 每次 attempt 建一个独立的 AbortController（仅用于 timeout）
         // 调用方自己的 options.signal 仍然有效，两者任一触发就 abort
-        let attemptOptions = metaOptions;
+        let attemptOptions = forcedBodyOverride != null ? { ...metaOptions, body: forcedBodyOverride } : metaOptions;
         let timeoutHandle: any = null;
         if (timeoutMs > 0) {
             const ac = new AbortController();
@@ -407,6 +470,83 @@ export async function safeFetchJson(
         }
         const attemptStartedAt = Date.now();
         try {
+            const useNativeRuntime = shouldTryNativeRuntime(urlStr, attemptOptions, meta) && await isNativeRuntimeAvailable();
+            if (useNativeRuntime) {
+                if (timeoutHandle) {
+                    clearTimeout(timeoutHandle);
+                    timeoutHandle = null;
+                }
+                const nativeStartedAt = Date.now();
+                const nativeBody = prepareNativeChatBody(String(attemptOptions.body || ''));
+                const nativeResult = await enqueueAndWaitNativeHttp({
+                    jobId: makeNativeJobId(),
+                    url: urlStr,
+                    method: String(attemptOptions.method || 'POST').toUpperCase() as 'POST' | 'GET',
+                    headers: headersInitToRecord(attemptOptions.headers),
+                    body: nativeBody,
+                    timeoutMs: timeoutMs || 120_000,
+                    responseType: 'json',
+                    title: meta?.charName ? `${meta.charName} 正在回应你` : 'SullyOS 正在生成回复',
+                    text: meta?.purpose || meta?.appName || '后台请求处理中',
+                    meta: meta ? {
+                        appName: meta.appName,
+                        charId: meta.charId,
+                        charName: meta.charName,
+                        purpose: meta.purpose,
+                    } : undefined,
+                });
+                const headersMs = Date.now() - nativeStartedAt;
+                lastStatus = nativeResult.statusCode;
+                const responseHeaders = nativeResult.headers || {};
+
+                if (nativeResult.statusCode < 200 || nativeResult.statusCode >= 300) {
+                    if (nativeResult.statusCode === 400 && isSamplingParamError(nativeResult.body || '')) {
+                        const strippedBody = stripSamplingFromBody(nativeBody);
+                        if (strippedBody && strippedBody !== nativeBody && attempt < maxRetries) {
+                            try { (window as any).__sullyRetryNotifier?.('采样参数被模型拒收，已自动摘除重试'); } catch { /* ignore */ }
+                            forcedBodyOverride = strippedBody;
+                            continue;
+                        }
+                    }
+                    if (retryableStatuses.has(nativeResult.statusCode) && attempt < maxRetries) {
+                        const delay = Math.pow(2, attempt) * 1000;
+                        log.warn('Native HTTP retry', { status: nativeResult.statusCode, attempt: attempt + 1, maxRetries, delay });
+                        try { streamHooks?.onRetry?.({ attempt: attempt + 1, maxRetries, reason: `http:${nativeResult.statusCode}`, message: `HTTP ${nativeResult.statusCode}`, delayMs: delay }); } catch { /* ignore */ }
+                        await new Promise(r => setTimeout(r, delay));
+                        continue;
+                    }
+                    const data = parseRawBodyText(nativeResult.body || '', nativeResult.statusCode, responseHeaders['content-type']);
+                    const errMsg = data?.error?.message || data?.error || `HTTP ${nativeResult.statusCode}`;
+                    throw new Error(`API Error ${nativeResult.statusCode}: ${errMsg}`);
+                }
+
+                const data = parseRawBodyText(nativeResult.body || '', nativeResult.statusCode, responseHeaders['content-type']);
+                if (isChatCompletionUrl(urlStr)) {
+                    const totalMs = Date.now() - nativeStartedAt;
+                    console.log(`⏱ [API timing] native=1 total=${totalMs}ms${streamHooks ? ' streamed=0(native)' : ''}`);
+                    appendDevDebugApiLog({
+                        url: urlStr,
+                        method: options.method,
+                        status: nativeResult.statusCode,
+                        requestBody: options.body,
+                        response: data,
+                        durationMs: totalMs,
+                        headersMs,
+                    });
+                    recordApiCall({
+                        url: urlStr,
+                        body: options.body,
+                        status: nativeResult.statusCode,
+                        ok: true,
+                        response: data,
+                        responseText: nativeResult.body,
+                        meta,
+                        durationMs: totalMs,
+                    });
+                }
+                return data;
+            }
+
             const response = await fetch(url, attemptOptions);
             if (timeoutHandle) clearTimeout(timeoutHandle);
             lastStatus = response.status;
@@ -457,8 +597,10 @@ export async function safeFetchJson(
             // AbortError（含 timeout）：是否重试看上层策略，先按可重试处理（网络层面）
             const isAbort = e?.name === 'AbortError' || /aborted|timeout/i.test(e?.message || '');
 
+            const isNativeTransportError = /Native job|NativeRuntime|native.*timeout|Connection refused|Unable to resolve host|timeout/i.test(e?.message || '');
+
             // Network errors (fetch itself failed) are retryable
-            if ((e?.name === 'TypeError' || isAbort) && attempt < maxRetries) {
+            if ((e?.name === 'TypeError' || isAbort || isNativeTransportError) && attempt < maxRetries) {
                 const delay = Math.pow(2, attempt) * 1000;
                 log.warn(isAbort ? 'Timeout/Abort retry' : 'Network error retry', { attempt: attempt + 1, maxRetries, delay, message: e?.message });
                 try { streamHooks?.onRetry?.({ attempt: attempt + 1, maxRetries, reason: isAbort ? 'timeout' : 'network', message: e?.message || '', delayMs: delay }); } catch { /* 回调异常不拦截重试 */ }
