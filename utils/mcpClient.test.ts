@@ -500,7 +500,7 @@ describe('群聊 MCP 工具循环', () => {
         expect(chatBodies).toHaveLength(2);
         expect(chatBodies[0].tools[0].function.name).toBe('roll_dice');
         expect(chatBodies[1].messages).toEqual(expect.arrayContaining([
-            expect.objectContaining({ role: 'tool', tool_call_id: 'call-1', content: expect.stringContaining('{"value":4}') }),
+            expect.objectContaining({ role: 'tool', name: 'roll_dice', tool_call_id: 'call-1', content: expect.stringContaining('{"value":4}') }),
         ]));
         expect(result.choices[0].message.content).toContain('你掷出了 4');
         expect(result.usage.total_tokens).toBe(29);

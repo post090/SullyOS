@@ -1,7 +1,7 @@
 
 
 
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Message, ChatTheme } from '../../types';
 import { tryParseLifeSimResetCard } from '../../utils/lifeSimChatCard';
 import { VALID_INTERJECTION_TAGS, cleanVoiceMarkupForDisplay } from '../../utils/minimaxTts';
@@ -421,15 +421,177 @@ export const ThinkingChainBlock: React.FC<{
     onOpenSettings?: () => void;
 }> = ({ chain, styleId, customColors, onOpenSettings }) => {
     const [expanded, setExpanded] = useState(false);
+    const [copyState, setCopyState] = useState<'idle' | 'ready' | 'ok' | 'error'>('idle');
+    const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const pointerIdRef = useRef<number | null>(null);
+    const pointerTypeRef = useRef<React.PointerEvent<HTMLDivElement>['pointerType']>('');
+    const pointerStartRef = useRef({ x: 0, y: 0 });
+    const longPressReadyRef = useRef(false);
+    const suppressNextClickRef = useRef(false);
     const trimmed = (chain || '').trim();
-    if (!trimmed) return null;
     const spec = resolveThinkingChainStyle(styleId, customColors);
     const firstLine = trimmed.replace(/\s+/g, ' ').slice(0, 38);
     const hasMore = trimmed.length > 38;
+
+    const clearCopyTimer = () => {
+        if (copyTimerRef.current) {
+            clearTimeout(copyTimerRef.current);
+            copyTimerRef.current = null;
+        }
+    };
+
+    useEffect(() => () => {
+        clearCopyTimer();
+        if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+    }, []);
+
+    if (!trimmed) return null;
+
+    const copyThinkingChain = async () => {
+        let success = false;
+        try {
+            if (!navigator.clipboard?.writeText) throw new Error('Clipboard API unavailable');
+            await navigator.clipboard.writeText(trimmed);
+            success = true;
+        } catch {
+            // iOS PWA / 非安全上下文可能拒绝 Clipboard API，保留 textarea 兜底。
+            let textarea: HTMLTextAreaElement | null = null;
+            try {
+                textarea = document.createElement('textarea');
+                textarea.value = trimmed;
+                textarea.setAttribute('readonly', '');
+                textarea.style.position = 'fixed';
+                textarea.style.opacity = '0';
+                textarea.style.pointerEvents = 'none';
+                document.body.appendChild(textarea);
+                textarea.select();
+                textarea.setSelectionRange(0, textarea.value.length);
+                success = document.execCommand('copy');
+            } catch {
+                success = false;
+            } finally {
+                textarea?.remove();
+            }
+        }
+
+        setCopyState(success ? 'ok' : 'error');
+        if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+        feedbackTimerRef.current = setTimeout(() => setCopyState('idle'), 1600);
+    };
+
+    const resetLongPress = () => {
+        clearCopyTimer();
+        longPressReadyRef.current = false;
+        if (copyState === 'ready') setCopyState('idle');
+    };
+
+    // 必须由 pointerup / touchend / contextmenu 这类真实用户手势直接调用。
+    // Safari 会拒绝在长按 setTimeout 回调里发起的剪贴板写入。
+    const finishLongPressCopy = () => {
+        if (!longPressReadyRef.current) return false;
+        clearCopyTimer();
+        longPressReadyRef.current = false;
+        suppressNextClickRef.current = true;
+        void copyThinkingChain();
+        return true;
+    };
+
+    const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+        e.stopPropagation();
+        pointerTypeRef.current = e.pointerType;
+        if (e.button !== 0) return;
+        pointerIdRef.current = e.pointerId;
+        pointerStartRef.current = { x: e.clientX, y: e.clientY };
+        longPressReadyRef.current = false;
+        suppressNextClickRef.current = false;
+        clearCopyTimer();
+        copyTimerRef.current = setTimeout(() => {
+            copyTimerRef.current = null;
+            longPressReadyRef.current = true;
+            setCopyState('ready');
+            try { navigator.vibrate?.(20); } catch { /* vibration is optional */ }
+        }, 450);
+    };
+
+    const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+        e.stopPropagation();
+        if (pointerIdRef.current !== e.pointerId) return;
+        const dx = e.clientX - pointerStartRef.current.x;
+        const dy = e.clientY - pointerStartRef.current.y;
+        if (Math.abs(dx) > 10 || Math.abs(dy) > 10) resetLongPress();
+    };
+
+    const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+        e.stopPropagation();
+        if (pointerIdRef.current !== e.pointerId) return;
+        pointerIdRef.current = null;
+        if (!finishLongPressCopy()) resetLongPress();
+    };
+
+    const handlePointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
+        e.stopPropagation();
+        if (pointerIdRef.current !== e.pointerId) return;
+        pointerIdRef.current = null;
+        clearCopyTimer();
+        // iOS 弹出原生选区时可能先派发 pointercancel，随后仍会派发 touchend。
+        // 此时保留 ready，让 touchend 仍可在真实用户手势中执行复制。
+        if (e.pointerType !== 'touch' || !longPressReadyRef.current) resetLongPress();
+    };
+
+    const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+        e.stopPropagation();
+        if (suppressNextClickRef.current) {
+            suppressNextClickRef.current = false;
+            e.preventDefault();
+            return;
+        }
+        setExpanded(v => !v);
+    };
+
+    const copyStatusLabel = copyState === 'ok'
+        ? '已复制'
+        : copyState === 'ready'
+            ? '松开复制'
+            : copyState === 'error'
+                ? '请用系统复制'
+                : expanded ? spec.silenceLabel : spec.listenLabel;
+
     return (
         <div
             className="sully-psyche relative mb-2 w-full max-w-full select-text cursor-pointer group"
-            onClick={(e) => { e.stopPropagation(); setExpanded(v => !v); }}
+            role="button"
+            tabIndex={0}
+            aria-label="心象：点击展开，长按复制全文"
+            title="长按复制心象全文"
+            onClick={handleClick}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerCancel}
+            onTouchEnd={(e) => {
+                e.stopPropagation();
+                finishLongPressCopy();
+            }}
+            onContextMenu={(e) => {
+                e.stopPropagation();
+                // 触屏保留 Safari 原生蓝色选区与复制菜单，作为剪贴板权限受限时的兜底。
+                if (pointerTypeRef.current !== 'mouse') return;
+                e.preventDefault();
+                suppressNextClickRef.current = false;
+                void copyThinkingChain();
+            }}
+            onKeyDown={(e) => {
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                e.preventDefault();
+                setExpanded(v => !v);
+            }}
+            style={{
+                touchAction: 'pan-y',
+                userSelect: 'text',
+                WebkitUserSelect: 'text',
+                WebkitTouchCallout: 'default',
+            }}
         >
             <div
                 className="sully-psyche-card relative overflow-hidden px-4 py-2.5 transition-all duration-300"
@@ -499,7 +661,7 @@ export const ThinkingChainBlock: React.FC<{
                         className="ml-auto text-[10px] tracking-[0.18em] transition-opacity opacity-65 group-hover:opacity-100"
                         style={{ color: spec.subtext }}
                     >
-                        {expanded ? spec.silenceLabel : spec.listenLabel}
+                        {copyStatusLabel}
                     </span>
                 </div>
 

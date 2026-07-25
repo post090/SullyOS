@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { countUnprocessedBufferMessages } from './bufferCount';
+import { isMessageSemanticallyRelevant } from '../messageFormat';
 
 /** 造一批 id 连续、内容非空的文本消息 */
 const makeMsgs = (n: number, startId = 1) =>
@@ -36,5 +37,23 @@ describe('countUnprocessedBufferMessages（记忆宫殿未同步口径）', () =
         const correct = countUnprocessedBufferMessages(msgs, 0, 200); // 正确 = 50
         expect(correct).toBe(50);
         expect(correct).not.toBe(naive); // 若有人改回裸过滤，这一行会挂
+    });
+
+    it('语音转写与 metadata 卡片进入同一水位线统计，纯媒体不计数', () => {
+        const mixed = [
+            { id: 1, type: 'text', content: '文字' },
+            { id: 2, type: 'voice', content: '语音配套文字' },
+            { id: 3, type: 'xhs_card', content: '', metadata: { xhsNote: { title: '卡片标题' } } },
+            { id: 4, type: 'image', content: 'data:image/png;base64,AAAA' },
+            { id: 5, type: 'emoji', content: 'blob:emoji' },
+            { id: 6, type: 'voice', content: 'blob:voice' },
+            { id: 7, type: 'text', content: '热区一' },
+            { id: 8, type: 'text', content: '热区二' },
+        ] as any;
+        const semantic = mixed.filter(isMessageSemanticallyRelevant);
+
+        expect(semantic.map((m: any) => m.id)).toEqual([1, 2, 3, 7, 8]);
+        expect(countUnprocessedBufferMessages(semantic, 0, 2)).toBe(3);
+        expect(countUnprocessedBufferMessages(semantic, 1, 2)).toBe(2);
     });
 });

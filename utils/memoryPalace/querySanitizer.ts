@@ -28,7 +28,8 @@ const DATA_URI_RE = /data:[a-z0-9.+-]+\/[a-z0-9.+-]+[;,]\S*/gi;
 /**
  * 把原始消息列表清洗成「可以安全参与检索 query 构建」的列表：
  *
- * 1. 丢掉无语义消息（image/emoji/voice 及空消息）—— 与入库口径一致
+ * 1. 丢掉无语义消息（image/emoji、无转写的纯音频及空消息）—— 与入库口径一致
+ *    有配套文字的 voice 会转成「语音转写」继续参与检索
  * 2. 卡片/系统类消息经 normalizeMessageContent 翻成可读文本
  *    （music_card 的 content 可能是占位符、score_card 可能是 JSON）
  * 3. 剥离所有 data URI；剥完变空的消息一并丢掉

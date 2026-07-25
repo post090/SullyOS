@@ -48,4 +48,22 @@ describe('ChatPrompts.filterVisibleEmojis', () => {
     const res = ChatPrompts.filterVisibleEmojis(emojis, openCats, 'B');
     expect(res.emojis).toBe(emojis);
   });
+
+  it('同名表情只保留当前角色绑定的版本，避免按名字反查到其他角色的 URL', () => {
+    const scopedCategories: EmojiCategory[] = [
+      { id: 'onlyA', name: 'A 专属', allowedCharacterIds: ['A'] },
+      { id: 'onlyB', name: 'B 专属', allowedCharacterIds: ['B'] },
+    ];
+    const duplicateNames: Emoji[] = [
+      { name: '挥手', url: 'a-only-url', categoryId: 'onlyA' },
+      { name: '挥手', url: 'b-only-url', categoryId: 'onlyB' },
+    ];
+
+    const res = ChatPrompts.filterVisibleEmojis(duplicateNames, scopedCategories, 'B');
+
+    expect(res.emojis).toEqual([
+      { name: '挥手', url: 'b-only-url', categoryId: 'onlyB' },
+    ]);
+    expect(res.emojis.find(e => e.name === '挥手')?.url).toBe('b-only-url');
+  });
 });

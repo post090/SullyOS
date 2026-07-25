@@ -5,6 +5,7 @@ import { CharacterProfile, Message, EmojiCategory, DailySchedule, ScheduleSlot, 
 import ScheduleCard from '../schedule/ScheduleCard';
 import EmotionSettingsPanel from './EmotionSettingsPanel';
 import { isTranslationLangPreset, normalizeTranslationLangLabel, TRANSLATION_LANG_MAX_LENGTH, TRANSLATION_LANG_PRESETS } from '../../utils/translationLang';
+import type { ContextRangeMode, ContextRangeSnapshot } from '../../utils/chatContextRange';
 
 interface ChatModalsProps {
     modalType: string;
@@ -18,6 +19,8 @@ interface ChatModalsProps {
     setEmojiImportText: (v: string) => void;
     settingsContextLimit: number;
     setSettingsContextLimit: (v: number) => void;
+    settingsContextRangeMode: ContextRangeMode;
+    setSettingsContextRangeMode: (v: ContextRangeMode) => void;
     settingsHideSysLogs: boolean;
     setSettingsHideSysLogs: (v: boolean) => void;
     preserveContext: boolean;
@@ -51,6 +54,7 @@ interface ChatModalsProps {
     activeCharacter: CharacterProfile;
     messages: Message[];
     allHistoryMessages?: Message[];
+    contextRangeSnapshot?: ContextRangeSnapshot;
 
     // Handlers
     onTransfer: () => void;
@@ -65,6 +69,7 @@ interface ChatModalsProps {
     onSavePrompt: () => void;
     onDeletePrompt: (id: string) => void;
     onSetHistoryStart: (id: number | undefined) => void;
+    onRestoreAdaptiveContext?: () => void;
     onJumpToMessageInChat?: (id: number) => void;
     onEnterSelectionMode: () => void;
     onReplyMessage: () => void;
@@ -215,6 +220,7 @@ const ChatModals: React.FC<ChatModalsProps> = ({
     transferNote, setTransferNote,
     emojiImportText, setEmojiImportText,
     settingsContextLimit, setSettingsContextLimit,
+    settingsContextRangeMode, setSettingsContextRangeMode,
     settingsHideSysLogs, setSettingsHideSysLogs,
     preserveContext, setPreserveContext,
     editContent, setEditContent,
@@ -224,10 +230,11 @@ const ChatModals: React.FC<ChatModalsProps> = ({
     editingPrompt, setEditingPrompt, isSummarizing, archiveProgress,
     selectedMessage, selectedEmoji, selectedCategory, activeCharacter, messages,
     allHistoryMessages = [],
+    contextRangeSnapshot,
     onTransfer, onImportEmoji, onSaveSettings,
     onBgUpload, onRemoveBg, onClearHistory,
     onArchive, onCreatePrompt, onEditPrompt, onSavePrompt, onDeletePrompt,
-    onSetHistoryStart, onJumpToMessageInChat, onEnterSelectionMode, onReplyMessage, onEditMessageStart, onConfirmEditMessage, onDeleteMessage, onCopyMessage, onDeleteEmoji, onDeleteCategory,
+    onSetHistoryStart, onRestoreAdaptiveContext, onJumpToMessageInChat, onEnterSelectionMode, onReplyMessage, onEditMessageStart, onConfirmEditMessage, onDeleteMessage, onCopyMessage, onDeleteEmoji, onDeleteCategory,
     allCharacters = [], onSaveCategoryVisibility,
     translationEnabled, onToggleTranslation, translateSourceLang, translateTargetLang, onSetTranslateSourceLang, onSetTranslateLang,
     xhsEnabled, onToggleXhs,
@@ -244,7 +251,6 @@ const ChatModals: React.FC<ChatModalsProps> = ({
     const [visibilitySelection, setVisibilitySelection] = useState<Set<string>>(new Set());
     const [historyPage, setHistoryPage] = useState(0);
     const [historySearch, setHistorySearch] = useState('');
-    const [pendingHideMsgId, setPendingHideMsgId] = useState<number | null>(null);
     const longPressTimerRef = useRef<number | null>(null);
     const longPressTriggeredRef = useRef(false);
     const HISTORY_PAGE_SIZE = 50;
@@ -260,7 +266,6 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                 setModalType('none');
                 setHistoryPage(0);
                 setHistorySearch('');
-                setPendingHideMsgId(null);
                 onJumpToMessageInChat(msgId);
             }
         }, LONG_PRESS_MS);
@@ -276,7 +281,8 @@ const ChatModals: React.FC<ChatModalsProps> = ({
             longPressTriggeredRef.current = false;
             return;
         }
-        setPendingHideMsgId(msgId);
+        // 范围内直接设置；范围外由上层直接提示先调整拉杆。
+        onSetHistoryStart(msgId);
     };
 
     // 模糊匹配：query 的所有字符按顺序在 content 里出现即算命中（大小写不敏感）。
@@ -384,9 +390,74 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                          {activeCharacter.chatBackground && <button onClick={onRemoveBg} className="text-[10px] text-red-400 mt-1">移除背景</button>}
                      </div>
                      <div>
-                         <label className="text-xs font-bold text-slate-400 uppercase mb-2 block">上下文条数 ({settingsContextLimit})</label>
-                         <input type="range" min="20" max="5000" step="10" value={settingsContextLimit} onChange={e => setSettingsContextLimit(parseInt(e.target.value))} className="w-full h-2 bg-slate-200 rounded-full appearance-none accent-primary" />
-                         <div className="flex justify-between text-[10px] text-slate-400 mt-1"><span>20 (省流)</span><span>5000 (超长记忆)</span></div>
+                         {activeCharacter.autoArchiveEnabled && settingsContextRangeMode === 'adaptive' ? (
+                             <div className="rounded-2xl border border-violet-200 bg-violet-50 p-3.5">
+                                 <div className="flex items-start justify-between gap-3">
+                                     <div>
+                                         <div className="text-xs font-bold text-violet-700">自适应全自动记忆中</div>
+                                         <p className="text-[10px] text-violet-600/80 mt-1 leading-relaxed">
+                                             原文范围自动跟随记忆宫殿水位线，更早内容通过向量记忆召回。非特殊需求请勿调整。
+                                         </p>
+                                         {activeCharacter.contextUserStartMessageId && (
+                                             <p className="text-[10px] text-sky-700 mt-1.5 leading-relaxed">
+                                                 当前另有用户断点，实际原文范围会在自适应上限内进一步缩小。
+                                             </p>
+                                         )}
+                                     </div>
+                                     <div className="shrink-0 flex flex-col gap-1.5">
+                                         <button
+                                             type="button"
+                                             onClick={() => setSettingsContextRangeMode('manual')}
+                                             className="px-3 py-1.5 rounded-xl bg-white border border-violet-200 text-[11px] font-bold text-violet-700"
+                                         >
+                                             自定义范围
+                                         </button>
+                                         {activeCharacter.contextUserStartMessageId && (
+                                             <button
+                                                 type="button"
+                                                 onClick={onRestoreAdaptiveContext}
+                                                 className="px-3 py-1.5 rounded-xl bg-violet-600 text-[11px] font-bold text-white"
+                                             >
+                                                 一键还原
+                                             </button>
+                                         )}
+                                     </div>
+                                 </div>
+                             </div>
+                         ) : (
+                             <>
+                                 <div className="flex items-center justify-between gap-2 mb-2">
+                                     <label className="text-xs font-bold text-slate-400 uppercase">上下文最大条数 ({settingsContextLimit})</label>
+                                     {activeCharacter.autoArchiveEnabled && (
+                                         <button
+                                             type="button"
+                                             onClick={onRestoreAdaptiveContext}
+                                             className="text-[10px] font-bold text-violet-600 bg-violet-50 border border-violet-100 rounded-full px-2.5 py-1"
+                                         >
+                                             一键恢复自适应
+                                         </button>
+                                     )}
+                                 </div>
+                                 <input
+                                     type="range"
+                                     min="20"
+                                     max="5000"
+                                     step="10"
+                                     value={settingsContextLimit}
+                                     onChange={e => {
+                                         setSettingsContextRangeMode('manual');
+                                         setSettingsContextLimit(parseInt(e.target.value));
+                                     }}
+                                     className="w-full h-2 bg-slate-200 rounded-full appearance-none accent-primary"
+                                 />
+                                 <div className="flex justify-between text-[10px] text-slate-400 mt-1"><span>20 (省流)</span><span>5000 (最大范围)</span></div>
+                                 {activeCharacter.autoArchiveEnabled && (
+                                     <p className="text-[10px] text-amber-600 mt-2 leading-relaxed">
+                                         自定义只改变 AI 可直接读取的原文范围，不会回退记忆宫殿水位线，也不会让旧消息重新向量化。
+                                     </p>
+                                 )}
+                             </>
+                         )}
                      </div>
 
                      <div className="pt-2 border-t border-slate-100">
@@ -505,9 +576,9 @@ const ChatModals: React.FC<ChatModalsProps> = ({
 
                      <div className="pt-2 border-t border-slate-100">
                          <button onClick={() => setModalType('history-manager')} className="w-full py-3 bg-slate-50 text-slate-600 font-bold rounded-2xl border border-slate-200 active:scale-95 transition-transform flex items-center justify-center gap-2">
-                             管理上下文 / 隐藏历史
+                             查看原文范围 / 设置用户断点
                          </button>
-                         <p className="text-[10px] text-slate-400 mt-2 text-center">可选择从某条消息开始显示，隐藏之前的记录（不被 AI 读取）。</p>
+                         <p className="text-[10px] text-slate-400 mt-2 text-center">查看拉杆上限、记忆水位线，并可在最大范围内进一步缩小 AI 原文范围。</p>
                      </div>
                      
                      {/* 记忆宫殿：一键向量化所有聊天记录 */}
@@ -637,17 +708,24 @@ const ChatModals: React.FC<ChatModalsProps> = ({
 
             {/* History Manager Modal */}
             <Modal
-                isOpen={modalType === 'history-manager'} title="历史记录断点" onClose={() => { setModalType('none'); setHistoryPage(0); setHistorySearch(''); setPendingHideMsgId(null); }}
-                footer={<><button onClick={() => onSetHistoryStart(undefined)} className="flex-1 py-3 bg-slate-100 text-slate-600 font-bold rounded-2xl">恢复全部</button><button onClick={() => { setModalType('none'); setHistoryPage(0); setHistorySearch(''); setPendingHideMsgId(null); }} className="flex-1 py-3 bg-primary text-white font-bold rounded-2xl">完成</button></>}
+                isOpen={modalType === 'history-manager'} title="AI 原文读取范围" onClose={() => { setModalType('none'); setHistoryPage(0); setHistorySearch(''); }}
+                footer={<><button onClick={() => onSetHistoryStart(undefined)} className="flex-1 py-3 bg-slate-100 text-slate-600 font-bold rounded-2xl">清除用户断点</button><button onClick={() => { setModalType('none'); setHistoryPage(0); setHistorySearch(''); }} className="flex-1 py-3 bg-primary text-white font-bold rounded-2xl">完成</button></>}
             >
                 <div className="space-y-2 max-h-[50vh] overflow-y-auto no-scrollbar p-1">
-                    <p className="text-xs text-slate-400 text-center mb-2"><b>短按</b>消息 = 设为隐藏起点（会再次确认） · <b>长按</b>消息 = 跳转到聊天里查看原文</p>
-                    {typeof activeCharacter.hideBeforeMessageId === 'number' && activeCharacter.hideBeforeMessageId > 0 && (
-                        <div className="bg-violet-50 border border-violet-200 rounded-xl p-2.5 text-[11px] text-violet-800 leading-relaxed mb-2">
-                            <b>💡 已经有隐藏起点了</b>：灰色消息是自动/手动归档时标记为"已总结"的，AI 现在看不到原文，但能看到它们的总结。<br/>
-                            <span className="text-violet-600">记忆宫殿的记忆是自动维护的，跟这里无关，不用手动管。</span>
+                    <p className="text-xs text-slate-400 text-center mb-2"><b>短按</b>消息 = 设置用户断点（只能缩小范围） · <b>长按</b>消息 = 跳转查看原文</p>
+                    <div className="grid gap-2 mb-2">
+                        <div className="bg-violet-50 border border-violet-200 rounded-xl p-2.5 text-[11px] text-violet-800 leading-relaxed">
+                            <b>紫色 · 记忆宫殿水位线</b>：此前消息已经处理，不会因调整上下文再次向量化。
                         </div>
-                    )}
+                        <div className="bg-orange-50 border border-orange-200 rounded-xl p-2.5 text-[11px] text-orange-800 leading-relaxed">
+                            <b>橙色 · 最大范围起点</b>：由{contextRangeSnapshot?.mode === 'adaptive' ? '全自动记忆' : `拉杆 ${settingsContextLimit} 条`}决定，用户断点不能越过它读取更早内容。
+                        </div>
+                        {contextRangeSnapshot?.userStartMessageId && (
+                            <div className="bg-sky-50 border border-sky-200 rounded-xl p-2.5 text-[11px] text-sky-800 leading-relaxed">
+                                <b>蓝色 · 用户断点</b>：只在最大范围内进一步隐藏更早原文；被移动中的最大范围越过后会自动失效。
+                            </div>
+                        )}
+                    </div>
                     <div className="sticky top-0 bg-white/95 backdrop-blur-sm z-10 pb-1.5 -mx-1 px-1">
                         <div className="relative">
                             <input
@@ -672,7 +750,10 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                         const limited = query ? filtered.slice(0, HISTORY_SEARCH_MAX) : filtered;
                         const totalPages = Math.max(1, Math.ceil(limited.length / HISTORY_PAGE_SIZE));
                         const pageMessages = limited.slice(historyPage * HISTORY_PAGE_SIZE, (historyPage + 1) * HISTORY_PAGE_SIZE);
-                        const hideCut = activeCharacter.hideBeforeMessageId;
+                        const hwm = contextRangeSnapshot?.hwm || 0;
+                        const maxCut = contextRangeSnapshot?.maxRangeStartMessageId;
+                        const userCut = contextRangeSnapshot?.userStartMessageId;
+                        const effectiveCut = contextRangeSnapshot?.effectiveStartMessageId;
                         return (<>
                             {query && (
                                 <div className="text-xs text-slate-500 px-1 py-1">
@@ -694,13 +775,20 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                                 </div>
                             )}
                             {pageMessages.map(m => {
-                                const isCurrentStart = hideCut === m.id;
-                                const isHidden = !!(hideCut && m.id < hideCut);
-                                const cls = isCurrentStart
-                                    ? 'bg-primary/10 border-primary ring-1 ring-primary'
-                                    : isHidden
-                                        ? 'bg-slate-50 border-slate-100 opacity-55'
-                                        : 'bg-white border-slate-100 hover:bg-slate-50';
+                                const isWatermark = hwm === m.id;
+                                const isMaxStart = maxCut === m.id;
+                                const isUserStart = userCut === m.id;
+                                const isHidden = !!(effectiveCut && m.id < effectiveCut);
+                                const isVectorized = hwm > 0 && m.id <= hwm;
+                                const cls = isUserStart
+                                    ? 'bg-sky-50 border-sky-300 ring-1 ring-sky-300'
+                                    : isMaxStart
+                                        ? 'bg-orange-50 border-orange-300 ring-1 ring-orange-300'
+                                        : isWatermark
+                                            ? 'bg-violet-50 border-violet-300 ring-1 ring-violet-300'
+                                            : isHidden
+                                                ? 'bg-slate-50 border-slate-100 opacity-55'
+                                                : 'bg-white border-slate-100 hover:bg-slate-50';
                                 const contentClass = isHidden ? 'text-slate-400 line-through decoration-slate-300/70' : 'text-slate-500';
                                 return (
                                     <div
@@ -719,8 +807,13 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                                             <div className="font-bold text-slate-600 mb-0.5">{m.role === 'user' ? '我' : activeCharacter.name}</div>
                                             <div className="truncate">{renderHighlighted(m.content || '', query, contentClass)}</div>
                                         </div>
-                                        {isCurrentStart && <span className="text-primary font-bold text-[10px] bg-white px-2 rounded-full border border-primary/20">起点</span>}
-                                        {!isCurrentStart && isHidden && <span className="text-slate-400 font-bold text-[10px] bg-white px-2 rounded-full border border-slate-200">已隐</span>}
+                                        <div className="flex flex-wrap justify-end gap-1 max-w-[42%]">
+                                            {isWatermark && <span className="text-violet-600 font-bold text-[9px] bg-white px-1.5 rounded-full border border-violet-200">水位线</span>}
+                                            {isMaxStart && <span className="text-orange-600 font-bold text-[9px] bg-white px-1.5 rounded-full border border-orange-200">最大范围</span>}
+                                            {isUserStart && <span className="text-sky-600 font-bold text-[9px] bg-white px-1.5 rounded-full border border-sky-200">用户断点</span>}
+                                            {!isWatermark && !isMaxStart && !isUserStart && isHidden && <span className="text-slate-400 font-bold text-[9px] bg-white px-1.5 rounded-full border border-slate-200">AI 不读原文</span>}
+                                            {!isWatermark && !isMaxStart && !isUserStart && isVectorized && !isHidden && <span className="text-violet-400 font-bold text-[9px] bg-white px-1.5 rounded-full border border-violet-100">已向量化</span>}
+                                        </div>
                                     </div>
                                 );
                             })}
@@ -728,46 +821,6 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                                 <div className="flex items-center justify-center px-1 pt-2">
                                     <span className="text-xs text-slate-400">{historyPage + 1} / {totalPages}</span>
                                 </div>
-                            )}
-                        </>);
-                    })()}
-                </div>
-            </Modal>
-
-            {/* Confirm Set Hide Start Point */}
-            <Modal
-                isOpen={pendingHideMsgId !== null}
-                title="设为隐藏起点？"
-                onClose={() => setPendingHideMsgId(null)}
-                footer={<>
-                    <button onClick={() => setPendingHideMsgId(null)} className="flex-1 py-3 bg-slate-100 text-slate-600 font-bold rounded-2xl">取消</button>
-                    <button onClick={() => { if (pendingHideMsgId !== null) onSetHistoryStart(pendingHideMsgId); setPendingHideMsgId(null); }} className="flex-1 py-3 bg-primary text-white font-bold rounded-2xl">确认</button>
-                </>}
-            >
-                <div className="space-y-3 text-xs text-slate-600 leading-relaxed">
-                    {(() => {
-                        const m = allHistoryMessages.find(x => x.id === pendingHideMsgId);
-                        if (!m) return <p>消息不存在</p>;
-                        return (<>
-                            <p>该条之前的消息将被隐藏，不再发送给 AI（你仍能在聊天里翻看）。</p>
-                            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-                                <div className="font-bold text-slate-600 mb-1">{m.role === 'user' ? '我' : activeCharacter.name} <span className="text-slate-400 font-normal text-[10px] ml-1">{new Date(m.timestamp).toLocaleString()}</span></div>
-                                <div className="text-slate-500 line-clamp-3">{m.content}</div>
-                            </div>
-                            {onJumpToMessageInChat && (
-                                <button
-                                    onClick={() => {
-                                        const id = pendingHideMsgId;
-                                        setPendingHideMsgId(null);
-                                        setModalType('none');
-                                        setHistoryPage(0);
-                                        setHistorySearch('');
-                                        if (id !== null) onJumpToMessageInChat(id);
-                                    }}
-                                    className="w-full py-2 text-xs text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-xl transition-colors"
-                                >
-                                    或：跳转到聊天里查看原文
-                                </button>
                             )}
                         </>);
                     })()}

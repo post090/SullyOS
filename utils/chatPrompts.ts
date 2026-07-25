@@ -956,7 +956,12 @@ ${userProfile.name} 给你反馈时，别当成约束，当成信任——ta 在
         processedExcludeIds?: Set<number>,
     ) => {
         // Filter Logic
-        let effectiveHistory = messages.filter(m => !char.hideBeforeMessageId || m.id >= char.hideBeforeMessageId);
+        // 新版上下文范围由 chatContextRange 先按「自适应/拉杆最大范围」取窗；
+        // 这里只应用用户额外断点。旧角色尚未完成迁移时才回退 hideBeforeMessageId。
+        const userStartMessageId = (char.contextRangePolicyVersion || 0) >= 1
+            ? char.contextUserStartMessageId
+            : char.hideBeforeMessageId;
+        let effectiveHistory = messages.filter(m => !userStartMessageId || m.id >= userStartMessageId);
         // Memory Palace: 过滤已被记忆宫殿处理过的消息（由向量记忆替代，节省 token）
         if (processedExcludeIds && processedExcludeIds.size > 0) {
             effectiveHistory = effectiveHistory.filter(m => !processedExcludeIds.has(m.id));
@@ -1096,7 +1101,13 @@ ${userProfile.name} 给你反馈时，别当成约束，当成信任——ta 在
                     const commentsLine = noteComments.length
                         ? `\n热评: ${noteComments.slice(0, 15).map((c: any) => `${c.author || '匿名'}: ${c.content}`).join(' | ')}`
                         : '';
-                    content = `${timeStr} [${sender}分享了小红书笔记]\n标题: ${note.title || '无标题'}\n作者: ${note.author || '未知'}\n赞: ${note.likes || 0}\n简介: ${note.desc || '无'}${commentsLine}\n${m.role === 'user' ? '(请根据你的性格对这个帖子发表看法)' : ''}`;
+                    const interactions = [
+                        `${note.likes ?? 0}赞`,
+                        note.collects != null ? `${note.collects}收藏` : '',
+                        note.commentCount != null ? `${note.commentCount}评论` : '',
+                        note.shareCount != null ? `${note.shareCount}分享` : '',
+                    ].filter(Boolean).join(' ');
+                    content = `${timeStr} [${sender}分享了小红书笔记]\n标题: ${note.title || '无标题'}\n作者: ${note.author || '未知'}\n互动: ${interactions}\n简介: ${note.desc || '无'}${commentsLine}\n${m.role === 'user' ? '(请根据你的性格对这个帖子发表看法)' : ''}`;
                 }
                 else if ((m.type as string) === 'vr_card') {
                     // vr_card：你自己进入 VR 社交游戏《彼方》时留下的动态。

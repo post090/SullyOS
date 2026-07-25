@@ -26,6 +26,7 @@ import { LUCKIN_PROPOSE_TOOL, autoFixProposalCodesByName as autoFixLuckinProposa
 import { callLuckinTool } from '../utils/luckinMcpClient';
 import { callMcpTool, getMcpUseNativeTools } from '../utils/mcpClient';
 import { buildMcpOpenAITools, buildMcpRejectedToolsFallbackBody, buildMcpTextFallbackBody, extractTextFakedMcpCalls, formatMcpToolResult, sanitizeMcpLeadInText, shouldRetryMcpWithoutTools, stripTextFakedMcpCalls, type FakedMcpCall } from '../utils/mcpToolBridge';
+import { buildToolResultMessage, normalizeToolCallsForCompat } from '../utils/toolCallCompat';
 import { buildChatRequestPayload } from '../utils/chatRequestPayload';
 import {
     isInstantConfigReady,
@@ -44,6 +45,11 @@ import { applyEmotionEvalRaw, extractAssistantText } from '../utils/emotionApply
 import { announceChatGen, CHAT_GEN_EVENTS } from '../utils/chatGenEvents';
 import { shouldRequestAmbient, buildAmbientEvalSection } from '../utils/roomAmbient';
 import { isEmotionEvalSkipped } from '../utils/devDebug';
+import {
+    computeContextRangeSnapshot,
+    getMemoryPalaceHighWaterMarkForContext,
+    loadCharacterContextRange,
+} from '../utils/chatContextRange';
 
 // ─── 情绪评估（副API，fire & forget）───
 
@@ -540,9 +546,11 @@ export const useChatAI = ({
         const charIdAtMount = char.id;
 
         const runEvalForPushedChar = async (): Promise<void> => {
+            // The listener is keyed by character ID, but settings may change without remounting it.
+            const evalChar = charRef.current?.id === charIdAtMount ? charRef.current : char;
             // 双 gate: 跟 line 613 一致 (schedule feature on + emotionConfig enabled).
             // 关掉的话还是要 clear pending, 否则下次 mount 反复尝试.
-            if (!isScheduleFeatureOn(char) || !char.emotionConfig?.enabled) {
+            if (!isScheduleFeatureOn(evalChar) || !evalChar.emotionConfig?.enabled) {
                 try { await ActiveMsgStore.clearPendingEmotionEval(charIdAtMount); } catch { /* ignore */ }
                 return;
             }
@@ -553,14 +561,17 @@ export const useChatAI = ({
                 return;
             }
             // 评估跟随全局流式开关（与 triggerAI 路径同口径；专用情绪 API 自带 stream 时以它为准）
-            const emotionApi = (char.emotionConfig.api?.baseUrl)
-                ? { ...char.emotionConfig.api, stream: (char.emotionConfig.api as any).stream ?? !!(deps.apiConfig.stream ?? false) }
+            const emotionApi = (evalChar.emotionConfig.api?.baseUrl)
+                ? { ...evalChar.emotionConfig.api, stream: (evalChar.emotionConfig.api as any).stream ?? !!(deps.apiConfig.stream ?? false) }
                 : { baseUrl: deps.apiConfig.baseUrl, apiKey: deps.apiConfig.apiKey, model: deps.apiConfig.model, stream: !!(deps.apiConfig.stream ?? false) };
 
             try {
-                // 重新从 DB 拉 history (push msg 此刻已经在 DB 里, activeMsgRuntime 在 dispatch
-                // 事件前已 await saveMessage). limit 200 跟 sendMessage line 543 同等级别.
-                const contextMsgs = await DB.getRecentMessagesByCharId(charIdAtMount, 200);
+                // 重新从 DB 拉与主聊天一致的「自适应/拉杆最大范围 + 用户断点」。
+                const pushedRange = await loadCharacterContextRange(evalChar);
+                const contextMsgs = pushedRange.messages;
+                if (pushedRange.userBreakpointExpired && updateCharacter) {
+                    updateCharacter(charIdAtMount, { contextUserStartMessageId: undefined });
+                }
 
                 // 跟 sendMessage line 553 同一个 helper, 同一份 ctx → emotion eval 看到的 systemPrompt
                 // + cleanedApiMessages 跟 主 API 调用看到的几乎完全一致 (差别仅在 music live snapshot 时序).
@@ -569,13 +580,13 @@ export const useChatAI = ({
                 const luckinMiniSnap = deps.luckinMiniAppRef?.current;
                 const luckinMiniOpen = !!luckinMiniSnap?.open;
                 const payload = await buildChatRequestPayload({
-                    char,
+                    char: evalChar,
                     userProfile: deps.userProfile,
                     groups: deps.groups,
                     emojis: deps.emojis,
                     categories: deps.categories,
                     historyMsgs: contextMsgs,
-                    contextLimit: 200,
+                    contextLimit: Math.max(1, contextMsgs.length),
                     realtimeConfig: deps.realtimeConfig,
                     innerState: deps.evolvedNarrative || undefined,
                     musicSnapshot: {
@@ -588,8 +599,8 @@ export const useChatAI = ({
                         recentTrackChange: deps.music.recentTrackChange,
                     },
                     translationConfig: deps.translationConfig,
-                    htmlMode: { enabled: !!(char as any).htmlModeEnabled, customPrompt: (char as any).htmlModeCustomPrompt },
-                    thinkingChain: { enabled: !!(char as any).showThinkingChain, customPrompt: (char as any).thinkingChainCustomPrompt },
+                    htmlMode: { enabled: !!(evalChar as any).htmlModeEnabled, customPrompt: (evalChar as any).htmlModeCustomPrompt },
+                    thinkingChain: { enabled: !!(evalChar as any).showThinkingChain, customPrompt: (evalChar as any).thinkingChainCustomPrompt },
                     mcdMiniSnap: mcdMiniOpen ? mcdMiniSnap : undefined,
                     luckinMiniSnap: luckinMiniOpen ? luckinMiniSnap : undefined,
                 });
@@ -601,7 +612,7 @@ export const useChatAI = ({
 
                 setEmotionStatus('evaluating');
                 const innerState = await evaluateEmotionBackground(
-                    char, deps.userProfile, payload.systemPrompt, payload.cleanedApiMessages, emotionApi,
+                    evalChar, deps.userProfile, payload.systemPrompt, payload.cleanedApiMessages, emotionApi,
                 );
                 if (innerState) setEvolvedNarrative(innerState);
                 // 成功后清 pending. 失败不清 → 下次 mount drain 重试.
@@ -715,6 +726,10 @@ export const useChatAI = ({
         // 解耦，用户切走 Chat 也能看到生成还活着。finally 里派发 end（两条路径都经过）。
         announceChatGen(CHAT_GEN_EVENTS.replyStart, { charId: char.id, charName: char.name });
 
+        // 保存进入本轮发送前的全局重试通知器；finally 中恢复，避免本轮闭包泄漏。
+        // 必须声明在 try 外，否则 finally 访问会触发 ReferenceError。
+        const prevNotifier = (window as any).__sullyRetryNotifier;
+
         try {
             // Keep the Service Worker alive while we make potentially long AI calls
             // 放 try 内：若抛错，finally 仍会派发 replyEnd 清横幅，避免卡 6 分钟 TTL
@@ -731,20 +746,29 @@ export const useChatAI = ({
                 finally { perfStages[label] = Math.round(performance.now() - t0); }
             };
 
-            // 0.9 历史消息加载: AI 上下文以 DB 最新状态为准.
-            // 刚保存消息后 React state 可能还是旧快照; 每次触发都读最近 contextLimit 条,
-            // 避免自动回复 / 手动触发在时序边界漏掉刚写入的消息或派生卡片。
-            const limit = char.contextLimit || 500;
-            const fullHistoryPromise: Promise<Message[] | null> = char.id
-                ? DB.getRecentMessagesByCharId(char.id, limit).catch(e => {
-                    console.error('Failed to load full history from DB, using React state:', e);
-                    return null;
-                })
-                : Promise.resolve(null);
-            const fullHistory = await stageT('dbHistory', fullHistoryPromise);
+            // 0.9 历史消息加载：最大范围与记忆宫殿水位线彻底解耦。
+            // adaptive 从 HWM 之后开始；manual 忽略 HWM 读取最近 N 条完整原文；
+            // 用户断点只可在最大范围内继续收窄，越界后自动失效。
+            const contextRange = char.id
+                ? await stageT('dbHistory', loadCharacterContextRange(char).catch(e => {
+                    console.error('Failed to load context range from DB, using React state:', e);
+                    // 即便 DB 读取失败，降级路径也必须继续遵守水位线/拉杆硬上限，不能把 React
+                    // 缓存里的更早消息意外送回模型。
+                    return computeContextRangeSnapshot(
+                        currentMsgs,
+                        char,
+                        getMemoryPalaceHighWaterMarkForContext(char.id),
+                    );
+                }))
+                : null;
+            if (contextRange?.userBreakpointExpired && updateCharacter) {
+                updateCharacter(char.id, { contextUserStartMessageId: undefined });
+            }
+            const fullHistory = contextRange?.messages || null;
             const contextMsgs = fullHistory || currentMsgs;
+            const limit = Math.max(1, fullHistory ? fullHistory.length : (char.contextLimit || 500));
             if (fullHistory) {
-                console.log(`📊 [Context] Loaded ${fullHistory.length} msgs from DB (React state had ${currentMsgs.length}, contextLimit=${limit})`);
+                console.log(`📊 [Context] Loaded ${fullHistory.length} msgs from DB (React state had ${currentMsgs.length}, mode=${contextRange?.mode}, maxStart=${contextRange?.maxRangeStartMessageId ?? 'none'}, effectiveStart=${contextRange?.effectiveStartMessageId ?? 'none'})`);
             }
 
             // 1. 构造完整 chat 请求载荷（memoryPalace 召回 + system prompt + 双语 / HTML / 思考链 / MCD + 历史）
@@ -1080,7 +1104,6 @@ export const useChatAI = ({
             // patchedFetch 内部的 400 自愈重发 + stream 升级回退重发 + 原生栈 fallback
             // 都通过 window.__sullyRetryNotifier 广播（OSContext 里 patchedFetch 调用）。
             // 这里注册本轮发送的 notifier，复用 handleRetry 的"只 toast 一次"节流逻辑。
-            const prevNotifier = (window as any).__sullyRetryNotifier;
             (window as any).__sullyRetryNotifier = (msg: string) => {
                 if (retryToastShown) return;
                 retryToastShown = true;
@@ -1367,7 +1390,10 @@ export const useChatAI = ({
                 let loopMessages = [...fullMessages];
                 const loc = luckinChatRef?.current;
                 for (let it = 0; it < MAX_LOOPS; it++) {
-                    const toolCalls = data.choices?.[0]?.message?.tool_calls;
+                    const toolCalls = normalizeToolCallsForCompat(
+                        data.choices?.[0]?.message?.tool_calls,
+                        `private_${it}`,
+                    );
                     if (!toolCalls || !toolCalls.length) break;
                     if (mcpToolResolve && toolCalls.some((tc: any) => mcpToolResolve?.has(tc.function?.name || ''))) {
                         await persistMcpLeadIn(data.choices?.[0]?.message?.content || '');
@@ -1397,12 +1423,12 @@ export const useChatAI = ({
                             const mcpMsg = mcpResult.success
                                 ? `工具 ${fname} 成功。结果: ${formatMcpToolResult(mcpResult.data)}`
                                 : `工具 ${fname} 失败: ${mcpResult.error}`;
-                            loopMessages.push({ role: 'tool', tool_call_id: tc.id, content: mcpMsg } as any);
+                            loopMessages.push(buildToolResultMessage(tc, mcpMsg) as any);
                             continue;
                         }
                         // 只开了 MCP 没开瑞幸时, 幻觉出的未知工具名直接回错误让模型自我纠正
                         if (!payload.flags.luckinChatActive) {
-                            loopMessages.push({ role: 'tool', tool_call_id: tc.id, content: `未知工具 ${fname}, 只能使用系统提供的工具。` } as any);
+                            loopMessages.push(buildToolResultMessage(tc, `未知工具 ${fname}, 只能使用系统提供的工具。`) as any);
                             continue;
                         }
                         // 经纬度兜底: 角色漏传就用激活时抓到的定位补上
@@ -1412,11 +1438,10 @@ export const useChatAI = ({
                         }
                         // 拦截 createOrder: 不真下单, 引导走结账卡
                         if (/create[-_]?order/i.test(fname)) {
-                            loopMessages.push({
-                                role: 'tool',
-                                tool_call_id: tc.id,
-                                content: '下单与支付由用户在结账卡上完成, 你不要调 createOrder。若还没出结账卡, 请先调 previewOrder 把订单算价展示出来, 然后用角色语气让用户去卡片上确认支付。',
-                            } as any);
+                            loopMessages.push(buildToolResultMessage(
+                                tc,
+                                '下单与支付由用户在结账卡上完成, 你不要调 createOrder。若还没出结账卡, 请先调 previewOrder 把订单算价展示出来, 然后用角色语气让用户去卡片上确认支付。',
+                            ) as any);
                             continue;
                         }
                         let result: any;
@@ -1446,7 +1471,7 @@ export const useChatAI = ({
                         const toolMsg = result.success
                             ? `工具 ${fname} 成功。结果(截断): ${(() => { try { return JSON.stringify(result.data).slice(0, 1500); } catch { return String(result.data).slice(0, 800); } })()}`
                             : `工具 ${fname} 失败: ${result.error}`;
-                        loopMessages.push({ role: 'tool', tool_call_id: tc.id, content: toolMsg } as any);
+                        loopMessages.push(buildToolResultMessage(tc, toolMsg) as any);
                     }
                     // 继续让角色多步推进 (保留 tools, 允许 query→search→preview 连续走)
                     if (mcpToolResolve) setSearchStatus('正在整理 MCP 工具结果...');

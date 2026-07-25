@@ -202,3 +202,29 @@ describe('记忆宫殿导出 / 导入', () => {
         await expect(importMemoryPalace({ type: 'nope' } as any, 'whatever')).rejects.toThrow();
     });
 });
+
+describe('窗台期盼人工纠错', () => {
+    it('可修改正文并删除，不影响期盼的生命周期字段', async () => {
+        const ant: Anticipation = {
+            id: 'ant_crud_1',
+            charId: 'char_ant_crud',
+            content: '原来的期盼',
+            status: 'anchor',
+            createdAt: 1000,
+            anchoredAt: 2000,
+            resolvedAt: null,
+        };
+        await AnticipationDB.save(ant);
+        await AnticipationDB.save({ ...ant, content: '修改后的期盼' });
+
+        expect(await AnticipationDB.getById(ant.id)).toMatchObject({
+            content: '修改后的期盼',
+            status: 'anchor',
+            createdAt: 1000,
+            anchoredAt: 2000,
+        });
+
+        await AnticipationDB.delete(ant.id);
+        expect(await AnticipationDB.getById(ant.id)).toBeUndefined();
+    });
+});

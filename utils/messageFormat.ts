@@ -25,6 +25,35 @@ export function stickerNameFromUrl(emojis: Emoji[], url: string): string {
 }
 
 /**
+ * 语音消息的音频资源与转写文本可能分别落在 content / metadata 中。
+ * 记忆链路只取可理解的文字，绝不把 blob、data URI 或纯音频 URL 当成上下文。
+ */
+export function getVoiceTranscript(msg: Message): string {
+    const meta = msg.metadata || {};
+    const candidates = [
+        meta.transcript,
+        meta.originalText,
+        meta.spokenText,
+        meta.text,
+        msg.content,
+    ];
+    for (const candidate of candidates) {
+        if (typeof candidate !== 'string') continue;
+        const trimmed = candidate.trim();
+        if (!trimmed) continue;
+        if (/^(?:blob:|data:audio\/)/i.test(trimmed)) continue;
+        if (/^https?:\/\/\S+$/i.test(trimmed)) continue;
+        const cleaned = trimmed
+            .replace(/<\/?(?:语音|語音|字幕)[^>]*>/g, ' ')
+            .replace(/%%BILINGUAL%%/gi, '\n')
+            .replace(/[ \t]{2,}/g, ' ')
+            .trim();
+        if (cleaned) return cleaned;
+    }
+    return '';
+}
+
+/**
  * 把「窥视的是哪个具体时间」组成一句人话：日期相对词 + 时段词 + 时刻。
  * 例：今天上午08:00 / 昨天晚上21:30 / 6月25日下午14:00。
  * 用于小剧场卡片注入——晚上看上午的内容时，不能含糊说"刚刚/刚才"，要落到具体时间。
@@ -70,10 +99,13 @@ export function normalizeMessageContent(
 ): string {
     const type = msg.type as string;
 
-    // 纯视觉/音频类：给个占位，别让 URL / base64 污染 LLM 上下文
+    // 纯视觉类给占位；语音优先使用配套转写，避免把音频资源地址送进上下文。
     if (type === 'image') return '[图片]';
     if (type === 'emoji') return '[表情包]';
-    if (type === 'voice') return '[语音]';
+    if (type === 'voice') {
+        const transcript = getVoiceTranscript(msg);
+        return transcript ? `[语音转写] ${transcript}` : '[语音]';
+    }
 
     // 系统交互事件
     if (type === 'interaction') return `[系统: ${userName}戳了${charName}一下]`;
@@ -331,12 +363,18 @@ export function formatMessageWithTime(
  * 判断一条消息是否"对 palace / archive 有语义价值"。
  *
  * pipeline 以前的过滤是 `type === 'text'`，这会漏掉 score_card / system /
- * transfer / interaction 等有内容的事件；纯二进制类型（image/emoji/voice）
- * 通过 normalize 会变成短占位符，LLM 看到也没帮助，直接过滤掉。
+ * transfer / interaction 等有内容的事件；image/emoji 这类纯视觉资源直接过滤。
+ * voice 只要带转写文字就属于语义上下文，应该与文字和卡片一起参与统计与总结。
  */
 export function isMessageSemanticallyRelevant(msg: Message): boolean {
     const type = msg.type as string;
-    if (type === 'image' || type === 'emoji' || type === 'voice') return false;
+    if (type === 'image' || type === 'emoji') return false;
+    if (type === 'voice') return !!getVoiceTranscript(msg);
+    // 卡片是其它功能汇入聊天的结构化上下文；即使 content 为空，只要专用格式化器
+    // 能从 metadata 生成可读摘要，也必须参与缓冲区计数和记忆总结。
+    if (type?.endsWith('_card')) {
+        return !!normalizeMessageContent(msg, '角色', '用户').trim();
+    }
     // 有内容或有结构化 metadata 才算
     return !!(msg.content?.trim() || msg.metadata?.scoreCard || msg.metadata?.amount || msg.metadata?.song || msg.metadata?.trpg || msg.metadata?.webpage);
 }

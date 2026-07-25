@@ -85,7 +85,7 @@ export async function expandAndFormat(
     const pinnedNodes = allCharNodes.filter(n => n.pinnedUntil && n.pinnedUntil > now && !n.archived);
     const pinnedIds = new Set(pinnedNodes.map(n => n.id));
 
-    if (results.length === 0 && anticipations.length === 0 && pinnedNodes.length === 0) return '';
+    if (results.length === 0 && anticipations.length === 0 && pinnedNodes.length === 0) return { text: '', items: [] };
 
     // 1. 按 eventBoxId 去重分组（同一 box 多次命中合并；保留命中里最高分作 box 分）
     //    boxItem: { boxId, topScore, hitNodeIds[] }

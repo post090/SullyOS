@@ -145,6 +145,34 @@ describe('v2 真实链路：分片 → 组装 → importFullData', () => {
         expect(profile.perCharAvatars).toEqual(userProfile.perCharAvatars);
     });
 
+    it('AI 原文范围设置随角色备份完整往返', async () => {
+        const char = {
+            id: 'ctx1',
+            name: '上下文角色',
+            avatar: '',
+            description: '',
+            systemPrompt: '',
+            memories: [],
+            contextRangePolicyVersion: 1,
+            contextRangeMode: 'manual',
+            contextLimit: 1200,
+            contextUserStartMessageId: 345,
+        };
+        const zip = new FakeZip();
+        const manifest = await writeV2Backup(zip, { characters: [char] } as any, {});
+        const data = await assembleV2Backup(zip, manifest);
+
+        await DB.importFullData(data as any);
+
+        const restored = (await DB.getRawStoreData('characters')).find((c: any) => c.id === 'ctx1');
+        expect(restored).toMatchObject({
+            contextRangePolicyVersion: 1,
+            contextRangeMode: 'manual',
+            contextLimit: 1200,
+            contextUserStartMessageId: 345,
+        });
+    });
+
     it('formatVersion 3 在组装阶段 abort，DB 未发生任何写（test 12）', async () => {
         await seedStore('gallery', [{ id: 'keep', url: 'x' }]);
         const zip = new FakeZip();

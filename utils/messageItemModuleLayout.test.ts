@@ -91,4 +91,22 @@ describe('MessageItem module layout', () => {
         expect(markup).toContain('alt="avatar"');
         expect(markup).toContain('https://example.com/char.png');
     });
+
+    it('心象卡片提供长按复制提示与独立交互入口', () => {
+        const markup = renderMessage({
+            id: 4,
+            charId: 'char-1',
+            role: 'assistant',
+            type: 'text',
+            content: '回复正文',
+            timestamp: 4,
+            metadata: { thinkingChain: '这是可以一键复制的完整心象。' },
+        });
+
+        expect(markup).toContain('aria-label="心象：点击展开，长按复制全文"');
+        expect(markup).toContain('title="长按复制心象全文"');
+        expect(markup).toContain('这是可以一键复制的完整心象');
+        expect(markup).toContain('user-select:text');
+        expect(markup).toContain('-webkit-touch-callout:default');
+    });
 });

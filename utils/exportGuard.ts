@@ -41,7 +41,7 @@ const SECRET_VALUE_PATTERNS: { re: RegExp; label: string }[] = [
 ];
 
 /** 这些字段名即便值很长也别误报（正文 / 描述 / 图片 dataURL 等） */
-const VALUE_WHITELIST_KEYS = /^(id|systemPrompt|description|worldview|content|summary|memoryText|impression|avatar|src|prompt|notes|bio|title|label|text|css|chromeCustomCss|lyrics)$/i;
+const VALUE_WHITELIST_KEYS = /^(id|voiceId|fishReferenceId|systemPrompt|description|worldview|content|summary|memoryText|impression|avatar|src|prompt|notes|bio|title|label|text|css|chromeCustomCss|lyrics)$/i;
 
 function mask(v: unknown): string {
   const s = typeof v === 'string' ? v : String(v);

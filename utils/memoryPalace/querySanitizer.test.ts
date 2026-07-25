@@ -32,15 +32,30 @@ describe('sanitizeQuerySourceMessages', () => {
         expect(out[0].content).toBe('你看这张图');
     });
 
-    it('表情包 / 语音消息整条丢弃', () => {
+    it('表情包 / 无转写的纯音频资源整条丢弃', () => {
         const out = sanitizeQuerySourceMessages([
             msg({ type: 'emoji', content: 'https://img.host/sticker.png' }),
-            // 'voice' 不在 MessageType 联合里，但运行时存在（messageFormat 同款处理）
-            msg({ type: 'voice' as any, content: 'blob:xxx' }),
+            msg({ type: 'voice', content: 'blob:xxx' }),
             msg({ content: '晚安' }),
         ]);
         expect(out).toHaveLength(1);
         expect(out[0].content).toBe('晚安');
+    });
+
+    it('有配套文字的语音按转写内容参与记忆检索', () => {
+        const out = sanitizeQuerySourceMessages([
+            msg({ type: 'voice', content: '今天下班路上看见了一只很像你的猫' }),
+            msg({
+                type: 'voice',
+                content: 'blob:voice-audio',
+                metadata: { transcript: '别忘了明天一起去看电影' },
+            }),
+        ]);
+
+        expect(out).toHaveLength(2);
+        expect(out[0].content).toContain('今天下班路上看见了一只很像你的猫');
+        expect(out[1].content).toContain('别忘了明天一起去看电影');
+        expect(out.every(item => item.content.startsWith('[语音转写]'))).toBe(true);
     });
 
     it('文本里粘贴的 data URI 被剥掉，其余文字保留', () => {
@@ -69,6 +84,24 @@ describe('sanitizeQuerySourceMessages', () => {
         expect(out).toHaveLength(1);
         expect(out[0].content).toContain('海底');
         expect(out[0].content).toContain('阿汐');
+    });
+
+    it('正文为空但 metadata 有内容的卡片仍参与统计与记忆上下文', () => {
+        const xhs = msg({
+            type: 'xhs_card',
+            content: '',
+            metadata: {
+                xhsNote: {
+                    title: '今天遇到一只很亲人的小猫',
+                    desc: '它一路跟着我走到了地铁口。',
+                    author: '路边观察员',
+                },
+            },
+        });
+        const out = sanitizeQuerySourceMessages([xhs], '阿澄', '小鱼');
+        expect(out).toHaveLength(1);
+        expect(out[0].content).toContain('今天遇到一只很亲人的小猫');
+        expect(out[0].content).toContain('它一路跟着我走到了地铁口');
     });
 
     it('空消息丢弃；没有 type 字段的合成消息按文本处理', () => {

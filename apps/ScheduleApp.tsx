@@ -410,7 +410,6 @@ const ScheduleApp: React.FC = () => {
         const updated: TaskV2 = { ...task, ...patch };
         await DB.saveTaskV2(updated);
         setTasks(prev => prev.map(t => t.id === taskId ? updated : t));
-        setDetailTask(updated);
         addToast('契约已更新', 'success');
         syncTaskReminders().catch(err => console.warn('[ScheduleApp] syncTaskReminders after update failed:', err));
     };

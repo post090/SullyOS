@@ -73,6 +73,7 @@ describe('isVideoShareUrl', () => {
         expect(isVideoShareUrl('https://example.com/article')).toBe(false);
         expect(isVideoShareUrl('https://www.xiaohongshu.com/explore/abc')).toBe(false); // XHS 走专门卡片路径
         expect(isVideoShareUrl('https://xhslink.com/abc')).toBe(false);
+        expect(isVideoShareUrl('http://xhslink.cn/o/abc')).toBe(false);
         expect(isVideoShareUrl('not a url')).toBe(false);
         expect(isVideoShareUrl('')).toBe(false);
         // 域名后缀不能被前缀仿冒

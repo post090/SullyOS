@@ -74,6 +74,15 @@ describe('safeFetchJson streaming', () => {
         expect(data.choices[0].message.content).toBe('整包回复');
     });
 
+    it('代理把整包 JSON 错标为 event-stream 时仍按 JSON 解析', async () => {
+        const json = { choices: [{ message: { role: 'assistant', content: '错标但有效' }, finish_reason: 'stop' }] };
+        vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(json), {
+            status: 200, headers: { 'Content-Type': 'text/event-stream' },
+        })));
+        const data = await safeFetchJson('https://api.test/v1/chat/completions', { method: 'POST', body: '{}' }, 0, 0);
+        expect(data.choices[0].message.content).toBe('错标但有效');
+    });
+
     it('不传 streamHooks 时对 SSE 响应仍走整包拼接（旧行为不变）', async () => {
         const events = [
             'data: {"choices":[{"delta":{"content":"a"}}]}\n\n',
@@ -83,6 +92,44 @@ describe('safeFetchJson streaming', () => {
         vi.stubGlobal('fetch', vi.fn(async () => sseResponse(events)));
         const data = await safeFetchJson('https://api.test/v1/chat/completions', { method: 'POST', body: '{}' }, 0, 0);
         expect(data.choices[0].message.content).toBe('ab');
+    });
+
+    it('不传 streamHooks 时忽略 OpenRouter 心跳并继续拼接 data', async () => {
+        const events = [
+            ': OPENROUTER PROCESSING\n\n',
+            ': OPENROUTER PROCESSING\n\n',
+            'data: {"choices":[{"delta":{"content":"印象"}}]}\n\n',
+            'data: {"choices":[{"delta":{"content":"完成"}}]}\n\n',
+            'data: [DONE]\n',
+        ];
+        vi.stubGlobal('fetch', vi.fn(async () => sseResponse(events)));
+        const data = await safeFetchJson('https://api.test/v1/chat/completions', { method: 'POST', body: '{}' }, 0, 0);
+        expect(data.choices[0].message.content).toBe('印象完成');
+    });
+
+    it('真流式读取时首块只有 OpenRouter 心跳也不会误判为普通文本', async () => {
+        const events = [
+            ': OPENROUTER PROCESSING\n\n',
+            'data: {"choices":[{"delta":{"content":"正常"}}]}\n\n',
+            'data: [DONE]\n',
+        ];
+        vi.stubGlobal('fetch', vi.fn(async () => sseResponse(events)));
+        const deltas: string[] = [];
+        const data = await safeFetchJson('https://api.test/v1/chat/completions', { method: 'POST', body: '{}' }, 0, 0, undefined, {
+            onDelta: delta => { deltas.push(delta); },
+        });
+        expect(deltas).toEqual(['正常']);
+        expect(data.choices[0].message.content).toBe('正常');
+    });
+
+    it('只有心跳就结束时明确报流式无有效数据，不伪造成功结果', async () => {
+        vi.stubGlobal('fetch', vi.fn(async () => sseResponse([
+            ': OPENROUTER PROCESSING\n\n',
+            ': OPENROUTER PROCESSING\n\n',
+        ])));
+        await expect(
+            safeFetchJson('https://api.test/v1/chat/completions', { method: 'POST', body: '{}' }, 0, 0),
+        ).rejects.toThrow('API流式响应未返回有效数据');
     });
 });
 

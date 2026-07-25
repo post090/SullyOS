@@ -46,6 +46,21 @@ describe('assembleUpgradedResponse', () => {
         expect(data.usage.total_tokens).toBe(12);
     });
 
+    it('OpenRouter 心跳先于 data 时仍拼回标准 JSON', async () => {
+        const sse = [
+            ': OPENROUTER PROCESSING',
+            '',
+            'data: {"id":"c2","choices":[{"delta":{"content":"心跳后"}}]}',
+            'data: {"choices":[{"delta":{"content":"正常"}}]}',
+            'data: [DONE]',
+            '',
+        ].join('\n');
+        const upstream = new Response(sse, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+        const out = await assembleUpgradedResponse(upstream);
+        const data = await out.json();
+        expect(data.choices[0].message.content).toBe('心跳后正常');
+    });
+
     it('代理无视 stream 返回整包 JSON → 原文透传（重新包装）', async () => {
         const json = JSON.stringify({ choices: [{ message: { content: '整包' } }] });
         const upstream = new Response(json, { status: 200, headers: { 'Content-Type': 'application/json' } });

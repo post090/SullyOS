@@ -89,13 +89,112 @@ export function detectFirstUrl(text: string): string | null {
   return m[0].replace(/[.,;:!?'")\]]+$/, '');
 }
 
-/** XHS 链接已有专门的 MCP 卡片路径，网页抓取要避开它，免得抢同一条消息。 */
-export function isXhsUrl(url: string): boolean {
-  return /xiaohongshu\.com|xhslink\.com/i.test(url);
+const XHS_NOTE_PATH_RE = /^\/(?:discovery\/item|explore|item)\/([a-f0-9]{24})(?:[/?#]|$)/i;
+const XHS_SHORT_HOSTS = ['xhslink.com', 'xhslink.cn'];
+
+function isXhsHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/\.$/, '');
+  return ['xiaohongshu.com', 'rednote.com', ...XHS_SHORT_HOSTS]
+    .some(domain => host === domain || host.endsWith(`.${domain}`));
 }
 
 /**
- * 经 sfworker 展开短链（xhslink.com 等），返回跟随 HTTP 重定向后的最终 URL。
+ * 从分享文案中提取小红书短链。
+ * 桌面/旧版常见 xhslink.com，手机版新版会生成 xhslink.cn。
+ */
+export function detectXhsShortUrl(text: string): string | null {
+  if (!text) return null;
+
+  const candidates: string[] = [...(text.match(/https?:\/\/[^\s，。！？；、"'《》()（）【】]+/ig) || [])];
+  const naked = text.match(/(?:^|[\s，。！？；、"'《》()（）【】])((?:www\.)?xhslink\.(?:com|cn)\/[A-Za-z0-9/_-]+)/i)?.[1];
+  if (naked) candidates.push(`https://${naked}`);
+
+  for (const candidate of candidates) {
+    try {
+      const cleaned = candidate.replace(/[.,;:!?'")\]]+$/, '');
+      const parsed = new URL(cleaned);
+      const host = parsed.hostname.toLowerCase().replace(/\.$/, '');
+      if (XHS_SHORT_HOSTS.some(domain => host === domain || host.endsWith(`.${domain}`))) {
+        return cleaned;
+      }
+    } catch {
+      // 忽略坏链接，继续检查下一个 URL。
+    }
+  }
+  return null;
+}
+
+function cleanXhsShareTitle(raw: string): string {
+  return raw
+    .replace(/\s*[|｜]\s*(?:小红书|REDnote).*$/i, '')
+    .replace(/\s*(?:\.{2,}|…+|。{2,})\s*$/u, '')
+    .replace(/^[\s“”"'「」『』《》]+|[\s“”"'「」『』《》]+$/g, '')
+    .trim();
+}
+
+/**
+ * 从小红书分享文案中提取卡片标题。
+ *
+ * 桌面旧版常见「【标题 | 小红书】」，手机新版则是
+ * 「标题 ... http://xhslink.cn/... 打开【小红书】即可查看」。
+ * 后一种不能直接取第一个【】块，否则会把应用名“小红书”误当标题。
+ */
+export function extractXhsShareTitle(text: string): string {
+  if (!text) return '';
+
+  const bracketed = [...text.matchAll(/【(.+?)】/g)]
+    .map(match => cleanXhsShareTitle(match[1] || ''))
+    .find(candidate => candidate && !/^(?:小红书|REDnote)$/i.test(candidate));
+  if (bracketed) return bracketed;
+
+  const urls = text.match(/https?:\/\/[^\s，。！？；、'"」』）】]+/ig) || [];
+  const xhsUrl = urls.find(candidate => isXhsUrl(candidate.replace(/[.,;:!?'"）)\]】]+$/, '')));
+  if (!xhsUrl) return '';
+
+  const prefix = cleanXhsShareTitle(text.slice(0, text.indexOf(xhsUrl)));
+  return /^(?:小红书|REDnote)$/i.test(prefix) ? '' : prefix;
+}
+
+/** XHS 链接已有专门的 MCP 卡片路径，网页抓取要避开它，免得抢同一条消息。 */
+export function isXhsUrl(url: string): boolean {
+  try {
+    const parsed = new URL(/^https?:\/\//i.test(url) ? url : `https://${url}`);
+    return isXhsHostname(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 从完整分享文案或单个链接中提取小红书笔记 ID。
+ * 同时支持国内域名 xiaohongshu.com 和新版国际域名 rednote.com；
+ * xhslink.com / xhslink.cn 短链没有 ID，需先 expandShortUrl 后再调用本函数。
+ */
+export function extractXhsNoteId(text: string): string | null {
+  if (!text) return null;
+
+  const candidates: string[] = [...(text.match(/https?:\/\/[^\s，。！？；、"'《》()（）【】]+/ig) || [])];
+  const naked = text.match(/(?:^|[\s，。！？；、"'《》()（）【】])((?:www\.)?(?:xiaohongshu\.com|rednote\.com)\/[^\s，。！？；、"'《》()（）【】]+)/i)?.[1];
+  if (naked) candidates.push(`https://${naked}`);
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = new URL(candidate.replace(/[.,;:!?'")\]]+$/, ''));
+      const host = parsed.hostname.toLowerCase().replace(/\.$/, '');
+      const isNoteHost = ['xiaohongshu.com', 'rednote.com']
+        .some(domain => host === domain || host.endsWith(`.${domain}`));
+      if (!isNoteHost) continue;
+      const noteId = parsed.pathname.match(XHS_NOTE_PATH_RE)?.[1];
+      if (noteId) return noteId;
+    } catch {
+      // 忽略文案里的坏链接，继续检查下一个 URL。
+    }
+  }
+  return null;
+}
+
+/**
+ * 经 sfworker 展开短链（xhslink.com / xhslink.cn 等），返回跟随 HTTP 重定向后的最终 URL。
  * 小红书短链不含 note id / xsec_token，展开后才拿得到。
  */
 export async function expandShortUrl(url: string): Promise<string> {

@@ -19,7 +19,7 @@
  * 一次（见 OSContext 集成点），行为退回旧版。
  */
 
-import { parseSseToCompletion } from './safeApi';
+import { isSseResponseText, parseSseToCompletion } from './safeApi';
 
 const API_CONFIG_KEY = 'os_api_config';
 
@@ -59,7 +59,7 @@ export function upgradeChatBodyToStream(bodyStr: string): string | null {
  */
 export async function assembleUpgradedResponse(response: Response): Promise<Response> {
     const text = await response.text();
-    if (text.trimStart().startsWith('data:')) {
+    if (isSseResponseText(text, response.headers.get('content-type'))) {
         const assembled = parseSseToCompletion(text);
         if (assembled) {
             return new Response(JSON.stringify(assembled), {

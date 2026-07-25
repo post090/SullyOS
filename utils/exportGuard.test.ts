@@ -27,6 +27,23 @@ describe('scanPlaintextSecrets', () => {
     expect(hits.length).toBe(0);
   });
 
+  it('不把语音模型 ID 误报成明文密钥', () => {
+    const hits = scanPlaintextSecrets({
+      voiceProfile: {
+        voiceId: 'speech-02-turbo-240501',
+        fishReferenceId: '35230ec20d9bebb2215a50a5e53cf112',
+      },
+    });
+    expect(hits).toEqual([]);
+  });
+
+  it('仍会检出未知字段里的 32 位长密钥状字符串', () => {
+    const hits = scanPlaintextSecrets({
+      opaqueValue: '35230ec20d9bebb2215a50a5e53cf112',
+    });
+    expect(hits.some(h => h.path === 'opaqueValue')).toBe(true);
+  });
+
   it('干净对象返回空', () => {
     expect(scanPlaintextSecrets({ name: 'x', worldview: 'w' })).toEqual([]);
   });

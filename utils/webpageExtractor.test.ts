@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { detectFirstUrl, isXhsUrl, parseWebpageHtml, extractWebpageContent } from './webpageExtractor';
+import { detectFirstUrl, detectXhsShortUrl, extractXhsShareTitle, isXhsUrl, extractXhsNoteId, parseWebpageHtml, extractWebpageContent } from './webpageExtractor';
 
 describe('detectFirstUrl', () => {
   it('从一句话里揪出 http(s) 链接', () => {
@@ -26,7 +26,70 @@ describe('isXhsUrl', () => {
   it('识别小红书域名（已有专门 MCP 路径，网页抓取要避开）', () => {
     expect(isXhsUrl('https://www.xiaohongshu.com/explore/abc')).toBe(true);
     expect(isXhsUrl('https://xhslink.com/xxx')).toBe(true);
+    expect(isXhsUrl('http://xhslink.cn/o/3hJ4anvedNl')).toBe(true);
+    expect(isXhsUrl('https://www.rednote.com/explore/abc')).toBe(true);
     expect(isXhsUrl('https://example.com')).toBe(false);
+    expect(isXhsUrl('https://rednote.com.example.com/explore/abc')).toBe(false);
+    expect(isXhsUrl('https://fake-rednote.com/explore/abc')).toBe(false);
+  });
+});
+
+describe('detectXhsShortUrl', () => {
+  it('识别手机版 xhslink.cn 完整分享文案', () => {
+    const text = '办公室的领导看着不苟言笑 http://xhslink.cn/o/3hJ4anvedNl 存下链接，去【小红书】阅读全文~';
+    expect(detectXhsShortUrl(text)).toBe('http://xhslink.cn/o/3hJ4anvedNl');
+  });
+
+  it('继续兼容 xhslink.com 和不带协议的短链', () => {
+    expect(detectXhsShortUrl('https://xhslink.com/a/AbC_123-xy')).toBe('https://xhslink.com/a/AbC_123-xy');
+    expect(detectXhsShortUrl('看看 xhslink.cn/o/AbC123')).toBe('https://xhslink.cn/o/AbC123');
+  });
+
+  it('不接受相似恶意域名', () => {
+    expect(detectXhsShortUrl('https://xhslink.cn.example.com/o/AbC123')).toBeNull();
+    expect(detectXhsShortUrl('https://fake-xhslink.cn/o/AbC123')).toBeNull();
+  });
+});
+
+describe('extractXhsShareTitle', () => {
+  it('从新版手机分享文案的短链前提取标题，不把【小红书】当标题', () => {
+    const text = '人机恋教主~ a社是不是该给你和你的克颁发结婚证嘞？ ... http://xhslink.cn/o/3udN9HGr5iT 把文本复制下来，打开【小红书】即可查看。';
+    expect(extractXhsShareTitle(text))
+      .toBe('人机恋教主~ a社是不是该给你和你的克颁发结婚证嘞？');
+  });
+
+  it('继续支持旧版【标题 | 小红书】格式', () => {
+    const text = '【今天也要好好吃饭 | 小红书】 https://xhslink.com/a/AbC123';
+    expect(extractXhsShareTitle(text)).toBe('今天也要好好吃饭');
+  });
+
+  it('只有应用名而没有标题时返回空，允许接口标题兜底', () => {
+    const text = 'http://xhslink.cn/o/AbC123 打开【小红书】即可查看';
+    expect(extractXhsShareTitle(text)).toBe('');
+  });
+});
+
+describe('extractXhsNoteId', () => {
+  const NOTE_ID = '6858ccaa0000000013013c94';
+
+  it('从国内和新版 RedNote 完整链接中提取笔记 ID', () => {
+    expect(extractXhsNoteId(`看看这个 https://www.xiaohongshu.com/explore/${NOTE_ID}?xsec_token=abc`))
+      .toBe(NOTE_ID);
+    expect(extractXhsNoteId(`分享给你 https://www.rednote.com/explore/${NOTE_ID}?xsec_token=abc`))
+      .toBe(NOTE_ID);
+    expect(extractXhsNoteId(`www.rednote.com/discovery/item/${NOTE_ID}`))
+      .toBe(NOTE_ID);
+  });
+
+  it('支持短链展开后落到 rednote.com 的最终链接', () => {
+    expect(extractXhsNoteId(`https://rednote.com/item/${NOTE_ID}?xsec_source=app_share`))
+      .toBe(NOTE_ID);
+  });
+
+  it('不把相似恶意域名或非笔记页面误判成小红书笔记', () => {
+    expect(extractXhsNoteId(`https://rednote.com.example.com/explore/${NOTE_ID}`)).toBeNull();
+    expect(extractXhsNoteId(`https://fake-rednote.com/explore/${NOTE_ID}`)).toBeNull();
+    expect(extractXhsNoteId('https://www.rednote.com/explore')).toBeNull();
   });
 });
 

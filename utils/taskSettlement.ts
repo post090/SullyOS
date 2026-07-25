@@ -312,20 +312,15 @@ export async function markTaskDone(
 
     // 2. 算连胜 + 选场景 + 调 LLM
     let reaction = '';
-    let scene: TaskPromptContext['scene'];
+    const newStreak = wasOneshot ? 0 : computeCurrentStreak(working, now);
+    const scene: TaskPromptContext['scene'] = wasOneshot ? 'oneshot_complete' : pickSceneForComplete(newStreak);
     if (supervisor) {
-        if (wasOneshot) {
-            scene = 'oneshot_complete';
-        } else {
-            const newStreak = computeCurrentStreak(working, now);
-            scene = pickSceneForComplete(newStreak);
-        }
         const ctx: TaskPromptContext = {
             userName: user.name,
             task,
             supervisorName: supervisor.name,
             scene,
-            streak: wasOneshot ? 0 : computeCurrentStreak(working, now),
+            streak: newStreak,
         };
         reaction = await generateSupervisorReaction(supervisor, user, apiConfig, ctx);
     }

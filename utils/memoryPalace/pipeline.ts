@@ -1153,7 +1153,7 @@ const PROCESS_RATIO = 0.85;
  * 计算当前"真正可被 pipeline 处理"的缓冲区消息数。
  *
  * 与 processNewMessages 的口径完全一致：
- *   - 只数语义相关消息（排除纯图片/语音/表情）
+ *   - 只数语义相关消息（排除纯图片/表情和无转写的纯音频；保留有文字的语音与卡片）
  *   - 排除最后 HOT_ZONE_SIZE 条（热区永远不会被处理）
  *   - 只数 id > 高水位标记的部分
  *
@@ -1551,8 +1551,8 @@ export async function processNewMessages(
 
     try {
         // 1. 加载全部消息（含已处理的），计算热区和缓冲区
-        //    过滤：保留任何有语义的消息类型（text / score_card / system / transfer / interaction），
-        //    只排除纯视觉/音频类（image / emoji / voice）—— 后者经 normalize 变短占位，对 LLM 无增益
+        //    过滤：保留任何有语义的消息类型（文字、带转写的语音、卡片、系统事件等），
+        //    只排除纯视觉资源和无转写的纯音频，避免 URL / base64 污染 LLM。
         const allMessages = await DB.getMessagesByCharId(charId, true);
         const textMessages = allMessages
             .filter(m => isMessageSemanticallyRelevant(m))

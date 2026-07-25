@@ -16,7 +16,13 @@
 
 import { CharacterProfile, UserProfile, Message, RealtimeConfig } from '../types';
 import { RealtimeContextManager, NotionManager, FeishuManager, XhsNote } from './realtimeContext';
-import { XhsMcpClient, extractNotesFromMcpData, normalizeNote } from './xhsMcpClient';
+import {
+    XhsMcpClient,
+    extractNotesFromMcpData,
+    normalizeNote,
+    normalizeXhsComments,
+    normalizeXhsLiteDetail,
+} from './xhsMcpClient';
 import { getLocalDateKey } from './localDate';
 
 // ─── 共用类型 ────────────────────────────────────────────────────────────────
@@ -515,35 +521,57 @@ export async function runXhsDetail(
         // detail 自带的 xsecToken / 评论结构 写回缓存
         if (result.success && result.data && typeof result.data === 'object') {
             const d = result.data;
-            const noteObj = (d as any).note || d;
-            const detailToken = noteObj?.xsecToken || noteObj?.xsec_token || (d as any)?.xsecToken;
+            const noteObj = (d as any).data?.note || (d as any).note || d;
+            const detailToken = noteObj?.xsecToken || noteObj?.xsec_token
+                || (d as any).data?.xsecToken || (d as any).data?.xsec_token
+                || (d as any).xsecToken || (d as any).xsec_token;
             if (detailToken && args.noteId && ctx.xhsCaches) {
                 ctx.xhsCaches.xsecTokenCache.set(args.noteId, detailToken);
                 console.log(`📕 [XHS] 从 detail 缓存 xsecToken: ${args.noteId}`);
             }
 
+            const normalizedComments = normalizeXhsComments(d);
             if (ctx.xhsCaches) {
                 const caches = ctx.xhsCaches;
-                const cacheComments = (comments: any[], parentId?: string) => {
+                const cacheComments = (comments: ReturnType<typeof normalizeXhsComments>) => {
                     for (const c of comments) {
-                        const cid = c.id || c.commentId || c.comment_id;
-                        const uid = c.userInfo?.userId || c.userInfo?.user_id || c.user_id || c.userId;
-                        const authorName = c.userInfo?.nickname || c.userInfo?.name || c.nickname || c.userName || c.user_name;
-                        if (cid && uid) caches.commentUserIdCache.set(cid, uid);
-                        if (cid && authorName) caches.commentAuthorNameCache.set(cid, authorName);
-                        if (cid && parentId) caches.commentParentIdCache.set(cid, parentId);
-                        if (Array.isArray(c.subComments)) cacheComments(c.subComments, cid);
-                        if (Array.isArray(c.sub_comments)) cacheComments(c.sub_comments, cid);
+                        if (c.commentId && c.userId) caches.commentUserIdCache.set(c.commentId, c.userId);
+                        if (c.commentId && c.author) caches.commentAuthorNameCache.set(c.commentId, c.author);
+                        if (c.commentId && c.parentCommentId) {
+                            caches.commentParentIdCache.set(c.commentId, c.parentCommentId);
+                        }
+                        cacheComments(c.subComments);
                     }
                 };
-                const commentList = (d as any).data?.comments?.list || (d as any).comments?.list
-                    || (d as any).data?.comments || (d as any).comments
-                    || (d as any).note?.comments?.list || (d as any).note?.comments;
-                if (Array.isArray(commentList)) {
-                    cacheComments(commentList);
+                if (normalizedComments.length > 0) {
+                    cacheComments(normalizedComments);
                     console.log(`📕 [XHS] 缓存了 ${caches.commentUserIdCache.size} 条评论的 userId, ${caches.commentAuthorNameCache.size} 条 authorName`);
                 } else {
                     console.warn(`📕 [XHS] 未找到评论数组, d keys:`, Object.keys(d as any), 'd.note keys:', (d as any).note ? Object.keys((d as any).note) : 'N/A');
+                }
+            }
+
+            // XHS_DETAIL 已经拿到正文和评论，补回搜索结果中的同一张卡。
+            // 后续 XHS_SHARE 直接复用这里的数据，不额外发起详情请求。
+            if (ctx.lastXhsNotesRef) {
+                const detailNote = normalizeXhsLiteDetail(d);
+                const matched = ctx.lastXhsNotesRef.current.find(n => n.noteId === args.noteId);
+                const enriched: XhsNote = {
+                    ...matched,
+                    ...detailNote,
+                    noteId: detailNote.noteId || args.noteId,
+                    title: detailNote.title || matched?.title || '',
+                    desc: detailNote.desc || matched?.desc || '',
+                    author: detailNote.author || matched?.author || '',
+                    authorId: detailNote.authorId || matched?.authorId || '',
+                    xsecToken: detailNote.xsecToken || detailToken || xsecToken || matched?.xsecToken,
+                    comments: detailNote.comments || matched?.comments,
+                };
+                const index = ctx.lastXhsNotesRef.current.findIndex(n => n.noteId === args.noteId);
+                if (index >= 0) {
+                    ctx.lastXhsNotesRef.current = ctx.lastXhsNotesRef.current.map((note, i) =>
+                        i === index ? enriched : note
+                    );
                 }
             }
         }
@@ -560,15 +588,16 @@ export async function runXhsDetail(
             } else {
                 const innerData = (detailData as any).data && typeof (detailData as any).data === 'object' ? (detailData as any).data : null;
                 const note = innerData?.note || (detailData as any).note || detailData;
-                const noteTitle = note.title || note.displayTitle || note.display_title || '';
-                const noteDesc = (note.desc || note.description || note.content || '').slice(0, 1500);
-                const noteAuthor = note.user?.nickname || note.author || '';
-                const noteLikes = note.interactInfo?.likedCount || note.likes || 0;
-                const noteCollects = note.interactInfo?.collectedCount || note.collects || 0;
-                const noteShareCount = note.interactInfo?.shareCount || 0;
-                const noteCommentCount = note.interactInfo?.commentCount || 0;
+                const normalizedNote = normalizeNote(note);
+                const noteTitle = normalizedNote.title;
+                const noteDesc = normalizedNote.desc.slice(0, 1500);
+                const noteAuthor = normalizedNote.author;
+                const noteLikes = normalizedNote.likes;
+                const noteCollects = normalizedNote.collects;
+                const noteShareCount = normalizedNote.shareCount;
+                const noteCommentCount = normalizedNote.commentCount;
                 const noteTime = note.time ? new Date(note.time).toLocaleString('zh-CN') : '';
-                const noteIp = note.ipLocation || '';
+                const noteIp = note.ipLocation || note.ip_location || '';
 
                 let noteSection = `📝 笔记详情:\n标题: ${noteTitle}\n作者: ${noteAuthor}`;
                 if (noteTime) noteSection += `\n发布时间: ${noteTime}`;
@@ -576,22 +605,16 @@ export async function runXhsDetail(
                 noteSection += `\n互动: ${noteLikes}赞 ${noteCollects}收藏 ${noteCommentCount}评论 ${noteShareCount}分享`;
                 noteSection += `\n\n正文:\n${noteDesc}`;
 
-                const rawComments = innerData?.comments?.list || innerData?.comments
-                    || (detailData as any).comments?.list || (detailData as any).comments
-                    || note.comments?.list || note.comments || [];
-                const commentArr = Array.isArray(rawComments) ? rawComments : [];
+                const commentArr = normalizeXhsComments(detailData);
 
                 let commentsSection = '';
                 if (commentArr.length > 0) {
-                    const formatComment = (c: any, indent = '') => {
-                        const name = c.userInfo?.nickname || c.nickname || c.userName || '匿名';
-                        const content = c.content || '';
-                        const likes = c.likeCount || c.like_count || c.likes || 0;
-                        const cid = c.id || c.commentId || c.comment_id || '';
-                        let line = `${indent}${name}: ${content} (${likes}赞) [commentId=${cid}]`;
-                        const subs = c.subComments || c.sub_comments || [];
-                        if (Array.isArray(subs) && subs.length > 0) {
-                            line += '\n' + subs.slice(0, 10).map((s: any) => formatComment(s, indent + '  ↳ ')).join('\n');
+                    const formatComment = (c: (typeof commentArr)[number], indent = '') => {
+                        let line = `${indent}${c.author}: ${c.content} (${c.likes}赞) [commentId=${c.commentId}]`;
+                        if (c.subComments.length > 0) {
+                            line += '\n' + c.subComments.slice(0, 10)
+                                .map(sub => formatComment(sub, indent + '  ↳ '))
+                                .join('\n');
                         }
                         return line;
                     };

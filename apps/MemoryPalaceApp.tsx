@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useDeferredValue, useMemo } from 'react';
 import { useOS } from '../context/OSContext';
 import {
     MemoryRoom, MemoryNode, ROOM_CONFIGS, ROOM_LABELS, getRoomLabel,
@@ -18,9 +18,19 @@ import type { Anticipation, MigrationProgress, DigestResult, MemoryLink, EventBo
 import { confirmExportSafety } from '../utils/exportGuard';
 import type { Message } from '../types';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
+import {
+    CONTEXT_RANGE_POLICY_VERSION,
+    DEFAULT_MANUAL_CONTEXT_LIMIT,
+} from '../utils/chatContextRange';
+import {
+    buildRangeSearchEntries,
+    filterRangeSearchEntries,
+    getRangeEndpointLabel,
+    getRangeSelectionHint,
+} from '../utils/memoryPalace/rangeSelection';
 
 /** 手动总结面板：每页渲染多少条聊天记录（翻页，避免一次性塞几百条 DOM 卡顿） */
-const RANGE_PAGE_SIZE = 100;
+const RANGE_PAGE_SIZE = 50;
 
 /** 手动总结面板：把毫秒时间戳格式化成「2026-03-20 14:30」 */
 const fmtRangeTs = (ts: number): string => {
@@ -445,6 +455,11 @@ export default function MemoryPalaceApp() {
     const [boxCount, setBoxCount] = useState(0);
     const [anticipations, setAnticipations] = useState<Anticipation[]>([]);
     const [pinnedNodes, setPinnedNodes] = useState<MemoryNode[]>([]);
+    const [editingAnticipation, setEditingAnticipation] = useState<Anticipation | null>(null);
+    const [anticipationDraft, setAnticipationDraft] = useState('');
+    const [savingAnticipation, setSavingAnticipation] = useState(false);
+    const anticipationPressTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    const anticipationPressStartRef = React.useRef<{ x: number; y: number } | null>(null);
 
     // 事件盒视图
     const [allBoxes, setAllBoxes] = useState<EventBox[]>([]);
@@ -484,6 +499,16 @@ export default function MemoryPalaceApp() {
     const [rangeRunning, setRangeRunning] = useState(false);
     const [rangeProgress, setRangeProgress] = useState('');
     const [rangeResult, setRangeResult] = useState<string | null>(null);
+    // 输入优先响应；消息内容和格式化日期只在记录集变化时预计算一次。
+    const deferredRangeQuery = useDeferredValue(rangeQuery);
+    const rangeSearchEntries = useMemo(
+        () => buildRangeSearchEntries(rangeMessages, fmtRangeTs),
+        [rangeMessages],
+    );
+    const filteredRangeMessages = useMemo(
+        () => filterRangeSearchEntries(rangeSearchEntries, deferredRangeQuery),
+        [rangeSearchEntries, deferredRangeQuery],
+    );
     // 完成后的结果弹窗（逐条列出新增记忆，和水位线总结一致）
     const [rangeResultData, setRangeResultData] = useState<import('../utils/memoryPalace/pipeline').RangeProcessResult | null>(null);
 
@@ -767,6 +792,81 @@ export default function MemoryPalaceApp() {
     }, [char]);
 
     useEffect(() => { loadStats(); }, [loadStats]);
+
+    const cancelAnticipationLongPress = useCallback(() => {
+        if (anticipationPressTimerRef.current) {
+            clearTimeout(anticipationPressTimerRef.current);
+            anticipationPressTimerRef.current = null;
+        }
+        anticipationPressStartRef.current = null;
+    }, []);
+
+    const openAnticipationEditor = useCallback((ant: Anticipation) => {
+        cancelAnticipationLongPress();
+        setEditingAnticipation(ant);
+        setAnticipationDraft(ant.content);
+    }, [cancelAnticipationLongPress]);
+
+    const startAnticipationLongPress = useCallback((e: React.PointerEvent<HTMLDivElement>, ant: Anticipation) => {
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
+        cancelAnticipationLongPress();
+        anticipationPressStartRef.current = { x: e.clientX, y: e.clientY };
+        anticipationPressTimerRef.current = setTimeout(() => {
+            anticipationPressTimerRef.current = null;
+            anticipationPressStartRef.current = null;
+            setEditingAnticipation(ant);
+            setAnticipationDraft(ant.content);
+        }, 550);
+    }, [cancelAnticipationLongPress]);
+
+    const moveAnticipationLongPress = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+        const start = anticipationPressStartRef.current;
+        if (!start) return;
+        if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > 10) {
+            cancelAnticipationLongPress();
+        }
+    }, [cancelAnticipationLongPress]);
+
+    useEffect(() => () => cancelAnticipationLongPress(), [cancelAnticipationLongPress]);
+    useEffect(() => {
+        setEditingAnticipation(null);
+        setAnticipationDraft('');
+    }, [char?.id]);
+
+    const handleSaveAnticipation = async () => {
+        if (!editingAnticipation) return;
+        const content = anticipationDraft.trim();
+        if (!content) {
+            addToast('期盼内容不能为空', 'error');
+            return;
+        }
+        setSavingAnticipation(true);
+        try {
+            const updated = { ...editingAnticipation, content };
+            await AnticipationDB.save(updated);
+            setAnticipations(prev => prev.map(ant => ant.id === updated.id ? updated : ant));
+            setEditingAnticipation(null);
+            setAnticipationDraft('');
+            addToast('窗台期盼已修改', 'success');
+        } finally {
+            setSavingAnticipation(false);
+        }
+    };
+
+    const handleDeleteAnticipation = async () => {
+        if (!editingAnticipation) return;
+        if (!window.confirm('确定删除这条窗台期盼吗？删除后不会自动恢复。')) return;
+        setSavingAnticipation(true);
+        try {
+            await AnticipationDB.delete(editingAnticipation.id);
+            setAnticipations(prev => prev.filter(ant => ant.id !== editingAnticipation.id));
+            setEditingAnticipation(null);
+            setAnticipationDraft('');
+            addToast('窗台期盼已删除', 'success');
+        } finally {
+            setSavingAnticipation(false);
+        }
+    };
 
     // 加载可用月份和分块（旧记忆迁移用）
     useEffect(() => {
@@ -1098,7 +1198,13 @@ export default function MemoryPalaceApp() {
         } else {
             // 关闭 palace 必然连带关闭全自动记忆；同时清空残留的向量召回注入，
             // 否则旧的 memoryPalaceInjection 会被 saveCharacter 持久化并继续注入 prompt。
-            updateCharacter(charId, { memoryPalaceEnabled: false, autoArchiveEnabled: false, memoryPalaceInjection: undefined } as any);
+            updateCharacter(charId, {
+                memoryPalaceEnabled: false,
+                autoArchiveEnabled: false,
+                memoryPalaceInjection: undefined,
+                contextRangeMode: 'manual',
+                contextRangePolicyVersion: CONTEXT_RANGE_POLICY_VERSION,
+            } as any);
         }
     };
 
@@ -1108,7 +1214,11 @@ export default function MemoryPalaceApp() {
         if (!target) return;
 
         if (!on) {
-            updateCharacter(charId, { autoArchiveEnabled: false } as any);
+            updateCharacter(charId, {
+                autoArchiveEnabled: false,
+                contextRangeMode: 'manual',
+                contextRangePolicyVersion: CONTEXT_RANGE_POLICY_VERSION,
+            } as any);
             addToast('已关闭全自动记忆（palace 向量化仍在正常运行）', 'info');
             return;
         }
@@ -1124,7 +1234,13 @@ export default function MemoryPalaceApp() {
             return;
         }
 
-        updateCharacter(charId, { autoArchiveEnabled: true } as any);
+        updateCharacter(charId, {
+            autoArchiveEnabled: true,
+            contextRangeMode: 'adaptive',
+            contextRangePolicyVersion: CONTEXT_RANGE_POLICY_VERSION,
+            contextLimit: DEFAULT_MANUAL_CONTEXT_LIMIT,
+            contextUserStartMessageId: undefined,
+        } as any);
 
         // 统计未同步消息数并决定是否立即追平历史
         // 口径必须和 pipeline 的缓冲区定义一致：排除热区（最后 200 条），
@@ -2747,8 +2863,6 @@ export default function MemoryPalaceApp() {
                                 {[
                                     { model: 'BAAI/bge-m3', dim: 1024, tag: '推荐', desc: '多语言顶级模型，免费', color: '#7c3aed' },
                                     { model: 'Pro/BAAI/bge-m3', dim: 1024, tag: '最强', desc: '加速推理版，¥0.7/百万token', color: '#f59e0b' },
-                                    { model: 'BAAI/bge-large-zh-v1.5', dim: 1024, tag: '免费', desc: '中文专精，轻量快速', color: '#10b981' },
-                                    { model: 'netease-youdao/bce-embedding-base_v1', dim: 768, tag: '免费', desc: '网易有道，768维', color: '#10b981' },
                                 ].map(opt => {
                                     const isActive = embModel === opt.model && embDimensions === opt.dim;
                                     return (
@@ -3474,30 +3588,26 @@ create table if not exists memory_vectors (
                 {/* 手动总结：区间选择弹窗（浏览聊天记录 → 点选起点/终点 → 总结） */}
                 {rangeModalOpen && char && (() => {
                     const bothSet = rangeStartId != null && rangeEndId != null;
-                    const lo = bothSet ? Math.min(rangeStartId!, rangeEndId!) : rangeStartId;
+                    const hasEndpoint = rangeStartId != null || rangeEndId != null;
+                    const lo = bothSet ? Math.min(rangeStartId!, rangeEndId!) : null;
                     const hi = bothSet ? Math.max(rangeStartId!, rangeEndId!) : null;
                     const selectedCount = (lo != null && hi != null)
                         ? rangeMessages.filter(m => m.id >= lo && m.id <= hi).length
-                        : (rangeStartId != null ? 1 : 0);
+                        : (hasEndpoint ? 1 : 0);
 
-                    const q = rangeQuery.trim().toLowerCase();
-                    const filtered = q
-                        ? rangeMessages.filter(m => (m.content || '').toLowerCase().includes(q) || fmtRangeTs(m.timestamp).includes(q))
-                        : rangeMessages;
                     // 翻页：每页 RANGE_PAGE_SIZE 条，避免一次渲染几百条 DOM
-                    const totalPages = Math.max(1, Math.ceil(filtered.length / RANGE_PAGE_SIZE));
+                    const totalPages = Math.max(1, Math.ceil(filteredRangeMessages.length / RANGE_PAGE_SIZE));
                     const page = Math.min(Math.max(0, rangePage), totalPages - 1);
                     const pageStart = page * RANGE_PAGE_SIZE;
-                    const shown = filtered.slice(pageStart, pageStart + RANGE_PAGE_SIZE);
+                    const shown = filteredRangeMessages.slice(pageStart, pageStart + RANGE_PAGE_SIZE);
 
                     return (
                         <div
                             style={{
                                 position: 'fixed', inset: 0, zIndex: 210,
                                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                padding: 16,
+                                padding: 12,
                                 background: 'rgba(31,17,71,0.45)',
-                                backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
                                 animation: 'fade-in 0.2s ease-out',
                             }}
                             onClick={() => { if (!rangeRunning) setRangeModalOpen(false); }}
@@ -3505,7 +3615,8 @@ create table if not exists memory_vectors (
                             <div
                                 onClick={e => e.stopPropagation()}
                                 style={{
-                                    width: '100%', maxWidth: 420, height: '82vh',
+                                    width: '100%', maxWidth: 420, height: 'min(82dvh, 720px)', maxHeight: 'calc(100dvh - 24px)',
+                                    minHeight: 0,
                                     display: 'flex', flexDirection: 'column',
                                     borderRadius: 24, overflow: 'hidden',
                                     background: '#ffffff',
@@ -3544,7 +3655,10 @@ create table if not exists memory_vectors (
                                 </div>
 
                                 {/* 消息列表 */}
-                                <div style={{ flex: 1, overflowY: 'auto', padding: '8px 10px' }}>
+                                <div style={{
+                                    flex: 1, minHeight: 0, overflowY: 'auto', padding: '8px 10px',
+                                    WebkitOverflowScrolling: 'touch', overscrollBehavior: 'contain', touchAction: 'pan-y',
+                                }}>
                                     {rangeLoading && (
                                         <div style={{ textAlign: 'center', color: '#94a3b8', fontSize: 12, padding: 24 }}>加载聊天记录中...</div>
                                     )}
@@ -3553,7 +3667,7 @@ create table if not exists memory_vectors (
                                             {rangeMessages.length === 0 ? '这个角色还没有聊天记录' : '没有匹配的消息'}
                                         </div>
                                     )}
-                                    {!rangeLoading && filtered.length > RANGE_PAGE_SIZE && (
+                                    {!rangeLoading && filteredRangeMessages.length > RANGE_PAGE_SIZE && (
                                         <div style={{
                                             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                                             gap: 8, padding: '6px 8px', marginBottom: 6,
@@ -3567,7 +3681,7 @@ create table if not exists memory_vectors (
                                                 ‹ 更早
                                             </button>
                                             <span style={{ fontSize: 10, color: '#7c3aed', fontWeight: 600 }}>
-                                                第 {page + 1} / {totalPages} 页 · 共 {filtered.length} 条
+                                                第 {page + 1} / {totalPages} 页 · 共 {filteredRangeMessages.length} 条
                                             </span>
                                             <button
                                                 onClick={() => setRangePage(p => Math.min(totalPages - 1, p + 1))}
@@ -3581,9 +3695,10 @@ create table if not exists memory_vectors (
                                     {!rangeLoading && shown.map(m => {
                                         const isStart = m.id === rangeStartId;
                                         const isEnd = m.id === rangeEndId;
+                                        const endpointLabel = getRangeEndpointLabel(m.id, rangeStartId, rangeEndId);
                                         const isPending = m.id === rangePendingId;
                                         const inRange = lo != null && hi != null && m.id >= lo && m.id <= hi;
-                                        const isEndpoint = (lo != null && m.id === lo) || (hi != null && m.id === hi) || (rangeStartId != null && rangeEndId == null && isStart);
+                                        const isEndpoint = !!endpointLabel;
                                         const who = m.role === 'user' ? '我' : m.role === 'system' ? '系统' : char.name;
                                         const isDate = (m.metadata as any)?.source === 'date';
                                         const preview = (m.content || '').replace(/\s+/g, ' ').trim().slice(0, 48);
@@ -3606,7 +3721,7 @@ create table if not exists memory_vectors (
                                                     </span>
                                                     {(isStart || isEnd) && (
                                                         <span style={{ fontSize: 9, fontWeight: 800, color: '#fff', background: '#7c3aed', borderRadius: 6, padding: '1px 6px' }}>
-                                                            {bothSet ? (m.id === lo ? '起点' : '终点') : '起点'}
+                                                            {endpointLabel}
                                                         </span>
                                                     )}
                                                 </div>
@@ -3654,15 +3769,15 @@ create table if not exists memory_vectors (
                                     )}
                                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
                                         <span style={{ fontSize: 11, color: '#64748b' }}>
-                                            {bothSet ? `已选 ${selectedCount} 条` : rangeStartId != null ? '已选起点，请再点终点' : '未选择'}
+                                            {getRangeSelectionHint(rangeStartId, rangeEndId, selectedCount)}
                                         </span>
                                         <button
                                             onClick={() => { setRangeStartId(null); setRangeEndId(null); }}
-                                            disabled={rangeRunning || rangeStartId == null}
+                                            disabled={rangeRunning || !hasEndpoint}
                                             style={{
-                                                fontSize: 11, fontWeight: 600, color: (rangeRunning || rangeStartId == null) ? '#cbd5e1' : '#dc2626',
+                                                fontSize: 11, fontWeight: 600, color: (rangeRunning || !hasEndpoint) ? '#cbd5e1' : '#dc2626',
                                                 background: 'transparent', border: 'none',
-                                                cursor: (rangeRunning || rangeStartId == null) ? 'not-allowed' : 'pointer',
+                                                cursor: (rangeRunning || !hasEndpoint) ? 'not-allowed' : 'pointer',
                                             }}
                                         >
                                             清除选择
@@ -4527,13 +4642,26 @@ create table if not exists memory_vectors (
                         <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
                             <Icon name="sunrise" size={14} />
                             <span>窗台期盼</span>
+                            <span style={{ marginLeft: 'auto', fontSize: 10, color: '#9ca3af', fontWeight: 400 }}>长按可修改或删除</span>
                         </div>
                         {anticipations.map((ant: Anticipation) => (
-                            <div key={ant.id} style={{
+                            <div
+                                key={ant.id}
+                                onPointerDown={(e) => startAnticipationLongPress(e, ant)}
+                                onPointerMove={moveAnticipationLongPress}
+                                onPointerUp={cancelAnticipationLongPress}
+                                onPointerCancel={cancelAnticipationLongPress}
+                                onPointerLeave={cancelAnticipationLongPress}
+                                onContextMenu={(e) => {
+                                    e.preventDefault();
+                                    openAnticipationEditor(ant);
+                                }}
+                                style={{
                                 padding: 10, borderRadius: 8, marginBottom: 6,
                                 backgroundColor: ant.status === 'fulfilled' ? '#ecfdf5' :
                                     ant.status === 'disappointed' ? '#fef2f2' : '#fefce8',
-                                fontSize: 13, display: 'flex', alignItems: 'center', gap: 6,
+                                fontSize: 13, display: 'flex', alignItems: 'flex-start', gap: 6,
+                                cursor: 'pointer', userSelect: 'none', touchAction: 'pan-y',
                             }}>
                                 <span style={{ display: 'inline-flex', color:
                                     ant.status === 'active' ? '#7c3aed' :
@@ -4547,12 +4675,97 @@ create table if not exists memory_vectors (
                                         size={14}
                                     />
                                 </span>
-                                {ant.content}
-                                <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>
-                                    {new Date(ant.createdAt).toLocaleDateString('zh-CN')} · {ant.status}
+                                <div style={{ minWidth: 0, flex: 1 }}>
+                                    <div style={{ lineHeight: 1.5, color: '#1f2937', whiteSpace: 'pre-wrap' }}>{ant.content}</div>
+                                    <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>
+                                        {new Date(ant.createdAt).toLocaleDateString('zh-CN')} · {ant.status}
+                                    </div>
                                 </div>
                             </div>
                         ))}
+                    </div>
+                )}
+
+                {editingAnticipation && (
+                    <div
+                        onClick={() => {
+                            if (!savingAnticipation) {
+                                setEditingAnticipation(null);
+                                setAnticipationDraft('');
+                            }
+                        }}
+                        style={{
+                            position: 'fixed', inset: 0, zIndex: 120,
+                            background: 'rgba(15,23,42,0.42)', backdropFilter: 'blur(4px)',
+                            display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
+                            padding: 16,
+                        }}
+                    >
+                        <div
+                            onClick={e => e.stopPropagation()}
+                            style={{
+                                width: '100%', maxWidth: 520, padding: 18,
+                                borderRadius: 22, background: 'white',
+                                boxShadow: '0 18px 50px rgba(15,23,42,0.22)',
+                            }}
+                        >
+                            <div style={{ fontSize: 16, fontWeight: 700, color: '#1f2937' }}>修改窗台期盼</div>
+                            <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 3, marginBottom: 12 }}>
+                                只修改便利贴正文；状态与创建时间保持不变
+                            </div>
+                            <textarea
+                                autoFocus
+                                value={anticipationDraft}
+                                onChange={e => setAnticipationDraft(e.target.value)}
+                                rows={5}
+                                maxLength={2000}
+                                style={{
+                                    width: '100%', boxSizing: 'border-box', resize: 'vertical',
+                                    border: '1px solid #e5e7eb', borderRadius: 14,
+                                    background: '#fffbeb', color: '#1f2937',
+                                    fontSize: 14, lineHeight: 1.6, padding: 12, outline: 'none',
+                                }}
+                            />
+                            <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+                                <button
+                                    onClick={handleDeleteAnticipation}
+                                    disabled={savingAnticipation}
+                                    style={{
+                                        padding: '10px 14px', borderRadius: 12,
+                                        border: '1px solid #fecaca', background: '#fef2f2',
+                                        color: '#dc2626', fontWeight: 700, cursor: 'pointer',
+                                    }}
+                                >
+                                    删除
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        setEditingAnticipation(null);
+                                        setAnticipationDraft('');
+                                    }}
+                                    disabled={savingAnticipation}
+                                    style={{
+                                        marginLeft: 'auto', padding: '10px 16px', borderRadius: 12,
+                                        border: '1px solid #e5e7eb', background: 'white',
+                                        color: '#6b7280', fontWeight: 600, cursor: 'pointer',
+                                    }}
+                                >
+                                    取消
+                                </button>
+                                <button
+                                    onClick={handleSaveAnticipation}
+                                    disabled={savingAnticipation || !anticipationDraft.trim()}
+                                    style={{
+                                        padding: '10px 18px', borderRadius: 12,
+                                        border: 'none', background: '#7c3aed',
+                                        color: 'white', fontWeight: 700, cursor: 'pointer',
+                                        opacity: savingAnticipation || !anticipationDraft.trim() ? 0.5 : 1,
+                                    }}
+                                >
+                                    {savingAnticipation ? '保存中…' : '保存'}
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 )}
             </div>

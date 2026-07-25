@@ -615,6 +615,8 @@ export const AnticipationDB = {
 
     getById: (id: string) => getByKey<Anticipation>(STORE_ANTICIPATIONS, id),
 
+    delete: (id: string) => deleteByKey(STORE_ANTICIPATIONS, id),
+
     getByCharId: (charId: string) =>
         getAllByIndex<Anticipation>(STORE_ANTICIPATIONS, 'charId', charId),
 

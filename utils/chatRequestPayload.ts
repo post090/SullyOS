@@ -222,10 +222,19 @@ export function flattenImageContentParts(apiMessages: Array<{ role: string; cont
  */
 export async function buildChatRequestPayload(input: BuildChatPayloadInput): Promise<BuildChatPayloadResult> {
     const {
-        char, userProfile, groups, emojis, categories, historyMsgs, contextLimit,
+        char, userProfile, groups, historyMsgs, contextLimit,
         realtimeConfig, innerState,
         translationConfig, htmlMode, thinkingChain, mcdMiniSnap, luckinMiniSnap, luckinChat,
     } = input;
+    // 角色可见性必须在统一载荷层再次收口。UI 聊天、1.0 本地主动消息、2.0 推送、
+    // 彼方/小小窝等调用方各自维护筛选很容易漏掉一条路径；一旦把全量表情传进来，
+    // 模型既会看到其他角色的专属表情，历史里的同名表情也可能反查到错误 URL。
+    // 即使调用方已经过滤过，重复过滤仍是幂等的。
+    const { emojis, categories } = ChatPrompts.filterVisibleEmojis(
+        input.emojis,
+        input.categories,
+        char.id,
+    );
     const recentMsgsHint = input.recentMsgsHint ?? historyMsgs;
 
     if (isPromptBuildSkipped()) {

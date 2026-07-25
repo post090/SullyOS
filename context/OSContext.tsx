@@ -26,10 +26,17 @@ import { rewriteStaleWorkerUrl } from '../utils/proxyWorker';
 import { INSTALLED_APPS } from '../constants';
 import { markBackupDone } from '../utils/backupReminder';
 import { normalizeCharacterImpression, normalizeCharacterDefaults } from '../utils/impression';
+import {
+  CONTEXT_RANGE_POLICY_VERSION,
+  DEFAULT_MANUAL_CONTEXT_LIMIT,
+  loadCharacterContextRange,
+  migrateCharacterContextRange,
+} from '../utils/chatContextRange';
 import { isScheduleFeatureOn } from '../utils/scheduleGenerator';
 import { evaluateEmotionBackground } from '../hooks/useChatAI';
 import { CHAT_GEN_EVENTS, setChatViewSnapshot } from '../utils/chatGenEvents';
 import { buildChatRequestPayload } from '../utils/chatRequestPayload';
+import { ChatPrompts } from '../utils/chatPrompts';
 import { extractHtmlBlocks } from '../utils/htmlPrompt';
 import { loadMusicPlaybackSnapshot } from './MusicContext';
 import { setCharNameRegistry } from '../utils/charNameRegistry';
@@ -665,6 +672,8 @@ Sully是小手机的内置AI。
   // Default theme settings
   bubbleStyle: 'default', // Or specific theme ID if we had one
   contextLimit: 1000,
+  contextRangeMode: 'manual',
+  contextRangePolicyVersion: CONTEXT_RANGE_POLICY_VERSION,
   
   // Default Room Config
   roomConfig: {
@@ -1583,7 +1592,24 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
             }
         }
 
-        finalChars = finalChars.map(c => normalizeCharacterDefaults(normalizeCharacterImpression(c)));
+        let resetAutoContextCount = 0;
+        let migratedContextCount = 0;
+        finalChars = finalChars.map(c => {
+          const normalized = normalizeCharacterDefaults(normalizeCharacterImpression(c));
+          const migration = migrateCharacterContextRange(normalized);
+          if (migration.migrated) migratedContextCount++;
+          if (migration.resetAutoContext) resetAutoContextCount++;
+          return migration.character;
+        });
+        if (migratedContextCount > 0) {
+          await Promise.all(finalChars.map(c => DB.saveCharacter(c)));
+        }
+        if (resetAutoContextCount > 0) {
+          setTimeout(() => addToast(
+            `上下文范围已升级：${resetAutoContextCount} 个全自动记忆角色已恢复为自适应模式。需要读取更多旧原文时，可在聊天设置中手动调整。`,
+            'info',
+          ), 1200);
+        }
 
         if (finalChars.length > 0) {
           setCharacters(finalChars);
@@ -2190,9 +2216,20 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
 
               // 3. Build prompt & message history — 走和 useChatAI / emotion eval 同一个 helper，
               //    保证三家拿到的"材料"完全一致；区别只在前面追加的"现在主动找用户"那条 hint。
-              const allMsgs = await DB.getRecentMessagesByCharId(charId, char.contextLimit || 500);
-              const emojis = await DB.getEmojis();
-              const categories = await DB.getEmojiCategories();
+              const proactiveRange = await loadCharacterContextRange(char);
+              if (proactiveRange.userBreakpointExpired) {
+                  updateCharacter(charId, { contextUserStartMessageId: undefined });
+              }
+              const allMsgs = proactiveRange.messages;
+              // 1.0 本地主动消息不会经过 Chat.tsx 的 aiVisibleEmojis。
+              // 这里既要过滤提示词，也要过滤下方 [[SEND_EMOJI]] 的按名反查：
+              // 只修提示词仍挡不住模型复述旧上下文里的表情名；只修落库则模型仍会看到越权表情。
+              // 2.0 推送路径已在 activeMsgClient / activeMsgRuntime 做同样的双层收口。
+              const { emojis, categories } = ChatPrompts.filterVisibleEmojis(
+                  await DB.getEmojis(),
+                  await DB.getEmojiCategories(),
+                  charId,
+              );
 
               // 上一轮缓存的意识流独白 —— 主路径用 React state，主动消息这里用 ref Map
               const cachedInnerState = proactiveInnerStateRef.current.get(charId) || undefined;
@@ -2201,7 +2238,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                   char, userProfile: currentUserProfile!, groups: currentGroups,
                   emojis, categories,
                   historyMsgs: allMsgs,
-                  contextLimit: char.contextLimit || 500,
+                  contextLimit: Math.max(1, allMsgs.length),
                   realtimeConfig: currentRealtimeConfig,
                   innerState: cachedInnerState,
                   // 实时音乐播放状态 —— OSContext 在 MusicProvider 上层用不了 useMusic()，
@@ -2851,7 +2888,9 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       description: '点击编辑设定...',
       systemPrompt: '',
       memories: [],
-      contextLimit: 500,
+      contextLimit: DEFAULT_MANUAL_CONTEXT_LIMIT,
+      contextRangeMode: 'manual',
+      contextRangePolicyVersion: CONTEXT_RANGE_POLICY_VERSION,
       emotionConfig: { enabled: true },
     };
     setCharacters(prev => [...prev, newChar]);
@@ -4299,7 +4338,27 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               setAppearancePresets(loadedPresets);
           }
 
-          if (chars.length > 0) setCharacters(chars.map(c => normalizeCharacterDefaults(normalizeCharacterImpression(c))));
+          if (chars.length > 0) {
+              let importedAutoContextCount = 0;
+              let importedContextMigrated = false;
+              const normalizedChars = chars.map(c => {
+                  const normalized = normalizeCharacterDefaults(normalizeCharacterImpression(c));
+                  const migration = migrateCharacterContextRange(normalized);
+                  if (migration.migrated) importedContextMigrated = true;
+                  if (migration.resetAutoContext) importedAutoContextCount++;
+                  return migration.character;
+              });
+              if (importedContextMigrated) {
+                  await Promise.all(normalizedChars.map(c => DB.saveCharacter(c)));
+              }
+              setCharacters(normalizedChars);
+              if (importedAutoContextCount > 0) {
+                  setTimeout(() => addToast(
+                      `导入的旧设置已升级：${importedAutoContextCount} 个全自动记忆角色已使用自适应上下文。`,
+                      'info',
+                  ), 600);
+              }
+          }
           if (groupsList.length > 0) setGroups(groupsList);
           if (themes.length > 0) setCustomThemes(themes);
           if (user) setUserProfile(user);

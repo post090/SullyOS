@@ -941,7 +941,8 @@ const Settings: React.FC = () => {
                   try {
                       await Filesystem.mkdir({ path: exportDir, directory: Directory.Documents, recursive: true });
                   } catch (e) {
-                      if (!/exist/i.test(String(e?.message || e))) throw e;
+                      const message = (e as { message?: unknown })?.message;
+                      if (!/exist/i.test(String(message || e))) throw e;
                   }
                   // 清理可能存在的同名最终文件（极小概率撞 Date.now，正常不存在）。
                   try { await Filesystem.deleteFile({ path: finalPath, directory: Directory.Documents }); } catch { /* ignore */ }
@@ -960,8 +961,9 @@ const Settings: React.FC = () => {
                   // 把错误对象拆成可读的 message / stack 传进 console：之前直接 `console.error('...', e)`
                   // 遇到 FilesystemException 这种没自定义 toString 的对象时，调试终端只会显示
                   // "[object Object]"，等于啥都没记，下一次再炸照样看不见根因。
-                  const errMessage = (e && (e.message || String(e))) || 'Unknown backup write error';
-                  const errStack = (e && e.stack) || '';
+                  const err = e as { message?: unknown; stack?: unknown };
+                  const errMessage = (e && (err.message || String(e))) || 'Unknown backup write error';
+                  const errStack = (err.stack && String(err.stack)) || '';
                   console.error('Native backup write failed:', errMessage, errStack);
                   try { await Filesystem.deleteFile({ path: finalPath, directory: Directory.Documents }); } catch { /* ignore */ }
                   addToast('保存文件失败', 'error');
