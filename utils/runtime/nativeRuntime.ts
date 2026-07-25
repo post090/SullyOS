@@ -42,7 +42,33 @@ interface SullyNativeRuntimePlugin {
 
 const NativeRuntime = registerPlugin<SullyNativeRuntimePlugin>('SullyNativeRuntime');
 
+export const NATIVE_RUNTIME_ENABLED_KEY = 'sully_native_runtime_enabled';
+export const NATIVE_RUNTIME_CHAT_KEY = 'sully_native_runtime_chat';
+
 let availability: boolean | null = null;
+
+export function getNativeRuntimeUserEnabled(): boolean {
+  try { return localStorage.getItem(NATIVE_RUNTIME_ENABLED_KEY) !== '0'; } catch { return true; }
+}
+
+export function setNativeRuntimeUserEnabled(enabled: boolean): void {
+  try {
+    if (enabled) localStorage.removeItem(NATIVE_RUNTIME_ENABLED_KEY);
+    else localStorage.setItem(NATIVE_RUNTIME_ENABLED_KEY, '0');
+  } catch { /* ignore */ }
+  availability = null;
+}
+
+export function getNativeChatRuntimeUserEnabled(): boolean {
+  try { return localStorage.getItem(NATIVE_RUNTIME_CHAT_KEY) !== '0'; } catch { return true; }
+}
+
+export function setNativeChatRuntimeUserEnabled(enabled: boolean): void {
+  try {
+    if (enabled) localStorage.removeItem(NATIVE_RUNTIME_CHAT_KEY);
+    else localStorage.setItem(NATIVE_RUNTIME_CHAT_KEY, '0');
+  } catch { /* ignore */ }
+}
 
 export function isNativeRuntimePlatform(): boolean {
   return Capacitor.isNativePlatform();
@@ -50,12 +76,7 @@ export function isNativeRuntimePlatform(): boolean {
 
 export function isNativeRuntimeEnabled(): boolean {
   if (!isNativeRuntimePlatform()) return false;
-  try {
-    // 可在控制台/localStorage 里临时关掉，方便现场排查：localStorage.sully_native_runtime_enabled='0'
-    return localStorage.getItem('sully_native_runtime_enabled') !== '0';
-  } catch {
-    return true;
-  }
+  return getNativeRuntimeUserEnabled();
 }
 
 export async function isNativeRuntimeAvailable(): Promise<boolean> {

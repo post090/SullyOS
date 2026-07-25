@@ -30,6 +30,7 @@ import { isPushVapidReady } from '../utils/pushVapid';
 import ApiCallLogModal from '../components/settings/ApiCallLogModal';
 import { DB } from '../utils/db';
 import { getBackupReminderState, setBackupReminderIntervalDays, daysSinceLastBackup, BACKUP_REMINDER_MIN_DAYS, BACKUP_REMINDER_MAX_DAYS } from '../utils/backupReminder';
+import { getNativeChatRuntimeUserEnabled, setNativeChatRuntimeUserEnabled, getNativeRuntimeUserEnabled, setNativeRuntimeUserEnabled } from '../utils/runtime/nativeRuntime';
 
 // hot_news（orz.ai）可选热榜平台。key 必须与 API 的 ?platform= 完全一致。
 const HOTNEWS_PLATFORM_OPTIONS: { key: string; label: string }[] = [
@@ -363,6 +364,9 @@ const Settings: React.FC = () => {
   const [localTemperature, setLocalTemperature] = useState<number>(
     typeof apiConfig.temperature === 'number' ? apiConfig.temperature : 0.85
   );
+  const isNativeApk = Capacitor.isNativePlatform();
+  const [nativeRuntimeEnabled, setNativeRuntimeEnabledState] = useState<boolean>(() => getNativeRuntimeUserEnabled());
+  const [nativeChatEnabled, setNativeChatEnabledState] = useState<boolean>(() => getNativeChatRuntimeUserEnabled());
   const [localMiniMaxKey, setLocalMiniMaxKey] = useState(apiConfig.minimaxApiKey || '');
   const [localMiniMaxGroupId, setLocalMiniMaxGroupId] = useState(apiConfig.minimaxGroupId || '');
   const [localMiniMaxRegion, setLocalMiniMaxRegion] = useState<'domestic' | 'overseas'>(
@@ -1686,6 +1690,48 @@ const Settings: React.FC = () => {
                                     <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${localStream ? 'translate-x-4' : 'translate-x-0.5'}`} />
                                 </button>
                             </div>
+                            {isNativeApk && (
+                                <div className="rounded-xl bg-emerald-50/60 border border-emerald-100 px-3 py-2 space-y-2">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div>
+                                            <span className="text-[10px] text-emerald-700 font-semibold">APK 原生稳定模式</span>
+                                            <p className="text-[9px] text-emerald-700/60 mt-0.5">主聊天回复交给 Android 原生后台任务；异常时可关闭回旧链路</p>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                const next = !nativeRuntimeEnabled;
+                                                setNativeRuntimeUserEnabled(next);
+                                                setNativeRuntimeEnabledState(next);
+                                                if (!next) { setNativeChatRuntimeUserEnabled(false); setNativeChatEnabledState(false); }
+                                                addToast(next ? '已开启 APK 原生稳定模式' : '已关闭 APK 原生稳定模式', 'info');
+                                            }}
+                                            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${nativeRuntimeEnabled ? 'bg-emerald-500' : 'bg-slate-200'}`}
+                                        >
+                                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${nativeRuntimeEnabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                                        </button>
+                                    </div>
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div>
+                                            <span className="text-[10px] text-emerald-700/80">主聊天原生请求</span>
+                                            <p className="text-[9px] text-emerald-700/50 mt-0.5">只影响消息 App 的主回复，不影响记忆/小红书等旁路任务</p>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            disabled={!nativeRuntimeEnabled}
+                                            onClick={() => {
+                                                const next = !nativeChatEnabled;
+                                                setNativeChatRuntimeUserEnabled(next);
+                                                setNativeChatEnabledState(next);
+                                                addToast(next ? '主聊天将使用原生请求' : '主聊天已切回旧请求链路', 'info');
+                                            }}
+                                            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-40 ${nativeChatEnabled && nativeRuntimeEnabled ? 'bg-emerald-500' : 'bg-slate-200'}`}
+                                        >
+                                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${nativeChatEnabled && nativeRuntimeEnabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
                             <div>
                                 <div className="flex items-center justify-between">
                                     <span className="text-[10px] text-slate-400">温度 (Temperature)</span>

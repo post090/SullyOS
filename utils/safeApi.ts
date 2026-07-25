@@ -13,7 +13,7 @@
 import { appendDevDebugApiLog, makeDebugLogger } from './devDebug';
 import { recordApiCall, type ApiCallMeta } from './apiCallLog';
 import { enqueueAndWaitNativeHttp } from './runtime/nativeJobQueue';
-import { isNativeRuntimeAvailable, isNativeRuntimeEnabled } from './runtime/nativeRuntime';
+import { getNativeChatRuntimeUserEnabled, isNativeRuntimeAvailable, isNativeRuntimeEnabled } from './runtime/nativeRuntime';
 import { isSamplingParamError, modelRejectsSamplingParams, stripSamplingParams } from './samplingParamCompat';
 import { createChatGenerationJob, markChatJobFailed, markChatJobNativeCompleted } from './runtime/chatJobs';
 
@@ -45,6 +45,7 @@ function shouldTryNativeRuntime(url: string, options: RequestInit, meta?: ApiCal
     if (!isChatCompletionUrl(url)) return false;
     // 先只接主聊天回复：旁路任务继续走原 fetch monkey-patch，避免丢失它的流式升级/专项自愈。
     if (!(meta?.appName === '消息' && meta?.purpose === '聊天回复')) return false;
+    if (!getNativeChatRuntimeUserEnabled()) return false;
     const method = String(options.method || 'GET').toUpperCase();
     if (method !== 'POST') return false;
     if (typeof options.body !== 'string') return false;

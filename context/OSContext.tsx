@@ -893,6 +893,17 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     if (nativeRecoveryInFlightRef.current) return;
     nativeRecoveryInFlightRef.current = true;
     recoverNativeChatJobs()
+      .then(({ recovered, failed, running }) => {
+        if (recovered === 0 && failed === 0) return;
+        setSystemLogs(prev => [{
+          id: `log-${Date.now()}`,
+          timestamp: Date.now(),
+          type: 'system',
+          source: 'Native Runtime',
+          message: `后台回复恢复：成功 ${recovered}，失败 ${failed}${running ? `，仍在运行 ${running}` : ''}`,
+          detail: '这是 APK 原生后台任务恢复摘要；不会插入聊天记录。',
+        }, ...prev.slice(0, 49)]);
+      })
       .catch(err => console.warn('[NativeRuntime] recover chat jobs failed:', err))
       .finally(() => { nativeRecoveryInFlightRef.current = false; });
   }, []);
