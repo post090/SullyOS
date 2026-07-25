@@ -523,7 +523,12 @@ const flushInboxToChatImpl = async () => {
 
     if (!routed) {
       try {
-        await DB.saveMessage({
+        const existing = await DB.getRecentMessagesByCharId(message.charId, 200);
+        const alreadySaved = existing.some(saved => saved.metadata?.activeMsg2?.messageId === message.messageId);
+        if (alreadySaved) {
+          routed = true;
+        } else {
+          await DB.saveMessage({
           charId: message.charId,
           role: 'assistant',
           type: 'text',
@@ -543,6 +548,7 @@ const flushInboxToChatImpl = async () => {
             ...(message.metadata || {}),
           },
         });
+        }
       } catch (e) {
         log.warn('saveMessage failed, requeue to inbox', { messageId: message.messageId, error: e });
         try {

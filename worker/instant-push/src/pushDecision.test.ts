@@ -40,7 +40,7 @@ describe('buildPushDecision D 系列 (pushPayloads 数组)', () => {
     // raw 跟 sanitized 在普通文本上一样, 但都塞 notification.body (0.8+ 不再
     // 用条件去重, lib 不 clone notification 跨 chunk, 每条独立)
     expect(ps[0].message).toBe('你好');
-    expect(ps[0].notification).toEqual({ show: 'when-hidden', title: '来自 X', body: '你好' });
+    expect(ps[0].notification).toEqual({ show: 'when-hidden', title: 'X', body: '你好' });
     expect(ps[0].metadata?.directives).toEqual([]);
   });
 
@@ -152,14 +152,14 @@ describe('buildPushDecision D 系列 (pushPayloads 数组)', () => {
 // ─── E 系列: title fallback ──────────────────────────────────────────────
 
 describe('buildPushDecision E 系列 (title fallback)', () => {
-  it('E1 contactName="Sully" → 每条 push title="来自 Sully"', () => {
+  it('E1 contactName="Sully" → 每条 push title="Sully"', () => {
     const r = buildPushDecision(baseInput({
       llmOutputText: '你好\n再见',
       contactName: 'Sully',
     }));
     const ps = pushes(r);
     for (const p of ps) {
-      expect(p.notification?.title).toBe('来自 Sully');
+      expect(p.notification?.title).toBe('Sully');
     }
   });
 
@@ -167,13 +167,13 @@ describe('buildPushDecision E 系列 (title fallback)', () => {
     { name: '空字符串', value: '' },
     { name: '全空白', value: '   ' },
     { name: '混合空白 (tab + 全角空格 + nbsp)', value: '\t　 ' },
-  ])('E2 contactName=$name → fallback 到 "来自 主动消息"', ({ value }) => {
+  ])('E2 contactName=$name → fallback 到 "主动消息"', ({ value }) => {
     const r = buildPushDecision(baseInput({
       llmOutputText: '你好',
       contactName: value,
     }));
     const ps = pushes(r);
-    expect(ps[0].notification?.title).toBe('来自 主动消息');
+    expect(ps[0].notification?.title).toBe('主动消息');
   });
 });
 
