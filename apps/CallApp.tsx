@@ -11,6 +11,7 @@ import { FISH_VOICE_ACTING_GUIDE, synthesizeSpeechFishDetailed, resolveFishAudio
 import { ELEVEN_VOICE_ACTING_GUIDE, synthesizeSpeechElevenDetailed, resolveElevenLabsApiKey, cleanTextForTtsEleven, stripElevenMarkupForDisplay } from '../utils/elevenLabsTts';
 import { resolveTtsProvider, getTtsProvider, getVoicePromptOverride } from '../utils/ttsProvider';
 import { startStt, isSttSupported, type SttSession } from '../utils/speechToText';
+import { startNativeCallNotification, updateNativeCallNotification, stopNativeCallNotification, getNativeCallState } from '../utils/runtime/nativeRuntime';
 import { ContextBuilder } from '../utils/context';
 import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
 import { RealtimeContextManager } from '../utils/realtimeContext';
@@ -476,18 +477,45 @@ const CallApp: React.FC = () => {
     sttSessionRef.current?.stop();
   }, []);
   // Voice input: toggle speech-to-text into the draft input box.
+  // Fix: use a synchronous ref to avoid React state race when clicking twice quickly.
+  // Previous bug: isListening state update is async, so double-click could start two sessions
+  // or fail to stop. Also stop() on native is async and needs await to free RecognitionService.
+  const isListeningRef = useRef(false);
+  useEffect(() => { isListeningRef.current = isListening; }, [isListening]);
+
   const toggleStt = async () => {
-    if (isListening) { sttSessionRef.current?.stop(); return; }
+    // If we are currently listening (sync ref), stop immediately
+    if (isListeningRef.current) {
+      isListeningRef.current = false;
+      setIsListening(false);
+      try {
+        const sess = sttSessionRef.current;
+        sttSessionRef.current = null;
+        await sess?.stop();
+      } catch { /* ignore */ }
+      return;
+    }
     if (!sttSupported) { addToast('当前环境不支持语音输入', 'info'); return; }
+    // Prevent concurrent starts
+    if (sttSessionRef.current) {
+      try { await sttSessionRef.current.stop(); } catch {}
+      sttSessionRef.current = null;
+    }
     try {
+      isListeningRef.current = true;
       setIsListening(true);
       sttSessionRef.current = await startStt('zh-CN', {
         onPartial: (t) => setDraftInput(t),
         onFinal: (t) => setDraftInput(t),
         onError: (m) => { if (m) addToast(m, 'info'); },
-        onEnd: () => { setIsListening(false); sttSessionRef.current = null; },
+        onEnd: () => {
+          isListeningRef.current = false;
+          setIsListening(false);
+          sttSessionRef.current = null;
+        },
       });
     } catch (e: any) {
+      isListeningRef.current = false;
       setIsListening(false);
       sttSessionRef.current = null;
       // native 端的异常 e.message 可能是对象（Capacitor 原生 Error），String 兜底防 toast 渲染成 [object Object]。
@@ -522,6 +550,53 @@ const CallApp: React.FC = () => {
     const timer = window.setInterval(() => setElapsedSeconds(Math.max(0, Math.floor((Date.now() - callStartedAt) / 1000))), 1000);
     return () => window.clearInterval(timer);
   }, [callStartedAt, callState]);
+
+  // Call keep-alive + notification like QQ: show ongoing call with chronometer, allow resume after WebView death
+  useEffect(() => {
+    if (viewMode !== 'in-call') return;
+    if (!callStartedAt || ['idle', 'ended'].includes(callState)) return;
+    const charName = selectedChar?.name || '通话中';
+    const charId = selectedCharId || selectedChar?.id || '';
+    // Start/update native call notification with chronometer
+    if (callState === 'connecting' || callState === 'listening' || callState === 'thinking' || callState === 'speaking') {
+      void startNativeCallNotification({ charName, charId, startedAt: callStartedAt });
+    }
+    // Update notification when selected char changes (e.g., resume)
+    void updateNativeCallNotification({ charName, charId, startedAt: callStartedAt });
+
+    // If call gets interrupted (WebView killed), on resume we can read native call state
+    // and restore. The service persists call_active in SharedPreferences.
+    return () => {
+      // Don't stop on every re-render, only when truly ending – handled in finishCall/resetCurrentCall
+    };
+  }, [viewMode, callStartedAt, callState, selectedCharId]);
+
+  // When viewMode leaves in-call, stop call notification (unless suspended)
+  useEffect(() => {
+    if (viewMode !== 'in-call') {
+      // If we are going to role-select and we have a suspended call, keep notification for resume
+      // The suspendCall flow will keep call_active true in native prefs, so notification stays via service startForeground
+      // Only stop if not suspended
+      if (!suspendedCall) {
+        void stopNativeCallNotification();
+      }
+    }
+  }, [viewMode]);
+
+  // Check for native call state on mount to allow resume after process death
+  useEffect(() => {
+    void (async () => {
+      try {
+        const nativeState = await getNativeCallState();
+        if (nativeState?.active && nativeState.charId && viewMode === 'role-select') {
+          // If native says call is active but JS is idle, we can show a toast to resume
+          // Don't auto-resume to avoid surprising user, but keep notification
+          console.log('[Call] native call still active, waiting for user resume:', nativeState);
+        }
+      } catch {}
+    })();
+  }, []);
+
   useEffect(() => {
     callScrollableRef.current?.scrollTo({ top: callScrollableRef.current.scrollHeight, behavior: 'smooth' });
   }, [bubbles]);
@@ -696,6 +771,7 @@ const CallApp: React.FC = () => {
     setElapsedSeconds(0);
     setShowInputPanel(true);
     setCurrentSessionId(`call-${Date.now()}`);
+    void stopNativeCallNotification();
   };
   const finishCall = async () => {
     if (selectedChar?.id) {
@@ -824,7 +900,11 @@ const CallApp: React.FC = () => {
   const handleTurn = async () => {
     const minimaxApiKey = resolveMiniMaxApiKey(apiConfig);
     const voiceId = resolveVoiceId();
-    if (isListening) { sttSessionRef.current?.stop(); setIsListening(false); }
+    if (isListeningRef.current) {
+      isListeningRef.current = false;
+      setIsListening(false);
+      try { const s = sttSessionRef.current; sttSessionRef.current = null; await s?.stop(); } catch {}
+    }
     const input = draftInput.trim();
     if (!input) return addToast('说点什么吧', 'info');
     if (['connecting', 'thinking'].includes(callState)) return addToast(`${selectedChar?.name || '对方'}还在想，等一等`, 'info');

@@ -13,13 +13,11 @@ import android.os.IBinder;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -37,15 +35,30 @@ public class SullyNativeRuntimeService extends Service {
     public static final String ACTION_ENQUEUE_HTTP = "com.sullyos.nativeruntime.ENQUEUE_HTTP";
     public static final String ACTION_CANCEL_JOB = "com.sullyos.nativeruntime.CANCEL_JOB";
     public static final String ACTION_EVENT_NOTIFICATION = "com.sullyos.nativeruntime.EVENT_NOTIFICATION";
+    public static final String ACTION_CALL_START = "com.sullyos.nativeruntime.CALL_START";
+    public static final String ACTION_CALL_UPDATE = "com.sullyos.nativeruntime.CALL_UPDATE";
+    public static final String ACTION_CALL_END = "com.sullyos.nativeruntime.CALL_END";
+    public static final String ACTION_MUSIC_SHOW = "com.sullyos.nativeruntime.MUSIC_SHOW";
+    public static final String ACTION_MUSIC_UPDATE = "com.sullyos.nativeruntime.MUSIC_UPDATE";
+    public static final String ACTION_MUSIC_STOP = "com.sullyos.nativeruntime.MUSIC_STOP";
+    public static final String ACTION_MUSIC_ACTION = "com.sullyos.nativeruntime.MUSIC_ACTION";
 
     private static final String CHANNEL_ID = "sully_native_runtime";
+    private static final String CHANNEL_CALL = "sully_call";
+    private static final String CHANNEL_MUSIC = "sully_music";
     private static final int NOTIFICATION_ID = 31090;
+    private static final int NOTIFICATION_CALL_ID = 31091;
+    private static final int NOTIFICATION_MUSIC_ID = 31092;
     private static final ExecutorService EXECUTOR = Executors.newCachedThreadPool();
     private static final AtomicInteger RUNNING_JOBS = new AtomicInteger(0);
     private static final Set<String> CANCELLED = ConcurrentHashMap.newKeySet();
     private static final Set<String> ACTIVE_JOB_IDS = ConcurrentHashMap.newKeySet();
     private static final ConcurrentHashMap<String, HttpURLConnection> CONNECTIONS = new ConcurrentHashMap<>();
     private static volatile boolean manualForeground = false;
+    // Call tracking for resume
+    private static volatile long callStartedAtMs = 0;
+    private static volatile String callCharId = null;
+    private static volatile String callCharName = null;
 
     @Override
     public IBinder onBind(Intent intent) {
@@ -63,12 +76,83 @@ public class SullyNativeRuntimeService extends Service {
                 intent.getStringExtra("tag"),
                 intent.getStringExtra("route")
             );
-            // Fix: don't kill the persistent foreground service when a role event arrives.
-            // The service is supposed to stay alive as "SullyOS 正在运行" when always-on is enabled.
             if (manualForeground) {
                 return START_STICKY;
             }
             stopSelf(startId);
+            return START_NOT_STICKY;
+        }
+        if (ACTION_CALL_START.equals(action)) {
+            String charName = intent.getStringExtra("charName");
+            String charId = intent.getStringExtra("charId");
+            long startedAt = intent.getLongExtra("startedAt", System.currentTimeMillis());
+            callCharId = charId;
+            callCharName = charName;
+            callStartedAtMs = startedAt;
+            // Persist for resume after WebView death
+            getSharedPreferences("sully_native_runtime", MODE_PRIVATE).edit()
+                .putString("call_char_id", charId)
+                .putString("call_char_name", charName)
+                .putLong("call_started_at", startedAt)
+                .putBoolean("call_active", true)
+                .apply();
+            startForegroundCompatWithCall(charName, startedAt);
+            return START_STICKY;
+        }
+        if (ACTION_CALL_UPDATE.equals(action)) {
+            String charName = intent.getStringExtra("charName");
+            long startedAt = intent.getLongExtra("startedAt", callStartedAtMs);
+            String charId = intent.getStringExtra("charId");
+            if (charId != null) callCharId = charId;
+            if (charName != null) callCharName = charName;
+            if (startedAt != 0) callStartedAtMs = startedAt;
+            updateCallNotification(charName != null ? charName : callCharName, callStartedAtMs);
+            return START_STICKY;
+        }
+        if (ACTION_CALL_END.equals(action)) {
+            stopCallNotification();
+            callCharId = null;
+            callCharName = null;
+            callStartedAtMs = 0;
+            getSharedPreferences("sully_native_runtime", MODE_PRIVATE).edit()
+                .putBoolean("call_active", false)
+                .remove("call_char_id")
+                .remove("call_char_name")
+                .remove("call_started_at")
+                .apply();
+            maybeStop();
+            return START_NOT_STICKY;
+        }
+        if (ACTION_MUSIC_SHOW.equals(action) || ACTION_MUSIC_UPDATE.equals(action)) {
+            String title = intent.getStringExtra("title");
+            String artist = intent.getStringExtra("artist");
+            String album = intent.getStringExtra("album");
+            boolean isPlaying = intent.getBooleanExtra("isPlaying", true);
+            boolean isLiked = intent.getBooleanExtra("isLiked", false);
+            String songId = intent.getStringExtra("songId");
+            showMusicNotification(title, artist, album, isPlaying, isLiked, songId);
+            return START_STICKY;
+        }
+        if (ACTION_MUSIC_STOP.equals(action)) {
+            stopMusicNotification();
+            return START_NOT_STICKY;
+        }
+        if (ACTION_MUSIC_ACTION.equals(action)) {
+            String musicAction = intent.getStringExtra("musicAction");
+            if (musicAction != null && !musicAction.trim().isEmpty()) {
+                // Store pending action for JS to consume on resume
+                getSharedPreferences("sully_native_runtime", MODE_PRIVATE).edit()
+                    .putString("pending_music_action", musicAction)
+                    .putLong("pending_music_action_at", System.currentTimeMillis())
+                    .apply();
+                // Launch app so JS can handle it
+                Intent launchIntent = getPackageManager().getLaunchIntentForPackage(getPackageName());
+                if (launchIntent != null) {
+                    launchIntent.putExtra("sully_music_action", musicAction);
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                    try { startActivity(launchIntent); } catch (Exception ignored) {}
+                }
+            }
             return START_NOT_STICKY;
         }
         if (ACTION_START_FOREGROUND.equals(action)) {
@@ -78,10 +162,29 @@ public class SullyNativeRuntimeService extends Service {
                 intent.getStringExtra("text")
             );
             resumePendingJobs();
+            // If there was an active call persisted, restore its notification
+            boolean wasCallActive = getSharedPreferences("sully_native_runtime", MODE_PRIVATE).getBoolean("call_active", false);
+            if (wasCallActive) {
+                String savedName = getSharedPreferences("sully_native_runtime", MODE_PRIVATE).getString("call_char_name", null);
+                long savedStarted = getSharedPreferences("sully_native_runtime", MODE_PRIVATE).getLong("call_started_at", System.currentTimeMillis());
+                String savedCharId = getSharedPreferences("sully_native_runtime", MODE_PRIVATE).getString("call_char_id", null);
+                if (savedName != null) {
+                    callCharName = savedName;
+                    callCharId = savedCharId;
+                    callStartedAtMs = savedStarted;
+                    // Re-show call notification as foreground? We already have foreground from persistent,
+                    // so show call as separate notification (not foreground) to avoid replacing persistent.
+                    updateCallNotification(savedName, savedStarted);
+                }
+            }
             return START_STICKY;
         }
         if (ACTION_STOP_FOREGROUND.equals(action)) {
             manualForeground = false;
+            // If call is still active, keep service alive for call
+            if (callStartedAtMs != 0) {
+                return START_STICKY;
+            }
             maybeStop();
             return START_NOT_STICKY;
         }
@@ -294,6 +397,188 @@ public class SullyNativeRuntimeService extends Service {
         ));
     }
 
+    private void startForegroundCompatWithCall(String charName, long startedAtMs) {
+        ensureChannel(this);
+        ensureCallChannel(this);
+        // charId is stored in static field callCharId, use it for route if available
+        String rawRoute = callCharId != null ? callCharId : (charName != null ? charName : "call");
+        String routeCallId = rawRoute.startsWith("call:") ? rawRoute : "call:" + rawRoute;
+        Notification notification = buildCallNotification(
+            charName == null || charName.trim().isEmpty() ? "通话中" : "正在与 " + charName + " 通话",
+            "轻触返回通话 · " + formatCallDuration(System.currentTimeMillis() - startedAtMs),
+            startedAtMs,
+            routeCallId
+        );
+        startForeground(NOTIFICATION_CALL_ID, notification);
+    }
+
+    private void updateCallNotification(String charName, long startedAtMs) {
+        ensureChannel(this);
+        ensureCallChannel(this);
+        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager == null) return;
+        String rawRoute = callCharId != null ? callCharId : (charName != null ? charName : "call");
+        String routeCallId = rawRoute.startsWith("call:") ? rawRoute : "call:" + rawRoute;
+        Notification notification = buildCallNotification(
+            charName == null || charName.trim().isEmpty() ? "通话中" : "正在与 " + charName + " 通话",
+            "轻触返回通话 · " + formatCallDuration(System.currentTimeMillis() - startedAtMs),
+            startedAtMs,
+            routeCallId
+        );
+        manager.notify("sully-call", NOTIFICATION_CALL_ID, notification);
+    }
+
+    private static String formatCallDuration(long elapsedMs) {
+        if (elapsedMs <= 0) return "00:00";
+        long totalSec = elapsedMs / 1000;
+        long min = totalSec / 60;
+        long sec = totalSec % 60;
+        return String.format("%02d:%02d", min, sec);
+    }
+
+    private void stopCallNotification() {
+        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager != null) {
+            manager.cancel("sully-call", NOTIFICATION_CALL_ID);
+        }
+        // If persistent mode is still enabled, restore its foreground notification
+        if (manualForeground) {
+            startForegroundCompat("SullyOS 正在运行", "");
+        } else {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE);
+            } else {
+                stopForeground(true);
+            }
+        }
+    }
+
+    private Notification buildCallNotification(String title, String text, long startedAtMs, String charIdForRoute) {
+        ensureCallChannel(this);
+        Intent launchIntent = getPackageManager().getLaunchIntentForPackage(getPackageName());
+        PendingIntent contentIntent = null;
+        if (launchIntent != null) {
+            launchIntent.putExtra("sully_route", charIdForRoute != null ? charIdForRoute : "call");
+            launchIntent.putExtra("sully_call_resume", true);
+            getSharedPreferences("sully_native_runtime", MODE_PRIVATE).edit()
+                .putString("launch_route", charIdForRoute != null ? charIdForRoute : "call")
+                .apply();
+            int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) flags |= PendingIntent.FLAG_IMMUTABLE;
+            contentIntent = PendingIntent.getActivity(this, 93091, launchIntent, flags);
+        }
+
+        // Hangup action
+        Intent hangupIntent = new Intent(this, SullyNativeRuntimeService.class);
+        hangupIntent.setAction(ACTION_CALL_END);
+        int hangupFlags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) hangupFlags |= PendingIntent.FLAG_IMMUTABLE;
+        PendingIntent hangupPending = PendingIntent.getService(this, 93092, hangupIntent, hangupFlags);
+
+        Notification.Builder builder;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            builder = new Notification.Builder(this, CHANNEL_CALL);
+        } else {
+            builder = new Notification.Builder(this);
+        }
+        builder.setContentTitle(title)
+            .setContentText(text)
+            .setSmallIcon(getApplicationInfo().icon)
+            .setOngoing(true)
+            .setShowWhen(true)
+            .setWhen(startedAtMs > 0 ? startedAtMs : System.currentTimeMillis())
+            .setUsesChronometer(true)
+            .setContentIntent(contentIntent)
+            .setCategory(Notification.CATEGORY_CALL);
+
+        // Add hangup action for Android
+        builder.addAction(new Notification.Action.Builder(
+            null,
+            "挂断",
+            hangupPending
+        ).build());
+
+        return builder.build();
+    }
+
+    private void showMusicNotification(String title, String artist, String album, boolean isPlaying, boolean isLiked, String songId) {
+        ensureChannel(this);
+        ensureMusicChannel(this);
+        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager == null) return;
+
+        String contentTitle = title != null && !title.trim().isEmpty() ? title : "SullyOS 音乐";
+        String contentText = artist != null && !artist.trim().isEmpty() ? artist : (album != null ? album : "正在播放");
+
+        Notification notification = buildMusicNotification(contentTitle, contentText, isPlaying, isLiked, songId);
+        manager.notify("sully-music", NOTIFICATION_MUSIC_ID, notification);
+    }
+
+    private void stopMusicNotification() {
+        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager != null) {
+            manager.cancel("sully-music", NOTIFICATION_MUSIC_ID);
+        }
+    }
+
+    private Notification buildMusicNotification(String title, String artist, boolean isPlaying, boolean isLiked, String songId) {
+        ensureMusicChannel(this);
+
+        Intent launchIntent = getPackageManager().getLaunchIntentForPackage(getPackageName());
+        PendingIntent contentIntent = null;
+        if (launchIntent != null) {
+            launchIntent.putExtra("sully_route", "music");
+            launchIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) flags |= PendingIntent.FLAG_IMMUTABLE;
+            contentIntent = PendingIntent.getActivity(this, 94091, launchIntent, flags);
+        }
+
+        Notification.Builder builder;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            builder = new Notification.Builder(this, CHANNEL_MUSIC);
+        } else {
+            builder = new Notification.Builder(this);
+        }
+
+        builder.setContentTitle(title)
+            .setContentText(artist)
+            .setSmallIcon(getApplicationInfo().icon)
+            .setOngoing(isPlaying) // ongoing when playing, swipe-dismissable when paused
+            .setShowWhen(false)
+            .setContentIntent(contentIntent);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            builder.setCategory(Notification.CATEGORY_TRANSPORT);
+        }
+
+        // Build action pending intents
+        PendingIntent prevPending = buildMusicActionPendingIntent("prev", 94092);
+        PendingIntent togglePending = buildMusicActionPendingIntent(isPlaying ? "pause" : "play", 94093);
+        PendingIntent nextPending = buildMusicActionPendingIntent("next", 94094);
+        PendingIntent likePending = buildMusicActionPendingIntent(isLiked ? "unlike" : "like", 94095);
+
+        // Order: like, prev, play/pause, next
+        String likeTitle = isLiked ? "取消喜欢" : "喜欢";
+        builder.addAction(new Notification.Action.Builder(null, likeTitle, likePending).build());
+        builder.addAction(new Notification.Action.Builder(null, "上一首", prevPending).build());
+        String toggleTitle = isPlaying ? "暂停" : "播放";
+        builder.addAction(new Notification.Action.Builder(null, toggleTitle, togglePending).build());
+        builder.addAction(new Notification.Action.Builder(null, "下一首", nextPending).build());
+
+        // For Android 10+, we could use MediaStyle, but keep simple for compatibility
+        return builder.build();
+    }
+
+    private PendingIntent buildMusicActionPendingIntent(String action, int requestCode) {
+        Intent intent = new Intent(this, SullyNativeRuntimeService.class);
+        intent.setAction(ACTION_MUSIC_ACTION);
+        intent.putExtra("musicAction", action);
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) flags |= PendingIntent.FLAG_IMMUTABLE;
+        return PendingIntent.getService(this, requestCode, intent, flags);
+    }
+
     private Notification buildNotification(String title, String text, boolean ongoing, String route) {
         Intent launchIntent = getPackageManager().getLaunchIntentForPackage(getPackageName());
         PendingIntent pendingIntent = null;
@@ -328,7 +613,7 @@ public class SullyNativeRuntimeService extends Service {
     }
 
     private void maybeStop() {
-        if (manualForeground || RUNNING_JOBS.get() > 0) return;
+        if (manualForeground || RUNNING_JOBS.get() > 0 || callStartedAtMs != 0) return;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             stopForeground(STOP_FOREGROUND_REMOVE);
         } else {
@@ -355,6 +640,37 @@ public class SullyNativeRuntimeService extends Service {
             NotificationManager.IMPORTANCE_LOW
         );
         channel.setDescription("SullyOS APK 原生后台任务与生成保活");
+        manager.createNotificationChannel(channel);
+    }
+
+    private static void ensureCallChannel(Context context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager == null || manager.getNotificationChannel(CHANNEL_CALL) != null) return;
+        NotificationChannel channel = new NotificationChannel(
+            CHANNEL_CALL,
+            "SullyOS 通话",
+            NotificationManager.IMPORTANCE_HIGH
+        );
+        channel.setDescription("正在进行的通话");
+        channel.setShowBadge(false);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            channel.setAllowBubbles(false);
+        }
+        manager.createNotificationChannel(channel);
+    }
+
+    private static void ensureMusicChannel(Context context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager == null || manager.getNotificationChannel(CHANNEL_MUSIC) != null) return;
+        NotificationChannel channel = new NotificationChannel(
+            CHANNEL_MUSIC,
+            "SullyOS 音乐",
+            NotificationManager.IMPORTANCE_LOW
+        );
+        channel.setDescription("正在播放的音乐");
+        channel.setShowBadge(false);
         manager.createNotificationChannel(channel);
     }
 

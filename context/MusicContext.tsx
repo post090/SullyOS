@@ -857,6 +857,66 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     try { (navigator as any).mediaSession.playbackState = playing ? 'playing' : 'paused'; } catch {}
   }, [playing]);
 
+  // 原生音乐通知 - 像网易云一样在通知栏显示歌曲信息 + 操作
+  useEffect(() => {
+    if (!current) {
+      // 没有歌曲时清除原生通知
+      void import('../utils/runtime/nativeRuntime').then(m => {
+        m.stopNativeMusicNotification().catch(() => {});
+      });
+      return;
+    }
+    void import('../utils/runtime/nativeRuntime').then(m => {
+      const input = {
+        title: current.name || '未知歌曲',
+        artist: current.artists || current.album || 'SullyOS',
+        album: current.album || '',
+        isPlaying: playing,
+        isLiked: liked,
+        songId: String(current.id),
+      };
+      // 首次显示 vs 更新都用同一个入口，service 会更新已有通知
+      m.showNativeMusicNotification(input).catch(() => {});
+    });
+  }, [current?.id, current?.name, current?.artists, current?.album, playing, liked]);
+
+  // 轮询原生侧音乐控制按钮（通知栏点击） - prev/next/toggle/like
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        const { getPendingNativeMusicAction } = await import('../utils/runtime/nativeRuntime');
+        const action = await getPendingNativeMusicAction();
+        if (!action) return;
+        switch (action) {
+          case 'prev':
+            prevSong();
+            break;
+          case 'next':
+            nextSong();
+            break;
+          case 'play':
+          case 'pause':
+          case 'toggle':
+            togglePlay();
+            break;
+          case 'like':
+          case 'unlike':
+            void toggleLike();
+            break;
+        }
+      } catch { /* ignore */ }
+    };
+    // 每 1s 轮询一次 pending action，通知栏点击后 10s 内有效
+    timer = setInterval(() => { void poll(); }, 1000);
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+    };
+  }, [prevSong, nextSong, togglePlay, toggleLike]);
+
   // 把当前播放状态写到模块级快照，供非 React 调用者（OSContext.runProactive
   // 等位于 MusicProvider 上层的代码）读取。useMusic() 在那一层用不了。
   useEffect(() => {

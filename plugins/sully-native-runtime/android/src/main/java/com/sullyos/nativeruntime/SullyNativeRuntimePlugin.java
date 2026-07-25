@@ -321,6 +321,125 @@ public class SullyNativeRuntimePlugin extends Plugin {
         call.resolve();
     }
 
+    @PluginMethod
+    public void startCallNotification(PluginCall call) {
+        String charName = call.getString("charName", "通话中");
+        String charId = call.getString("charId", "");
+        long startedAt = call.getLong("startedAt", System.currentTimeMillis());
+        Intent intent = new Intent(getContext(), SullyNativeRuntimeService.class);
+        intent.setAction(SullyNativeRuntimeService.ACTION_CALL_START);
+        intent.putExtra("charName", charName);
+        intent.putExtra("charId", charId);
+        intent.putExtra("startedAt", startedAt);
+        SullyNativeRuntimeService.startCompat(getContext(), intent);
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void updateCallNotification(PluginCall call) {
+        String charName = call.getString("charName", "通话中");
+        String charId = call.getString("charId", "");
+        long startedAt = call.getLong("startedAt", 0L);
+        Intent intent = new Intent(getContext(), SullyNativeRuntimeService.class);
+        intent.setAction(SullyNativeRuntimeService.ACTION_CALL_UPDATE);
+        intent.putExtra("charName", charName);
+        intent.putExtra("charId", charId);
+        intent.putExtra("startedAt", startedAt);
+        getContext().startService(intent);
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void stopCallNotification(PluginCall call) {
+        Intent intent = new Intent(getContext(), SullyNativeRuntimeService.class);
+        intent.setAction(SullyNativeRuntimeService.ACTION_CALL_END);
+        getContext().startService(intent);
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void showMusicNotification(PluginCall call) {
+        String title = call.getString("title", "SullyOS 音乐");
+        String artist = call.getString("artist", "");
+        String album = call.getString("album", "");
+        boolean isPlaying = call.getBoolean("isPlaying", true);
+        boolean isLiked = call.getBoolean("isLiked", false);
+        String songId = call.getString("songId", "");
+        Intent intent = new Intent(getContext(), SullyNativeRuntimeService.class);
+        intent.setAction(SullyNativeRuntimeService.ACTION_MUSIC_SHOW);
+        intent.putExtra("title", title);
+        intent.putExtra("artist", artist);
+        intent.putExtra("album", album);
+        intent.putExtra("isPlaying", isPlaying);
+        intent.putExtra("isLiked", isLiked);
+        intent.putExtra("songId", songId);
+        getContext().startService(intent);
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void updateMusicNotification(PluginCall call) {
+        String title = call.getString("title", "SullyOS 音乐");
+        String artist = call.getString("artist", "");
+        String album = call.getString("album", "");
+        boolean isPlaying = call.getBoolean("isPlaying", true);
+        boolean isLiked = call.getBoolean("isLiked", false);
+        String songId = call.getString("songId", "");
+        Intent intent = new Intent(getContext(), SullyNativeRuntimeService.class);
+        intent.setAction(SullyNativeRuntimeService.ACTION_MUSIC_UPDATE);
+        intent.putExtra("title", title);
+        intent.putExtra("artist", artist);
+        intent.putExtra("album", album);
+        intent.putExtra("isPlaying", isPlaying);
+        intent.putExtra("isLiked", isLiked);
+        intent.putExtra("songId", songId);
+        getContext().startService(intent);
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void stopMusicNotification(PluginCall call) {
+        Intent intent = new Intent(getContext(), SullyNativeRuntimeService.class);
+        intent.setAction(SullyNativeRuntimeService.ACTION_MUSIC_STOP);
+        getContext().startService(intent);
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void getPendingMusicAction(PluginCall call) {
+        String action = getContext().getSharedPreferences("sully_native_runtime", Context.MODE_PRIVATE)
+            .getString("pending_music_action", null);
+        long at = getContext().getSharedPreferences("sully_native_runtime", Context.MODE_PRIVATE)
+            .getLong("pending_music_action_at", 0L);
+        // Only return if within last 10 seconds to avoid stale actions
+        JSObject result = new JSObject();
+        if (action != null && System.currentTimeMillis() - at < 10000) {
+            result.put("action", action);
+            // Clear after reading
+            getContext().getSharedPreferences("sully_native_runtime", Context.MODE_PRIVATE)
+                .edit().remove("pending_music_action").remove("pending_music_action_at").apply();
+        }
+        call.resolve(result);
+    }
+
+    @PluginMethod
+    public void getCallState(PluginCall call) {
+        boolean active = getContext().getSharedPreferences("sully_native_runtime", Context.MODE_PRIVATE)
+            .getBoolean("call_active", false);
+        String charId = getContext().getSharedPreferences("sully_native_runtime", Context.MODE_PRIVATE)
+            .getString("call_char_id", null);
+        String charName = getContext().getSharedPreferences("sully_native_runtime", Context.MODE_PRIVATE)
+            .getString("call_char_name", null);
+        long startedAt = getContext().getSharedPreferences("sully_native_runtime", Context.MODE_PRIVATE)
+            .getLong("call_started_at", 0L);
+        JSObject result = new JSObject();
+        result.put("active", active);
+        if (charId != null) result.put("charId", charId);
+        if (charName != null) result.put("charName", charName);
+        if (startedAt != 0) result.put("startedAt", startedAt);
+        call.resolve(result);
+    }
+
     private static JSONObject toJsonObject(JSObject object) throws Exception {
         JSONObject out = new JSONObject();
         Iterator<String> keys = object.keys();

@@ -54,6 +54,14 @@ interface SullyNativeRuntimePlugin {
   requestBatteryOptimizationExemption(): Promise<{ opened: boolean; fallback?: boolean; error?: string }>;
   openNotificationSettings(): Promise<void>;
   openBatterySettings(): Promise<void>;
+  startCallNotification(options: { charName: string; charId: string; startedAt: number }): Promise<void>;
+  updateCallNotification(options: { charName: string; charId: string; startedAt: number }): Promise<void>;
+  stopCallNotification(): Promise<void>;
+  showMusicNotification(options: { title: string; artist: string; album: string; isPlaying: boolean; isLiked: boolean; songId: string }): Promise<void>;
+  updateMusicNotification(options: { title: string; artist: string; album: string; isPlaying: boolean; isLiked: boolean; songId: string }): Promise<void>;
+  stopMusicNotification(): Promise<void>;
+  getPendingMusicAction(): Promise<{ action?: string }>;
+  getCallState(): Promise<{ active: boolean; charId?: string; charName?: string; startedAt?: number }>;
 }
 
 const NativeRuntime = registerPlugin<SullyNativeRuntimePlugin>('SullyNativeRuntime');
@@ -224,4 +232,88 @@ export async function cancelNativeJob(jobId: string): Promise<void> {
 export async function clearNativeJob(jobId: string): Promise<void> {
   if (!(await isNativeRuntimeAvailable())) return;
   await NativeRuntime.clearJob({ jobId });
+}
+
+export async function startNativeCallNotification(input: { charName: string; charId: string; startedAt?: number }): Promise<void> {
+  if (!isNativeRuntimePlatform()) return;
+  try {
+    await NativeRuntime.startCallNotification({
+      charName: input.charName,
+      charId: input.charId,
+      startedAt: input.startedAt || Date.now(),
+    });
+  } catch {}
+}
+
+export async function updateNativeCallNotification(input: { charName: string; charId: string; startedAt?: number }): Promise<void> {
+  if (!isNativeRuntimePlatform()) return;
+  try {
+    await NativeRuntime.updateCallNotification({
+      charName: input.charName,
+      charId: input.charId,
+      startedAt: input.startedAt || 0,
+    });
+  } catch {}
+}
+
+export async function stopNativeCallNotification(): Promise<void> {
+  if (!isNativeRuntimePlatform()) return;
+  try { await NativeRuntime.stopCallNotification(); } catch {}
+}
+
+export interface NativeMusicNotificationInput {
+  title: string;
+  artist: string;
+  album?: string;
+  isPlaying: boolean;
+  isLiked: boolean;
+  songId?: string;
+}
+
+export async function showNativeMusicNotification(input: NativeMusicNotificationInput): Promise<void> {
+  if (!isNativeRuntimePlatform()) return;
+  try {
+    await NativeRuntime.showMusicNotification({
+      title: input.title,
+      artist: input.artist,
+      album: input.album || '',
+      isPlaying: input.isPlaying,
+      isLiked: input.isLiked,
+      songId: input.songId || '',
+    });
+  } catch {}
+}
+
+export async function updateNativeMusicNotification(input: NativeMusicNotificationInput): Promise<void> {
+  if (!isNativeRuntimePlatform()) return;
+  try {
+    await NativeRuntime.updateMusicNotification({
+      title: input.title,
+      artist: input.artist,
+      album: input.album || '',
+      isPlaying: input.isPlaying,
+      isLiked: input.isLiked,
+      songId: input.songId || '',
+    });
+  } catch {}
+}
+
+export async function stopNativeMusicNotification(): Promise<void> {
+  if (!isNativeRuntimePlatform()) return;
+  try { await NativeRuntime.stopMusicNotification(); } catch {}
+}
+
+export async function getPendingNativeMusicAction(): Promise<string | null> {
+  if (!isNativeRuntimePlatform()) return null;
+  try {
+    const res = await NativeRuntime.getPendingMusicAction();
+    return res?.action || null;
+  } catch { return null; }
+}
+
+export async function getNativeCallState(): Promise<{ active: boolean; charId?: string; charName?: string; startedAt?: number } | null> {
+  if (!isNativeRuntimePlatform()) return null;
+  try {
+    return await NativeRuntime.getCallState();
+  } catch { return null; }
 }

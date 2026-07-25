@@ -994,6 +994,12 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       } else if (value.startsWith('vr:')) {
         setActiveApp(AppID.VRWorld);
         setActiveCharacterId(value.slice(3));
+      } else if (value.startsWith('call:') || value === 'call') {
+        const charId = value.startsWith('call:') ? value.slice(5) : '';
+        if (charId) setActiveCharacterId(charId);
+        setActiveApp(AppID.Call);
+      } else if (value.startsWith('music')) {
+        setActiveApp(AppID.Music);
       } else {
         setActiveApp(AppID.Chat);
         setActiveCharacterId(value);
