@@ -681,3 +681,95 @@ Native Runtime 必须是 APK 优先路径，Web fallback 原样保留。
 - 用户是否仍希望用 Kaka 身份提交；
 - 是否需要 push / build APK；
 - 如需用 PAT，只临时使用，不落盘。
+
+---
+
+## 11. 当前实现进度记录（2026-07-25 / commit d9ae4b4）
+
+### 11.1 总体进度估算
+
+按最终目标「APK Native Runtime：原生保活 + 常规聊天生成接续 + App 现场恢复」计算，当前约 **35%**。
+
+这个百分比含义：
+
+- 原生地基已经落地；
+- 主聊天请求已经有 APK native 通路；
+- 现场快照已有基础；
+- 但“WebView 被杀后自动 drain 结果 / pending job UI / 中断重试”还没完成，所以还不能算完整体验闭环。
+
+### 11.2 已完成
+
+1. **本地 Capacitor 插件骨架**
+   - 路径：`plugins/sully-native-runtime/`
+   - Android 侧：`SullyNativeRuntimePlugin.java`、`SullyNativeRuntimeService.java`
+   - 能力：`ping`、前台服务启动/停止、HTTP job enqueue/get/list/cancel/clear。
+
+2. **Android Foreground Service 基础**
+   - 生成任务时可显示前台通知，降低 APK 后台生成时被系统回收概率。
+   - 第一版使用轻量实现，没有引入 OkHttp / Room 等额外重依赖。
+
+3. **Native HTTP Job Queue 基础**
+   - 原生层使用 `HttpURLConnection` 发请求。
+   - job 状态写入 app 私有目录 `native-jobs/*.json`。
+   - JS 可以轮询等待结果。
+
+4. **JS Runtime 封装**
+   - `utils/runtime/nativeRuntime.ts`
+   - `utils/runtime/nativeJobQueue.ts`
+   - 提供 native 可用性判断、enqueue + wait、job 查询等。
+
+5. **主聊天回复接入 Native Runtime**
+   - 修改点：`utils/safeApi.ts`
+   - 仅对 `appName === '消息' && purpose === '聊天回复'` 的 `/chat/completions` 启用 native 路径。
+   - 其它旁路任务仍走原 fetch / OSContext monkey-patch，避免一次性扩大影响面。
+
+6. **采样参数兼容保留**
+   - native 路径发送前会对已知拒绝采样参数的模型剥离参数。
+   - native 返回 400 且识别为采样参数错误时，会剥离后重试。
+
+7. **Native 路径 API 调用记录**
+   - native 请求不会经过浏览器 fetch 拦截器，所以在 `safeApi.ts` native 分支里手动调用 `recordApiCall` 和 `appendDevDebugApiLog`。
+
+8. **Runtime Snapshot 基础**
+   - `utils/runtime/runtimeState.ts`
+   - OSContext 已接入 activeApp、activeCharacterId、前后台时间、suspendedCall 快照。
+   - App 重开时可恢复上次 activeApp 与挂起通话基础状态。
+
+9. **验证**
+   - `vitest run`：109 passed / 1233 tests passed。
+   - `pnpm run build`：通过。
+   - `npx cap add android && npx cap sync android`：能识别 `sully-native-runtime@0.1.0`。
+   - GitHub Actions APK：成功。
+   - Release：`v2026-07-25-11-52-76`。
+
+### 11.3 未完成 / 下一步
+
+1. **ChatGenerationJob 本地状态表**
+   - 需要记录主聊天生成 job：queued/running/completed/failed/interrupted。
+
+2. **Native completed job drain**
+   - App 启动 / 回前台时读取 native job 结果。
+   - 如果 WebView 被杀但 native job 已完成，需要补写 assistant 消息。
+
+3. **中断恢复 UI**
+   - 聊天界面显示：后台生成中 / 上次生成中断 / 可重试 / 忽略。
+   - 不污染聊天历史。
+
+4. **失败和清理策略**
+   - native job 超时、取消、失败后的状态同步。
+   - 成功 drain 后清理 native job 文件。
+
+5. **设置项**
+   - APK 原生稳定模式开关。
+   - 原生聊天请求开关。
+   - 后台待命模式暂不默认开启。
+
+6. **完整 resume 体验**
+   - 当前 snapshot 只是基础恢复，不等于完整现场恢复。
+   - 草稿、滚动位置、pending 状态还未全部接入。
+
+### 11.4 当前提交与 APK
+
+- 实现提交：`d9ae4b4 Add APK native runtime foundation`
+- APK Release：`https://github.com/post090/SullyOS/releases/tag/v2026-07-25-11-52-76`
+- 当前阶段关键词：**原生地基已完成，主聊天 native 请求已接入；接续闭环未完成。**
