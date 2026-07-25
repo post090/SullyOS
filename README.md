@@ -26,7 +26,6 @@
 - 实机自检面板：设置→持续运行里可刷新通知总开关/运行时权限/忽略电池优化/重启恢复，提供一键打开通知设置/请求忽略电池优化/打开电池列表
 
 **通话**
-- 录音开关竞态修复：`isListeningRef` 同步 ref + `await stop()`，连点不再“关不掉”
 - 保活 + 通知：通话时前台通知带计时器（`setUsesChronometer`），像 QQ 显示“正在与 X 通话 · 01:23”，挂断 Action，`call_active` 持久化，进程被杀/重启后通知可恢复，点通知回到通话可续
 
 **音乐**
@@ -36,7 +35,6 @@
 
 **热点与 RSS**
 - RSS 内置源 10 个（BBC/NHK/HN Best/Verge/Aeon/Psyche/JAMA/Lancet/Onion/Bangumi），`/rss/bunkyo` 工坊在 Worker 仍保留（`/rss/bunkyo` 抓文京区区报 HTML 包装）
-- **修复**：自定义 RSS 之前前端校验只允许 `https://`，导致 `/rss/bunkyo` 无法作为自定义添加；现允许 `https://` 或 `/rss/` 前缀，热点里可显示文京区区报
 - 热点 App 按 source 分组，RSS 与 orz.ai 热榜混合（每 5 条插 1 条 RSS）
 
 **其他 APK 修复**
