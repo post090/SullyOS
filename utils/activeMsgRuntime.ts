@@ -15,6 +15,7 @@ import { processNewMessages } from './memoryPalace/pipeline';
 import { loadMusicHooks } from '../context/MusicContext';
 import type { XhsNote } from './realtimeContext';
 import { appendDevDebugInstantPushLog, appendDevDebugLog, isCaptureEnabled, makeDebugLogger } from './devDebug';
+import { notifyRoleEvent } from './runtime/roleEventNotification';
 
 // 同一个 category，两个 tag——保持 console 里现有的 [ActiveMsg] / [amsg] 标签，
 // 方便用户 / 文档里 grep 历史报错信息。两条 tag 都归 instant-push 一类。
@@ -569,6 +570,14 @@ const flushInboxToChatImpl = async () => {
         sentAt: messageTimestamp,
       },
     }));
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+      void notifyRoleEvent({
+        charName: message.charName,
+        kind: 'message',
+        tag: `active-msg-${message.messageId}`,
+        route: message.charId,
+      }).catch(err => log.warn('native role notification failed', { messageId: message.messageId, error: err }));
+    }
     activeMsgTrace('runtime-active-msg-received-dispatched', {
       sessionId: (message as any).sessionId || (message.metadata as any)?.sessionId,
       messageId: message.messageId,
