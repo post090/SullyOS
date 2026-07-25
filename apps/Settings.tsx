@@ -1661,10 +1661,18 @@ const Settings: React.FC = () => {
                                                 addToast('通知权限未授予，已打开系统设置，授权后通知才会显示', 'info');
                                             }
                                             await startPersistentNativeRuntime();
-                                            // Refresh system status after enabling
+                                            // Refresh system status after enabling + auto prompt battery optimization
                                             try {
                                                 const s = await getNativeSystemStatus();
-                                                if (s) setNativeSystemStatus(s);
+                                                if (s) {
+                                                    setNativeSystemStatus(s);
+                                                    if (!s.batteryOptimizationIgnored) {
+                                                        setTimeout(async () => {
+                                                            const ok = await requestBatteryOptimizationExemption();
+                                                            if (ok) addToast('已请求忽略电池优化，请在系统弹窗中允许', 'info');
+                                                        }, 800);
+                                                    }
+                                                }
                                             } catch {}
                                         }
                                         else await stopPersistentNativeRuntime();

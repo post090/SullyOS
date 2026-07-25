@@ -277,7 +277,9 @@ const Chat: React.FC = () => {
     }, [activeCharacterId, scrollKey, messages]);
 
     const handleScrollSnapshot = useCallback(() => {
-        if (saveScrollTimerRef.current != null) return;
+        if (saveScrollTimerRef.current != null) {
+            window.clearTimeout(saveScrollTimerRef.current);
+        }
         saveScrollTimerRef.current = window.setTimeout(() => {
             saveScrollTimerRef.current = null;
             saveCurrentScrollTop();
