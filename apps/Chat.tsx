@@ -777,11 +777,11 @@ const Chat: React.FC = () => {
             setPlayingMsgId(null);
             if (chatAudioRef.current) { try { chatAudioRef.current.pause(); } catch { /* ignore */ } }
 
+            restoreScrollTopRef.current = loadSavedScrollTop();
             reloadMessages(LOAD_BATCH_SIZE);
             loadEmojiData();
             const savedDraft = localStorage.getItem(draftKey);
             setInput(savedDraft || '');
-            restoreScrollTopRef.current = loadSavedScrollTop();
             if (char) {
                 setSettingsContextLimit(char.contextLimit || 500);
                 setSettingsContextRangeMode(
@@ -975,13 +975,20 @@ const Chat: React.FC = () => {
     }, [messages, activeCharacterId, selectionMode, windowedFocusMsgId]);
 
     useEffect(() => {
+        const flushScrollSnapshot = () => saveCurrentScrollTop();
+        const onVisibility = () => { if (document.visibilityState === 'hidden') flushScrollSnapshot(); };
+        document.addEventListener('visibilitychange', onVisibility);
+        window.addEventListener('pagehide', flushScrollSnapshot);
         return () => {
+            flushScrollSnapshot();
+            document.removeEventListener('visibilitychange', onVisibility);
+            window.removeEventListener('pagehide', flushScrollSnapshot);
             if (saveScrollTimerRef.current != null) {
                 window.clearTimeout(saveScrollTimerRef.current);
                 saveScrollTimerRef.current = null;
             }
         };
-    }, []);
+    }, [saveCurrentScrollTop]);
 
     useEffect(() => {
         if (isTyping && scrollRef.current && !selectionMode && windowedFocusMsgId === null) {

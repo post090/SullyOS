@@ -956,3 +956,18 @@ Native Runtime 必须是 APK 优先路径，Web fallback 原样保留。
 - 新增 runtime snapshot 测试，覆盖 activeApp、activeCharacterId、非法 appId、挂起通话恢复。
 
 这主要提升“无感恢复”的干净度和可维护性。
+
+---
+
+## 19. 当前实现进度记录（2026-07-25 / 滚动快照收口）
+
+### 19.1 总体进度估算
+
+当前约 **71%**。
+
+本轮补强：
+
+- Chat 页面在 `visibilitychange → hidden`、`pagehide`、组件卸载时立即 flush 滚动位置；
+- 进入角色时先准备要恢复的位置，再加载消息，降低异步竞态导致恢复失败的概率。
+
+这继续完善 App 被切后台 / WebView 被回收后的现场恢复。
