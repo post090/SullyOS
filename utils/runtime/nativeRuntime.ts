@@ -23,6 +23,7 @@ interface EnqueueHttpJobInput {
   headers?: Record<string, string>;
   body?: string;
   timeoutMs?: number;
+  runAt?: number;
   responseType?: 'text' | 'json';
   title?: string;
   text?: string;

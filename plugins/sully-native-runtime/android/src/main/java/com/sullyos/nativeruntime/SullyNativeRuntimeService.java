@@ -43,6 +43,7 @@ public class SullyNativeRuntimeService extends Service {
     private static final ExecutorService EXECUTOR = Executors.newCachedThreadPool();
     private static final AtomicInteger RUNNING_JOBS = new AtomicInteger(0);
     private static final Set<String> CANCELLED = ConcurrentHashMap.newKeySet();
+    private static final Set<String> ACTIVE_JOB_IDS = ConcurrentHashMap.newKeySet();
     private static final ConcurrentHashMap<String, HttpURLConnection> CONNECTIONS = new ConcurrentHashMap<>();
     private static volatile boolean manualForeground = false;
 
@@ -71,6 +72,7 @@ public class SullyNativeRuntimeService extends Service {
                 intent.getStringExtra("title"),
                 intent.getStringExtra("text")
             );
+            resumePendingJobs();
             return START_STICKY;
         }
         if (ACTION_STOP_FOREGROUND.equals(action)) {
@@ -96,17 +98,44 @@ public class SullyNativeRuntimeService extends Service {
                 intent.getStringExtra("title"),
                 intent.getStringExtra("text")
             );
-            RUNNING_JOBS.incrementAndGet();
-            EXECUTOR.execute(() -> runHttpJob(jobId));
+            if (ACTIVE_JOB_IDS.add(jobId)) {
+                RUNNING_JOBS.incrementAndGet();
+                EXECUTOR.execute(() -> runHttpJob(jobId));
+            }
             return START_REDELIVER_INTENT;
         }
         return START_NOT_STICKY;
+    }
+
+    private void resumePendingJobs() {
+        File[] files = jobsDir(this).listFiles();
+        if (files == null) return;
+        for (File file : files) {
+            try {
+                JSONObject job = new JSONObject(readAll(new FileInputStream(file)));
+                String status = job.optString("status", "");
+                if (!"queued".equals(status) && !"running".equals(status)) continue;
+                String jobId = job.optString("jobId", "");
+                if (jobId.isEmpty()) continue;
+                if (!ACTIVE_JOB_IDS.add(jobId)) continue;
+                RUNNING_JOBS.incrementAndGet();
+                EXECUTOR.execute(() -> runHttpJob(jobId));
+            } catch (Exception ignored) { /* malformed job is left for recovery diagnostics */ }
+        }
     }
 
     private void runHttpJob(String jobId) {
         try {
             JSONObject job = readJob(this, jobId);
             if (job == null) throw new IllegalStateException("job file not found");
+            if (CANCELLED.contains(jobId)) {
+                markCancelled(this, jobId);
+                return;
+            }
+            long runAt = job.optLong("runAt", 0L);
+            if (runAt > System.currentTimeMillis()) {
+                Thread.sleep(Math.min(runAt - System.currentTimeMillis(), 2_147_000_000L));
+            }
             if (CANCELLED.contains(jobId)) {
                 markCancelled(this, jobId);
                 return;
@@ -143,6 +172,7 @@ public class SullyNativeRuntimeService extends Service {
         } finally {
             CONNECTIONS.remove(jobId);
             CANCELLED.remove(jobId);
+            ACTIVE_JOB_IDS.remove(jobId);
             RUNNING_JOBS.decrementAndGet();
             maybeStop();
         }
@@ -209,6 +239,7 @@ public class SullyNativeRuntimeService extends Service {
         out.put("createdAt", job.optLong("createdAt", now));
         out.put("updatedAt", now);
         out.put("timeoutMs", job.optInt("timeoutMs", 120000));
+        if (job.has("runAt")) out.put("runAt", job.optLong("runAt"));
         out.put("responseType", job.optString("responseType", "json"));
         if (job.has("meta")) out.put("meta", job.getJSONObject("meta"));
         JSONObject req = job.optJSONObject("request");

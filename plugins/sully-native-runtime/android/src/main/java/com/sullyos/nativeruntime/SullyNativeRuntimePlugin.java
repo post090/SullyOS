@@ -73,6 +73,8 @@ public class SullyNativeRuntimePlugin extends Plugin {
             job.put("createdAt", now);
             job.put("updatedAt", now);
             job.put("timeoutMs", call.getInt("timeoutMs", 120000));
+            long runAt = call.getLong("runAt", 0L);
+            if (runAt > 0L) job.put("runAt", runAt);
             job.put("responseType", call.getString("responseType", "json"));
 
             JSONObject request = new JSONObject();
