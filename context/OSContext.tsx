@@ -2164,8 +2164,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           // 设计目标：
           //   0) 间隔闸：intervalMinutes 语义是"用户多久没联系才找"。用户在间隔内有联系→skip。
           //   0b) 节制闸：用户没回应反复找，找满 maxAttempts 次用户仍没回→停止直到用户再说话。
-          //   1) 睡眠窗口检查：在窗口内 → 默认 skip，不攒思念值（她在睡觉谈不上想念）。
-          //      但若思念值已攒满（MISS_THRESHOLD）→ 强制发（思念优先，这么想怎么睡得着）。
+//      1) 睡眠窗口检查：在窗口内始终 skip，不攒思念值；睡眠时间优先于补火和思念值保底。
           //   2) 思念值保底：清醒时段 roll 失败攒思念值，攒满 5 次 → 强制发，清零。
           //   3) 概率 roll：proactiveness/100 作为概率阈值，roll 小于它才发。
           const pCfgForDecision = char.proactiveConfig;
@@ -2181,8 +2180,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           const lastUserContactMs = lastRealUserMsgForGate?.timestamp || 0;
           const sinceUserContact = nowMs - lastUserContactMs;
 
-          // 间隔闸：用户在间隔内有联系→skip（间隔=用户多久没联系才找）
-          // 但思念值保底触发时无视此闸（思念优先）
+          // 间隔闸：用户在间隔内有联系→skip（间隔=用户多久没联系才找）。睡眠窗口在后面作为硬闸再次检查。
           const currentMissCountPre = getMissCount(charId);
           const missSaturatedPre = currentMissCountPre >= MISS_THRESHOLD;
           if (!missSaturatedPre && sinceUserContact < intervalMs) {
@@ -2208,7 +2206,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           const currentMissCount = getMissCount(charId);
           const missSaturated = currentMissCount >= MISS_THRESHOLD;
 
-          if (inSleepWindow && !missSaturated) {
+          if (inSleepWindow) {
               // 在睡眠窗口内且思念值没满 → 静默 skip，不攒思念（她在睡觉）
               drainQueuedProactive();
               console.log(`🔇 [Proactive/Global] Skipped for ${char.name}: 睡眠窗口 ${sleepStart}-${sleepEnd}, miss=${currentMissCount}`);
