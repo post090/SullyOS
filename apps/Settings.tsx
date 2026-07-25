@@ -30,7 +30,7 @@ import { isPushVapidReady } from '../utils/pushVapid';
 import ApiCallLogModal from '../components/settings/ApiCallLogModal';
 import { DB } from '../utils/db';
 import { getBackupReminderState, setBackupReminderIntervalDays, daysSinceLastBackup, BACKUP_REMINDER_MIN_DAYS, BACKUP_REMINDER_MAX_DAYS } from '../utils/backupReminder';
-import { getNativeChatRuntimeUserEnabled, setNativeChatRuntimeUserEnabled, getNativeRuntimeUserEnabled, setNativeRuntimeUserEnabled } from '../utils/runtime/nativeRuntime';
+import { getNativeChatRuntimeUserEnabled, setNativeChatRuntimeUserEnabled, getNativeRuntimeUserEnabled, setNativeRuntimeUserEnabled, getPersistentNativeRuntimeUserEnabled, setPersistentNativeRuntimeUserEnabled, startPersistentNativeRuntime, stopPersistentNativeRuntime } from '../utils/runtime/nativeRuntime';
 
 // hot_news（orz.ai）可选热榜平台。key 必须与 API 的 ?platform= 完全一致。
 const HOTNEWS_PLATFORM_OPTIONS: { key: string; label: string }[] = [
@@ -366,6 +366,7 @@ const Settings: React.FC = () => {
   );
   const isNativeApk = Capacitor.isNativePlatform();
   const [nativeRuntimeEnabled, setNativeRuntimeEnabledState] = useState<boolean>(() => getNativeRuntimeUserEnabled());
+  const [persistentRuntimeEnabled, setPersistentRuntimeEnabledState] = useState<boolean>(() => getPersistentNativeRuntimeUserEnabled());
   const [nativeChatEnabled, setNativeChatEnabledState] = useState<boolean>(() => getNativeChatRuntimeUserEnabled());
   const [localMiniMaxKey, setLocalMiniMaxKey] = useState(apiConfig.minimaxApiKey || '');
   const [localMiniMaxGroupId, setLocalMiniMaxGroupId] = useState(apiConfig.minimaxGroupId || '');
@@ -1694,21 +1695,28 @@ const Settings: React.FC = () => {
                                 <div className="rounded-xl bg-emerald-50/60 border border-emerald-100 px-3 py-2 space-y-2">
                                     <div className="flex items-center justify-between gap-3">
                                         <div>
-                                            <span className="text-[10px] text-emerald-700 font-semibold">APK 原生稳定模式</span>
-                                            <p className="text-[9px] text-emerald-700/60 mt-0.5">主聊天回复交给 Android 原生后台任务；异常时可关闭回旧链路</p>
+                                            <span className="text-[10px] text-emerald-700 font-semibold">持续运行</span>
+                                            <p className="text-[9px] text-emerald-700/60 mt-0.5">让角色主动消息、彼方活动和后台回复继续运行</p>
                                         </div>
                                         <button
                                             type="button"
-                                            onClick={() => {
-                                                const next = !nativeRuntimeEnabled;
-                                                setNativeRuntimeUserEnabled(next);
-                                                setNativeRuntimeEnabledState(next);
-                                                if (!next) { setNativeChatRuntimeUserEnabled(false); setNativeChatEnabledState(false); }
-                                                addToast(next ? '已开启 APK 原生稳定模式' : '已关闭 APK 原生稳定模式', 'info');
+                                            onClick={async () => {
+                                                const next = !persistentRuntimeEnabled;
+                                                setPersistentNativeRuntimeUserEnabled(next);
+                                                setPersistentRuntimeEnabledState(next);
+                                                try {
+                                                    if (next) await startPersistentNativeRuntime();
+                                                    else await stopPersistentNativeRuntime();
+                                                    addToast(next ? 'SullyOS 正在运行' : '已停止后台运行', 'info');
+                                                } catch (err) {
+                                                    setPersistentNativeRuntimeUserEnabled(!next);
+                                                    setPersistentRuntimeEnabledState(!next);
+                                                    addToast('后台运行未能启动', 'error');
+                                                }
                                             }}
-                                            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${nativeRuntimeEnabled ? 'bg-emerald-500' : 'bg-slate-200'}`}
+                                            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${persistentRuntimeEnabled ? 'bg-emerald-500' : 'bg-slate-200'}`}
                                         >
-                                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${nativeRuntimeEnabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${persistentRuntimeEnabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
                                         </button>
                                     </div>
                                     <div className="flex items-center justify-between gap-3">

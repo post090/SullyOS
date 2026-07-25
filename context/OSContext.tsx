@@ -61,6 +61,7 @@ import { exportDesktopSkinLocal } from '../utils/desktopSkinBackup';
 import { assertSupportedSullyBackup } from '../utils/backupImportPolicy';
 import { getRestorableActiveApp, getRestorableActiveCharacterId, getRestorableSuspendedCall, patchRuntimeSnapshot } from '../utils/runtime/runtimeState';
 import { recoverNativeChatJobs } from '../utils/runtime/recovery';
+import { getPersistentNativeRuntimeUserEnabled, isNativeRuntimePlatform, startPersistentNativeRuntime } from '../utils/runtime/nativeRuntime';
 
 interface ProactiveQueueEntry {
   charId: string;
@@ -911,6 +912,18 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   useEffect(() => {
     runNativeRecovery();
   }, [runNativeRecovery]);
+
+  // 持续运行模式：APK 重启/WebView 重建后重新拉起常驻前台服务。
+  // 服务本身不依赖 WebView 存活；这里仅负责把用户选择同步到 Android Runtime。
+  useEffect(() => {
+    if (!isNativeRuntimePlatform() || !getPersistentNativeRuntimeUserEnabled()) return;
+    startPersistentNativeRuntime().catch(err => {
+      console.warn('[NativeRuntime] persistent service start failed:', err);
+    });
+    return () => {
+      // 不在普通 WebView 卸载时停止：Android 可能只是重建页面，服务应继续运行。
+    };
+  }, []);
 
   useEffect(() => {
     const markVisible = () => {

@@ -44,6 +44,7 @@ const NativeRuntime = registerPlugin<SullyNativeRuntimePlugin>('SullyNativeRunti
 
 export const NATIVE_RUNTIME_ENABLED_KEY = 'sully_native_runtime_enabled';
 export const NATIVE_RUNTIME_CHAT_KEY = 'sully_native_runtime_chat';
+export const NATIVE_RUNTIME_PERSISTENT_KEY = 'sully_native_runtime_persistent';
 
 let availability: boolean | null = null;
 
@@ -57,6 +58,17 @@ export function setNativeRuntimeUserEnabled(enabled: boolean): void {
     else localStorage.setItem(NATIVE_RUNTIME_ENABLED_KEY, '0');
   } catch { /* ignore */ }
   availability = null;
+}
+
+export function getPersistentNativeRuntimeUserEnabled(): boolean {
+  try { return localStorage.getItem(NATIVE_RUNTIME_PERSISTENT_KEY) === '1'; } catch { return false; }
+}
+
+export function setPersistentNativeRuntimeUserEnabled(enabled: boolean): void {
+  try {
+    if (enabled) localStorage.setItem(NATIVE_RUNTIME_PERSISTENT_KEY, '1');
+    else localStorage.removeItem(NATIVE_RUNTIME_PERSISTENT_KEY);
+  } catch { /* ignore */ }
 }
 
 export function getNativeChatRuntimeUserEnabled(): boolean {
@@ -99,6 +111,16 @@ export async function startNativeForegroundTask(options: { id: string; kind?: Na
 export async function stopNativeForegroundTask(id: string = 'sully-runtime'): Promise<void> {
   if (!(await isNativeRuntimeAvailable())) return;
   await NativeRuntime.stopForegroundTask({ id });
+}
+
+/** Keeps the Android foreground service alive while the user enables the always-on mode. */
+export async function startPersistentNativeRuntime(): Promise<void> {
+  if (!(await isNativeRuntimeAvailable())) throw new Error('NativeRuntime unavailable');
+  await startNativeForegroundTask({ id: 'sully-runtime', kind: 'generic', title: 'SullyOS 正在运行', text: '', ongoing: true });
+}
+
+export async function stopPersistentNativeRuntime(): Promise<void> {
+  await stopNativeForegroundTask('sully-runtime');
 }
 
 export async function enqueueNativeHttpJob(options: EnqueueHttpJobInput): Promise<{ jobId: string }> {

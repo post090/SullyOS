@@ -244,8 +244,12 @@ public class SullyNativeRuntimeService extends Service {
             : new Notification.Builder(this);
         builder
             .setContentTitle(title)
-            .setContentText(text)
             .setSmallIcon(getApplicationInfo().icon)
+        ;
+        if (text != null && !text.trim().isEmpty()) {
+            builder.setContentText(text);
+        }
+        builder
             .setOngoing(true)
             .setShowWhen(false)
             .setContentIntent(pendingIntent);
