@@ -32,15 +32,7 @@
 - 原生媒体通知：歌曲信息 + 操作（喜欢/上一首/暂停/下一首），`ACTION_MUSIC_ACTION` 存 `pending_music_action` 并拉起 App，`MusicContext` 每秒轮询执行
 - 播放页增加播放列表按钮：☰ 抽屉显示当前队列，可切歌；已保留 MediaSession 锁屏控件
 - 角色歌单：歌单内新增“▶ 播放全部”按钮，一键替换当前播放列表从头播；`playPlaylistSong` 从点击歌曲起播，已支持替换队列
-
-**热点与 RSS**
-- RSS 内置源 10 个（BBC/NHK/HN Best/Verge/Aeon/Psyche/JAMA/Lancet/Onion/Bangumi），`/rss/bunkyo` 工坊在 Worker 仍保留（`/rss/bunkyo` 抓文京区区报 HTML 包装）
-- 热点 App 按 source 分组，RSS 与 orz.ai 热榜混合（每 5 条插 1 条 RSS）
-
-**其他 APK 修复**
 - 网易云扫码登录持久化（cookie 进 IndexedDB 镜像）、返回桌面卡顿（blob URL 缓存）、数据导出 `[object Object]` 修复、签名固定、MCP 在 APK 可用、模型列表走 `nativeFetch` 绕 CORS
-- Chat 滚动位置持久化：保存 `top/visibleCount`，24h 内恢复可视范围深度，防抖改为 `clearTimeout` 后重设
-- 任务/彼方通知去重策略按你确认改为每次都提醒（时间戳 tag），便于“误完成打回”场景
 
 **实时感知 Worker 地址**
 - 中心配置 `utils/proxyWorker.ts` 默认 `https://sullymeow.ccwu.cc`，但支持通过 `VITE_PROXY_WORKER` 环境变量覆盖，运行时可通过设置 → 自定义网络代理 修改，联网搜索/热点/RSS/备份等全部自动切走，无需改代码
@@ -49,7 +41,9 @@
 **功能增强（原版基础上）**
 - 时光契约任务监督系统、私聊建任务/卡片确认/通话日记查手机只读感知/定时催
 - TTS 接入 ElevenLabs v3，音乐人格/歌单生成多维度
-- RSS 订阅源支持自定义增删改，地区与热点模块可自定义角色城市与热点档位
+- 实时感知加入 RSS 订阅源，支持自定义增删改，地区与热点模块可自定义角色城市与热点档位；热点 App 按 source 分组，RSS 与 orz.ai 热榜混合（每 5 条插 1 条 RSS）
+
+**新增功能**
 - 角色个人备忘录 APP（上限 10 条）
 
 以下是原版 README（已跟随上游到 2026-07-14，功能概览/数据存储/后端代理/鸣谢等已更新）：
