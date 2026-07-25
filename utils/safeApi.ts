@@ -470,6 +470,7 @@ export async function safeFetchJson(
             attemptOptions = { ...metaOptions, signal: ac.signal };
         }
         const attemptStartedAt = Date.now();
+        let currentChatJobId: string | undefined;
         try {
             const useNativeRuntime = shouldTryNativeRuntime(urlStr, attemptOptions, meta) && await isNativeRuntimeAvailable();
             if (useNativeRuntime) {
@@ -484,6 +485,7 @@ export async function safeFetchJson(
                     charId: meta.charId,
                     charName: meta.charName,
                 }) : null;
+                currentChatJobId = chatJob?.id;
                 const nativeBody = prepareNativeChatBody(String(attemptOptions.body || ''));
                 const nativeResult = await enqueueAndWaitNativeHttp({
                     jobId: nativeJobId,
@@ -524,8 +526,13 @@ export async function safeFetchJson(
                         await new Promise(r => setTimeout(r, delay));
                         continue;
                     }
-                    const data = parseRawBodyText(nativeResult.body || '', nativeResult.statusCode, responseHeaders['content-type']);
-                    const errMsg = data?.error?.message || data?.error || `HTTP ${nativeResult.statusCode}`;
+                    let errMsg = `HTTP ${nativeResult.statusCode}`;
+                    try {
+                        const data = parseRawBodyText(nativeResult.body || '', nativeResult.statusCode, responseHeaders['content-type']);
+                        errMsg = data?.error?.message || data?.error || errMsg;
+                    } catch (parseErr: any) {
+                        errMsg = parseErr?.message || errMsg;
+                    }
                     if (chatJob) markChatJobFailed(chatJob.id, `API Error ${nativeResult.statusCode}: ${errMsg}`);
                     throw new Error(`API Error ${nativeResult.statusCode}: ${errMsg}`);
                 }
@@ -607,6 +614,9 @@ export async function safeFetchJson(
         } catch (e: any) {
             if (timeoutHandle) clearTimeout(timeoutHandle);
             lastError = e;
+            if (currentChatJobId) {
+                markChatJobFailed(currentChatJobId, e?.message || String(e));
+            }
 
             // AbortError（含 timeout）：是否重试看上层策略，先按可重试处理（网络层面）
             const isAbort = e?.name === 'AbortError' || /aborted|timeout/i.test(e?.message || '');
