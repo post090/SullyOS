@@ -152,6 +152,14 @@ public class SullyNativeRuntimePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void getLaunchRoute(PluginCall call) {
+        JSObject result = new JSObject();
+        String route = getActivity() == null ? null : getActivity().getIntent().getStringExtra("sully_route");
+        if (route != null && !route.trim().isEmpty()) result.put("route", route);
+        call.resolve(result);
+    }
+
+    @PluginMethod
     public void setPersistentEnabled(PluginCall call) {
         boolean enabled = call.getBoolean("enabled", false);
         getContext().getSharedPreferences("sully_native_runtime", Context.MODE_PRIVATE)

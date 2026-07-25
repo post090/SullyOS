@@ -40,6 +40,7 @@ interface SullyNativeRuntimePlugin {
   clearJob(options: { jobId: string }): Promise<void>;
   showEventNotification(options: { title: string; body: string; tag?: string; route?: string }): Promise<void>;
   setPersistentEnabled(options: { enabled: boolean }): Promise<void>;
+  getLaunchRoute(): Promise<{ route?: string }>;
 }
 
 const NativeRuntime = registerPlugin<SullyNativeRuntimePlugin>('SullyNativeRuntime');
@@ -125,6 +126,14 @@ export async function startPersistentNativeRuntime(): Promise<void> {
 export async function stopPersistentNativeRuntime(): Promise<void> {
   if (await isNativeRuntimeAvailable()) await NativeRuntime.setPersistentEnabled({ enabled: false });
   await stopNativeForegroundTask('sully-runtime');
+}
+
+export async function getNativeLaunchRoute(): Promise<string | null> {
+  if (!isNativeRuntimePlatform()) return null;
+  try {
+    const result = await NativeRuntime.getLaunchRoute();
+    return result?.route || null;
+  } catch { return null; }
 }
 
 export async function showNativeRoleEventNotification(input: { title: string; body: string; tag?: string; route?: string }): Promise<void> {

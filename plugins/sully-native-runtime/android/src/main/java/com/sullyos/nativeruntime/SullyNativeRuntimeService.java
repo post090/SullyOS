@@ -59,7 +59,8 @@ public class SullyNativeRuntimeService extends Service {
             showEventNotification(
                 intent.getStringExtra("title"),
                 intent.getStringExtra("body"),
-                intent.getStringExtra("tag")
+                intent.getStringExtra("tag"),
+                intent.getStringExtra("route")
             );
             stopSelf(startId);
             return START_NOT_STICKY;
@@ -233,14 +234,15 @@ public class SullyNativeRuntimeService extends Service {
         writeJob(context, jobId, cancelled);
     }
 
-    private void showEventNotification(String title, String body, String tag) {
+    private void showEventNotification(String title, String body, String tag, String route) {
         ensureChannel(this);
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager == null) return;
         Notification notification = buildNotification(
             title == null || title.trim().isEmpty() ? "SullyOS" : title,
             body == null ? "" : body,
-            false
+            false,
+            route
         );
         int id = 32000 + Math.abs((tag == null ? "sully-event" : tag).hashCode() % 10000);
         manager.notify(tag == null ? "sully-event" : tag, id, notification);
@@ -251,14 +253,16 @@ public class SullyNativeRuntimeService extends Service {
         startForeground(NOTIFICATION_ID, buildNotification(
             title == null || title.trim().isEmpty() ? "SullyOS 正在运行" : title,
             text == null || text.trim().isEmpty() ? "" : text,
-            true
+            true,
+            null
         ));
     }
 
-    private Notification buildNotification(String title, String text, boolean ongoing) {
+    private Notification buildNotification(String title, String text, boolean ongoing, String route) {
         Intent launchIntent = getPackageManager().getLaunchIntentForPackage(getPackageName());
         PendingIntent pendingIntent = null;
         if (launchIntent != null) {
+            if (route != null && !route.trim().isEmpty()) launchIntent.putExtra("sully_route", route);
             int flags = PendingIntent.FLAG_UPDATE_CURRENT;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) flags |= PendingIntent.FLAG_IMMUTABLE;
             pendingIntent = PendingIntent.getActivity(this, 0, launchIntent, flags);
