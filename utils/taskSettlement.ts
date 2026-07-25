@@ -28,6 +28,7 @@ import {
     computeCurrentStreak,
     computeSettlementAmount,
 } from './taskScheduler';
+import { notifyRoleEvent } from './runtime/roleEventNotification';
 import {
     buildTaskPrompt,
     pickSceneForMissedEntry,
@@ -291,6 +292,9 @@ export async function runSettlementForTask(
                 },
             });
         }
+        if (supervisor) {
+            void notifyRoleEvent({ charName: supervisor.name, kind: 'task', name: task.title, tag: `task-${task.id}-${now.getTime()}`, route: `task:${task.id}` }).catch(() => {});
+        }
     }
 
     return { taskId: task.id, updatedTask: working, newEntries, coinDelta, archived, archiveReason };
@@ -366,6 +370,7 @@ export async function markTaskDone(
                 coinDelta: amount,
             },
         });
+        void notifyRoleEvent({ charName: supervisor.name, kind: 'task', name: task.title, tag: `task-${task.id}-${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`, route: `task:${task.id}` }).catch(() => {});
     }
 
     const todayStr = `${now.getFullYear()}-${(now.getMonth()+1).toString().padStart(2,'0')}-${now.getDate().toString().padStart(2,'0')}`;
