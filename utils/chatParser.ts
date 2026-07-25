@@ -84,6 +84,35 @@ export interface TaskProposalMeta {
     taskId?: string;
 }
 
+const TRANSFER_AMOUNT = String.raw`([0-9][0-9,]*(?:\.[0-9]{1,2})?)`;
+const CANONICAL_TRANSFER_RE = new RegExp(
+    String.raw`\[\[\s*ACTION\s*[:：]\s*TRANSFER\s*[:：]\s*[¥￥]?\s*${TRANSFER_AMOUNT}\s*(?:元|credits?)?\s*\]\]`,
+    'gi',
+);
+// 部分模型会把动作错误地复述成聊天记录，例如「[系统: 你向小明转账 1999]」。
+// 这里只兜底完整的系统日志形态，并要求主语是模型视角的「你/我」，避免把提示词中
+// 「用户向你转账」的收款记录误判成角色主动转账。
+const SYSTEM_TRANSFER_RE = new RegExp(
+    String.raw`[\[【]\s*系统\s*[:：]\s*(?:你|我)\s*向\s*[^\]\】\r\n]{0,40}?\s*转账\s*[:：]?\s*[¥￥]?\s*${TRANSFER_AMOUNT}\s*(?:元|credits?)?\s*[\]】]`,
+    'gi',
+);
+
+/** 将规范动作及常见的模型掉格式输出统一提取为转账卡片。 */
+export const extractAssistantTransfers = (input: string): { content: string; amounts: string[] } => {
+    const amounts: string[] = [];
+    const collect = (_whole: string, amount: string) => {
+        const normalized = amount.replace(/,/g, '');
+        if (Number(normalized) > 0) amounts.push(normalized);
+        return '';
+    };
+
+    const content = input
+        .replace(CANONICAL_TRANSFER_RE, collect)
+        .replace(SYSTEM_TRANSFER_RE, collect)
+        .trim();
+    return { content, amounts };
+};
+
 export const ChatParser = {
     // Return cleaned content and perform side effects
     parseAndExecuteActions: async (
@@ -102,11 +131,11 @@ export const ChatParser = {
             content = content.replace('[[ACTION:POKE]]', '').trim();
         }
 
-        // TRANSFER
-        const transferMatch = content.match(/\[\[ACTION:TRANSFER:(\d+)\]\]/);
-        if (transferMatch) {
-            await DB.saveMessage({ charId, role: 'assistant', type: 'transfer', content: '[转账]', metadata: { amount: transferMatch[1], status: 'pending' } });
-            content = content.replace(transferMatch[0], '').trim();
+        // TRANSFER：兼容全角标点、可选货币符号，以及模型误写出的「[系统: 你向…转账…]」。
+        const transfers = extractAssistantTransfers(content);
+        content = transfers.content;
+        for (const amount of transfers.amounts) {
+            await DB.saveMessage({ charId, role: 'assistant', type: 'transfer', content: '[转账]', metadata: { amount, status: 'pending' } });
         }
 
         // TRANSFER_ACCEPT / TRANSFER_RETURN — char 收下 / 退回 user 最近一笔待处理的转账。
