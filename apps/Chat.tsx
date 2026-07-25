@@ -115,6 +115,8 @@ const Chat: React.FC = () => {
     const scrollThrottleRef = useRef(0);
     const visibleCountRef = useRef(30);
     const activeCharIdRef = useRef(activeCharacterId);
+    const restoreScrollTopRef = useRef<number | null>(null);
+    const saveScrollTimerRef = useRef<number | null>(null);
     // 流式预览接棒过的正式消息在当前会话内始终跳过入场动画，避免后续 DB 刷新时动画类又被加回来。
     const streamPreviewHandoverIdsRef = useRef<Set<number>>(new Set());
     const registerStreamPreviewHandover = useCallback((charId: string, messageIds: number[]) => {
@@ -238,6 +240,43 @@ const Chat: React.FC = () => {
         [currentThemeId, customThemes],
     );
     const draftKey = `chat_draft_${activeCharacterId}`;
+    const scrollKey = `chat_scroll_${activeCharacterId}`;
+
+    const loadSavedScrollTop = useCallback((): number | null => {
+        if (!activeCharacterId) return null;
+        try {
+            const raw = localStorage.getItem(scrollKey);
+            if (!raw) return null;
+            const saved = JSON.parse(raw);
+            if (!saved || typeof saved.top !== 'number' || typeof saved.at !== 'number') return null;
+            // 只恢复近 24 小时的位置，太旧的位置容易让用户误以为消息丢了。
+            if (Date.now() - saved.at > 24 * 60 * 60 * 1000) return null;
+            return Math.max(0, saved.top);
+        } catch {
+            return null;
+        }
+    }, [activeCharacterId, scrollKey]);
+
+    const saveCurrentScrollTop = useCallback(() => {
+        const el = scrollRef.current;
+        if (!el || !activeCharacterId) return;
+        try {
+            localStorage.setItem(scrollKey, JSON.stringify({
+                top: el.scrollTop,
+                height: el.scrollHeight,
+                at: Date.now(),
+                lastId: messages[messages.length - 1]?.id ?? null,
+            }));
+        } catch { /* best-effort */ }
+    }, [activeCharacterId, scrollKey, messages]);
+
+    const handleScrollSnapshot = useCallback(() => {
+        if (saveScrollTimerRef.current != null) return;
+        saveScrollTimerRef.current = window.setTimeout(() => {
+            saveScrollTimerRef.current = null;
+            saveCurrentScrollTop();
+        }, 250);
+    }, [saveCurrentScrollTop]);
 
     // Filter categories and emojis by active character's visibility (used for both AI prompt and UI)
     const visibleCategories = useMemo(() => categories.filter(cat => {
@@ -742,6 +781,7 @@ const Chat: React.FC = () => {
             loadEmojiData();
             const savedDraft = localStorage.getItem(draftKey);
             setInput(savedDraft || '');
+            restoreScrollTopRef.current = loadSavedScrollTop();
             if (char) {
                 setSettingsContextLimit(char.contextLimit || 500);
                 setSettingsContextRangeMode(
@@ -922,11 +962,26 @@ const Chat: React.FC = () => {
         // windowed 模式下用户在翻旧消息，不要被新消息打断滚走。
         if (currentLastId !== lastMsgIdRef.current) {
             if (windowedFocusMsgId === null) {
-                scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+                const restoreTop = restoreScrollTopRef.current;
+                if (restoreTop != null) {
+                    scrollRef.current.scrollTop = Math.min(restoreTop, scrollRef.current.scrollHeight);
+                    restoreScrollTopRef.current = null;
+                } else {
+                    scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+                }
             }
             lastMsgIdRef.current = currentLastId;
         }
     }, [messages, activeCharacterId, selectionMode, windowedFocusMsgId]);
+
+    useEffect(() => {
+        return () => {
+            if (saveScrollTimerRef.current != null) {
+                window.clearTimeout(saveScrollTimerRef.current);
+                saveScrollTimerRef.current = null;
+            }
+        };
+    }, []);
 
     useEffect(() => {
         if (isTyping && scrollRef.current && !selectionMode && windowedFocusMsgId === null) {
@@ -3211,7 +3266,7 @@ const Chat: React.FC = () => {
                 );
             })()}
 
-            <div ref={scrollRef} className="flex-1 overflow-y-auto overflow-x-hidden pt-6 pb-6 no-scrollbar" style={{ backgroundImage: activeTheme.type === 'custom' && activeTheme.user.backgroundImage ? 'none' : undefined }}>
+            <div ref={scrollRef} onScroll={handleScrollSnapshot} className="flex-1 overflow-y-auto overflow-x-hidden pt-6 pb-6 no-scrollbar" style={{ backgroundImage: activeTheme.type === 'custom' && activeTheme.user.backgroundImage ? 'none' : undefined }}>
                 {windowedFocusMsgId !== null && (
                     <div className="sticky top-0 z-20 flex justify-center pb-2 pointer-events-none">
                         <button onClick={handleBackToCurrent} className="pointer-events-auto px-4 py-2 bg-primary text-white rounded-full text-xs font-bold shadow-lg active:scale-95 transition-transform flex items-center gap-1.5">
