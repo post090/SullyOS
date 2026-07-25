@@ -2647,7 +2647,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                       charName: char.name,
                       kind: 'other_side',
                       name: roomName,
-                      tag: `vr-${charId}-${Date.now()}`,
+                      tag: `vr-${charId}-${result.room}-${String(result.activity || '').slice(0, 80)}`,
                       route: `vr:${charId}`,
                   }).catch(() => {});
               }

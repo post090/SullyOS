@@ -24,6 +24,25 @@ export function formatRoleEventNotification(input: RoleEventNotificationInput): 
   return { title, body, tag: input.tag, route: input.route };
 }
 
+const NOTIFIED_KEY = 'sully_role_event_notifications_v1';
+const NOTIFIED_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function claimNotification(tag: string): boolean {
+  try {
+    const raw = localStorage.getItem(NOTIFIED_KEY);
+    const current = raw ? JSON.parse(raw) as Record<string, number> : {};
+    const now = Date.now();
+    for (const key of Object.keys(current)) if (!Number.isFinite(current[key]) || now - current[key] > NOTIFIED_TTL_MS) delete current[key];
+    if (current[tag]) return false;
+    current[tag] = now;
+    localStorage.setItem(NOTIFIED_KEY, JSON.stringify(current));
+    return true;
+  } catch {
+    return true;
+  }
+}
+
 export async function notifyRoleEvent(input: RoleEventNotificationInput): Promise<void> {
+  if (!claimNotification(input.tag)) return;
   await showNativeRoleEventNotification(formatRoleEventNotification(input));
 }
