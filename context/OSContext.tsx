@@ -1828,6 +1828,12 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                       // If not chatting specifically with this char right now, mark as unread
                       if (!isChattingWithThisChar) {
                           addToast(`${char.name} 发来了一条消息`, 'success');
+                          void notifyRoleEvent({
+                              charName: char.name,
+                              kind: 'message',
+                              tag: `scheduled-${char.id}-${dueMessages.map(m => m.id).join('-')}`,
+                              route: char.id,
+                          }).catch(() => {});
                           unreadUpdates[char.id] = dueMessages.length;
 
                           // Web Notification
