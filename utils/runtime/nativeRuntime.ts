@@ -39,6 +39,7 @@ interface SullyNativeRuntimePlugin {
   cancelJob(options: { jobId: string }): Promise<void>;
   clearJob(options: { jobId: string }): Promise<void>;
   showEventNotification(options: { title: string; body: string; tag?: string; route?: string }): Promise<void>;
+  setPersistentEnabled(options: { enabled: boolean }): Promise<void>;
 }
 
 const NativeRuntime = registerPlugin<SullyNativeRuntimePlugin>('SullyNativeRuntime');
@@ -117,10 +118,12 @@ export async function stopNativeForegroundTask(id: string = 'sully-runtime'): Pr
 /** Keeps the Android foreground service alive while the user enables the always-on mode. */
 export async function startPersistentNativeRuntime(): Promise<void> {
   if (!(await isNativeRuntimeAvailable())) throw new Error('NativeRuntime unavailable');
+  await NativeRuntime.setPersistentEnabled({ enabled: true });
   await startNativeForegroundTask({ id: 'sully-runtime', kind: 'generic', title: 'SullyOS 正在运行', text: '', ongoing: true });
 }
 
 export async function stopPersistentNativeRuntime(): Promise<void> {
+  if (await isNativeRuntimeAvailable()) await NativeRuntime.setPersistentEnabled({ enabled: false });
   await stopNativeForegroundTask('sully-runtime');
 }
 

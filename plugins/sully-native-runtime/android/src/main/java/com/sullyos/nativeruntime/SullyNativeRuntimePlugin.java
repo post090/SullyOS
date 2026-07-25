@@ -1,5 +1,6 @@
 package com.sullyos.nativeruntime;
 
+import android.content.Context;
 import android.content.Intent;
 
 import com.getcapacitor.JSArray;
@@ -148,6 +149,14 @@ public class SullyNativeRuntimePlugin extends Plugin {
         } catch (Exception e) {
             call.reject(e.getMessage(), e);
         }
+    }
+
+    @PluginMethod
+    public void setPersistentEnabled(PluginCall call) {
+        boolean enabled = call.getBoolean("enabled", false);
+        getContext().getSharedPreferences("sully_native_runtime", Context.MODE_PRIVATE)
+            .edit().putBoolean("persistent_enabled", enabled).apply();
+        call.resolve();
     }
 
     @PluginMethod
