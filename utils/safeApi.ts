@@ -15,6 +15,7 @@ import { recordApiCall, type ApiCallMeta } from './apiCallLog';
 import { enqueueAndWaitNativeHttp } from './runtime/nativeJobQueue';
 import { isNativeRuntimeAvailable, isNativeRuntimeEnabled } from './runtime/nativeRuntime';
 import { isSamplingParamError, modelRejectsSamplingParams, stripSamplingParams } from './samplingParamCompat';
+import { createChatGenerationJob, markChatJobFailed, markChatJobNativeCompleted } from './runtime/chatJobs';
 
 const log = makeDebugLogger('api', 'SafeAPI');
 
@@ -477,9 +478,15 @@ export async function safeFetchJson(
                     timeoutHandle = null;
                 }
                 const nativeStartedAt = Date.now();
+                const nativeJobId = makeNativeJobId();
+                const chatJob = meta?.charId ? createChatGenerationJob({
+                    nativeJobId,
+                    charId: meta.charId,
+                    charName: meta.charName,
+                }) : null;
                 const nativeBody = prepareNativeChatBody(String(attemptOptions.body || ''));
                 const nativeResult = await enqueueAndWaitNativeHttp({
-                    jobId: makeNativeJobId(),
+                    jobId: nativeJobId,
                     url: urlStr,
                     method: String(attemptOptions.method || 'POST').toUpperCase() as 'POST' | 'GET',
                     headers: headersInitToRecord(attemptOptions.headers),
@@ -503,12 +510,14 @@ export async function safeFetchJson(
                     if (nativeResult.statusCode === 400 && isSamplingParamError(nativeResult.body || '')) {
                         const strippedBody = stripSamplingFromBody(nativeBody);
                         if (strippedBody && strippedBody !== nativeBody && attempt < maxRetries) {
+                            if (chatJob) markChatJobFailed(chatJob.id, `HTTP ${nativeResult.statusCode}: sampling params retry`);
                             try { (window as any).__sullyRetryNotifier?.('采样参数被模型拒收，已自动摘除重试'); } catch { /* ignore */ }
                             forcedBodyOverride = strippedBody;
                             continue;
                         }
                     }
                     if (retryableStatuses.has(nativeResult.statusCode) && attempt < maxRetries) {
+                        if (chatJob) markChatJobFailed(chatJob.id, `HTTP ${nativeResult.statusCode}: retrying`);
                         const delay = Math.pow(2, attempt) * 1000;
                         log.warn('Native HTTP retry', { status: nativeResult.statusCode, attempt: attempt + 1, maxRetries, delay });
                         try { streamHooks?.onRetry?.({ attempt: attempt + 1, maxRetries, reason: `http:${nativeResult.statusCode}`, message: `HTTP ${nativeResult.statusCode}`, delayMs: delay }); } catch { /* ignore */ }
@@ -517,10 +526,15 @@ export async function safeFetchJson(
                     }
                     const data = parseRawBodyText(nativeResult.body || '', nativeResult.statusCode, responseHeaders['content-type']);
                     const errMsg = data?.error?.message || data?.error || `HTTP ${nativeResult.statusCode}`;
+                    if (chatJob) markChatJobFailed(chatJob.id, `API Error ${nativeResult.statusCode}: ${errMsg}`);
                     throw new Error(`API Error ${nativeResult.statusCode}: ${errMsg}`);
                 }
 
                 const data = parseRawBodyText(nativeResult.body || '', nativeResult.statusCode, responseHeaders['content-type']);
+                if (chatJob && data && typeof data === 'object') {
+                    markChatJobNativeCompleted(chatJob.id);
+                    try { Object.defineProperty(data, '__sullyChatJobId', { value: chatJob.id, enumerable: false }); } catch { (data as any).__sullyChatJobId = chatJob.id; }
+                }
                 if (isChatCompletionUrl(urlStr)) {
                     const totalMs = Date.now() - nativeStartedAt;
                     console.log(`⏱ [API timing] native=1 total=${totalMs}ms${streamHooks ? ' streamed=0(native)' : ''}`);

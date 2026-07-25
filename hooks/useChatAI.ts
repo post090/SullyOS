@@ -35,6 +35,7 @@ import {
     type InstantPushPayload,
 } from '../utils/instantPushClient';
 import { applyAssistantPostProcessing, type XhsCaches } from '../utils/applyAssistantPostProcessing';
+import { markChatJobConsumed } from '../utils/runtime/chatJobs';
 import {
     computeStreamPreviewBubbles,
     extractStreamingEmbeddedThinking,
@@ -1136,6 +1137,7 @@ export const useChatAI = ({
             fireLocalEmotionEval?.();
 
             let data: any;
+            let nativeChatJobId: string | undefined;
             try {
                 data = await safeFetchJson(`${baseUrl}/chat/completions`, {
                     method: 'POST', headers,
@@ -1155,6 +1157,7 @@ export const useChatAI = ({
                     body: JSON.stringify(fallbackBody)
                 }, 0, 120_000, { appName: '消息', charId: char.id, charName: char.name, purpose: 'MCP tools 兼容重试' });
             }
+            nativeChatJobId = data?.__sullyChatJobId;
             console.log(`⏱ [API call] ${Math.round(performance.now() - apiT0)}ms`);
             updateTokenUsage(data, historyMsgCount, 'initial');
 
@@ -1623,6 +1626,7 @@ export const useChatAI = ({
                 skipSecondPassLLM: false,
                 directives: [],
             });
+            await markChatJobConsumed(nativeChatJobId);
 
             // 本地路径回复已全部落库。OSContext 监听这个事件 bump lastMsgTimestamp——
             // 当前挂载的 Chat（可能是切走又切回后新 mount 的实例，本闭包的 setMessages
@@ -1645,6 +1649,7 @@ export const useChatAI = ({
                 await DB.saveMessage({ charId: char.id, role: 'system', type: 'text', content: `[回复处理失败: ${errMsg}]` });
             }
             setMessages(await DB.getRecentMessagesByCharId(char.id, 200));
+            await markChatJobConsumed(nativeChatJobId);
         } finally {
             KeepAlive.stop();
             setIsTyping(false);

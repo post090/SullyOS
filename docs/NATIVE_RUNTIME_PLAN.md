@@ -773,3 +773,69 @@ Native Runtime 必须是 APK 优先路径，Web fallback 原样保留。
 - 实现提交：`d9ae4b4 Add APK native runtime foundation`
 - APK Release：`https://github.com/post090/SullyOS/releases/tag/v2026-07-25-11-52-76`
 - 当前阶段关键词：**原生地基已完成，主聊天 native 请求已接入；接续闭环未完成。**
+
+---
+
+## 12. 当前实现进度记录（2026-07-25 / 本轮继续）
+
+### 12.1 总体进度估算
+
+当前约 **50%**。
+
+比 35% 前进的部分：
+
+- 已经有 ChatGenerationJob 本地状态；
+- native job 完成后，App 启动 / 回前台会尝试 drain；
+- 如果 WebView 被杀但 native 请求完成，恢复逻辑会把助手回复补写回聊天；
+- 如果 native job 失败 / 超时，会写一条系统提示说明上次生成中断。
+
+仍未到完整体验的原因：
+
+- 恢复时目前走“安全降级写入”：保存清洗后的普通 assistant 文本，不完整重放 `applyAssistantPostProcessing` 的 13 步后处理管线；
+- 还没有专门的聊天 UI 卡片（“后台生成中 / 中断 / 重试 / 忽略”），现在中断会以 system 消息形式出现；
+- 草稿、滚动位置等完整现场恢复还未做；
+- 设置项还没做。
+
+### 12.2 本轮新增
+
+1. **ChatGenerationJob 本地状态**
+   - 文件：`utils/runtime/chatJobs.ts`
+   - 状态：`running / native_completed / consumed / recovered / failed / interrupted`
+   - 记录 nativeJobId、charId、charName、createdAt、updatedAt。
+
+2. **Native job drain / recovery**
+   - 文件：`utils/runtime/recovery.ts`
+   - OSContext 启动与回前台时调用 `recoverNativeChatJobs()`。
+   - completed：解析 native response，提取 `choices[0].message.content`，清洗后写回 assistant 消息。
+   - failed / stale：写入系统提示 `[系统: 上次回复生成中断...]`。
+
+3. **主聊天 native job 消费闭环**
+   - `safeApi.ts` native 分支创建 ChatGenerationJob。
+   - native 请求成功后标记 `native_completed`，并在返回对象上附加隐藏字段 `__sullyChatJobId`。
+   - `useChatAI.ts` 在后处理成功后 `markChatJobConsumed()`，清掉 native job 文件，避免下次启动重复恢复。
+   - 如果 WebView 在 native 完成后、后处理完成前被杀，job 会保留为 recoverable，下一次启动可 drain。
+
+4. **恢复触发点**
+   - OSContext mount 时跑一次；
+   - `visibilitychange → visible` 跑；
+   - Capacitor `appStateChange.isActive === true` 跑。
+
+### 12.3 当前恢复行为的边界
+
+当前恢复是“保底恢复”，不是完全等价本地活着时的聊天后处理：
+
+- 会保存普通文本回复；
+- 会使用 `ChatParser.sanitize` 和 `chunkText` 清理/拆泡；
+- 不会完整执行音乐、小红书、备忘录、任务监督等复杂副作用；
+- 不会恢复流式预览；
+- 不会恢复思考过程显示。
+
+这是有意的保守做法：先保证“回复不丢”，再逐步把恢复路径做成更接近正常路径。
+
+### 12.4 下一步优先级
+
+1. 做聊天 UI 状态卡片：后台生成中 / 生成中断 / 重试 / 忽略。
+2. 给 ChatGenerationJob 补 userMessageId / request fingerprint，支持一键重试上一条。
+3. 将 recovery 从“普通文本保底写入”升级为可选择地重放更多后处理，但要避免副作用重复执行。
+4. 设置页加入 APK 原生稳定模式开关。
+5. 继续完善 runtime snapshot：草稿、滚动位置、当前聊天角色恢复。

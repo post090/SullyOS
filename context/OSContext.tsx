@@ -60,6 +60,7 @@ import { exportMcdLocal } from '../utils/mcdMcpClient';
 import { exportDesktopSkinLocal } from '../utils/desktopSkinBackup';
 import { assertSupportedSullyBackup } from '../utils/backupImportPolicy';
 import { getRestorableActiveApp, getRestorableSuspendedCall, patchRuntimeSnapshot } from '../utils/runtime/runtimeState';
+import { recoverNativeChatJobs } from '../utils/runtime/recovery';
 
 interface ProactiveQueueEntry {
   charId: string;
@@ -887,8 +888,24 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     patchRuntimeSnapshot({ activeApp, activeCharacterId: activeCharacterId || undefined, suspendedCall });
   }, [activeApp, activeCharacterId, suspendedCall]);
 
+  const nativeRecoveryInFlightRef = useRef(false);
+  const runNativeRecovery = useCallback(() => {
+    if (nativeRecoveryInFlightRef.current) return;
+    nativeRecoveryInFlightRef.current = true;
+    recoverNativeChatJobs()
+      .catch(err => console.warn('[NativeRuntime] recover chat jobs failed:', err))
+      .finally(() => { nativeRecoveryInFlightRef.current = false; });
+  }, []);
+
   useEffect(() => {
-    const markVisible = () => patchRuntimeSnapshot({ lastVisibleAt: Date.now() });
+    runNativeRecovery();
+  }, [runNativeRecovery]);
+
+  useEffect(() => {
+    const markVisible = () => {
+      patchRuntimeSnapshot({ lastVisibleAt: Date.now() });
+      runNativeRecovery();
+    };
     const markHidden = () => patchRuntimeSnapshot({ lastHiddenAt: Date.now(), activeApp, activeCharacterId: activeCharacterId || undefined, suspendedCall });
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') markHidden();
@@ -906,7 +923,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       document.removeEventListener('visibilitychange', onVisibility);
       try { appStateHandle?.remove?.(); } catch {}
     };
-  }, [activeApp, activeCharacterId, suspendedCall]);
+  }, [activeApp, activeCharacterId, suspendedCall, runNativeRecovery]);
   // 聊天「见面」按钮 → 见面：记录目标角色，DateApp 挂载后消费一次并自动进入见面
   const [dateAutoStartCharId, setDateAutoStartCharId] = useState<string | null>(null);
 
