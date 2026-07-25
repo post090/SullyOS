@@ -59,6 +59,11 @@ export function getRestorableActiveApp(): AppID {
   return app;
 }
 
+export function getRestorableActiveCharacterId(): string | undefined {
+  const id = loadRuntimeSnapshot().activeCharacterId;
+  return typeof id === 'string' && id.trim() ? id : undefined;
+}
+
 export function getRestorableSuspendedCall(): SuspendedCallSnapshot | null {
   const call = loadRuntimeSnapshot().suspendedCall;
   if (!call?.charId || !call.charName || !call.startedAt) return null;

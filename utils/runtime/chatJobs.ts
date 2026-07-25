@@ -14,6 +14,7 @@ export interface ChatGenerationJob {
   createdAt: number;
   updatedAt: number;
   error?: string;
+  requestHash?: string;
 }
 
 export function makeChatGenerationJobId(): string {
@@ -58,6 +59,7 @@ export function createChatGenerationJob(input: {
   nativeJobId: string;
   charId: string;
   charName?: string;
+  requestHash?: string;
 }): ChatGenerationJob {
   const now = Date.now();
   const job: ChatGenerationJob = {
@@ -68,6 +70,7 @@ export function createChatGenerationJob(input: {
     status: 'running',
     createdAt: now,
     updatedAt: now,
+    requestHash: input.requestHash,
   };
   upsertChatGenerationJob(job);
   return job;
@@ -101,7 +104,13 @@ export function markChatJobFailed(id: string | undefined, error: string): void {
 }
 
 export function getRecoverableChatJobs(): ChatGenerationJob[] {
-  return loadChatGenerationJobs().filter(job => job.status === 'running' || job.status === 'native_completed');
+  return loadChatGenerationJobs()
+    .filter(job => job.status === 'running' || job.status === 'native_completed')
+    .sort((a, b) => a.createdAt - b.createdAt);
+}
+
+export function hasOpenChatGenerationJobs(): boolean {
+  return getRecoverableChatJobs().length > 0;
 }
 
 export async function refreshChatJobFromNative(job: ChatGenerationJob): Promise<ChatGenerationJob> {
@@ -125,4 +134,14 @@ function isJob(value: any): value is ChatGenerationJob {
     && typeof value.createdAt === 'number'
     && typeof value.updatedAt === 'number'
     && typeof value.status === 'string';
+}
+
+export function hashChatRequestBody(body: string): string {
+  // 简单稳定 hash：只用于同机去重/排查，不作安全用途。
+  let h = 2166136261;
+  for (let i = 0; i < body.length; i++) {
+    h ^= body.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(16);
 }

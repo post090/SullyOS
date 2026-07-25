@@ -8,10 +8,12 @@ import {
   loadChatGenerationJobs,
   patchChatGenerationJob,
   refreshChatJobFromNative,
+  saveChatGenerationJobs,
   type ChatGenerationJob,
 } from './chatJobs';
 
 const RUNNING_JOB_STALE_MS = 30 * 60 * 1000;
+const JOB_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 export async function recoverNativeChatJobs(): Promise<{ recovered: number; failed: number; running: number }> {
   const jobs = getRecoverableChatJobs();
@@ -28,13 +30,13 @@ export async function recoverNativeChatJobs(): Promise<{ recovered: number; fail
       continue;
     }
     if (job.status === 'failed' || job.status === 'interrupted') {
-      await writeInterruptedNotice(job, job.error || '后台生成失败');
+      await markInterrupted(job, job.error || '后台生成失败');
       failed += 1;
       continue;
     }
     if (Date.now() - job.updatedAt > RUNNING_JOB_STALE_MS) {
       patchChatGenerationJob(job.id, { status: 'interrupted', error: '后台生成超时或被系统中断' });
-      await writeInterruptedNotice(job, '后台生成超时或被系统中断');
+      await markInterrupted(job, '后台生成超时或被系统中断');
       failed += 1;
       continue;
     }
@@ -48,53 +50,107 @@ export async function recoverNativeChatJobs(): Promise<{ recovered: number; fail
 async function recoverCompletedJob(job: ChatGenerationJob): Promise<boolean> {
   const native = await getNativeJob(job.nativeJobId);
   if (!native || native.status !== 'completed') return false;
+
+  if (await hasRecoveredMessages(job)) {
+    patchChatGenerationJob(job.id, { status: 'recovered' });
+    try { await clearNativeJob(job.nativeJobId); } catch { /* ignore */ }
+    return true;
+  }
+
   const raw = extractAssistantContent(native.response?.body || '');
-  if (!raw) {
-    patchChatGenerationJob(job.id, { status: 'failed', error: '后台回复为空' });
-    await writeInterruptedNotice(job, '后台回复为空');
-    return false;
-  }
+  if (!raw) return failCompletedJob(job, '后台回复为空');
 
-  const clean = ChatParser.sanitize(raw).trim();
-  if (!ChatParser.hasDisplayContent(clean)) {
-    patchChatGenerationJob(job.id, { status: 'failed', error: '后台回复没有可显示内容' });
-    await writeInterruptedNotice(job, '后台回复没有可显示内容');
-    return false;
-  }
-
-  const chunks = ChatParser.chunkText(clean).filter(chunk => ChatParser.hasDisplayContent(chunk));
-  for (const chunk of chunks) {
-    const text = ChatParser.sanitize(chunk).trim();
-    if (!text) continue;
-    await DB.saveMessage({
-      charId: job.charId,
-      role: 'assistant',
-      type: 'text',
-      content: text,
-      metadata: {
-        source: 'native-runtime-recovery',
-        chatJobId: job.id,
-        nativeJobId: job.nativeJobId,
-      },
-    } as any);
-  }
+  const saved = await saveRecoveredAssistantMessages(job, raw);
+  if (saved <= 0) return failCompletedJob(job, '后台回复没有可显示内容');
 
   patchChatGenerationJob(job.id, { status: 'recovered' });
   try { await clearNativeJob(job.nativeJobId); } catch { /* ignore */ }
+  logLifecycle('native-runtime chat job recovered', {
+    chatJobId: job.id,
+    nativeJobId: job.nativeJobId,
+    charId: job.charId,
+    charName: job.charName,
+    messages: saved,
+  });
   announceChatGen(CHAT_GEN_EVENTS.replyArrived, { charId: job.charId, charName: job.charName || '角色' });
   return true;
 }
 
-async function writeInterruptedNotice(job: ChatGenerationJob, reason: string): Promise<void> {
+async function saveRecoveredAssistantMessages(job: ChatGenerationJob, raw: string): Promise<number> {
+  let saved = 0;
+  const parts = ChatParser.splitResponse(raw);
+  const fallbackParts = parts.length > 0 ? parts : [{ type: 'text' as const, content: raw }];
+
+  for (const part of fallbackParts) {
+    if (part.type === 'emoji') {
+      const emoji = part.content.trim();
+      if (!emoji) continue;
+      await DB.saveMessage({
+        charId: job.charId,
+        role: 'assistant',
+        type: 'emoji',
+        content: emoji,
+        metadata: recoveredMeta(job),
+      } as any);
+      saved++;
+      continue;
+    }
+
+    const clean = ChatParser.sanitize(part.content).trim();
+    if (!ChatParser.hasDisplayContent(clean)) continue;
+    const chunks = ChatParser.chunkText(clean).filter(chunk => ChatParser.hasDisplayContent(chunk));
+    for (const chunk of chunks) {
+      const text = ChatParser.sanitize(chunk).trim();
+      if (!text) continue;
+      await DB.saveMessage({
+        charId: job.charId,
+        role: 'assistant',
+        type: 'text',
+        content: text,
+        metadata: recoveredMeta(job),
+      } as any);
+      saved++;
+    }
+  }
+
+  return saved;
+}
+
+function recoveredMeta(job: ChatGenerationJob): Record<string, unknown> {
+  return {
+    source: 'native-runtime-recovery',
+    chatJobId: job.id,
+    nativeJobId: job.nativeJobId,
+    requestHash: job.requestHash,
+  };
+}
+
+async function hasRecoveredMessages(job: ChatGenerationJob): Promise<boolean> {
+  try {
+    const messages = await DB.getMessagesByCharId(job.charId, true);
+    return messages.some(message => message.metadata?.source === 'native-runtime-recovery' && message.metadata?.chatJobId === job.id);
+  } catch {
+    return false;
+  }
+}
+
+async function failCompletedJob(job: ChatGenerationJob, reason: string): Promise<boolean> {
+  patchChatGenerationJob(job.id, { status: 'failed', error: reason });
+  await markInterrupted(job, reason);
+  return false;
+}
+
+async function markInterrupted(job: ChatGenerationJob, reason: string): Promise<void> {
   // 用户希望恢复/中断尽量无感：不往聊天记录里插系统消息。
   // 状态只留在本地 job + 开发者日志里，必要时排查可在调试面板打开「前后台」日志。
   patchChatGenerationJob(job.id, { status: 'interrupted', error: reason });
-  try {
-    appendDevDebugLog('lifecycle', {
-      label: 'native-runtime chat job interrupted',
-      data: { chatJobId: job.id, nativeJobId: job.nativeJobId, charId: job.charId, charName: job.charName, reason },
-    });
-  } catch { /* ignore */ }
+  logLifecycle('native-runtime chat job interrupted', {
+    chatJobId: job.id,
+    nativeJobId: job.nativeJobId,
+    charId: job.charId,
+    charName: job.charName,
+    reason,
+  });
   try { await clearNativeJob(job.nativeJobId); } catch { /* ignore */ }
 }
 
@@ -123,7 +179,11 @@ function extractFromSse(body: string): string {
 }
 
 function pruneOldJobs(): void {
-  const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const cutoff = Date.now() - JOB_RETENTION_MS;
   const keep = loadChatGenerationJobs().filter(job => job.updatedAt >= cutoff || job.status === 'running' || job.status === 'native_completed');
-  try { localStorage.setItem('sully_chat_generation_jobs_v1', JSON.stringify(keep.slice(0, 50))); } catch { /* ignore */ }
+  saveChatGenerationJobs(keep);
+}
+
+function logLifecycle(label: string, data: unknown): void {
+  try { appendDevDebugLog('lifecycle', { label, data }); } catch { /* ignore */ }
 }

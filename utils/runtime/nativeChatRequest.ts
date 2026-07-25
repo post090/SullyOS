@@ -1,7 +1,7 @@
 import { type ApiCallMeta } from '../apiCallLog';
 import { isSamplingParamError, modelRejectsSamplingParams, stripSamplingParams } from '../samplingParamCompat';
 import { enqueueAndWaitNativeHttp, type NativeHttpResult } from './nativeJobQueue';
-import { createChatGenerationJob, markChatJobFailed, markChatJobNativeCompleted } from './chatJobs';
+import { createChatGenerationJob, hashChatRequestBody, markChatJobFailed, markChatJobNativeCompleted } from './chatJobs';
 import { getNativeChatRuntimeUserEnabled, isNativeRuntimeAvailable, isNativeRuntimeEnabled } from './nativeRuntime';
 
 export interface NativeChatAttemptResult extends NativeHttpResult {
@@ -33,12 +33,13 @@ export async function sendNativeChatAttempt(input: {
 }): Promise<NativeChatAttemptResult> {
   const nativeStartedAt = Date.now();
   const nativeJobId = makeNativeJobId();
+  const body = prepareNativeChatBody(String(input.options.body || ''));
   const chatJob = input.meta?.charId ? createChatGenerationJob({
     nativeJobId,
     charId: input.meta.charId,
     charName: input.meta.charName,
+    requestHash: hashChatRequestBody(body),
   }) : null;
-  const body = prepareNativeChatBody(String(input.options.body || ''));
   const result = await enqueueAndWaitNativeHttp({
     jobId: nativeJobId,
     url: input.url,

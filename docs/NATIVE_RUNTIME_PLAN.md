@@ -881,3 +881,27 @@ Native Runtime 必须是 APK 优先路径，Web fallback 原样保留。
 - safeApi 相关测试通过；
 - `pnpm run build` 通过；
 - `npx cap add android && npx cap sync android` 能识别 `sully-native-runtime@0.1.0`。
+
+---
+
+## 15. 当前实现进度记录（2026-07-25 / 恢复与现场收口）
+
+### 15.1 总体进度估算
+
+当前约 **65%**。
+
+本轮做的是一组连续工作，不再碎片拆提交：
+
+- 恢复角色选择时优先读取 runtime snapshot；
+- ChatGenerationJob 记录 requestHash；
+- native recovery 增加重复恢复保护，避免同一个 job 被补写多次；
+- recovery 支持基础 emoji 恢复；
+- recovery 成功 / 中断只写开发者生命周期日志，不插聊天系统提示；
+- job 清理统一走 `saveChatGenerationJobs`，避免手写 localStorage key。
+
+### 15.2 仍未完成
+
+- 当前聊天滚动位置恢复；
+- 更完整的草稿现场快照（目前仍主要依赖既有 `chat_draft_<charId>`）；
+- recovery 仍是保底文本/emoji恢复，不执行复杂副作用；
+- 更完整的重试策略。

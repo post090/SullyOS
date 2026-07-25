@@ -59,7 +59,7 @@ import { exportLuckinLocal } from '../utils/luckinMcpClient';
 import { exportMcdLocal } from '../utils/mcdMcpClient';
 import { exportDesktopSkinLocal } from '../utils/desktopSkinBackup';
 import { assertSupportedSullyBackup } from '../utils/backupImportPolicy';
-import { getRestorableActiveApp, getRestorableSuspendedCall, patchRuntimeSnapshot } from '../utils/runtime/runtimeState';
+import { getRestorableActiveApp, getRestorableActiveCharacterId, getRestorableSuspendedCall, patchRuntimeSnapshot } from '../utils/runtime/runtimeState';
 import { recoverNativeChatJobs } from '../utils/runtime/recovery';
 
 interface ProactiveQueueEntry {
@@ -1671,7 +1671,8 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
 
         if (finalChars.length > 0) {
           setCharacters(finalChars);
-          const lastActiveId = localStorage.getItem('os_last_active_char_id');
+          const snapshotActiveId = getRestorableActiveCharacterId();
+          const lastActiveId = snapshotActiveId || localStorage.getItem('os_last_active_char_id');
           if (lastActiveId && finalChars.find(c => c.id === lastActiveId)) {
             setActiveCharacterId(lastActiveId);
           } else if (finalChars.find(c => c.id === sullyV2.id)) {
