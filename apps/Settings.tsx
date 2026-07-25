@@ -1641,15 +1641,22 @@ const Settings: React.FC = () => {
                                                 setPersistentRuntimeEnabledState(next);
                                                 try {
                                                     if (next) {
-                                                        await requestNativeNotificationPermission();
+                                                        const granted = await requestNativeNotificationPermission();
+                                                        if (!granted) {
+                                                            // On Android 13+, permission may be denied; we still start the service
+                                                            // but warn the user that notifications will be hidden. The plugin
+                                                            // opens system settings for best-effort guidance.
+                                                            addToast('通知权限未授予，已打开系统设置，授权后通知才会显示', 'info');
+                                                        }
                                                         await startPersistentNativeRuntime();
                                                     }
                                                     else await stopPersistentNativeRuntime();
                                                     addToast(next ? 'SullyOS 正在运行' : '已停止后台运行', 'info');
                                                 } catch (err) {
+                                                    console.warn('[Settings] persistent toggle failed', err);
                                                     setPersistentNativeRuntimeUserEnabled(!next);
                                                     setPersistentRuntimeEnabledState(!next);
-                                                    addToast('后台运行未能启动', 'error');
+                                                    addToast('后台运行未能启动: ' + String((err as any)?.message || err), 'error');
                                                 }
                                             }}
                                             className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${persistentRuntimeEnabled ? 'bg-emerald-500' : 'bg-slate-200'}`}

@@ -926,26 +926,40 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     }
     const openRoute = (route: string) => {
       const value = String(route || '');
+      if (!value) return;
       if (value.startsWith('task:')) {
         setActiveApp(AppID.Schedule);
       } else if (value.startsWith('vr:')) {
         setActiveApp(AppID.VRWorld);
         setActiveCharacterId(value.slice(3));
-      } else if (value) {
+      } else {
         setActiveApp(AppID.Chat);
         setActiveCharacterId(value);
       }
     };
+    const tryConsumeLaunchRoute = () => {
+      void getNativeLaunchRoute().then(route => { if (route) openRoute(route); });
+    };
     const onRoute = (event: Event) => openRoute((event as CustomEvent<{ route?: string }>).detail?.route || '');
     window.addEventListener('sully-native-route', onRoute);
-    void getNativeLaunchRoute().then(route => { if (route) openRoute(route); });
-    return () => window.removeEventListener('sully-native-route', onRoute);
+    // Initial cold start route
+    tryConsumeLaunchRoute();
+    // Also expose a window hook so native or visibility handlers can trigger it
+    (window as any).__sullyTryConsumeLaunchRoute = tryConsumeLaunchRoute;
+    return () => {
+      window.removeEventListener('sully-native-route', onRoute);
+      delete (window as any).__sullyTryConsumeLaunchRoute;
+    };
   }, []);
 
   useEffect(() => {
+    const tryConsumeRoute = () => {
+      try { (window as any).__sullyTryConsumeLaunchRoute?.(); } catch {}
+    };
     const markVisible = () => {
       patchRuntimeSnapshot({ lastVisibleAt: Date.now() });
       runNativeRecovery();
+      tryConsumeRoute();
     };
     const markHidden = () => patchRuntimeSnapshot({ lastHiddenAt: Date.now(), activeApp, activeCharacterId: activeCharacterId || undefined, suspendedCall });
     const onVisibility = () => {
@@ -2225,9 +2239,6 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               // 思念值保底触发：强制发消息（即便在睡眠窗口内 — 思念优先）
               console.log(`💖 [Proactive/Global] 思念值保底触发 for ${char.name}: miss=${currentMissCount}/${MISS_THRESHOLD}${inSleepWindow ? ' (无视睡眠窗口)' : ''}`);
               // 走到下面的正常发送流程；发完会在 dispatchEvent 后 resetMissCount
-          } else if (inSleepWindow && missSaturated) {
-              // 极端分支：睡眠窗口内思念值刚好满 — 上面 missSaturated 已处理，这分支不会到
-              // 留这个注释只是说明逻辑完整性。
           } else {
               // 清醒时段 + 思念值未满 → 概率 roll
               const roll = Math.random() * 100; // 0-100

@@ -63,6 +63,11 @@ public class SullyNativeRuntimeService extends Service {
                 intent.getStringExtra("tag"),
                 intent.getStringExtra("route")
             );
+            // Fix: don't kill the persistent foreground service when a role event arrives.
+            // The service is supposed to stay alive as "SullyOS 正在运行" when always-on is enabled.
+            if (manualForeground) {
+                return START_STICKY;
+            }
             stopSelf(startId);
             return START_NOT_STICKY;
         }
