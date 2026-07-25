@@ -40,23 +40,31 @@ export async function sendNativeChatAttempt(input: {
     charName: input.meta.charName,
     requestHash: hashChatRequestBody(body),
   }) : null;
-  const result = await enqueueAndWaitNativeHttp({
-    jobId: nativeJobId,
-    url: input.url,
-    method: String(input.options.method || 'POST').toUpperCase() as 'POST' | 'GET',
-    headers: headersInitToRecord(input.options.headers),
-    body,
-    timeoutMs: input.timeoutMs || 120_000,
-    responseType: 'json',
-    title: input.meta?.charName ? `${input.meta.charName} 正在回应你` : 'SullyOS 正在生成回复',
-    text: input.meta?.purpose || input.meta?.appName || '后台请求处理中',
-    meta: input.meta ? {
-      appName: input.meta.appName,
-      charId: input.meta.charId,
-      charName: input.meta.charName,
-      purpose: input.meta.purpose,
-    } : undefined,
-  });
+  let result: NativeHttpResult;
+  try {
+    result = await enqueueAndWaitNativeHttp({
+      jobId: nativeJobId,
+      url: input.url,
+      method: String(input.options.method || 'POST').toUpperCase() as 'POST' | 'GET',
+      headers: headersInitToRecord(input.options.headers),
+      body,
+      timeoutMs: input.timeoutMs || 120_000,
+      responseType: 'json',
+      title: input.meta?.charName ? `${input.meta.charName} 正在回应你` : 'SullyOS 正在生成回复',
+      text: input.meta?.purpose || input.meta?.appName || '后台请求处理中',
+      meta: input.meta ? {
+        appName: input.meta.appName,
+        charId: input.meta.charId,
+        charName: input.meta.charName,
+        purpose: input.meta.purpose,
+      } : undefined,
+    });
+  } catch (error) {
+    // enqueue/poll 在返回 chatJobId 之前失败时，也必须关闭已落盘的 running job，
+    // 否则下次启动 APK 会把一次已经失败的请求误判为可恢复任务。
+    if (chatJob?.id) markChatJobFailed(chatJob.id, error instanceof Error ? error.message : String(error));
+    throw error;
+  }
   const totalMs = Date.now() - nativeStartedAt;
   return {
     ...result,

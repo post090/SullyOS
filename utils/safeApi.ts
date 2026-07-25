@@ -412,7 +412,9 @@ export async function safeFetchJson(
                 }
                 options.signal.addEventListener('abort', () => ac.abort(), { once: true });
             }
-            attemptOptions = { ...metaOptions, signal: ac.signal };
+            // 保留本次 attempt 的 body 覆盖（例如模型拒绝采样参数后的自动重试）；
+            // 不能从 metaOptions 重建，否则会把 forcedBodyOverride 静默丢掉。
+            attemptOptions = { ...attemptOptions, signal: ac.signal };
         }
         const attemptStartedAt = Date.now();
         let currentChatJobId: string | undefined;

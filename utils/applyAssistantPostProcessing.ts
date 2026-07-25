@@ -306,6 +306,8 @@ export interface PostProcessCtx {
      * Phase 0 始终为 [] / undefined。
      */
     directives?: PostProcessDirective[];
+    /** Native recovery has the complete raw response and may replay local action tags. */
+    recoveryReplay?: boolean;
     /**
      * Phase 2 Round 2: push 路径 reasoning chain 来源. SW 把 ReasoningPush 写到
      * reasoning_buffer, flushInboxToChat 在处理 sessionId 的第一条 content 时 claim
@@ -340,6 +342,7 @@ export async function applyAssistantPostProcessing(
         instantRender,
         skipSecondPassLLM,
         directives,
+        recoveryReplay = false,
         reasoningContent: pushReasoningContent,
     } = ctx;
     const { baseUrl, headers, effectiveApi } = api;
@@ -386,7 +389,7 @@ export async function applyAssistantPostProcessing(
     //   - 本地 fetch 路径: skipSecondPassLLM=false → false → 不禁用, 跟历史行为一致
     //   - Phase 1 push 路径 (老 worker, 无 directives): true && true → 禁用 (旧 trade-off 不变)
     //   - Phase 2 push 路径 (Round 2 worker, 有 directives): true && false → 不禁用, 副作用照常跑
-    const disabledXhsSideEffects = skipSecondPassLLM && !hasReplayDirectives;
+    const disabledXhsSideEffects = skipSecondPassLLM && !hasReplayDirectives && !recoveryReplay;
 
     /** 从缓存或 notesPool 中查找 xsecToken — 仅副作用 XHS handler (COMMENT/REPLY/LIKE/FAV) 使用 */
     const findXsecToken = (noteId: string, notesPool: XhsNote[]): string | undefined => {

@@ -1,4 +1,5 @@
 import { DB } from '../db';
+import { applyAssistantPostProcessing, type XhsCaches } from '../applyAssistantPostProcessing';
 import { ChatParser } from '../chatParser';
 import { CHAT_GEN_EVENTS, announceChatGen } from '../chatGenEvents';
 import { appendDevDebugLog } from '../devDebug';
@@ -61,7 +62,7 @@ async function recoverCompletedJob(job: ChatGenerationJob): Promise<boolean> {
   const raw = extractAssistantContent(native.response?.body || '');
   if (!raw) return failCompletedJob(job, '后台回复为空');
 
-  const saved = await saveRecoveredAssistantMessages(job, raw);
+  const saved = await replayRecoveredAssistant(job, raw);
   if (saved <= 0) return failCompletedJob(job, '后台回复没有可显示内容');
 
   patchChatGenerationJob(job.id, { status: 'recovered' });
@@ -77,43 +78,57 @@ async function recoverCompletedJob(job: ChatGenerationJob): Promise<boolean> {
   return true;
 }
 
-async function saveRecoveredAssistantMessages(job: ChatGenerationJob, raw: string): Promise<number> {
+async function replayRecoveredAssistant(job: ChatGenerationJob, raw: string): Promise<number> {
+  const chars = await DB.getAllCharacters();
+  const char = chars.find(c => c.id === job.charId);
+  const userProfile = await DB.getUserProfile();
+  if (!char || !userProfile) return saveRecoveredAssistantMessagesFallback(job, raw);
+  const contextMsgs = await DB.getMessagesByCharId(job.charId, true);
+  const emojis = await DB.getEmojis();
+  let api: any = { baseUrl: '', apiKey: '', model: '' };
+  try {
+    const saved = JSON.parse(localStorage.getItem('os_api_config') || '{}');
+    api = { baseUrl: saved.baseUrl || '', apiKey: saved.apiKey || '', model: saved.model || '' };
+  } catch { /* fallback keeps action replay local-only */ }
+  let initialData: any = {};
+  try { initialData = JSON.parse(raw); } catch { initialData = { choices: [{ message: { content: raw } }] }; }
+  const content = initialData?.choices?.[0]?.message?.content || raw;
+  const caches: XhsCaches = {
+    xsecTokenCache: new Map(), noteTitleCache: new Map(), commentUserIdCache: new Map(),
+    commentAuthorNameCache: new Map(), commentParentIdCache: new Map(),
+  };
+  let savedMessages = 0;
+  const before = contextMsgs.length;
+  await applyAssistantPostProcessing(content, {
+    char, userProfile, emojis, contextMsgs, fullMessages: contextMsgs,
+    initialData, historyMsgCount: contextMsgs.length, xhsCaches: caches,
+    mcdInheritMeta: recoveredMeta(job),
+    api: { baseUrl: api.baseUrl, headers: api.apiKey ? { Authorization: `Bearer ${api.apiKey}` } : {}, effectiveApi: api },
+    recoveryReplay: true, skipSecondPassLLM: true, instantRender: true,
+    hooks: {
+      setMessages: msgs => { savedMessages = Math.max(savedMessages, msgs.length - before); },
+      addToast: () => {}, setRecallStatus: () => {}, setSearchStatus: () => {},
+      setDiaryStatus: () => {}, setXhsStatus: () => {}, updateTokenUsage: () => {},
+    },
+  });
+  return savedMessages > 0 ? savedMessages : countRecoveredMessages(job);
+}
+
+async function countRecoveredMessages(job: ChatGenerationJob): Promise<number> {
+  const messages = await DB.getMessagesByCharId(job.charId, true);
+  return messages.filter(m => m.metadata?.source === 'native-runtime-recovery' && m.metadata?.chatJobId === job.id).length;
+}
+
+async function saveRecoveredAssistantMessagesFallback(job: ChatGenerationJob, raw: string): Promise<number> {
   let saved = 0;
   const parts = ChatParser.splitResponse(raw);
   const fallbackParts = parts.length > 0 ? parts : [{ type: 'text' as const, content: raw }];
-
   for (const part of fallbackParts) {
-    if (part.type === 'emoji') {
-      const emoji = part.content.trim();
-      if (!emoji) continue;
-      await DB.saveMessage({
-        charId: job.charId,
-        role: 'assistant',
-        type: 'emoji',
-        content: emoji,
-        metadata: recoveredMeta(job),
-      } as any);
-      saved++;
-      continue;
-    }
-
     const clean = sanitizeRecoveredText(part.content);
     if (!ChatParser.hasDisplayContent(clean)) continue;
-    const chunks = ChatParser.chunkText(clean).filter(chunk => ChatParser.hasDisplayContent(chunk));
-    for (const chunk of chunks) {
-      const text = ChatParser.sanitize(chunk).trim();
-      if (!text) continue;
-      await DB.saveMessage({
-        charId: job.charId,
-        role: 'assistant',
-        type: 'text',
-        content: text,
-        metadata: recoveredMeta(job),
-      } as any);
-      saved++;
-    }
+    await DB.saveMessage({ charId: job.charId, role: 'assistant', type: part.type === 'emoji' ? 'emoji' : 'text', content: clean, metadata: recoveredMeta(job) } as any);
+    saved++;
   }
-
   return saved;
 }
 
@@ -135,7 +150,7 @@ function recoveredMeta(job: ChatGenerationJob): Record<string, unknown> {
 async function hasRecoveredMessages(job: ChatGenerationJob): Promise<boolean> {
   try {
     const messages = await DB.getMessagesByCharId(job.charId, true);
-    return messages.some(message => message.metadata?.source === 'native-runtime-recovery' && message.metadata?.chatJobId === job.id);
+    return messages.some(message => message.metadata?.chatJobId === job.id);
   } catch {
     return false;
   }
