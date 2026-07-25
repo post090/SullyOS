@@ -1617,6 +1617,67 @@ const Settings: React.FC = () => {
             </p>
         </SettingsSection>
 
+        {isNativeApk && (
+            <SettingsSection
+                title="持续运行"
+                icon={
+                    <div className="p-2 bg-emerald-100/50 rounded-xl text-emerald-600">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6l4 2m6-2a10 10 0 11-20 0 10 10 0 0120 0z" /></svg>
+                    </div>
+                }
+            >
+                            {isNativeApk && (
+                                <div className="rounded-xl bg-emerald-50/60 border border-emerald-100 px-3 py-2 space-y-2">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div>
+                                            <span className="text-[10px] text-emerald-700 font-semibold">持续运行</span>
+                                            <p className="text-[9px] text-emerald-700/60 mt-0.5">让角色主动消息、彼方活动和后台回复继续运行</p>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={async () => {
+                                                const next = !persistentRuntimeEnabled;
+                                                setPersistentNativeRuntimeUserEnabled(next);
+                                                setPersistentRuntimeEnabledState(next);
+                                                try {
+                                                    if (next) await startPersistentNativeRuntime();
+                                                    else await stopPersistentNativeRuntime();
+                                                    addToast(next ? 'SullyOS 正在运行' : '已停止后台运行', 'info');
+                                                } catch (err) {
+                                                    setPersistentNativeRuntimeUserEnabled(!next);
+                                                    setPersistentRuntimeEnabledState(!next);
+                                                    addToast('后台运行未能启动', 'error');
+                                                }
+                                            }}
+                                            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${persistentRuntimeEnabled ? 'bg-emerald-500' : 'bg-slate-200'}`}
+                                        >
+                                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${persistentRuntimeEnabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                                        </button>
+                                    </div>
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div>
+                                            <span className="text-[10px] text-emerald-700/80">主聊天原生请求</span>
+                                            <p className="text-[9px] text-emerald-700/50 mt-0.5">只影响消息 App 的主回复，不影响记忆/小红书等旁路任务</p>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            disabled={!nativeRuntimeEnabled}
+                                            onClick={() => {
+                                                const next = !nativeChatEnabled;
+                                                setNativeChatRuntimeUserEnabled(next);
+                                                setNativeChatEnabledState(next);
+                                                addToast(next ? '主聊天将使用原生请求' : '主聊天已切回旧请求链路', 'info');
+                                            }}
+                                            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-40 ${nativeChatEnabled && nativeRuntimeEnabled ? 'bg-emerald-500' : 'bg-slate-200'}`}
+                                        >
+                                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${nativeChatEnabled && nativeRuntimeEnabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+        </SettingsSection>
+        )}
+
         {/* AI 连接设置区域 */}
         <SettingsSection
             title="API 配置"
@@ -1691,55 +1752,6 @@ const Settings: React.FC = () => {
                                     <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${localStream ? 'translate-x-4' : 'translate-x-0.5'}`} />
                                 </button>
                             </div>
-                            {isNativeApk && (
-                                <div className="rounded-xl bg-emerald-50/60 border border-emerald-100 px-3 py-2 space-y-2">
-                                    <div className="flex items-center justify-between gap-3">
-                                        <div>
-                                            <span className="text-[10px] text-emerald-700 font-semibold">持续运行</span>
-                                            <p className="text-[9px] text-emerald-700/60 mt-0.5">让角色主动消息、彼方活动和后台回复继续运行</p>
-                                        </div>
-                                        <button
-                                            type="button"
-                                            onClick={async () => {
-                                                const next = !persistentRuntimeEnabled;
-                                                setPersistentNativeRuntimeUserEnabled(next);
-                                                setPersistentRuntimeEnabledState(next);
-                                                try {
-                                                    if (next) await startPersistentNativeRuntime();
-                                                    else await stopPersistentNativeRuntime();
-                                                    addToast(next ? 'SullyOS 正在运行' : '已停止后台运行', 'info');
-                                                } catch (err) {
-                                                    setPersistentNativeRuntimeUserEnabled(!next);
-                                                    setPersistentRuntimeEnabledState(!next);
-                                                    addToast('后台运行未能启动', 'error');
-                                                }
-                                            }}
-                                            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${persistentRuntimeEnabled ? 'bg-emerald-500' : 'bg-slate-200'}`}
-                                        >
-                                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${persistentRuntimeEnabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
-                                        </button>
-                                    </div>
-                                    <div className="flex items-center justify-between gap-3">
-                                        <div>
-                                            <span className="text-[10px] text-emerald-700/80">主聊天原生请求</span>
-                                            <p className="text-[9px] text-emerald-700/50 mt-0.5">只影响消息 App 的主回复，不影响记忆/小红书等旁路任务</p>
-                                        </div>
-                                        <button
-                                            type="button"
-                                            disabled={!nativeRuntimeEnabled}
-                                            onClick={() => {
-                                                const next = !nativeChatEnabled;
-                                                setNativeChatRuntimeUserEnabled(next);
-                                                setNativeChatEnabledState(next);
-                                                addToast(next ? '主聊天将使用原生请求' : '主聊天已切回旧请求链路', 'info');
-                                            }}
-                                            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-40 ${nativeChatEnabled && nativeRuntimeEnabled ? 'bg-emerald-500' : 'bg-slate-200'}`}
-                                        >
-                                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${nativeChatEnabled && nativeRuntimeEnabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
-                                        </button>
-                                    </div>
-                                </div>
-                            )}
                             <div>
                                 <div className="flex items-center justify-between">
                                     <span className="text-[10px] text-slate-400">温度 (Temperature)</span>

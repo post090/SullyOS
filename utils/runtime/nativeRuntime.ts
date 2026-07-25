@@ -128,6 +128,7 @@ export async function stopPersistentNativeRuntime(): Promise<void> {
 }
 
 export async function showNativeRoleEventNotification(input: { title: string; body: string; tag?: string; route?: string }): Promise<void> {
+  if (!getPersistentNativeRuntimeUserEnabled()) return;
   if (!(await isNativeRuntimeAvailable())) return;
   await NativeRuntime.showEventNotification({
     title: String(input.title || 'SullyOS').slice(0, 80),
