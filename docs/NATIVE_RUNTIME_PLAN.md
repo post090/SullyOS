@@ -54,7 +54,7 @@ OkHttp / 本地任务结果文件 / 通知 / 恢复机制
 - 切 APP、锁屏、一段时间后回来，尽量仍在原状态。
 - 如果 WebView 没死：继续当前状态。
 - 如果 WebView 被杀但原生任务还完成了：重开后补上结果。
-- 如果原生任务也失败/被杀：显示明确的“上次生成中断，可重试”。
+- 如果原生任务也失败/被杀：不污染对话；只记录状态和开发者/系统日志，后续可做轻量重试入口。
 - APK 常规聊天长请求不依赖 Worker。
 - Web/PWA 路径保留原行为，不因 APK 原生方案被破坏。
 
@@ -404,8 +404,8 @@ interface ChatGenerationJob {
 2. 查 pending chat jobs；
 3. 查 native job；
 4. completed → 补 assistant 消息；
-5. failed → UI 显示可重试；
-6. running 超时 → interrupted。
+5. failed → 标记 failed，写开发者/系统日志，不插入聊天；
+6. running 超时 → interrupted，等待后续无感重试策略。
 
 ---
 
@@ -480,35 +480,23 @@ recoverChatJobs();
 refreshCurrentChatIfNeeded();
 ```
 
-UI 表现：
+恢复表现：
 
-- 如果任务完成：补消息，刷新聊天；
-- 如果任务失败：显示轻量提示；
-- 如果任务中断：显示“上次回复中断，可重试”；
-- 如果仍在运行：显示“正在后台生成回复”。
+- 如果任务完成：无感补消息，刷新聊天；
+- 如果任务失败：记录状态与开发者日志；
+- 如果任务中断：不插入聊天消息，只记录状态与开发者日志；
+- 如果仍在运行：保持现状，不额外打扰用户。
 
 ---
 
-### 5.8 UI 接续提示
+### 5.8 无感接续原则
 
-聊天界面应能显示：
+默认不在聊天界面额外显示状态。
 
-```text
-正在后台生成回复……
-```
-
-或：
-
-```text
-上次回复生成中断
-[重试] [忽略]
-```
-
-注意：
-
-- 不要把 pending 状态伪装成普通 assistant 消息；
-- 避免污染聊天历史；
-- 成功后再写真正 assistant 消息。
+- 成功：直接补写真正 assistant 消息；
+- 失败/中断：只记录本地 job 状态与开发者/系统日志；
+- 不把 pending / interrupted 状态伪装成普通消息；
+- 如以后要做重试入口，也必须很轻，且不进入聊天记录。
 
 ---
 
@@ -533,7 +521,7 @@ APK 原生稳定模式
 默认建议：
 
 - 原生任务队列：APK 下开启；
-- 生成中通知：开启；
+- 生成中 Android 前台服务通知：开启（前台服务必须有系统通知，不是聊天 UI）；
 - 后台待命常驻：默认关闭，由用户手动开。
 
 ---
@@ -591,13 +579,15 @@ APK 原生稳定模式
 
 - App 启动 / 回前台 drain native jobs；
 - 完成的 native job 补 assistant 消息；
-- 失败/中断 job 标记并提示；
+- 失败/中断 job 标记并写入开发者日志；
 - 刷新当前聊天。
 
-### Step 8：UI 状态提示
+### Step 8：无感恢复收口
 
-- 聊天页面显示后台生成 / 中断 / 重试；
-- 不污染聊天历史。
+- 聊天页面默认无额外提示；
+- 成功只补角色回复；
+- 失败/中断只进本地状态与开发者/系统日志；
+- 如后续做重试入口，必须轻量且不进聊天记录。
 
 ### Step 9：设置项与开关
 
@@ -652,7 +642,7 @@ Native Runtime 必须是 APK 优先路径，Web fallback 原样保留。
 2. 生成中切后台，通知栏显示 SullyOS 正在生成。
 3. WebView 未死：回来继续/完成正常显示。
 4. WebView 被杀但 native job 完成：重开后 drain 并补 assistant 消息。
-5. native job 失败/中断：聊天 UI 显示可重试提示。
+5. native job 失败/中断：不污染聊天记录；本地状态和开发者日志可排查。
 6. APP 重开能恢复基本现场：active app / active character / 草稿 / pending 状态。
 7. 不依赖 Worker 才能完成常规聊天接续。
 8. Web 版仍可走原 safeFetchJson，不要求原生插件。
@@ -695,7 +685,7 @@ Native Runtime 必须是 APK 优先路径，Web fallback 原样保留。
 - 原生地基已经落地；
 - 主聊天请求已经有 APK native 通路；
 - 现场快照已有基础；
-- 但“WebView 被杀后自动 drain 结果 / pending job UI / 中断重试”还没完成，所以还不能算完整体验闭环。
+- 但“WebView 被杀后自动 drain 结果 / 失败后的无感重试策略 / 完整现场恢复”还没完成，所以还不能算完整体验闭环。
 
 ### 11.2 已完成
 
@@ -749,11 +739,11 @@ Native Runtime 必须是 APK 优先路径，Web fallback 原样保留。
 
 2. **Native completed job drain**
    - App 启动 / 回前台时读取 native job 结果。
-   - 如果 WebView 被杀但 native job 已完成，需要补写 assistant 消息。
+   - 如果 WebView 被杀但 native job 已完成，需要无感补写 assistant 消息。
 
-3. **中断恢复 UI**
-   - 聊天界面显示：后台生成中 / 上次生成中断 / 可重试 / 忽略。
-   - 不污染聊天历史。
+3. **无感恢复策略**
+   - 正常情况下不在聊天界面额外提示。
+   - 中断只进本地状态 / 开发者日志；如以后需要重试入口，也应做得很轻，不插入对话。
 
 4. **失败和清理策略**
    - native job 超时、取消、失败后的状态同步。
@@ -787,12 +777,12 @@ Native Runtime 必须是 APK 优先路径，Web fallback 原样保留。
 - 已经有 ChatGenerationJob 本地状态；
 - native job 完成后，App 启动 / 回前台会尝试 drain；
 - 如果 WebView 被杀但 native 请求完成，恢复逻辑会把助手回复补写回聊天；
-- 如果 native job 失败 / 超时，会写一条系统提示说明上次生成中断。
+- 如果 native job 失败 / 超时，只记录本地 job 状态和开发者日志，不打扰正常对话。
 
 仍未到完整体验的原因：
 
 - 恢复时目前走“安全降级写入”：保存清洗后的普通 assistant 文本，不完整重放 `applyAssistantPostProcessing` 的 13 步后处理管线；
-- 还没有专门的聊天 UI 卡片（“后台生成中 / 中断 / 重试 / 忽略”），现在中断会以 system 消息形式出现；
+- 不做聊天 UI 卡片；恢复/中断应尽量无感，只在必要的系统/开发者日志里留下痕迹。
 - 草稿、滚动位置等完整现场恢复还未做；
 - 设置项还没做。
 
@@ -807,7 +797,7 @@ Native Runtime 必须是 APK 优先路径，Web fallback 原样保留。
    - 文件：`utils/runtime/recovery.ts`
    - OSContext 启动与回前台时调用 `recoverNativeChatJobs()`。
    - completed：解析 native response，提取 `choices[0].message.content`，清洗后写回 assistant 消息。
-   - failed / stale：写入系统提示 `[系统: 上次回复生成中断...]`。
+   - failed / stale：只记录本地状态与开发者日志，不插入聊天消息。
 
 3. **主聊天 native job 消费闭环**
    - `safeApi.ts` native 分支创建 ChatGenerationJob。
@@ -834,7 +824,7 @@ Native Runtime 必须是 APK 优先路径，Web fallback 原样保留。
 
 ### 12.4 下一步优先级
 
-1. 做聊天 UI 状态卡片：后台生成中 / 生成中断 / 重试 / 忽略。
+1. 继续完善无感恢复：成功就补消息，失败只进日志，不插入对话。
 2. 给 ChatGenerationJob 补 userMessageId / request fingerprint，支持一键重试上一条。
 3. 将 recovery 从“普通文本保底写入”升级为可选择地重放更多后处理，但要避免副作用重复执行。
 4. 设置页加入 APK 原生稳定模式开关。

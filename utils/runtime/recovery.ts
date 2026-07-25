@@ -1,6 +1,7 @@
 import { DB } from '../db';
 import { ChatParser } from '../chatParser';
 import { CHAT_GEN_EVENTS, announceChatGen } from '../chatGenEvents';
+import { appendDevDebugLog } from '../devDebug';
 import { clearNativeJob, getNativeJob } from './nativeRuntime';
 import {
   getRecoverableChatJobs,
@@ -85,22 +86,16 @@ async function recoverCompletedJob(job: ChatGenerationJob): Promise<boolean> {
 }
 
 async function writeInterruptedNotice(job: ChatGenerationJob, reason: string): Promise<void> {
-  await DB.saveMessage({
-    charId: job.charId,
-    role: 'system',
-    type: 'text',
-    content: `[系统: 上次回复生成中断，可重新发送上一条消息重试。原因：${reason}]`,
-    metadata: {
-      source: 'native-runtime-recovery',
-      chatJobId: job.id,
-      nativeJobId: job.nativeJobId,
-      interrupted: true,
-      reason,
-    },
-  } as any).catch(() => {});
+  // 用户希望恢复/中断尽量无感：不往聊天记录里插系统消息。
+  // 状态只留在本地 job + 开发者日志里，必要时排查可在调试面板打开「前后台」日志。
   patchChatGenerationJob(job.id, { status: 'interrupted', error: reason });
+  try {
+    appendDevDebugLog('lifecycle', {
+      label: 'native-runtime chat job interrupted',
+      data: { chatJobId: job.id, nativeJobId: job.nativeJobId, charId: job.charId, charName: job.charName, reason },
+    });
+  } catch { /* ignore */ }
   try { await clearNativeJob(job.nativeJobId); } catch { /* ignore */ }
-  announceChatGen(CHAT_GEN_EVENTS.replyArrived, { charId: job.charId, charName: job.charName || '角色' });
 }
 
 function extractAssistantContent(body: string): string {
