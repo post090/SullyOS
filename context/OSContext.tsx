@@ -12,6 +12,7 @@ import { encodeVectorsForBackup } from '../utils/memoryPalace/db';
 import { ProactiveChat, getMissCount, incrementMissCount, resetMissCount, MISS_THRESHOLD, getNoResponseCount, incrementNoResponseCount, resetNoResponseCount } from '../utils/proactiveChat';
 import { replacePromptPlaceholders } from '../components/chat/ChatConstants';
 import { isInTimeWindow } from '../utils/timeWindow';
+import { shouldSkipProactiveForSleep } from '../utils/proactiveDecision';
 import { VRScheduler } from '../utils/vrWorld/scheduler';
 import { runVRSession } from '../utils/vrWorld/runSession';
 import { VR_DEFAULT_INTERVAL_MIN, getRoom } from '../utils/vrWorld/constants';
@@ -2164,7 +2165,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           // 设计目标：
           //   0) 间隔闸：intervalMinutes 语义是"用户多久没联系才找"。用户在间隔内有联系→skip。
           //   0b) 节制闸：用户没回应反复找，找满 maxAttempts 次用户仍没回→停止直到用户再说话。
-//      1) 睡眠窗口检查：在窗口内始终 skip，不攒思念值；睡眠时间优先于补火和思念值保底。
+//      1) 睡眠窗口检查：在窗口内默认 skip，不攒思念值；思念值达到阈值时保底触发仍有效。
           //   2) 思念值保底：清醒时段 roll 失败攒思念值，攒满 5 次 → 强制发，清零。
           //   3) 概率 roll：proactiveness/100 作为概率阈值，roll 小于它才发。
           const pCfgForDecision = char.proactiveConfig;
@@ -2206,7 +2207,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           const currentMissCount = getMissCount(charId);
           const missSaturated = currentMissCount >= MISS_THRESHOLD;
 
-          if (inSleepWindow) {
+          if (shouldSkipProactiveForSleep({ now: new Date(), sleepStart, sleepEnd, missCount: currentMissCount })) {
               // 在睡眠窗口内且思念值没满 → 静默 skip，不攒思念（她在睡觉）
               drainQueuedProactive();
               console.log(`🔇 [Proactive/Global] Skipped for ${char.name}: 睡眠窗口 ${sleepStart}-${sleepEnd}, miss=${currentMissCount}`);
@@ -2620,6 +2621,13 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       ProactiveChat.onTrigger((charId: string) => {
           void runProactive(charId);
       });
+      for (const scheduledChar of charactersRef.current) {
+          ProactiveChat.syncSleepWindow(
+              scheduledChar.id,
+              scheduledChar.proactiveConfig?.sleepStart,
+              scheduledChar.proactiveConfig?.sleepEnd,
+          );
+      }
 
       // 「彼方」自主登入 —— 独立调度，复用同一批 refs 拿最新状态
       const runVR = async (charId: string, room?: string, letterId?: string) => {

@@ -15,6 +15,7 @@
  *     flow runs exactly once per trigger regardless of source.
  */
 
+import { isInTimeWindow } from './timeWindow';
 import {
   loadPushConfig,
   isPushConfigReady,
@@ -27,6 +28,8 @@ import {
 export interface ProactiveSchedule {
   charId: string;
   intervalMs: number; // must be multiple of 30 * 60 * 1000
+  sleepStart?: string;
+  sleepEnd?: string;
 }
 
 type ProactiveScheduleMap = Record<string, ProactiveSchedule>;
@@ -247,6 +250,11 @@ let preciseTimer: ReturnType<typeof setTimeout> | null = null;
 // and keeps the worst-case delay under one bucket for hidden-tab throttling.
 const MAIN_THREAD_CHECK_INTERVAL = 20_000;
 
+function blockedBySleep(schedule: ProactiveSchedule): boolean {
+  return isInTimeWindow(new Date(), schedule.sleepStart, schedule.sleepEnd)
+    && getMissCount(schedule.charId) < MISS_THRESHOLD;
+}
+
 function handleSWMessage(e: MessageEvent) {
   if (e.data?.type !== 'proactive-trigger') return;
   const charId = e.data.charId;
@@ -271,6 +279,12 @@ function handleSWMessage(e: MessageEvent) {
     return;
   }
 
+  if (blockedBySleep(schedule)) {
+    setLastFireTime(charId, now);
+    schedulePreciseTimer();
+    console.log(`[ProactiveChat] Sleep gate skipped trigger for ${charId}`);
+    return;
+  }
   setLastFireTime(charId, now);
   schedulePreciseTimer();
   void triggerCallback(charId);
@@ -291,6 +305,10 @@ function checkOverdueSchedules() {
       console.log(`[ProactiveChat] Main-thread trigger: ${schedule.charId}, ${Math.round(elapsed / 60000)}min elapsed`);
       setLastFireTime(schedule.charId, now);
       syncSchedulesToSW();
+      if (blockedBySleep(schedule)) {
+        console.log(`[ProactiveChat] Sleep gate skipped trigger for ${schedule.charId}`);
+        continue;
+      }
       void triggerCallback(schedule.charId);
     }
   }
@@ -416,11 +434,11 @@ export const ProactiveChat = {
   /**
    * Start or update one character's proactive schedule.
    */
-  start(charId: string, intervalMinutes: number) {
+  start(charId: string, intervalMinutes: number, sleepStart?: string, sleepEnd?: string) {
     const clamped = Math.max(30, Math.round(intervalMinutes / 30) * 30);
     const intervalMs = clamped * 60 * 1000;
     const schedules = loadSchedules();
-    schedules[charId] = { charId, intervalMs };
+    schedules[charId] = { charId, intervalMs, sleepStart, sleepEnd };
     saveSchedules(schedules);
     setLastFireTime(charId, Date.now());
     syncSchedulesToSW();
@@ -433,6 +451,17 @@ export const ProactiveChat = {
     }
 
     console.log(`[ProactiveChat] Started: ${charId}, every ${clamped}min`);
+  },
+
+  syncSleepWindow(charId: string, sleepStart?: string, sleepEnd?: string) {
+    const schedules = loadSchedules();
+    const schedule = schedules[charId];
+    if (!schedule) return;
+    if (schedule.sleepStart === sleepStart && schedule.sleepEnd === sleepEnd) return;
+    schedule.sleepStart = sleepStart;
+    schedule.sleepEnd = sleepEnd;
+    saveSchedules(schedules);
+    syncSchedulesToSW();
   },
 
   /**

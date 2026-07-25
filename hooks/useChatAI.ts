@@ -1782,7 +1782,7 @@ export const useChatAI = ({
 
     const startProactiveChat = (intervalMinutes: number) => {
         if (!char) return;
-        ProactiveChat.start(char.id, intervalMinutes);
+        ProactiveChat.start(char.id, intervalMinutes, char.proactiveConfig?.sleepStart, char.proactiveConfig?.sleepEnd);
     };
 
     const stopProactiveChat = () => {
