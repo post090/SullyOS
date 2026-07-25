@@ -180,8 +180,11 @@ public class SullyNativeRuntimePlugin extends Plugin {
     @PluginMethod
     public void getLaunchRoute(PluginCall call) {
         JSObject result = new JSObject();
-        String route = getActivity() == null ? null : getActivity().getIntent().getStringExtra("sully_route");
+        String route = getContext().getSharedPreferences("sully_native_runtime", Context.MODE_PRIVATE)
+            .getString("launch_route", null);
         if (route != null && !route.trim().isEmpty()) result.put("route", route);
+        getContext().getSharedPreferences("sully_native_runtime", Context.MODE_PRIVATE)
+            .edit().remove("launch_route").apply();
         call.resolve(result);
     }
 

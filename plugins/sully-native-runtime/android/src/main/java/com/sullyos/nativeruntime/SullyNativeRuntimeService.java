@@ -293,7 +293,11 @@ public class SullyNativeRuntimeService extends Service {
         Intent launchIntent = getPackageManager().getLaunchIntentForPackage(getPackageName());
         PendingIntent pendingIntent = null;
         if (launchIntent != null) {
-            if (route != null && !route.trim().isEmpty()) launchIntent.putExtra("sully_route", route);
+            if (route != null && !route.trim().isEmpty()) {
+                launchIntent.putExtra("sully_route", route);
+                getSharedPreferences("sully_native_runtime", MODE_PRIVATE)
+                    .edit().putString("launch_route", route).apply();
+            }
             int flags = PendingIntent.FLAG_UPDATE_CURRENT;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) flags |= PendingIntent.FLAG_IMMUTABLE;
             pendingIntent = PendingIntent.getActivity(this, 0, launchIntent, flags);
