@@ -92,11 +92,15 @@ function schedulePreciseTimer() {
 
     const now = Date.now();
     let nextDue = Infinity;
+    let nextCharId: string | null = null;
     for (const s of schedules) {
         const lastFire = getLastFire(s.charId);
         const base = lastFire > 0 ? lastFire : now;
         const due = base + s.intervalMs;
-        if (due < nextDue) nextDue = due;
+        if (due < nextDue) {
+            nextDue = due;
+            nextCharId = s.charId;
+        }
     }
     if (!Number.isFinite(nextDue)) return;
 
@@ -105,6 +109,22 @@ function schedulePreciseTimer() {
         preciseTimer = null;
         checkOverdue();
     }, delay);
+
+    // Always-on: durable native timer fallback
+    if (nextCharId) {
+        void import('../runtime/nativeScheduler').then(m => {
+            m.scheduleNativeVrTimer(nextCharId!, nextDue).catch(() => {});
+        });
+    }
+    for (const s of schedules) {
+        if (s.charId === nextCharId) continue;
+        const lastFire = getLastFire(s.charId);
+        const base = lastFire > 0 ? lastFire : now;
+        const due = base + s.intervalMs;
+        void import('../runtime/nativeScheduler').then(m => {
+            m.scheduleNativeVrTimer(s.charId, due).catch(() => {});
+        });
+    }
 }
 
 function handleVisibility() {

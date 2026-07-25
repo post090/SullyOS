@@ -77,6 +77,41 @@ function checkDue() {
         }
     }
     if (changed) save(FIRED_KEY, firedMap);
+    // Always-on: schedule native timers for next upcoming slots
+    scheduleNativeForNextSlots();
+}
+
+function nextSlotTimestamp(slot: WorldTickSlot): number {
+    const now = new Date();
+    const today = new Date(now);
+    today.setHours(SLOT_HOUR[slot], 0, 0, 0);
+    if (today.getTime() <= now.getTime()) {
+        // tomorrow
+        const tomorrow = new Date(today);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        return tomorrow.getTime();
+    }
+    return today.getTime();
+}
+
+function scheduleNativeForNextSlots() {
+    try {
+        const slotsMap = load<SlotsMap>(SLOTS_KEY);
+        const firedMap = load<FiredMap>(FIRED_KEY);
+        const date = todayKey();
+        void import('../runtime/nativeScheduler').then(m => {
+            for (const [worldId, slots] of Object.entries(slotsMap)) {
+                const rec = firedMap[worldId];
+                const fired = rec && rec.date === date ? rec.fired : [];
+                for (const slot of slots) {
+                    if (fired.includes(slot)) continue;
+                    const ts = nextSlotTimestamp(slot);
+                    m.scheduleNativeWorldTimer(worldId, ts).catch(() => {});
+                    break; // only next slot per world
+                }
+            }
+        });
+    } catch { /* ignore */ }
 }
 
 function handleVisibility() {

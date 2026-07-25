@@ -30,6 +30,13 @@ interface EnqueueHttpJobInput {
   meta?: Record<string, unknown>;
 }
 
+export interface NativeSystemStatus {
+  notificationsEnabled: boolean;
+  batteryOptimizationIgnored: boolean;
+  persistentEnabled: boolean;
+  postNotificationGranted: boolean;
+}
+
 interface SullyNativeRuntimePlugin {
   ping(): Promise<{ ok: boolean; platform: string }>;
   startForegroundTask(options: { id: string; kind?: NativeRuntimeTaskKind; title: string; text: string; ongoing?: boolean }): Promise<void>;
@@ -43,6 +50,10 @@ interface SullyNativeRuntimePlugin {
   setPersistentEnabled(options: { enabled: boolean }): Promise<void>;
   getLaunchRoute(): Promise<{ route?: string }>;
   requestNotificationPermission(): Promise<{ granted: boolean }>;
+  getSystemStatus(): Promise<NativeSystemStatus>;
+  requestBatteryOptimizationExemption(): Promise<{ opened: boolean; fallback?: boolean; error?: string }>;
+  openNotificationSettings(): Promise<void>;
+  openBatterySettings(): Promise<void>;
 }
 
 const NativeRuntime = registerPlugin<SullyNativeRuntimePlugin>('SullyNativeRuntime');
@@ -141,6 +152,34 @@ export async function getNativeLaunchRoute(): Promise<string | null> {
 export async function requestNativeNotificationPermission(): Promise<boolean> {
   if (!isNativeRuntimePlatform()) return true;
   try { return !!(await NativeRuntime.requestNotificationPermission())?.granted; } catch { return false; }
+}
+
+export async function getNativeSystemStatus(): Promise<NativeSystemStatus | null> {
+  if (!isNativeRuntimePlatform()) return null;
+  try {
+    const res = await NativeRuntime.getSystemStatus();
+    return res as NativeSystemStatus;
+  } catch {
+    return null;
+  }
+}
+
+export async function requestBatteryOptimizationExemption(): Promise<boolean> {
+  if (!isNativeRuntimePlatform()) return true;
+  try {
+    const res = await NativeRuntime.requestBatteryOptimizationExemption();
+    return !!res?.opened;
+  } catch { return false; }
+}
+
+export async function openNativeNotificationSettings(): Promise<void> {
+  if (!isNativeRuntimePlatform()) return;
+  try { await NativeRuntime.openNotificationSettings(); } catch { /* ignore */ }
+}
+
+export async function openBatterySettings(): Promise<void> {
+  if (!isNativeRuntimePlatform()) return;
+  try { await NativeRuntime.openBatterySettings(); } catch { /* ignore */ }
 }
 
 export async function showNativeRoleEventNotification(input: { title: string; body: string; tag?: string; route?: string }): Promise<void> {

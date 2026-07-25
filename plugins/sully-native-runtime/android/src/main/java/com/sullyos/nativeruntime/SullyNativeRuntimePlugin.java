@@ -178,6 +178,103 @@ public class SullyNativeRuntimePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void getSystemStatus(PluginCall call) {
+        JSObject result = new JSObject();
+        // Notifications enabled?
+        boolean notificationsEnabled = true;
+        try {
+            android.app.NotificationManager nm = (android.app.NotificationManager) getContext().getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                    notificationsEnabled = nm.areNotificationsEnabled();
+                }
+            }
+        } catch (Exception ignored) { }
+        // Battery optimization ignored?
+        boolean batteryIgnored = true;
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                android.os.PowerManager pm = (android.os.PowerManager) getContext().getSystemService(Context.POWER_SERVICE);
+                if (pm != null) {
+                    batteryIgnored = pm.isIgnoringBatteryOptimizations(getContext().getPackageName());
+                }
+            }
+        } catch (Exception ignored) { }
+        // Persistent enabled pref?
+        boolean persistentEnabled = getContext().getSharedPreferences("sully_native_runtime", Context.MODE_PRIVATE)
+            .getBoolean("persistent_enabled", false);
+
+        result.put("notificationsEnabled", notificationsEnabled);
+        result.put("batteryOptimizationIgnored", batteryIgnored);
+        result.put("persistentEnabled", persistentEnabled);
+        // Also report POST_NOTIFICATIONS runtime grant for API 33+
+        boolean postNotifGranted = true;
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            try {
+                postNotifGranted = getContext().checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                    == android.content.pm.PackageManager.PERMISSION_GRANTED;
+            } catch (Exception ignored) { }
+        }
+        result.put("postNotificationGranted", postNotifGranted);
+        call.resolve(result);
+    }
+
+    @PluginMethod
+    public void requestBatteryOptimizationExemption(PluginCall call) {
+        JSObject result = new JSObject();
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                android.content.Intent intent = new android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                intent.setData(android.net.Uri.parse("package:" + getContext().getPackageName()));
+                intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                getContext().startActivity(intent);
+                result.put("opened", true);
+            } else {
+                result.put("opened", false);
+                result.put("reason", "API < 23");
+            }
+        } catch (Exception e) {
+            // Fallback: open general battery optimization settings
+            try {
+                android.content.Intent fallback = new android.content.Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS);
+                fallback.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                getContext().startActivity(fallback);
+                result.put("opened", true);
+                result.put("fallback", true);
+            } catch (Exception e2) {
+                result.put("opened", false);
+                result.put("error", e2.getMessage());
+            }
+        }
+        call.resolve(result);
+    }
+
+    @PluginMethod
+    public void openNotificationSettings(PluginCall call) {
+        try {
+            android.content.Intent settings = new android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS);
+            settings.putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, getContext().getPackageName());
+            settings.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(settings);
+            call.resolve();
+        } catch (Exception e) {
+            call.reject(e.getMessage(), e);
+        }
+    }
+
+    @PluginMethod
+    public void openBatterySettings(PluginCall call) {
+        try {
+            android.content.Intent intent = new android.content.Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS);
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(intent);
+            call.resolve();
+        } catch (Exception e) {
+            call.reject(e.getMessage(), e);
+        }
+    }
+
+    @PluginMethod
     public void getLaunchRoute(PluginCall call) {
         JSObject result = new JSObject();
         String route = getContext().getSharedPreferences("sully_native_runtime", Context.MODE_PRIVATE)

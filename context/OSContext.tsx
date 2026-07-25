@@ -915,6 +915,68 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     runNativeRecovery();
   }, [runNativeRecovery]);
 
+  // Native Scheduler: drain durable timers (proactive/VR/world) that fired while WebView was dead.
+  // This complements runNativeRecovery (which handles chat jobs). The native queue uses a tiny 204 request
+  // with future runAt; when it completes we dispatch sully-native-timer.
+  useEffect(() => {
+    if (!isNativeRuntimePlatform()) return;
+    if (!getPersistentNativeRuntimeUserEnabled()) return;
+    let cancelled = false;
+    let interval: ReturnType<typeof setInterval> | null = null;
+
+    const drain = async () => {
+      if (cancelled) return;
+      try {
+        const { drainNativeTimers } = await import('../utils/runtime/nativeScheduler');
+        const count = await drainNativeTimers();
+        if (count > 0) {
+          console.log(`[NativeScheduler] drained ${count} timer(s)`);
+        }
+      } catch (e) {
+        console.warn('[NativeScheduler] drain error', e);
+      }
+    };
+
+    // Initial drain shortly after boot
+    setTimeout(() => { void drain(); }, 1500);
+
+    // Poll every 45s while always-on is enabled (foreground service keeps JS alive somewhat,
+    // but WebView timers may be throttled; this is a safety net).
+    interval = setInterval(() => { void drain(); }, 45_000);
+
+    // Also drain on visibility changes (user returns)
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void drain();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
+    // Listen for native timer events dispatched by the drain itself (or by other code calling schedule)
+    const onNativeTimer = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { kind?: string; charId?: string; worldId?: string; tag?: string };
+      if (!detail) return;
+      const kind = detail.kind;
+      if (kind === 'proactive' && detail.charId) {
+        // Trigger proactive via the same global callback path: ProactiveChat's triggerCallback is private,
+        // so we dispatch a synthetic event that OSContext's runProactive listens? Instead, we directly
+        // try to run proactive by firing the scheduler's overdue check: set lastFire to 0 to force trigger
+        // or just call the global handler via custom event 'proactive-native-wake'.
+        window.dispatchEvent(new CustomEvent('proactive-native-wake', { detail: { charId: detail.charId } }));
+      } else if (kind === 'vr' && detail.charId) {
+        window.dispatchEvent(new CustomEvent('vr-native-wake', { detail: { charId: detail.charId } }));
+      } else if (kind === 'world' && detail.worldId) {
+        window.dispatchEvent(new CustomEvent('world-native-wake', { detail: { worldId: detail.worldId } }));
+      }
+    };
+    window.addEventListener('sully-native-timer', onNativeTimer as EventListener);
+
+    return () => {
+      cancelled = true;
+      if (interval) clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('sully-native-timer', onNativeTimer as EventListener);
+    };
+  }, []);
+
   // 持续运行模式：APK 重启/WebView 重建后重新拉起常驻前台服务。
   // 服务本身不依赖 WebView 存活；这里仅负责把用户选择同步到 Android Runtime。
   useEffect(() => {
@@ -2737,6 +2799,26 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           }
       };
       window.addEventListener('world-reroll-request', onRerollRequest as EventListener);
+
+      // Native timer wakeups: when durable native timers fire (after WebView was killed),
+      // they dispatch proactive-native-wake / vr-native-wake / world-native-wake.
+      // Here we bridge them to the existing runProactive/runVR/runWorld callbacks.
+      const onProactiveNativeWake = (e: Event) => {
+        const charId = (e as CustomEvent).detail?.charId;
+        if (charId) void runProactive(charId);
+      };
+      const onVrNativeWake = (e: Event) => {
+        const charId = (e as CustomEvent).detail?.charId;
+        if (charId) void runVR(charId);
+      };
+      const onWorldNativeWake = (e: Event) => {
+        const worldId = (e as CustomEvent).detail?.worldId;
+        if (worldId) void runWorld(worldId, 'tick');
+      };
+      window.addEventListener('proactive-native-wake', onProactiveNativeWake as EventListener);
+      window.addEventListener('vr-native-wake', onVrNativeWake as EventListener);
+      window.addEventListener('world-native-wake', onWorldNativeWake as EventListener);
+
       // 调度表存 localStorage 不随备份迁移，按 IndexedDB 里的世界配置对账
       void DB.getWorlds()
           .then(async worlds => {
@@ -2758,6 +2840,9 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           VRScheduler.onTrigger(() => {});
           WorldScheduler.onTrigger(() => {});
           window.removeEventListener('world-reroll-request', onRerollRequest as EventListener);
+          window.removeEventListener('proactive-native-wake', onProactiveNativeWake as EventListener);
+          window.removeEventListener('vr-native-wake', onVrNativeWake as EventListener);
+          window.removeEventListener('world-native-wake', onWorldNativeWake as EventListener);
       };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isDataLoaded]);

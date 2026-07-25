@@ -336,11 +336,15 @@ function schedulePreciseTimer() {
 
   const now = Date.now();
   let nextDue = Infinity;
+  let nextCharId: string | null = null;
   for (const schedule of schedules) {
     const lastFire = getLastFireTime(schedule.charId);
     const base = lastFire > 0 ? lastFire : now;
     const due = base + schedule.intervalMs;
-    if (due < nextDue) nextDue = due;
+    if (due < nextDue) {
+      nextDue = due;
+      nextCharId = schedule.charId;
+    }
   }
   if (!Number.isFinite(nextDue)) return;
 
@@ -359,6 +363,24 @@ function schedulePreciseTimer() {
     preciseTimer = null;
     checkOverdueSchedules();
   }, delay);
+
+  // Always-on: also schedule a durable native timer for the next due as fallback when WebView is killed.
+  // Use original nextDue (without jitter) for native to keep it deterministic.
+  if (nextCharId) {
+    void import('./runtime/nativeScheduler').then(m => {
+      m.scheduleNativeProactiveTimer(nextCharId!, nextDue).catch(() => {});
+    });
+  }
+  // Schedule additional native timers for all other characters (not just earliest) to ensure each has a durable alarm
+  for (const schedule of schedules) {
+    if (schedule.charId === nextCharId) continue;
+    const lastFire = getLastFireTime(schedule.charId);
+    const base = lastFire > 0 ? lastFire : now;
+    const due = base + schedule.intervalMs;
+    void import('./runtime/nativeScheduler').then(m => {
+      m.scheduleNativeProactiveTimer(schedule.charId, due).catch(() => {});
+    });
+  }
 }
 
 function handleVisibility() {

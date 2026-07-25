@@ -30,7 +30,7 @@ import { isPushVapidReady } from '../utils/pushVapid';
 import ApiCallLogModal from '../components/settings/ApiCallLogModal';
 import { DB } from '../utils/db';
 import { getBackupReminderState, setBackupReminderIntervalDays, daysSinceLastBackup, BACKUP_REMINDER_MIN_DAYS, BACKUP_REMINDER_MAX_DAYS } from '../utils/backupReminder';
-import { getNativeChatRuntimeUserEnabled, setNativeChatRuntimeUserEnabled, getNativeRuntimeUserEnabled, setNativeRuntimeUserEnabled, getPersistentNativeRuntimeUserEnabled, setPersistentNativeRuntimeUserEnabled, startPersistentNativeRuntime, stopPersistentNativeRuntime, requestNativeNotificationPermission } from '../utils/runtime/nativeRuntime';
+import { getNativeChatRuntimeUserEnabled, setNativeChatRuntimeUserEnabled, getNativeRuntimeUserEnabled, setNativeRuntimeUserEnabled, getPersistentNativeRuntimeUserEnabled, setPersistentNativeRuntimeUserEnabled, startPersistentNativeRuntime, stopPersistentNativeRuntime, requestNativeNotificationPermission, getNativeSystemStatus, requestBatteryOptimizationExemption, openNativeNotificationSettings, openBatterySettings, type NativeSystemStatus } from '../utils/runtime/nativeRuntime';
 
 // hot_news（orz.ai）可选热榜平台。key 必须与 API 的 ?platform= 完全一致。
 const HOTNEWS_PLATFORM_OPTIONS: { key: string; label: string }[] = [
@@ -368,6 +368,8 @@ const Settings: React.FC = () => {
   const [nativeRuntimeEnabled, setNativeRuntimeEnabledState] = useState<boolean>(() => getNativeRuntimeUserEnabled());
   const [persistentRuntimeEnabled, setPersistentRuntimeEnabledState] = useState<boolean>(() => getPersistentNativeRuntimeUserEnabled());
   const [nativeChatEnabled, setNativeChatEnabledState] = useState<boolean>(() => getNativeChatRuntimeUserEnabled());
+  const [nativeSystemStatus, setNativeSystemStatus] = useState<NativeSystemStatus | null>(null);
+  const [nativeStatusLoading, setNativeStatusLoading] = useState(false);
   const [localMiniMaxKey, setLocalMiniMaxKey] = useState(apiConfig.minimaxApiKey || '');
   const [localMiniMaxGroupId, setLocalMiniMaxGroupId] = useState(apiConfig.minimaxGroupId || '');
   const [localMiniMaxRegion, setLocalMiniMaxRegion] = useState<'domestic' | 'overseas'>(
@@ -660,6 +662,19 @@ const Settings: React.FC = () => {
   useEffect(() => {
       void refreshPpDiag();
   }, [refreshPpDiag, ppEnabled]);
+
+  // Always-on native system status (notifications / battery)
+  useEffect(() => {
+      if (!isNativeApk) return;
+      void (async () => {
+          setNativeStatusLoading(true);
+          try {
+              const s = await getNativeSystemStatus();
+              if (s) setNativeSystemStatus(s);
+          } catch { /* ignore */ }
+          finally { setNativeStatusLoading(false); }
+      })();
+  }, [isNativeApk]);
 
   // For web download link
   const [downloadUrl, setDownloadUrl] = useState<string>('');
@@ -1626,65 +1641,169 @@ const Settings: React.FC = () => {
                     </div>
                 }
             >
-                            {isNativeApk && (
-                                <div className="rounded-xl bg-emerald-50/60 border border-emerald-100 px-3 py-2 space-y-2">
-                                    <div className="flex items-center justify-between gap-3">
-                                        <div>
-                                            <span className="text-[10px] text-emerald-700 font-semibold">持续运行</span>
-                                            <p className="text-[9px] text-emerald-700/60 mt-0.5">让角色主动消息、彼方活动和后台回复继续运行</p>
-                                        </div>
-                                        <button
-                                            type="button"
-                                            onClick={async () => {
-                                                const next = !persistentRuntimeEnabled;
-                                                setPersistentNativeRuntimeUserEnabled(next);
-                                                setPersistentRuntimeEnabledState(next);
-                                                try {
-                                                    if (next) {
-                                                        const granted = await requestNativeNotificationPermission();
-                                                        if (!granted) {
-                                                            // On Android 13+, permission may be denied; we still start the service
-                                                            // but warn the user that notifications will be hidden. The plugin
-                                                            // opens system settings for best-effort guidance.
-                                                            addToast('通知权限未授予，已打开系统设置，授权后通知才会显示', 'info');
-                                                        }
-                                                        await startPersistentNativeRuntime();
-                                                    }
-                                                    else await stopPersistentNativeRuntime();
-                                                    addToast(next ? 'SullyOS 正在运行' : '已停止后台运行', 'info');
-                                                } catch (err) {
-                                                    console.warn('[Settings] persistent toggle failed', err);
-                                                    setPersistentNativeRuntimeUserEnabled(!next);
-                                                    setPersistentRuntimeEnabledState(!next);
-                                                    addToast('后台运行未能启动: ' + String((err as any)?.message || err), 'error');
-                                                }
-                                            }}
-                                            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${persistentRuntimeEnabled ? 'bg-emerald-500' : 'bg-slate-200'}`}
-                                        >
-                                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${persistentRuntimeEnabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
-                                        </button>
-                                    </div>
-                                    <div className="flex items-center justify-between gap-3">
-                                        <div>
-                                            <span className="text-[10px] text-emerald-700/80">主聊天原生请求</span>
-                                            <p className="text-[9px] text-emerald-700/50 mt-0.5">只影响消息 App 的主回复，不影响记忆/小红书等旁路任务</p>
-                                        </div>
-                                        <button
-                                            type="button"
-                                            disabled={!nativeRuntimeEnabled}
-                                            onClick={() => {
-                                                const next = !nativeChatEnabled;
-                                                setNativeChatRuntimeUserEnabled(next);
-                                                setNativeChatEnabledState(next);
-                                                addToast(next ? '主聊天将使用原生请求' : '主聊天已切回旧请求链路', 'info');
-                                            }}
-                                            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-40 ${nativeChatEnabled && nativeRuntimeEnabled ? 'bg-emerald-500' : 'bg-slate-200'}`}
-                                        >
-                                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${nativeChatEnabled && nativeRuntimeEnabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
-                                        </button>
-                                    </div>
-                                </div>
-                            )}
+                <div className="space-y-3">
+                    <div className="rounded-xl bg-emerald-50/60 border border-emerald-100 px-3 py-2 space-y-2">
+                        <div className="flex items-center justify-between gap-3">
+                            <div>
+                                <span className="text-[10px] text-emerald-700 font-semibold">持续运行</span>
+                                <p className="text-[9px] text-emerald-700/60 mt-0.5">让角色主动消息、彼方活动和后台回复继续运行</p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={async () => {
+                                    const next = !persistentRuntimeEnabled;
+                                    setPersistentNativeRuntimeUserEnabled(next);
+                                    setPersistentRuntimeEnabledState(next);
+                                    try {
+                                        if (next) {
+                                            const granted = await requestNativeNotificationPermission();
+                                            if (!granted) {
+                                                addToast('通知权限未授予，已打开系统设置，授权后通知才会显示', 'info');
+                                            }
+                                            await startPersistentNativeRuntime();
+                                            // Refresh system status after enabling
+                                            try {
+                                                const s = await getNativeSystemStatus();
+                                                if (s) setNativeSystemStatus(s);
+                                            } catch {}
+                                        }
+                                        else await stopPersistentNativeRuntime();
+                                        addToast(next ? 'SullyOS 正在运行' : '已停止后台运行', 'info');
+                                    } catch (err) {
+                                        console.warn('[Settings] persistent toggle failed', err);
+                                        setPersistentNativeRuntimeUserEnabled(!next);
+                                        setPersistentRuntimeEnabledState(!next);
+                                        addToast('后台运行未能启动: ' + String((err as any)?.message || err), 'error');
+                                    }
+                                }}
+                                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${persistentRuntimeEnabled ? 'bg-emerald-500' : 'bg-slate-200'}`}
+                            >
+                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${persistentRuntimeEnabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                            </button>
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                            <div>
+                                <span className="text-[10px] text-emerald-700/80">主聊天原生请求</span>
+                                <p className="text-[9px] text-emerald-700/50 mt-0.5">只影响消息 App 的主回复，不影响记忆/小红书等旁路任务</p>
+                            </div>
+                            <button
+                                type="button"
+                                disabled={!nativeRuntimeEnabled}
+                                onClick={() => {
+                                    const next = !nativeChatEnabled;
+                                    setNativeChatRuntimeUserEnabled(next);
+                                    setNativeChatEnabledState(next);
+                                    addToast(next ? '主聊天将使用原生请求' : '主聊天已切回旧请求链路', 'info');
+                                }}
+                                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-40 ${nativeChatEnabled && nativeRuntimeEnabled ? 'bg-emerald-500' : 'bg-slate-200'}`}
+                            >
+                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${nativeChatEnabled && nativeRuntimeEnabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* 系统状态自检 - 通知/省电/重启 */}
+                    <div className="rounded-xl bg-white border border-emerald-100 px-3 py-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-bold text-slate-600">实机自检</span>
+                            <button
+                                disabled={nativeStatusLoading}
+                                onClick={async () => {
+                                    setNativeStatusLoading(true);
+                                    try {
+                                        const s = await getNativeSystemStatus();
+                                        setNativeSystemStatus(s);
+                                        addToast(s ? '已刷新状态' : '无法获取系统状态', s ? 'success' : 'error');
+                                    } catch (e) {
+                                        addToast('刷新失败: ' + String((e as any)?.message || e), 'error');
+                                    } finally {
+                                        setNativeStatusLoading(false);
+                                    }
+                                }}
+                                className="text-[10px] px-2 py-1 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-100 active:scale-95 disabled:opacity-50"
+                            >
+                                {nativeStatusLoading ? '刷新中...' : '刷新'}
+                            </button>
+                        </div>
+
+                        <div className="space-y-1.5 text-[11px]">
+                            <div className="flex items-center justify-between">
+                                <span className="text-slate-500">通知总开关</span>
+                                <span className={`font-bold ${nativeSystemStatus ? (nativeSystemStatus.notificationsEnabled ? 'text-emerald-600' : 'text-rose-600') : 'text-slate-400'}`}>
+                                    {nativeSystemStatus ? (nativeSystemStatus.notificationsEnabled ? '已开启' : '已关闭') : '未知 (点刷新)'}
+                                </span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <span className="text-slate-500">运行时通知权限 (Android 13+)</span>
+                                <span className={`font-bold ${nativeSystemStatus ? (nativeSystemStatus.postNotificationGranted ? 'text-emerald-600' : 'text-rose-600') : 'text-slate-400'}`}>
+                                    {nativeSystemStatus ? (nativeSystemStatus.postNotificationGranted ? '已授权' : '未授权') : '未知'}
+                                </span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <span className="text-slate-500">忽略电池优化</span>
+                                <span className={`font-bold ${nativeSystemStatus ? (nativeSystemStatus.batteryOptimizationIgnored ? 'text-emerald-600' : 'text-amber-600') : 'text-slate-400'}`}>
+                                    {nativeSystemStatus ? (nativeSystemStatus.batteryOptimizationIgnored ? '已忽略 (推荐)' : '未忽略') : '未知'}
+                                </span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <span className="text-slate-500">重启后恢复</span>
+                                <span className="font-bold text-slate-600">已支持 (BOOT_COMPLETED)</span>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 pt-1">
+                            <button
+                                onClick={async () => {
+                                    try { await openNativeNotificationSettings(); addToast('已打开通知设置', 'info'); } catch (e) { addToast('打开失败', 'error'); }
+                                }}
+                                className="py-2 rounded-xl text-[11px] font-bold bg-white border border-slate-200 text-slate-600 active:scale-95"
+                            >
+                                打开通知设置
+                            </button>
+                            <button
+                                onClick={async () => {
+                                    try {
+                                        const ok = await requestBatteryOptimizationExemption();
+                                        addToast(ok ? '已请求忽略电池优化' : '未能自动打开，请手动设置', ok ? 'success' : 'info');
+                                        // Refresh after a short delay (user may grant in settings)
+                                        setTimeout(async () => {
+                                            try { const s = await getNativeSystemStatus(); if (s) setNativeSystemStatus(s); } catch {}
+                                        }, 1500);
+                                    } catch (e) {
+                                        addToast('请求失败', 'error');
+                                    }
+                                }}
+                                className="py-2 rounded-xl text-[11px] font-bold bg-amber-50 border border-amber-200 text-amber-700 active:scale-95"
+                            >
+                                忽略电池优化
+                            </button>
+                            <button
+                                onClick={async () => {
+                                    try { await openBatterySettings(); addToast('已打开电池优化设置', 'info'); } catch { addToast('打开失败', 'error'); }
+                                }}
+                                className="col-span-2 py-2 rounded-xl text-[10px] font-bold bg-slate-50 border border-slate-200 text-slate-500 active:scale-95"
+                            >
+                                手动设置：若“忽略电池优化”按钮无反应，点此打开列表自行找到 SullyOS 设为“不优化”
+                            </button>
+                        </div>
+
+                        <p className="text-[10px] text-slate-400 leading-relaxed pt-1">
+                            • 通知关闭会导致常驻通知不显示，前台服务在 Android 14+ 可能被系统杀掉。<br/>
+                            • 电池优化未忽略时，锁屏、切 App 后角色消息可能延迟或不响；国产 ROM 还需在“自启动/后台高耗电”里允许。<br/>
+                            • 重启后恢复已实现：<code className="bg-slate-100 px-1 rounded">RECEIVE_BOOT_COMPLETED</code> → 自动拉起常驻服务并恢复 pending 任务。
+                        </p>
+                    </div>
+
+                    {/* 调试信息 - 原生任务队列 */}
+                    <div className="rounded-xl bg-slate-50 border border-slate-200 px-3 py-2">
+                        <p className="text-[10px] font-bold text-slate-500 mb-1">原生任务队列 (调试)</p>
+                        <p className="text-[10px] text-slate-400 leading-relaxed">
+                            主聊天、主动消息、彼方、家园的下次触发已接入原生可恢复队列 (<code className="bg-white px-1 rounded border">nativeScheduler</code>)。
+                            即使 WebView 被系统回收，<code className="bg-white px-1 rounded">BOOT_COMPLETED</code> + <code className="bg-white px-1 rounded">START_STICKY</code> 会恢复 pending 任务，回前台时自动补火。
+                            若看到“正在运行”通知消失，说明服务被杀，请检查电池优化和通知权限。
+                        </p>
+                    </div>
+                </div>
         </SettingsSection>
         )}
 
