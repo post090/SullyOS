@@ -14,7 +14,7 @@ import { replacePromptPlaceholders } from '../components/chat/ChatConstants';
 import { isInTimeWindow } from '../utils/timeWindow';
 import { VRScheduler } from '../utils/vrWorld/scheduler';
 import { runVRSession } from '../utils/vrWorld/runSession';
-import { VR_DEFAULT_INTERVAL_MIN } from '../utils/vrWorld/constants';
+import { VR_DEFAULT_INTERVAL_MIN, getRoom } from '../utils/vrWorld/constants';
 import { WorldScheduler } from '../utils/worldHome/scheduler';
 import { runWorldEpisode, rerollWorldCharBeat } from '../utils/worldHome/engine';
 import { migrateWorldDaySegs } from '../utils/worldHome/prompts';
@@ -62,6 +62,7 @@ import { assertSupportedSullyBackup } from '../utils/backupImportPolicy';
 import { getRestorableActiveApp, getRestorableActiveCharacterId, getRestorableSuspendedCall, patchRuntimeSnapshot } from '../utils/runtime/runtimeState';
 import { recoverNativeChatJobs } from '../utils/runtime/recovery';
 import { getPersistentNativeRuntimeUserEnabled, isNativeRuntimePlatform, startPersistentNativeRuntime } from '../utils/runtime/nativeRuntime';
+import { notifyRoleEvent } from '../utils/runtime/roleEventNotification';
 
 interface ProactiveQueueEntry {
   charId: string;
@@ -2613,7 +2614,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           if (!char || !char.vrState?.enabled) return;
           if (!userProfileRef.current) return;
           try {
-              await runVRSession({
+              const result = await runVRSession({
                   char,
                   characters: charactersRef.current,
                   apiConfig: apiConfigRef.current,
@@ -2625,6 +2626,16 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                   forcedRoom: room as any,
                   forcedLetterId: letterId,
               });
+              if (result.ok) {
+                  const roomName = getRoom(result.room as any)?.name || '彼方';
+                  void notifyRoleEvent({
+                      charName: char.name,
+                      kind: 'other_side',
+                      name: roomName,
+                      tag: `vr-${charId}-${Date.now()}`,
+                      route: `vr:${charId}`,
+                  }).catch(() => {});
+              }
           } catch (e) {
               console.error('[VRWorld] runVR error', e);
           }
