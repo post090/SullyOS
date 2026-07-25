@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { formatRoleEventNotification } from './roleEventNotification';
 
 describe('role event notification copy', () => {
-  it('uses role name and message copy', () => {
-    expect(formatRoleEventNotification({ charName: '阿澄', kind: 'message', tag: 'm1' })).toMatchObject({ title: '阿澄', body: '给你发了一条消息' });
+  it('uses role name and preserves message preview', () => {
+    expect(formatRoleEventNotification({ charName: '阿澄', kind: 'message', preview: '你今天过得怎么样？', tag: 'm1' })).toMatchObject({ title: '阿澄', body: '你今天过得怎么样？' });
+    expect(formatRoleEventNotification({ charName: '阿澄', kind: 'message', tag: 'm2' })).toMatchObject({ title: '阿澄', body: '给你发了一条消息' });
   });
   it('previews other-side and task names', () => {
     expect(formatRoleEventNotification({ charName: '阿澄', kind: 'other_side', name: '雨夜车站', tag: 'o1' }).body).toBe('刚刚去了「雨夜车站」');

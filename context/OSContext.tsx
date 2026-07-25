@@ -1831,6 +1831,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                           void notifyRoleEvent({
                               charName: char.name,
                               kind: 'message',
+                              preview: dueMessages[0]?.content,
                               tag: `scheduled-${char.id}-${dueMessages.map(m => m.id).join('-')}`,
                               route: char.id,
                           }).catch(() => {});

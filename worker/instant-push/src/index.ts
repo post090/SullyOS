@@ -735,7 +735,7 @@ export function buildPushDecision(
   };
 
   const trimmedContactName = (contactName || '').trim();
-  const notificationTitle = `来自 ${trimmedContactName || '主动消息'}`;
+  const notificationTitle = trimmedContactName || '主动消息';
 
   if (result.kind === 'tool-request') {
     // 把 prefix narration 切 segments. classifier 已经剥 DATA tag, prefix 里只

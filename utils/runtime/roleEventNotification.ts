@@ -6,6 +6,7 @@ export interface RoleEventNotificationInput {
   charName?: string;
   kind: RoleEventNotificationKind;
   name?: string;
+  preview?: string;
   route?: string;
   tag: string;
 }
@@ -15,7 +16,7 @@ export function formatRoleEventNotification(input: RoleEventNotificationInput): 
   const name = input.name?.trim();
   let body: string;
   switch (input.kind) {
-    case 'message': body = '给你发了一条消息'; break;
+    case 'message': body = input.preview?.trim() || '给你发了一条消息'; break;
     case 'other_side': body = name ? `刚刚去了「${name}」` : '刚刚去彼方了'; break;
     case 'task': body = name ? `完成了「${name}」` : '刚刚完成了一件事'; break;
     case 'event': body = name ? `在「${name}」遇到了一件事` : '刚刚有件事想告诉你'; break;

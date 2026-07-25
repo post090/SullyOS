@@ -574,6 +574,7 @@ const flushInboxToChatImpl = async () => {
       void notifyRoleEvent({
         charName: message.charName,
         kind: 'message',
+        preview: message.previewBody || message.body,
         tag: `active-msg-${message.messageId}`,
         route: message.charId,
       }).catch(err => log.warn('native role notification failed', { messageId: message.messageId, error: err }));
