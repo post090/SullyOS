@@ -1705,7 +1705,7 @@ const Settings: React.FC = () => {
                         <div className="flex items-center justify-between gap-3">
                             <div>
                                 <span className="text-[10px] text-emerald-700/80">主聊天原生请求</span>
-                                <p className="text-[9px] text-emerald-700/50 mt-0.5">APK 下走原生 HttpURLConnection，WebView 被杀后仍可恢复；关闭则回退旧链路</p>
+                                <p className="text-[9px] text-emerald-700/50 mt-0.5">回复由系统级通道接收，锁屏、切走也不容易断线；遇到异常可关闭回到普通模式</p>
                             </div>
                             <button
                                 type="button"
@@ -1754,7 +1754,7 @@ const Settings: React.FC = () => {
                                 </span>
                             </div>
                             <div className="flex items-center justify-between">
-                                <span className="text-slate-500">运行时通知权限 (Android 13+)</span>
+                                <span className="text-slate-500">通知权限</span>
                                 <span className={`font-bold ${nativeSystemStatus ? (nativeSystemStatus.postNotificationGranted ? 'text-emerald-600' : 'text-rose-600') : 'text-slate-400'}`}>
                                     {nativeSystemStatus ? (nativeSystemStatus.postNotificationGranted ? '已授权' : '未授权') : '未知'}
                                 </span>
@@ -1766,8 +1766,8 @@ const Settings: React.FC = () => {
                                 </span>
                             </div>
                             <div className="flex items-center justify-between">
-                                <span className="text-slate-500">重启后恢复</span>
-                                <span className="font-bold text-slate-600">已支持 (BOOT_COMPLETED)</span>
+                                <span className="text-slate-500">重启后自动恢复</span>
+                                <span className="font-bold text-slate-600">已支持</span>
                             </div>
                         </div>
 
@@ -1801,16 +1801,17 @@ const Settings: React.FC = () => {
                                 onClick={async () => {
                                     try { await openBatterySettings(); addToast('已打开电池优化设置', 'info'); } catch { addToast('打开失败', 'error'); }
                                 }}
-                                className="col-span-2 py-2 rounded-xl text-[10px] font-bold bg-slate-50 border border-slate-200 text-slate-500 active:scale-95"
+                                className="col-span-2 py-2 rounded-xl text-[11px] font-bold bg-slate-50 border border-slate-200 text-slate-500 active:scale-95"
                             >
-                                手动设置：若“忽略电池优化”按钮无反应，点此打开列表自行找到 SullyOS 设为“不优化”
+                                打开电池优化列表
                             </button>
                         </div>
 
                         <p className="text-[10px] text-slate-400 leading-relaxed pt-1">
-                            • 通知关闭会导致常驻通知不显示，前台服务在 Android 14+ 可能被系统杀掉。<br/>
-                            • 电池优化未忽略时，锁屏、切 App 后角色消息可能延迟或不响；国产 ROM 还需在“自启动/后台高耗电”里允许。<br/>
-                            • 重启后恢复已实现：<code className="bg-slate-100 px-1 rounded">RECEIVE_BOOT_COMPLETED</code> → 自动拉起常驻服务并恢复 pending 任务。
+                            • 通知被关闭时，“正在运行”通知无法显示，系统也更容易把后台服务清理掉。<br/>
+                            • 未忽略电池优化时，锁屏或切走后角色消息可能延迟、不响；部分手机还需在“自启动 / 后台高耗电”里允许 SullyOS。<br/>
+                            • 若“忽略电池优化”按钮没反应，可点“打开电池优化列表”，找到 SullyOS 手动设为“不优化”。<br/>
+                            • 手机重启后会自动恢复后台运行，不用手动重新打开。
                         </p>
                     </div>
 
@@ -1818,9 +1819,8 @@ const Settings: React.FC = () => {
                     <div className="rounded-xl bg-slate-50 border border-slate-200 px-3 py-2">
                         <p className="text-[10px] font-bold text-slate-500 mb-1">原生任务队列 (调试)</p>
                         <p className="text-[10px] text-slate-400 leading-relaxed">
-                            主聊天、主动消息、彼方、家园的下次触发已接入原生可恢复队列 (<code className="bg-white px-1 rounded border">nativeScheduler</code>)。
-                            即使 WebView 被系统回收，<code className="bg-white px-1 rounded">BOOT_COMPLETED</code> + <code className="bg-white px-1 rounded">START_STICKY</code> 会恢复 pending 任务，回前台时自动补火。
-                            若看到“正在运行”通知消失，说明服务被杀，请检查电池优化和通知权限。
+                            主聊天、主动消息、彼方、家园的下次触发都记在系统级任务队列里，即使应用被系统回收，重启或回到前台后也会自动补发。
+                            若看到“正在运行”通知消失，说明后台服务被清理了，请检查上方的电池优化和通知权限。
                         </p>
                     </div>
                 </div>

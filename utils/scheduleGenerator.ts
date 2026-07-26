@@ -369,7 +369,8 @@ export async function generateDailyScheduleForChar(
             return null;
         }
         const slots: ScheduleSlot[] = (parsed.slots || []).map((s: any) => ({
-            startTime: s.startTime || '00:00',
+            // 补零规范化（"9:30" → "09:30"）：排序和修订引擎的字符串比较都依赖 HH:MM 定长格式
+            startTime: (typeof s.startTime === 'string' && /^\d{1,2}:\d{2}$/.test(s.startTime.trim())) ? s.startTime.trim().padStart(5, '0') : '00:00',
             activity: s.activity || '',
             description: s.description,
             emoji: s.emoji,

@@ -551,8 +551,8 @@ export async function runWorldEpisode(deps: WorldEpisodeDeps): Promise<WorldEpis
             }).catch(() => {});
         }
 
-        // ⑥ 世界事件驱动日程修订：对开了「家园影响日程」独立开关的成员逐个 fire
-        // （fire-and-forget，失败不影响演绎主流程；没日程/没未来时段时引擎内部静默跳过）
+        // ⑥ 世界事件驱动日程修订：修订模式（总阀门）开着 + 成员开了「家园影响日程」才触发
+        // （fire-and-forget，失败不影响演绎主流程；总阀门关/没日程/没未来时段时引擎内部静默跳过）
         try {
             const { reviseScheduleForEvent, revisionApiOf } = await import('../scheduleRevision');
             for (const beat of beats) {
@@ -565,7 +565,6 @@ export async function runWorldEpisode(deps: WorldEpisodeDeps): Promise<WorldEpis
                     source: 'world',
                     sourceLabel: world.name,
                     eventSummary: `你在「${world.name}」家园世界里刚发生的事：${beat.narrative.slice(0, 600)}`,
-                    skipEnabledCheck: true,
                 });
             }
         } catch { /* ignore */ }

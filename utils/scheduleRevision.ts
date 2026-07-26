@@ -138,11 +138,26 @@ function extractKeyedObject(raw: string, key: string): any | null {
 
 // ── 应用落库（共用） ──────────────────────────────────────────
 
+// 同角色修订串行化：群聊/通话/家园几乎同时触发时，避免读-改-写竞态互相覆盖
+const revisionChains = new Map<string, Promise<unknown>>();
+
 /**
  * 把修订载荷应用到今天的日程并落库。只动「当前时刻之后」的时段；
  * 应用成功（至少 1 处生效）返回 true，并广播 SCHEDULE_REVISED_EVENT。
  */
-export async function applyScheduleRevision(
+export function applyScheduleRevision(
+    charId: string,
+    payload: RevisionPayload,
+    source: RevisionSource,
+    sourceLabel?: string,
+): Promise<boolean> {
+    const prev = revisionChains.get(charId) || Promise.resolve();
+    const run = prev.then(() => applyRevisionInner(charId, payload, source, sourceLabel));
+    revisionChains.set(charId, run.catch(() => {}));
+    return run;
+}
+
+async function applyRevisionInner(
     charId: string,
     payload: RevisionPayload,
     source: RevisionSource,
@@ -255,12 +270,11 @@ export async function reviseScheduleForEvent(args: {
     sourceLabel?: string;
     /** 事件摘要（通话时长+纪念句 / 群聊片段 / 家园 narrative 节选…） */
     eventSummary: string;
-    /** world 来源受独立开关 scheduleConfig.worldAffectsSchedule 管 */
-    skipEnabledCheck?: boolean;
 }): Promise<boolean> {
     const { char, api, source, sourceLabel, eventSummary } = args;
     try {
-        if (!args.skipEnabledCheck && !isRevisionEnabled(char)) return false;
+        // 修订模式是总阀门：选「关闭」时所有来源（含家园）都不改日程
+        if (!isRevisionEnabled(char)) return false;
         if (!api?.baseUrl || !eventSummary.trim()) return false;
         const schedule = await getLocalDailySchedule(char.id);
         if (!schedule || schedule.slots.length === 0) return false;

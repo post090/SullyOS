@@ -1140,6 +1140,7 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                                                 onChange={e => onScheduleConfigChange({ ...cfg, worldAffectsSchedule: e.target.checked })}
                                                 className="w-4 h-4 accent-violet-500" />
                                         </label>
+                                        <p className="text-[10px] text-slate-400 mt-1">上面的模式是总开关：选「关闭」时，家园这个开关也不会生效。</p>
                                     </div>
                                 );
                             })()}
