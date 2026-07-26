@@ -54,11 +54,11 @@ interface SullyNativeRuntimePlugin {
   requestBatteryOptimizationExemption(): Promise<{ opened: boolean; fallback?: boolean; error?: string }>;
   openNotificationSettings(): Promise<void>;
   openBatterySettings(): Promise<void>;
-  startCallNotification(options: { charName: string; charId: string; startedAt: number }): Promise<void>;
-  updateCallNotification(options: { charName: string; charId: string; startedAt: number }): Promise<void>;
+  startCallNotification(options: { charName: string; charId: string; startedAt: number; avatar?: string }): Promise<void>;
+  updateCallNotification(options: { charName: string; charId: string; startedAt: number; avatar?: string }): Promise<void>;
   stopCallNotification(): Promise<void>;
-  showMusicNotification(options: { title: string; artist: string; album: string; isPlaying: boolean; isLiked: boolean; songId: string }): Promise<void>;
-  updateMusicNotification(options: { title: string; artist: string; album: string; isPlaying: boolean; isLiked: boolean; songId: string }): Promise<void>;
+  showMusicNotification(options: { title: string; artist: string; album: string; isPlaying: boolean; isLiked: boolean; songId: string; coverUrl?: string; durationMs?: number; positionMs?: number }): Promise<void>;
+  updateMusicNotification(options: { title: string; artist: string; album: string; isPlaying: boolean; isLiked: boolean; songId: string; coverUrl?: string; durationMs?: number; positionMs?: number }): Promise<void>;
   stopMusicNotification(): Promise<void>;
   getPendingMusicAction(): Promise<{ action?: string }>;
   getCallState(): Promise<{ active: boolean; charId?: string; charName?: string; startedAt?: number }>;
@@ -247,26 +247,63 @@ export async function clearNativeJob(jobId: string): Promise<void> {
   await NativeRuntime.clearJob({ jobId });
 }
 
-export async function startNativeCallNotification(input: { charName: string; charId: string; startedAt?: number }): Promise<void> {
+export async function startNativeCallNotification(input: { charName: string; charId: string; startedAt?: number; avatar?: string }): Promise<void> {
   if (!isNativeRuntimePlatform()) return;
   try {
     await NativeRuntime.startCallNotification({
       charName: input.charName,
       charId: input.charId,
       startedAt: input.startedAt || Date.now(),
+      avatar: await prepareCallAvatar(input.avatar),
     });
   } catch {}
 }
 
-export async function updateNativeCallNotification(input: { charName: string; charId: string; startedAt?: number }): Promise<void> {
+export async function updateNativeCallNotification(input: { charName: string; charId: string; startedAt?: number; avatar?: string }): Promise<void> {
   if (!isNativeRuntimePlatform()) return;
   try {
     await NativeRuntime.updateCallNotification({
       charName: input.charName,
       charId: input.charId,
       startedAt: input.startedAt || 0,
+      avatar: await prepareCallAvatar(input.avatar),
     });
   } catch {}
+}
+
+// 头像缩小成 192px JPEG dataURL 后再传给原生（Intent extras 有体积上限，大 base64 会抛
+// TransactionTooLarge）；远程 http(s) 头像 canvas 会被跨域污染，直接交给原生自己下载。
+const avatarCache = new Map<string, string>();
+async function prepareCallAvatar(avatar?: string): Promise<string> {
+  const src = (avatar || '').trim();
+  if (!src) return '';
+  if (/^https?:\/\//i.test(src)) return src.length < 2000 ? src : '';
+  if (!src.startsWith('data:image') && !src.startsWith('blob:')) return '';
+  const cached = avatarCache.get(src);
+  if (cached != null) return cached;
+  let out = '';
+  try {
+    const img = new Image();
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error('avatar load failed'));
+      img.src = src;
+    });
+    const size = 192;
+    const canvas = document.createElement('canvas');
+    canvas.width = size; canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    if (ctx && img.width > 0 && img.height > 0) {
+      // 居中裁成正方形（cover）
+      const s = Math.min(img.width, img.height);
+      ctx.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, size, size);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+      if (dataUrl.length < 200_000) out = dataUrl;
+    }
+  } catch { /* 取不到就不带头像 */ }
+  avatarCache.clear();
+  avatarCache.set(src, out);
+  return out;
 }
 
 export async function stopNativeCallNotification(): Promise<void> {
@@ -281,6 +318,10 @@ export interface NativeMusicNotificationInput {
   isPlaying: boolean;
   isLiked: boolean;
   songId?: string;
+  /** 专辑封面 http(s) URL，原生侧下载后渲染媒体卡片 */
+  coverUrl?: string;
+  durationMs?: number;
+  positionMs?: number;
 }
 
 export async function showNativeMusicNotification(input: NativeMusicNotificationInput): Promise<void> {
@@ -293,6 +334,9 @@ export async function showNativeMusicNotification(input: NativeMusicNotification
       isPlaying: input.isPlaying,
       isLiked: input.isLiked,
       songId: input.songId || '',
+      coverUrl: input.coverUrl || '',
+      durationMs: Math.max(0, Math.round(input.durationMs || 0)),
+      positionMs: Math.max(0, Math.round(input.positionMs || 0)),
     });
   } catch {}
 }
@@ -307,6 +351,9 @@ export async function updateNativeMusicNotification(input: NativeMusicNotificati
       isPlaying: input.isPlaying,
       isLiked: input.isLiked,
       songId: input.songId || '',
+      coverUrl: input.coverUrl || '',
+      durationMs: Math.max(0, Math.round(input.durationMs || 0)),
+      positionMs: Math.max(0, Math.round(input.positionMs || 0)),
     });
   } catch {}
 }

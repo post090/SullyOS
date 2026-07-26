@@ -329,11 +329,13 @@ public class SullyNativeRuntimePlugin extends Plugin {
         String charName = call.getString("charName", "通话中");
         String charId = call.getString("charId", "");
         long startedAt = call.getLong("startedAt", System.currentTimeMillis());
+        String avatar = call.getString("avatar", "");
         Intent intent = new Intent(getContext(), SullyNativeRuntimeService.class);
         intent.setAction(SullyNativeRuntimeService.ACTION_CALL_START);
         intent.putExtra("charName", charName);
         intent.putExtra("charId", charId);
         intent.putExtra("startedAt", startedAt);
+        intent.putExtra("avatar", avatar);
         SullyNativeRuntimeService.startCompat(getContext(), intent);
         call.resolve();
     }
@@ -343,11 +345,13 @@ public class SullyNativeRuntimePlugin extends Plugin {
         String charName = call.getString("charName", "通话中");
         String charId = call.getString("charId", "");
         long startedAt = call.getLong("startedAt", 0L);
+        String avatar = call.getString("avatar", "");
         Intent intent = new Intent(getContext(), SullyNativeRuntimeService.class);
         intent.setAction(SullyNativeRuntimeService.ACTION_CALL_UPDATE);
         intent.putExtra("charName", charName);
         intent.putExtra("charId", charId);
         intent.putExtra("startedAt", startedAt);
+        intent.putExtra("avatar", avatar);
         getContext().startService(intent);
         call.resolve();
     }
@@ -368,6 +372,9 @@ public class SullyNativeRuntimePlugin extends Plugin {
         boolean isPlaying = call.getBoolean("isPlaying", true);
         boolean isLiked = call.getBoolean("isLiked", false);
         String songId = call.getString("songId", "");
+        String coverUrl = call.getString("coverUrl", "");
+        long durationMs = call.getLong("durationMs", 0L);
+        long positionMs = call.getLong("positionMs", 0L);
         Intent intent = new Intent(getContext(), SullyNativeRuntimeService.class);
         intent.setAction(SullyNativeRuntimeService.ACTION_MUSIC_SHOW);
         intent.putExtra("title", title);
@@ -376,6 +383,9 @@ public class SullyNativeRuntimePlugin extends Plugin {
         intent.putExtra("isPlaying", isPlaying);
         intent.putExtra("isLiked", isLiked);
         intent.putExtra("songId", songId);
+        intent.putExtra("coverUrl", coverUrl);
+        intent.putExtra("durationMs", durationMs);
+        intent.putExtra("positionMs", positionMs);
         SullyNativeRuntimeService.startCompat(getContext(), intent);
         call.resolve();
     }
@@ -388,6 +398,9 @@ public class SullyNativeRuntimePlugin extends Plugin {
         boolean isPlaying = call.getBoolean("isPlaying", true);
         boolean isLiked = call.getBoolean("isLiked", false);
         String songId = call.getString("songId", "");
+        String coverUrl = call.getString("coverUrl", "");
+        long durationMs = call.getLong("durationMs", 0L);
+        long positionMs = call.getLong("positionMs", 0L);
         Intent intent = new Intent(getContext(), SullyNativeRuntimeService.class);
         intent.setAction(SullyNativeRuntimeService.ACTION_MUSIC_UPDATE);
         intent.putExtra("title", title);
@@ -396,6 +409,9 @@ public class SullyNativeRuntimePlugin extends Plugin {
         intent.putExtra("isPlaying", isPlaying);
         intent.putExtra("isLiked", isLiked);
         intent.putExtra("songId", songId);
+        intent.putExtra("coverUrl", coverUrl);
+        intent.putExtra("durationMs", durationMs);
+        intent.putExtra("positionMs", positionMs);
         SullyNativeRuntimeService.startCompat(getContext(), intent);
         call.resolve();
     }

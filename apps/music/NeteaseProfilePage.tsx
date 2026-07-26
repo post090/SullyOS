@@ -263,13 +263,16 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
   useEffect(() => { reload(); }, [reload]);
 
   // 展开歌单 — 同样用 ref 去稳定化 cfg / addToast
+  // 分页拉全整单（最多 10000 首）：之前只取前 100 首，千首大歌单翻来覆去都是那几首
   const expandPlaylist = useCallback(async (pl: Playlist) => {
     if (expandedPl === pl.id) { setExpandedPl(null); return; }
     setExpandedPl(pl.id);
     if (plTracks[pl.id]) return;
     try {
-      const r = await musicApi.playlistTrackAll(cfgRef.current, pl.id, 100, 0);
-      const songs: Song[] = (r?.songs || []).map((s: any) => ({
+      const MAX_TRACKS = 10000;
+      const PAGE = 500;
+      const total = Math.min(pl.trackCount || MAX_TRACKS, MAX_TRACKS);
+      const mapSong = (s: any): Song => ({
         id: s.id,
         name: s.name,
         artists: (s.ar || []).map((a: any) => a.name).join(' / '),
@@ -277,8 +280,18 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
         albumPic: toHttps(s.al?.picUrl || ''),
         duration: (s.dt || 0) / 1000,
         fee: s.fee ?? 0,
-      }));
-      setPlTracks(prev => ({ ...prev, [pl.id]: songs }));
+      });
+      const all: Song[] = [];
+      for (let offset = 0; offset < total; offset += PAGE) {
+        const r = await musicApi.playlistTrackAll(cfgRef.current, pl.id, PAGE, offset);
+        const page: Song[] = (r?.songs || []).map(mapSong);
+        if (!page.length) break;
+        all.push(...page);
+        // 第一页先上屏，剩下的后台继续补齐，不让用户等整单拉完
+        if (offset === 0) setPlTracks(prev => ({ ...prev, [pl.id]: page }));
+        if (page.length < PAGE) break;
+      }
+      setPlTracks(prev => ({ ...prev, [pl.id]: all.slice(0, MAX_TRACKS) }));
     } catch (e: any) {
       toastRef.current(`加载歌单失败：${e.message}`, 'error');
     }
@@ -753,6 +766,11 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
                     ))}
                     {(plTracks[pl.id] || []).length === 0 && (
                       <div className="text-[10px] text-center py-2" style={{ color: C.faint }}>加载中...</div>
+                    )}
+                    {(plTracks[pl.id] || []).length > 30 && (
+                      <div className="text-[9px] text-center py-1.5" style={{ color: C.faint }}>
+                        已加载 {plTracks[pl.id].length} 首 · 点任意一首整单入队
+                      </div>
                     )}
                   </div>
                 )}

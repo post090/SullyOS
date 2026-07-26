@@ -557,12 +557,13 @@ const CallApp: React.FC = () => {
     if (!callStartedAt || ['idle', 'ended'].includes(callState)) return;
     const charName = selectedChar?.name || '通话中';
     const charId = selectedCharId || selectedChar?.id || '';
+    const avatar = selectedChar?.avatar || '';
     // Start/update native call notification with chronometer
     if (callState === 'connecting' || callState === 'listening' || callState === 'thinking' || callState === 'speaking') {
-      void startNativeCallNotification({ charName, charId, startedAt: callStartedAt });
+      void startNativeCallNotification({ charName, charId, startedAt: callStartedAt, avatar });
     }
     // Update notification when selected char changes (e.g., resume)
-    void updateNativeCallNotification({ charName, charId, startedAt: callStartedAt });
+    void updateNativeCallNotification({ charName, charId, startedAt: callStartedAt, avatar });
 
     // If call gets interrupted (WebView killed), on resume we can read native call state
     // and restore. The service persists call_active in SharedPreferences.

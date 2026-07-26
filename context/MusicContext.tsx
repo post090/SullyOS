@@ -600,6 +600,10 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const modeRef = useRef(playMode); modeRef.current = playMode;
   const cfgRef = useRef(cfg); cfgRef.current = cfg;
   const endedHandlerRef = useRef<() => void>(() => {});
+  // 原生通知用：读进度/时长不订阅（避免每秒重发通知），seek/拿到时长后由 ref 主动补发
+  const progressRef = useRef(progress); progressRef.current = progress;
+  const durationRef = useRef(duration); durationRef.current = duration;
+  const nativeMusicSyncRef = useRef<(() => void) | null>(null);
 
   // 初始化 audio（仅 Provider 生命周期创建一次）
   useEffect(() => {
@@ -615,21 +619,28 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     // 播放出错 → 清掉 playing 状态 + 清掉"一起听"伙伴（防止 UI 卡在残留状态）
     const onErr = () => { setPlaying(false); setListeningTogetherWith([]); toast('播放失败', 'error'); };
     const onEnd = () => { endedHandlerRef.current(); };
+    // seek / 拿到真实时长 → 立即把新的进度同步到原生通知的进度条
+    const onSeeked = () => { nativeMusicSyncRef.current?.(); };
+    const onMetaSync = () => { nativeMusicSyncRef.current?.(); };
 
     a.addEventListener('play', onPlay);
     a.addEventListener('pause', onPause);
     a.addEventListener('timeupdate', onTime);
     a.addEventListener('loadedmetadata', onMeta);
+    a.addEventListener('loadedmetadata', onMetaSync);
     a.addEventListener('error', onErr);
     a.addEventListener('ended', onEnd);
+    a.addEventListener('seeked', onSeeked);
 
     return () => {
       a.removeEventListener('play', onPlay);
       a.removeEventListener('pause', onPause);
       a.removeEventListener('timeupdate', onTime);
       a.removeEventListener('loadedmetadata', onMeta);
+      a.removeEventListener('loadedmetadata', onMetaSync);
       a.removeEventListener('error', onErr);
       a.removeEventListener('ended', onEnd);
+      a.removeEventListener('seeked', onSeeked);
       try { a.pause(); a.src = ''; } catch {}
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -866,18 +877,29 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       });
       return;
     }
-    void import('../utils/runtime/nativeRuntime').then(m => {
-      const input = {
-        title: current.name || '未知歌曲',
-        artist: current.artists || current.album || 'SullyOS',
-        album: current.album || '',
-        isPlaying: playing,
-        isLiked: liked,
-        songId: String(current.id),
-      };
-      // 首次显示 vs 更新都用同一个入口，service 会更新已有通知
-      m.showNativeMusicNotification(input).catch(() => {});
-    });
+    const send = () => {
+      void import('../utils/runtime/nativeRuntime').then(m => {
+        // 时长优先用 API 给的（秒），本地/缺失时退回 audio 元数据
+        const durSec = current.duration && current.duration > 0 ? current.duration : durationRef.current;
+        const input = {
+          title: current.name || '未知歌曲',
+          artist: current.artists || current.album || 'SullyOS',
+          album: current.album || '',
+          isPlaying: playing,
+          isLiked: liked,
+          songId: String(current.id),
+          // 专辑封面 → 原生侧下载后作为通知 largeIcon + MediaSession 卡片封面
+          coverUrl: /^https?:\/\//i.test(current.albumPic || '') ? current.albumPic : '',
+          durationMs: Math.max(0, Math.round((durSec || 0) * 1000)),
+          positionMs: Math.max(0, Math.round((progressRef.current || 0) * 1000)),
+        };
+        // 首次显示 vs 更新都用同一个入口，service 会更新已有通知
+        m.showNativeMusicNotification(input).catch(() => {});
+      });
+    };
+    send();
+    nativeMusicSyncRef.current = send;
+    return () => { if (nativeMusicSyncRef.current === send) nativeMusicSyncRef.current = null; };
   }, [current?.id, current?.name, current?.artists, current?.album, playing, liked]);
 
   // 轮询原生侧音乐控制按钮（通知栏点击） - prev/next/toggle/like

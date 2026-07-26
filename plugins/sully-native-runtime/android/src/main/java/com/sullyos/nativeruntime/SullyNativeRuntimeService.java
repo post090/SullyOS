@@ -65,6 +65,7 @@ public class SullyNativeRuntimeService extends Service {
     private static volatile long callStartedAtMs = 0;
     private static volatile String callCharId = null;
     private static volatile String callCharName = null;
+    private static volatile String callAvatar = null;
     // Music tracking so we can keep the service foreground while playing and rebuild the
     // media notification when another foreground (call/persistent) is torn down.
     private static volatile boolean musicActive = false;
@@ -74,6 +75,14 @@ public class SullyNativeRuntimeService extends Service {
     private static volatile String musicSongId = null;
     private static volatile boolean musicPlaying = false;
     private static volatile boolean musicLiked = false;
+    private static volatile String musicCoverUrl = null;
+    private static volatile long musicDurationMs = 0;
+    // Position snapshot + capture timestamp so we can extrapolate while playing.
+    private static volatile long musicPositionMs = 0;
+    private static volatile long musicPositionCapturedAt = 0;
+    // Artwork bitmaps (album covers / call avatars) keyed by source URL or data-URI.
+    private static final ConcurrentHashMap<String, android.graphics.Bitmap> ART_CACHE = new ConcurrentHashMap<>();
+    private static final android.os.Handler MAIN_HANDLER = new android.os.Handler(android.os.Looper.getMainLooper());
     private android.media.session.MediaSession mediaSession;
 
     @Override
@@ -113,37 +122,46 @@ public class SullyNativeRuntimeService extends Service {
             String charName = intent.getStringExtra("charName");
             String charId = intent.getStringExtra("charId");
             long startedAt = intent.getLongExtra("startedAt", System.currentTimeMillis());
+            String avatar = intent.getStringExtra("avatar");
             callCharId = charId;
             callCharName = charName;
             callStartedAtMs = startedAt;
+            if (avatar != null && !avatar.trim().isEmpty()) callAvatar = avatar;
             // Persist for resume after WebView death
             getSharedPreferences("sully_native_runtime", MODE_PRIVATE).edit()
                 .putString("call_char_id", charId)
                 .putString("call_char_name", charName)
+                .putString("call_avatar", callAvatar == null ? "" : callAvatar)
                 .putLong("call_started_at", startedAt)
                 .putBoolean("call_active", true)
                 .apply();
             startForegroundCompatWithCall(charName, startedAt);
+            maybeFetchCallAvatar();
             return START_STICKY;
         }
         if (ACTION_CALL_UPDATE.equals(action)) {
             String charName = intent.getStringExtra("charName");
             long startedAt = intent.getLongExtra("startedAt", callStartedAtMs);
             String charId = intent.getStringExtra("charId");
+            String avatar = intent.getStringExtra("avatar");
             if (charId != null) callCharId = charId;
             if (charName != null) callCharName = charName;
             if (startedAt != 0) callStartedAtMs = startedAt;
+            if (avatar != null && !avatar.trim().isEmpty()) callAvatar = avatar;
             updateCallNotification(charName != null ? charName : callCharName, callStartedAtMs);
+            maybeFetchCallAvatar();
             return START_STICKY;
         }
         if (ACTION_CALL_END.equals(action)) {
             callCharId = null;
             callCharName = null;
             callStartedAtMs = 0;
+            callAvatar = null;
             getSharedPreferences("sully_native_runtime", MODE_PRIVATE).edit()
                 .putBoolean("call_active", false)
                 .remove("call_char_id")
                 .remove("call_char_name")
+                .remove("call_avatar")
                 .remove("call_started_at")
                 .apply();
             stopCallNotification();
@@ -157,7 +175,10 @@ public class SullyNativeRuntimeService extends Service {
             boolean isPlaying = intent.getBooleanExtra("isPlaying", true);
             boolean isLiked = intent.getBooleanExtra("isLiked", false);
             String songId = intent.getStringExtra("songId");
-            showMusicNotification(title, artist, album, isPlaying, isLiked, songId);
+            String coverUrl = intent.getStringExtra("coverUrl");
+            long durationMs = intent.getLongExtra("durationMs", 0L);
+            long positionMs = intent.getLongExtra("positionMs", 0L);
+            showMusicNotification(title, artist, album, isPlaying, isLiked, songId, coverUrl, durationMs, positionMs);
             return START_STICKY;
         }
         if (ACTION_MUSIC_STOP.equals(action)) {
@@ -195,13 +216,16 @@ public class SullyNativeRuntimeService extends Service {
                 String savedName = getSharedPreferences("sully_native_runtime", MODE_PRIVATE).getString("call_char_name", null);
                 long savedStarted = getSharedPreferences("sully_native_runtime", MODE_PRIVATE).getLong("call_started_at", System.currentTimeMillis());
                 String savedCharId = getSharedPreferences("sully_native_runtime", MODE_PRIVATE).getString("call_char_id", null);
+                String savedAvatar = getSharedPreferences("sully_native_runtime", MODE_PRIVATE).getString("call_avatar", null);
                 if (savedName != null) {
                     callCharName = savedName;
                     callCharId = savedCharId;
                     callStartedAtMs = savedStarted;
+                    if (savedAvatar != null && !savedAvatar.isEmpty()) callAvatar = savedAvatar;
                     // Re-show call notification as foreground? We already have foreground from persistent,
                     // so show call as separate notification (not foreground) to avoid replacing persistent.
                     updateCallNotification(savedName, savedStarted);
+                    maybeFetchCallAvatar();
                 }
             }
             return START_STICKY;
@@ -363,7 +387,8 @@ public class SullyNativeRuntimeService extends Service {
         } else if (callStartedAtMs != 0) {
             startForegroundCompatWithCall(callCharName, callStartedAtMs);
         } else if (musicActive) {
-            showMusicNotification(musicTitle, musicArtist, musicAlbum, musicPlaying, musicLiked, musicSongId);
+            showMusicNotification(musicTitle, musicArtist, musicAlbum, musicPlaying, musicLiked, musicSongId,
+                musicCoverUrl, musicDurationMs, currentMusicPositionMs());
         } else if (RUNNING_JOBS.get() > 0) {
             // Keep the service foreground for in-flight jobs with the generic notification.
             startForegroundCompat(null, null);
@@ -415,32 +440,124 @@ public class SullyNativeRuntimeService extends Service {
         return mediaSession;
     }
 
-    private void updateMediaSessionMetadata(String title, String artist, boolean isPlaying) {
+    private void updateMediaSessionMetadata(String title, String artist, String album, boolean isPlaying,
+                                            android.graphics.Bitmap art, long durationMs, long positionMs) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return;
         android.media.session.MediaSession s = ensureMediaSession();
         if (s == null) return;
         try {
-            android.media.MediaMetadata meta = new android.media.MediaMetadata.Builder()
+            android.media.MediaMetadata.Builder mb = new android.media.MediaMetadata.Builder()
                 .putString(android.media.MediaMetadata.METADATA_KEY_TITLE, title == null ? "" : title)
-                .putString(android.media.MediaMetadata.METADATA_KEY_ARTIST, artist == null ? "" : artist)
-                .build();
-            s.setMetadata(meta);
+                .putString(android.media.MediaMetadata.METADATA_KEY_ARTIST, artist == null ? "" : artist);
+            if (album != null && !album.trim().isEmpty()) {
+                mb.putString(android.media.MediaMetadata.METADATA_KEY_ALBUM, album);
+            }
+            // Duration drives the seekbar in the system media card (NetEase-style progress).
+            if (durationMs > 0) {
+                mb.putLong(android.media.MediaMetadata.METADATA_KEY_DURATION, durationMs);
+            }
+            // Album art renders both in the notification and the lockscreen/QS media card.
+            if (art != null) {
+                mb.putBitmap(android.media.MediaMetadata.METADATA_KEY_ALBUM_ART, art);
+                mb.putBitmap(android.media.MediaMetadata.METADATA_KEY_ART, art);
+            }
+            s.setMetadata(mb.build());
             long actions = android.media.session.PlaybackState.ACTION_PLAY
                 | android.media.session.PlaybackState.ACTION_PAUSE
                 | android.media.session.PlaybackState.ACTION_PLAY_PAUSE
                 | android.media.session.PlaybackState.ACTION_SKIP_TO_NEXT
                 | android.media.session.PlaybackState.ACTION_SKIP_TO_PREVIOUS;
+            // Real position + speed lets the system extrapolate the progress bar on its own.
             android.media.session.PlaybackState ps = new android.media.session.PlaybackState.Builder()
                 .setActions(actions)
                 .setState(
                     isPlaying ? android.media.session.PlaybackState.STATE_PLAYING
                               : android.media.session.PlaybackState.STATE_PAUSED,
-                    android.media.session.PlaybackState.PLAYBACK_POSITION_UNKNOWN,
-                    1.0f)
+                    positionMs >= 0 ? positionMs : android.media.session.PlaybackState.PLAYBACK_POSITION_UNKNOWN,
+                    isPlaying ? 1.0f : 0f)
                 .build();
             s.setPlaybackState(ps);
             if (!s.isActive()) s.setActive(true);
         } catch (Exception ignored) {}
+    }
+
+    /** Extrapolate the last reported playback position while the track keeps playing. */
+    private static long currentMusicPositionMs() {
+        long base = musicPositionMs;
+        if (musicPlaying && musicPositionCapturedAt > 0) {
+            base += System.currentTimeMillis() - musicPositionCapturedAt;
+        }
+        if (musicDurationMs > 0 && base > musicDurationMs) base = musicDurationMs;
+        return Math.max(0, base);
+    }
+
+    /** Download (or decode data-URI) artwork off the main thread, cache it, then run onReady on main. */
+    private void fetchArtAsync(final String src, final Runnable onReady) {
+        EXECUTOR.execute(() -> {
+            android.graphics.Bitmap bmp = loadArtBitmap(src);
+            if (bmp == null) return;
+            if (ART_CACHE.size() > 8) ART_CACHE.clear();
+            ART_CACHE.put(src, bmp);
+            MAIN_HANDLER.post(onReady);
+        });
+    }
+
+    private static android.graphics.Bitmap loadArtBitmap(String src) {
+        try {
+            byte[] data;
+            if (src.startsWith("data:")) {
+                int comma = src.indexOf(',');
+                if (comma < 0) return null;
+                data = android.util.Base64.decode(src.substring(comma + 1), android.util.Base64.DEFAULT);
+            } else {
+                HttpURLConnection conn = (HttpURLConnection) new URL(src).openConnection();
+                conn.setConnectTimeout(10000);
+                conn.setReadTimeout(15000);
+                conn.setInstanceFollowRedirects(true);
+                try (InputStream in = conn.getInputStream(); ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
+                    byte[] buf = new byte[8192];
+                    int n;
+                    while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+                    data = bos.toByteArray();
+                } finally {
+                    conn.disconnect();
+                }
+            }
+            android.graphics.BitmapFactory.Options bounds = new android.graphics.BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            android.graphics.BitmapFactory.decodeByteArray(data, 0, data.length, bounds);
+            int max = Math.max(bounds.outWidth, bounds.outHeight);
+            int sample = 1;
+            while (max / sample > 640) sample *= 2;
+            android.graphics.BitmapFactory.Options opts = new android.graphics.BitmapFactory.Options();
+            opts.inSampleSize = sample;
+            return android.graphics.BitmapFactory.decodeByteArray(data, 0, data.length, opts);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** Fetch the current song's cover if missing, then repost the notification with artwork. */
+    private void maybeFetchMusicArt() {
+        final String src = musicCoverUrl;
+        if (src == null || src.isEmpty() || ART_CACHE.containsKey(src)) return;
+        fetchArtAsync(src, () -> {
+            if (musicActive && src.equals(musicCoverUrl)) {
+                showMusicNotification(musicTitle, musicArtist, musicAlbum, musicPlaying, musicLiked, musicSongId,
+                    musicCoverUrl, musicDurationMs, currentMusicPositionMs());
+            }
+        });
+    }
+
+    /** Fetch the call avatar if missing, then refresh the call notification with it. */
+    private void maybeFetchCallAvatar() {
+        final String src = callAvatar;
+        if (src == null || src.isEmpty() || ART_CACHE.containsKey(src)) return;
+        fetchArtAsync(src, () -> {
+            if (callStartedAtMs != 0 && src.equals(callAvatar)) {
+                updateCallNotification(callCharName, callStartedAtMs);
+            }
+        });
     }
 
     private void runHttpJob(String jobId) {
@@ -617,6 +734,7 @@ public class SullyNativeRuntimeService extends Service {
         String rawRoute = callCharId != null ? callCharId : (charName != null ? charName : "call");
         String routeCallId = rawRoute.startsWith("call:") ? rawRoute : "call:" + rawRoute;
         Notification notification = buildCallNotification(
+            charName,
             charName == null || charName.trim().isEmpty() ? "通话中" : "正在与 " + charName + " 通话",
             "轻触返回通话 · " + formatCallDuration(System.currentTimeMillis() - startedAtMs),
             startedAtMs,
@@ -628,17 +746,24 @@ public class SullyNativeRuntimeService extends Service {
     private void updateCallNotification(String charName, long startedAtMs) {
         ensureChannel(this);
         ensureCallChannel(this);
+        // When the call anchors the foreground (posted without a tag), update through
+        // startForeground again so we don't create a second tagged notification.
+        if (callStartedAtMs != 0 && !manualForeground) {
+            startForegroundCompatWithCall(charName, startedAtMs);
+            return;
+        }
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager == null) return;
         String rawRoute = callCharId != null ? callCharId : (charName != null ? charName : "call");
         String routeCallId = rawRoute.startsWith("call:") ? rawRoute : "call:" + rawRoute;
         Notification notification = buildCallNotification(
+            charName,
             charName == null || charName.trim().isEmpty() ? "通话中" : "正在与 " + charName + " 通话",
             "轻触返回通话 · " + formatCallDuration(System.currentTimeMillis() - startedAtMs),
             startedAtMs,
             routeCallId
         );
-        manager.notify("sully-call", NOTIFICATION_CALL_ID, notification);
+        try { manager.notify("sully-call", NOTIFICATION_CALL_ID, notification); } catch (Exception ignored) {}
     }
 
     private static String formatCallDuration(long elapsedMs) {
@@ -658,7 +783,7 @@ public class SullyNativeRuntimeService extends Service {
         reassertForeground();
     }
 
-    private Notification buildCallNotification(String title, String text, long startedAtMs, String charIdForRoute) {
+    private Notification buildCallNotification(String charName, String title, String text, long startedAtMs, String charIdForRoute) {
         ensureCallChannel(this);
         Intent launchIntent = getPackageManager().getLaunchIntentForPackage(getPackageName());
         PendingIntent contentIntent = null;
@@ -680,6 +805,37 @@ public class SullyNativeRuntimeService extends Service {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) hangupFlags |= PendingIntent.FLAG_IMMUTABLE;
         PendingIntent hangupPending = PendingIntent.getService(this, 93092, hangupIntent, hangupFlags);
 
+        android.graphics.Bitmap avatarBmp = callAvatar != null && !callAvatar.isEmpty() ? ART_CACHE.get(callAvatar) : null;
+
+        // API 31+: CallStyle renders the QQ/WeChat-like ongoing-call card with a big
+        // avatar and a proper hang-up button. Fall back to the plain style if the
+        // system rejects it (CallStyle validates person / foreground requirements).
+        if (Build.VERSION.SDK_INT >= 31) {
+            try {
+                Notification.Builder builder = newCallBuilderBase(title, text, startedAtMs, contentIntent);
+                android.app.Person.Builder pb = new android.app.Person.Builder()
+                    .setName(charName == null || charName.trim().isEmpty() ? "通话中" : charName)
+                    .setImportant(true);
+                if (avatarBmp != null) {
+                    pb.setIcon(android.graphics.drawable.Icon.createWithBitmap(avatarBmp));
+                }
+                builder.setStyle(Notification.CallStyle.forOngoingCall(pb.build(), hangupPending));
+                return builder.build();
+            } catch (Exception ignored) { /* fall through to the legacy layout */ }
+        }
+
+        Notification.Builder builder = newCallBuilderBase(title, text, startedAtMs, contentIntent);
+        if (avatarBmp != null) builder.setLargeIcon(avatarBmp);
+        // Add hangup action for Android
+        builder.addAction(new Notification.Action.Builder(
+            null,
+            "挂断",
+            hangupPending
+        ).build());
+        return builder.build();
+    }
+
+    private Notification.Builder newCallBuilderBase(String title, String text, long startedAtMs, PendingIntent contentIntent) {
         Notification.Builder builder;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             builder = new Notification.Builder(this, CHANNEL_CALL);
@@ -695,18 +851,14 @@ public class SullyNativeRuntimeService extends Service {
             .setUsesChronometer(true)
             .setContentIntent(contentIntent)
             .setCategory(Notification.CATEGORY_CALL);
-
-        // Add hangup action for Android
-        builder.addAction(new Notification.Action.Builder(
-            null,
-            "挂断",
-            hangupPending
-        ).build());
-
-        return builder.build();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            builder.setColorized(true);
+        }
+        return builder;
     }
 
-    private void showMusicNotification(String title, String artist, String album, boolean isPlaying, boolean isLiked, String songId) {
+    private void showMusicNotification(String title, String artist, String album, boolean isPlaying, boolean isLiked, String songId,
+                                       String coverUrl, long durationMs, long positionMs) {
         ensureChannel(this);
         ensureMusicChannel(this);
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
@@ -719,13 +871,20 @@ public class SullyNativeRuntimeService extends Service {
         musicPlaying = isPlaying;
         musicLiked = isLiked;
         musicSongId = songId;
+        musicCoverUrl = coverUrl;
+        musicDurationMs = durationMs;
+        musicPositionMs = positionMs;
+        musicPositionCapturedAt = System.currentTimeMillis();
         musicActive = true;
 
         String contentTitle = title != null && !title.trim().isEmpty() ? title : "SullyOS 音乐";
         String contentText = artist != null && !artist.trim().isEmpty() ? artist : (album != null ? album : "正在播放");
 
-        updateMediaSessionMetadata(contentTitle, contentText, isPlaying);
-        Notification notification = buildMusicNotification(contentTitle, contentText, isPlaying, isLiked, songId);
+        // Post immediately with whatever artwork is cached; if the cover isn't cached yet,
+        // kick off a background download and repost once it lands (keeps the 5s FGS contract).
+        android.graphics.Bitmap art = coverUrl != null && !coverUrl.isEmpty() ? ART_CACHE.get(coverUrl) : null;
+        updateMediaSessionMetadata(contentTitle, contentText, album, isPlaying, art, durationMs, positionMs);
+        Notification notification = buildMusicNotification(contentTitle, contentText, isPlaying, isLiked, songId, art);
         if (manualForeground || callStartedAtMs != 0) {
             // Another notification already anchors the foreground; post music alongside it
             // so we don't displace the persistent/call notification.
@@ -735,6 +894,7 @@ public class SullyNativeRuntimeService extends Service {
             // controls keep working with the app in background / screen off.
             startForegroundTyped(NOTIFICATION_MUSIC_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
         }
+        if (art == null) maybeFetchMusicArt();
     }
 
     private void stopMusicNotification() {
@@ -754,7 +914,8 @@ public class SullyNativeRuntimeService extends Service {
         reassertForeground();
     }
 
-    private Notification buildMusicNotification(String title, String artist, boolean isPlaying, boolean isLiked, String songId) {
+    private Notification buildMusicNotification(String title, String artist, boolean isPlaying, boolean isLiked, String songId,
+                                                android.graphics.Bitmap art) {
         ensureMusicChannel(this);
 
         Intent launchIntent = getPackageManager().getLaunchIntentForPackage(getPackageName());
@@ -780,6 +941,15 @@ public class SullyNativeRuntimeService extends Service {
             .setOngoing(isPlaying) // ongoing when playing, swipe-dismissable when paused
             .setShowWhen(false)
             .setContentIntent(contentIntent);
+
+        // Album cover: largeIcon feeds the notification card; colorized lets the system
+        // tint the card from the artwork palette (the NetEase-like look on most OEMs).
+        if (art != null) {
+            builder.setLargeIcon(art);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                builder.setColorized(true);
+            }
+        }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             builder.setCategory(Notification.CATEGORY_TRANSPORT);

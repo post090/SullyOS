@@ -730,6 +730,8 @@ export const useChatAI = ({
         // 保存进入本轮发送前的全局重试通知器；finally 中恢复，避免本轮闭包泄漏。
         // 必须声明在 try 外，否则 finally 访问会触发 ReferenceError。
         const prevNotifier = (window as any).__sullyRetryNotifier;
+        // 原生 chat job 标记：声明在 try 外，catch 里也要标记消费（否则 ReferenceError）。
+        let nativeChatJobId: string | undefined;
 
         try {
             // Keep the Service Worker alive while we make potentially long AI calls
@@ -1137,7 +1139,6 @@ export const useChatAI = ({
             fireLocalEmotionEval?.();
 
             let data: any;
-            let nativeChatJobId: string | undefined;
             try {
                 data = await safeFetchJson(`${baseUrl}/chat/completions`, {
                     method: 'POST', headers,
