@@ -44,23 +44,6 @@ const MAX_ATTEMPTS_OPTIONS = [
  */
 const DEFAULT_HINT_REFERENCE = `[系统提示（非{{user_name}}发言）: 现在是 {{time}}。{{time_since_user}}这是系统给你的一次主动发消息机会——{{user_name}}并没有在跟你说话，是你想主动找{{user_name}}。像真人一样随意地发条消息吧，比如：随手拍了张照片想分享、刚看到个有趣的事想说、突然想到个冷知识、吐槽今天的天气/食物/见闻、或者就是单纯想找{{user_name}}聊几句。不要刻意，不要像在"汇报近况"，就像你真的拿起手机随手发了条消息。一两句话就好。]`;
 
-// 把分钟数（0-1439）格式化成 "HH:MM"
-const minutesToHHMM = (m: number): string => {
-    const h = Math.floor(m / 60) % 24;
-    const min = m % 60;
-    return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
-};
-// 把 "HH:MM" 解析成分钟数；非法返回默认值
-const hhmmToMinutes = (s: string | undefined, fallback: number): number => {
-    if (!s) return fallback;
-    const m = s.trim().match(/^(\d{1,2}):(\d{2})$/);
-    if (!m) return fallback;
-    const h = parseInt(m[1], 10);
-    const min = parseInt(m[2], 10);
-    if (h < 0 || h > 23 || min < 0 || min > 59) return fallback;
-    return h * 60 + min;
-};
-
 const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
     isOpen, onClose, char, isProactiveActive, onSave, onStop
 }) => {
@@ -72,9 +55,7 @@ const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
     const [secKey, setSecKey] = useState(saved?.secondaryApi?.apiKey ?? '');
     const [secModel, setSecModel] = useState(saved?.secondaryApi?.model ?? '');
     const [showApiSection, setShowApiSection] = useState(saved?.useSecondaryApi ?? false);
-    // 睡眠窗口（存分钟数 0-1439，每 30 分钟一档；默认 23:00 入睡 / 07:00 起床）
-    const [sleepStartMin, setSleepStartMin] = useState(hhmmToMinutes(saved?.sleepStart, 23 * 60));
-    const [sleepEndMin, setSleepEndMin] = useState(hhmmToMinutes(saved?.sleepEnd, 7 * 60));
+    // 睡眠窗口已迁至神经链接 → 角色设定页「睡眠时间」，这里不再编辑（见下方指路提示）
     // 主动联系倾向 0-100，默认 50
     const [proactiveness, setProactiveness] = useState(saved?.proactiveness ?? 50);
     // 节制模式：无回应最多找几次。0=无限（不建议）。默认 3。
@@ -94,8 +75,6 @@ const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
             setSecKey(s?.secondaryApi?.apiKey ?? '');
             setSecModel(s?.secondaryApi?.model ?? '');
             setShowApiSection(s?.useSecondaryApi ?? false);
-            setSleepStartMin(hhmmToMinutes(s?.sleepStart, 23 * 60));
-            setSleepEndMin(hhmmToMinutes(s?.sleepEnd, 7 * 60));
             setProactiveness(s?.proactiveness ?? 50);
             setMaxAttempts(s?.maxAttempts ?? 3);
             setHintCustom(s?.hintCustom ?? '');
@@ -113,8 +92,10 @@ const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
                 apiKey: secKey,
                 model: secModel,
             } : undefined,
-            sleepStart: minutesToHHMM(sleepStartMin),
-            sleepEnd: minutesToHHMM(sleepEndMin),
+            // 睡眠字段原样回传：这两个旧字段是神经链接新字段的 fallback 数据源，
+            // 整体替换 proactiveConfig 时不带上会把旧用户的睡眠设置顺手抹掉
+            sleepStart: char.proactiveConfig?.sleepStart,
+            sleepEnd: char.proactiveConfig?.sleepEnd,
             proactiveness,
             maxAttempts,
             hintCustom: hintCustom.trim() || undefined,
@@ -194,50 +175,20 @@ const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
                             </div>
                         </div>
 
-                        {/* 睡眠窗口 */}
+                        {/* 睡眠窗口 —— 已迁至神经链接，这里只留指路牌（解耦：不开主动消息也能设睡眠） */}
                         <div className="pt-2 border-t border-slate-100">
                             <label className="text-sm font-bold text-slate-700 block mb-1">睡眠窗口</label>
-                            <p className="text-[11px] text-slate-400 leading-relaxed mb-3">
-                                睡眠时段内 {char.name} 不会主动发消息（除非思念值攒满，思念优先）。
-                                支持跨日，如入睡 23:00 / 起床 07:00。
+                            <p className="text-[11px] text-slate-400 leading-relaxed">
+                                睡眠时间已搬到 <b className="text-violet-500">神经链接 → 角色设定 → 时间感知 & 时区 → 睡眠时间</b>。
+                                它现在是角色的全局生物钟：主动消息和彼方自主登入都读那里，不开主动消息也能设。
+                                {char.sleepSchedule?.enabled
+                                    ? ` 当前：${char.sleepSchedule.start} ~ ${char.sleepSchedule.end}。`
+                                    : (char.sleepSchedule
+                                        ? ' 当前：未启用。'
+                                        : (char.proactiveConfig?.sleepStart && char.proactiveConfig?.sleepEnd
+                                            ? ` 当前（沿用旧设置）：${char.proactiveConfig.sleepStart} ~ ${char.proactiveConfig.sleepEnd}。`
+                                            : ' 当前：未设置。'))}
                             </p>
-                            <div className="space-y-3 bg-slate-50 rounded-2xl p-3">
-                                <div>
-                                    <div className="flex items-center justify-between mb-1">
-                                        <span className="text-xs text-slate-500 font-medium">入睡时间</span>
-                                        <span className="text-sm font-bold text-violet-600 tabular-nums">{minutesToHHMM(sleepStartMin)}</span>
-                                    </div>
-                                    <input
-                                        type="range"
-                                        min={0}
-                                        max={1439}
-                                        step={30}
-                                        value={sleepStartMin}
-                                        onChange={e => setSleepStartMin(parseInt(e.target.value, 10))}
-                                        className="w-full accent-violet-500"
-                                    />
-                                </div>
-                                <div>
-                                    <div className="flex items-center justify-between mb-1">
-                                        <span className="text-xs text-slate-500 font-medium">起床时间</span>
-                                        <span className="text-sm font-bold text-violet-600 tabular-nums">{minutesToHHMM(sleepEndMin)}</span>
-                                    </div>
-                                    <input
-                                        type="range"
-                                        min={0}
-                                        max={1439}
-                                        step={30}
-                                        value={sleepEndMin}
-                                        onChange={e => setSleepEndMin(parseInt(e.target.value, 10))}
-                                        className="w-full accent-violet-500"
-                                    />
-                                </div>
-                                {sleepStartMin === sleepEndMin && (
-                                    <p className="text-[11px] text-amber-600 leading-relaxed">
-                                        入睡和起床时间相同，等于全天都在睡 — 这通常不是你想要的，请调整。
-                                    </p>
-                                )}
-                            </div>
                         </div>
 
                         {/* 主动联系倾向 */}

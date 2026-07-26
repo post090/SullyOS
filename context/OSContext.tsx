@@ -13,6 +13,7 @@ import { ProactiveChat, getMissCount, incrementMissCount, resetMissCount, MISS_T
 import { replacePromptPlaceholders } from '../components/chat/ChatConstants';
 import { isInTimeWindow } from '../utils/timeWindow';
 import { shouldSkipProactiveForSleep } from '../utils/proactiveDecision';
+import { getSleepWindow } from '../utils/sleepSchedule';
 import { VRScheduler } from '../utils/vrWorld/scheduler';
 import { runVRSession } from '../utils/vrWorld/runSession';
 import { VR_DEFAULT_INTERVAL_MIN, getRoom } from '../utils/vrWorld/constants';
@@ -2187,6 +2188,16 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   const charactersRef = useRef(characters);
   charactersRef.current = characters;
 
+  // 睡眠窗口 → 调度器快照同步。旧版靠“保存主动消息弹窗时 start() 顺路刷新”，
+  // 睡眠编辑点迁到神经链接后没人顺路刷了，这里跟随角色数据变化主动同步
+  //（syncSleepWindow 内部有 diff，无变化时是 no-op，不会频繁写 localStorage）。
+  useEffect(() => {
+      for (const c of characters) {
+          const w = getSleepWindow(c);
+          ProactiveChat.syncSleepWindow(c.id, w.sleepStart, w.sleepEnd);
+      }
+  }, [characters]);
+
   // 同步 charId → 角色名 注册表，让 utils 层（群聊背景注入等）能标出真实发言人名。
   useEffect(() => {
     setCharNameRegistry(characters);
@@ -2312,8 +2323,8 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               return;
           }
 
-          const sleepStart = pCfgForDecision?.sleepStart;
-          const sleepEnd = pCfgForDecision?.sleepEnd;
+          // 睡眠窗口统一读 helper：新字段 sleepSchedule 优先，回落旧 proactiveConfig
+          const { sleepStart, sleepEnd } = getSleepWindow(char);
           const proactiveness = pCfgForDecision?.proactiveness ?? 50; // 默认 50%
           const inSleepWindow = isInTimeWindow(new Date(), sleepStart, sleepEnd);
           const currentMissCount = getMissCount(charId);
@@ -2731,11 +2742,8 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           void runProactive(charId);
       });
       for (const scheduledChar of charactersRef.current) {
-          ProactiveChat.syncSleepWindow(
-              scheduledChar.id,
-              scheduledChar.proactiveConfig?.sleepStart,
-              scheduledChar.proactiveConfig?.sleepEnd,
-          );
+          const w = getSleepWindow(scheduledChar);
+          ProactiveChat.syncSleepWindow(scheduledChar.id, w.sleepStart, w.sleepEnd);
       }
 
       // 「彼方」自主登入 —— 独立调度，复用同一批 refs 拿最新状态
@@ -2745,7 +2753,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           if (!userProfileRef.current) return;
           // 睡眠时间内跳过自动登入（用户手动“现在去逛”不受限）
           if (!manual && char.vrState.sleepSkip) {
-              const { sleepStart, sleepEnd } = char.proactiveConfig || {};
+              const { sleepStart, sleepEnd } = getSleepWindow(char);
               if (isInTimeWindow(new Date(), sleepStart, sleepEnd)) {
                   console.log(`[VRWorld] ${char.name} 在睡眠时间内，跳过本次自主登入`);
                   return;

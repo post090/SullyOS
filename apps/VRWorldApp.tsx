@@ -15,6 +15,7 @@ import { VRScheduler } from '../utils/vrWorld/scheduler';
 import { VR_ROOMS, getRoom, VR_DEFAULT_INTERVAL_MIN, SIGNAL_EPIGRAPH, signalActFor, signalActRanges, SIGNAL_POEMS_PER_BOOKLET, SIGNAL_EVENT_ENDED, SIGNAL_MEMORIAL_CLOSING } from '../utils/vrWorld/constants';
 import { buildNovelAsync, groupAnnotationsBySeg, getBookmark } from '../utils/vrWorld/novel';
 import { decodeBytes } from '../utils/vrWorld/decodeText';
+import { getSleepWindow } from '../utils/sleepSchedule';
 import { stripLeakedAttrs } from '../utils/vrWorld/prompts';
 import { PostOffice, MAX_LETTER_CHARS, exportIdentity, importIdentity, getAdminToken, setAdminToken, type RemoteReply, type RemoteLetterStat, type RemoteAdminLetter } from '../utils/vrWorld/postOffice';
 import { Signal, getMyAuthorship, setSignalWhisper, hasSignalNoticeAck, ackSignalNotice, type SignalState } from '../utils/vrWorld/signal';
@@ -3354,14 +3355,17 @@ const SettingsView: React.FC<{
                                         </button>
                                     ))}
                                 </div>
-                                {/* 睡眠时间跳过：读角色主动消息里设的睡眠窗口，手动“现在去逛”不受限 */}
+                                {/* 睡眠时间跳过：读角色的全局生物钟（神经链接 → 睡眠时间，含旧字段 fallback），手动“现在去逛”不受限 */}
                                 <div className="flex items-center justify-between gap-2 mt-2.5">
                                     <div className="min-w-0">
                                         <div className="text-[11px] text-indigo-200/80 font-semibold">睡着时不去逛</div>
                                         <div className="text-[9.5px] text-indigo-300/45 leading-snug">
-                                            {char.proactiveConfig?.sleepStart && char.proactiveConfig?.sleepEnd
-                                                ? `${char.proactiveConfig.sleepStart} ~ ${char.proactiveConfig.sleepEnd} 内跳过自主登入`
-                                                : '角色还没设睡眠时间，开了也不会生效'}
+                                            {(() => {
+                                                const { sleepStart, sleepEnd } = getSleepWindow(char);
+                                                return sleepStart && sleepEnd
+                                                    ? `${sleepStart} ~ ${sleepEnd} 内跳过自主登入`
+                                                    : '角色还没设睡眠时间（神经链接 → 角色设定），开了也不会生效';
+                                            })()}
                                         </div>
                                     </div>
                                     <button onClick={() => updateCharacter(char.id, { vrState: { ...st!, sleepSkip: !st?.sleepSkip } })}

@@ -37,6 +37,15 @@ import { sortCharacterGroups, GROUP_FILTER_UNGROUPED } from '../components/chara
 // 浏览(1) / 关注(2) / 偏爱(3) / 必看(4)，拖 chip 到不同档位区即改权重/订阅。
 // 平时折叠只显示摘要，点「编辑」展开拖拽区。
 
+// 睡眠时间滑块用：分钟数(0-1439) ↔ "HH:MM"
+const sleepMinToHHMM = (m: number): string => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+const sleepHHMMToMin = (s: string | undefined, fallback: number): number => {
+    const m = s?.trim().match(/^(\d{1,2}):(\d{2})$/);
+    if (!m) return fallback;
+    const h = parseInt(m[1], 10), min = parseInt(m[2], 10);
+    return (h < 0 || h > 23 || min < 0 || min > 59) ? fallback : h * 60 + min;
+};
+
 interface FeedSource {
     origin: string;       // platform key 或 RSS URL
     label: string;
@@ -1611,6 +1620,64 @@ ${isInitialGeneration ? `
                                        </button>
                                    </div>
                                </div>
+
+                               {/* 4. 睡眠时间（角色生物钟，从主动消息迁入 —— 主动消息和彼方自主登入都读这里） */}
+                               {(() => {
+                                   // 兼容读：新字段优先；没设过则回落旧 proactiveConfig 里的值（旧用户无感迁移）
+                                   const legacy = formData.proactiveConfig;
+                                   const ss = formData.sleepSchedule;
+                                   const sleepOn = ss ? ss.enabled : !!(legacy?.sleepStart && legacy?.sleepEnd);
+                                   const startMin = sleepHHMMToMin(ss?.start ?? legacy?.sleepStart, 23 * 60);
+                                   const endMin = sleepHHMMToMin(ss?.end ?? legacy?.sleepEnd, 7 * 60);
+                                   const writeSleep = (enabled: boolean, sMin: number, eMin: number) => {
+                                       handleChange('sleepSchedule', { enabled, start: sleepMinToHHMM(sMin), end: sleepMinToHHMM(eMin) });
+                                   };
+                                   return (
+                                       <div className="border-t border-slate-100 pt-3">
+                                           <div className="flex items-center justify-between gap-3">
+                                               <div className="min-w-0">
+                                                   <p className="text-xs font-bold text-slate-700">睡眠时间</p>
+                                                   <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">角色的生物钟。睡着时不发主动消息（思念攒满除外）、不自主去逛彼方（需在彼方开「睡着时不去逛」）。支持跨日。</p>
+                                               </div>
+                                               <button
+                                                   onClick={() => writeSleep(!sleepOn, startMin, endMin)}
+                                                   className={`w-12 h-7 rounded-full transition-colors relative shrink-0 ${sleepOn ? 'bg-primary' : 'bg-slate-200'}`}
+                                               >
+                                                   <div className={`absolute top-0.5 w-6 h-6 bg-white rounded-full shadow-md transition-transform ${sleepOn ? 'translate-x-5' : 'translate-x-0.5'}`}></div>
+                                               </button>
+                                           </div>
+                                           {sleepOn && (
+                                               <div className="mt-3 space-y-3 bg-slate-50 rounded-2xl p-3">
+                                                   <div>
+                                                       <div className="flex items-center justify-between mb-1">
+                                                           <span className="text-[11px] text-slate-500 font-medium">入睡时间</span>
+                                                           <span className="text-xs font-bold text-indigo-600 tabular-nums">{sleepMinToHHMM(startMin)}</span>
+                                                       </div>
+                                                       <input
+                                                           type="range" min={0} max={1439} step={30} value={startMin}
+                                                           onChange={e => writeSleep(true, parseInt(e.target.value, 10), endMin)}
+                                                           className="w-full accent-indigo-500"
+                                                       />
+                                                   </div>
+                                                   <div>
+                                                       <div className="flex items-center justify-between mb-1">
+                                                           <span className="text-[11px] text-slate-500 font-medium">起床时间</span>
+                                                           <span className="text-xs font-bold text-indigo-600 tabular-nums">{sleepMinToHHMM(endMin)}</span>
+                                                       </div>
+                                                       <input
+                                                           type="range" min={0} max={1439} step={30} value={endMin}
+                                                           onChange={e => writeSleep(true, startMin, parseInt(e.target.value, 10))}
+                                                           className="w-full accent-indigo-500"
+                                                       />
+                                                   </div>
+                                                   {startMin === endMin && (
+                                                       <p className="text-[10px] text-amber-600 leading-relaxed">入睡和起床时间相同，等于全天都在睡 — 这通常不是你想要的，请调整。</p>
+                                                   )}
+                                               </div>
+                                           )}
+                                       </div>
+                                   );
+                               })()}
                            </div>
 
                            {/* 地区与热点：角色级覆盖（天气加角色自己城市 / 热点订阅池 + 占比） */}

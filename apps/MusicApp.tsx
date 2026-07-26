@@ -574,8 +574,8 @@ const MusicApp: React.FC = () => {
             </div>
             <div className="flex items-center justify-between">
               <div className="min-w-0 pr-3">
-                <div className="text-[11px]" style={{ color: C.text }}>在其他 App 里显示悬浮球</div>
-                <div className="text-[9px] mt-0.5 italic" style={{ color: C.faint }}>后台放歌时可快捷控制播放</div>
+                <div className="text-[11px]" style={{ color: C.text }}>在音乐 App 外显示悬浮球</div>
+                <div className="text-[9px] mt-0.5 italic" style={{ color: C.faint }}>含桌面；后台放歌时可快捷控制播放</div>
               </div>
               <button
                 onClick={() => {

@@ -7,6 +7,7 @@ import { safeFetchJson, safeResponseJson, type StreamHooks } from '../utils/safe
 import { replacePromptPlaceholders } from '../components/chat/ChatConstants';
 import { KeepAlive } from '../utils/keepAlive';
 import { ProactiveChat } from '../utils/proactiveChat';
+import { getSleepWindow } from '../utils/sleepSchedule';
 import { ContextBuilder } from '../utils/context';
 import { ChatParser } from '../utils/chatParser';
 // 思考链 / HTML / MCD / memoryPalace 注入已下沉到 chatRequestPayload；这里不再直接调用
@@ -1809,7 +1810,8 @@ export const useChatAI = ({
 
     const startProactiveChat = (intervalMinutes: number) => {
         if (!char) return;
-        ProactiveChat.start(char.id, intervalMinutes, char.proactiveConfig?.sleepStart, char.proactiveConfig?.sleepEnd);
+        const { sleepStart, sleepEnd } = getSleepWindow(char);
+        ProactiveChat.start(char.id, intervalMinutes, sleepStart, sleepEnd);
     };
 
     const stopProactiveChat = () => {

@@ -1100,7 +1100,7 @@ export interface VRWorldCharState {
     enabled: boolean;
     /** 自主登入间隔（分钟，30 对齐；默认 120 = 2h） */
     intervalMinutes: number;
-    /** 睡眠时间内跳过自主登入（读 proactiveConfig 的睡眠窗口；手动“现在去逛”不受限） */
+    /** 睡眠时间内跳过自主登入（读角色全局生物钟 getSleepWindow；手动“现在去逛”不受限） */
     sleepSkip?: boolean;
     /**
      * 每本小说的独立书签：novelId -> 下一次该从第几个 segment 开始读。
@@ -2364,6 +2364,18 @@ export interface CharacterProfile {
   // Cross-session guidebook insights: what char has discovered about user across games
   guidebookInsights?: string[];
 
+  /**
+   * 角色睡眠时间（神经链接设定页，角色的全局生物钟）。
+   * start > end 视为跨日（如 23:00-07:00）。消费方：主动消息、彼方自主登入。
+   * 历史包袱：旧版长在 proactiveConfig.sleepStart/sleepEnd 里（强耦合主动消息），
+   * 现已迁出。读取一律走 utils/sleepSchedule.ts 的 getSleepWindow()（含旧字段 fallback）。
+   */
+  sleepSchedule?: {
+    enabled: boolean;
+    start: string; // HH:MM
+    end: string;   // HH:MM
+  };
+
   // 主动消息配置
   proactiveConfig?: {
     enabled: boolean;
@@ -2375,9 +2387,8 @@ export interface CharacterProfile {
       model: string;
     };
     /**
-     * 睡眠窗口（HH:MM）。sleepStart > sleepEnd 视为跨日（如 23:00-07:00）。
-     * 睡眠窗口内：正常 roll 路径直接 skip（不攒思念值）；思念值已攒满时强制发
-     * （思念优先，这么想怎么睡得着）。两者都未配置时视为无睡眠窗口。
+     * @deprecated 睡眠窗口已迁至顶层 sleepSchedule（神经链接设定页）。
+     * 这两个字段仅作旧数据 fallback 保留（见 getSleepWindow），不要再写入新值。
      */
     sleepStart?: string;
     sleepEnd?: string;

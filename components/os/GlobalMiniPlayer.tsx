@@ -1,7 +1,8 @@
 /**
  * 全局悬浮 Mini 播放器
- * 仅在 非 Music / 非 Launcher 应用里 显示，表示「后台正在放歌」。
- * Launcher 页让位给已有的 Dock，Music 页让位给页面内自带的 MiniPlayer。
+ * 除 Music / Call 外全局显示，表示「后台正在放歌」。
+ * Music 页让位给页面内自带的 MiniPlayer，通话中不打扰；
+ * 桌面也显示（虽然桌面有音乐小组件，但它不在首屏——用户要求球常驻）。
  *
  * 默认折叠：只显示一个带封面的小圆球，点开才展开完整控制条；
  * 小球可拖动、可长按隐藏；切到新歌时会自动再出现。
@@ -215,8 +216,7 @@ const GlobalMiniPlayer: React.FC = () => {
     !!current &&
     // 重新进入项目时音乐是暂停的（从未真正播放过本次会话）→ 不显示悬浮球
     (everPlayed || playing) &&
-    activeApp !== AppID.Music &&
-    activeApp !== AppID.Launcher && // Launcher 的 dock 够用了
+    activeApp !== AppID.Music &&    // 音乐页有自己的迷你播放器
     activeApp !== AppID.Call &&     // 通话中不打扰
     !hidden &&
     enabled;
@@ -251,7 +251,10 @@ const GlobalMiniPlayer: React.FC = () => {
 
   // 越界自愈：保存的坐标是绝对像素，可能来自另一个视口（网页 ↔ APK，
   // 或横竖屏切换）——直接拿来用可能整颗球落在屏幕外，看起来就像"球消失了"。
-  // 挂载/尺寸变化/重新可见时 clamp 一把拉回屏内；拖动中不插手（拖动自己会 clamp）。
+  // 另一个坑：外壳容器在不同 App 里高度不同（自理安全区 App 会把底边收窄，
+  // 见 PhoneShell 的 shellPadsSafeArea 分支），球停在"高个屋子"底部，切到"矮个
+  // 屋子"就被 overflow-hidden 裁掉——窗口 resize 不会触发，得盯 activeApp 切换
+  // + 用 ResizeObserver 盯容器本身。拖动中不插手（拖动自己会 clamp）。
   useEffect(() => {
     if (expanded || !bubbleVisible) return;
     const ensureInBounds = () => {
@@ -275,8 +278,18 @@ const GlobalMiniPlayer: React.FC = () => {
     };
     ensureInBounds();
     window.addEventListener('resize', ensureInBounds);
-    return () => window.removeEventListener('resize', ensureInBounds);
-  }, [expanded, bubbleVisible]);
+    // 容器自身尺寸变化（App 切换引发的 padding/bottom 变更）也要重新 clamp
+    let ro: ResizeObserver | null = null;
+    const parentEl = wrapRef.current?.parentElement;
+    if (parentEl && typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(() => ensureInBounds());
+      ro.observe(parentEl);
+    }
+    return () => {
+      window.removeEventListener('resize', ensureInBounds);
+      ro?.disconnect();
+    };
+  }, [expanded, bubbleVisible, activeApp]);
 
   const onPointerDown = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
     const el = wrapRef.current;
