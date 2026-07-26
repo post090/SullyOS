@@ -14,6 +14,7 @@ import { CharPlaylist } from '../../types';
 import { removeSongsFromPlaylist } from '../../utils/charPlaylistEdit';
 import { pickSongsForPlaylist, songFromSearch, toCharPlaylistSong } from '../../utils/charPlaylistFill';
 import { C, Sparkle, MizuHeader, BokehBg, MiniPlayer, gradientFor } from './MusicUI';
+import { neteaseCacheGet, neteaseCacheSet } from '../../utils/neteaseCache';
 import {
   Play, Plus, Trash, Check, X, MagnifyingGlass, ChatCircleDots, MusicNote,
 } from '@phosphor-icons/react';
@@ -85,6 +86,8 @@ const PlaylistDetailPage: React.FC<Props> = ({ source, onBack, onOpenPlayer, onO
   const [neteaseTracks, setNeteaseTracks] = useState<Song[]>([]);
   const [neteaseDesc, setNeteaseDesc] = useState('');
   const [fetching, setFetching] = useState(false);
+  // 当前上屏的是离线快照（后台还在静默同步最新）
+  const [fromCache, setFromCache] = useState(false);
 
   // ── 通用 UI 状态 ──
   const [descExpanded, setDescExpanded] = useState(false);
@@ -99,7 +102,7 @@ const PlaylistDetailPage: React.FC<Props> = ({ source, onBack, onOpenPlayer, onO
 
   const neteaseId = source.kind === 'netease' ? source.playlist.id : null;
 
-  // 网易云：进页拉描述 + 分页拉全曲目（第一页先上屏，后台补齐）
+  // 网易云：进页先上离线快照（秒开），后台照常分页拉最新，拉完整单覆盖 + 落缓存
   useEffect(() => {
     if (neteaseId == null) return;
     const meta = source.kind === 'netease' ? source.playlist : null;
@@ -107,12 +110,28 @@ const PlaylistDetailPage: React.FC<Props> = ({ source, onBack, onOpenPlayer, onO
     let cancelled = false;
     setNeteaseTracks([]);
     setNeteaseDesc('');
+    setFromCache(false);
     setFetching(true);
-    // 描述等元信息独立拉，不阻塞曲目
+    // 描述等元信息独立拉，不阻塞曲目；同样先快照后网络
+    neteaseCacheGet<string>(`pld:${meta.id}`)
+      .then(hit => { if (!cancelled && hit) setNeteaseDesc(prev => prev || hit.data || ''); });
     musicApi.playlistDetail(cfgRef.current, meta.id)
-      .then(r => { if (!cancelled) setNeteaseDesc(r?.playlist?.description || ''); })
+      .then(r => {
+        if (cancelled) return;
+        const d = r?.playlist?.description || '';
+        setNeteaseDesc(d);
+        neteaseCacheSet(`pld:${meta.id}`, d);
+      })
       .catch(() => {});
     (async () => {
+      // IDB 读只要几毫秒，先 await 它再开网络循环，免得两边赛跑互相覆盖
+      const hit = await neteaseCacheGet<Song[]>(`pl:${meta.id}`);
+      if (cancelled) return;
+      const hadCache = !!(hit && Array.isArray(hit.data) && hit.data.length);
+      if (hadCache) {
+        setNeteaseTracks(hit!.data);
+        setFromCache(true);
+      }
       try {
         const MAX_TRACKS = 10000;
         const PAGE = 500;
@@ -124,11 +143,18 @@ const PlaylistDetailPage: React.FC<Props> = ({ source, onBack, onOpenPlayer, onO
           const page: Song[] = (r?.songs || []).map(mapTrack);
           if (!page.length) break;
           all.push(...page);
-          setNeteaseTracks([...all]);
+          // 有快照在屏上就静默积攒，避免整单先缩成第一页再慢慢长回来的闪烁
+          if (!hadCache) setNeteaseTracks([...all]);
           if (page.length < PAGE) break;
         }
+        if (!cancelled && all.length) {
+          setNeteaseTracks(all);
+          setFromCache(false);
+          neteaseCacheSet(`pl:${meta.id}`, all);
+        }
       } catch (e: any) {
-        if (!cancelled) toastRef.current(`加载歌单失败：${e.message}`, 'error');
+        // 快照在屏上时同步失败就静默留着旧数据，别弹错吓人
+        if (!cancelled && !hadCache) toastRef.current(`加载歌单失败：${e.message}`, 'error');
       } finally {
         if (!cancelled) setFetching(false);
       }
@@ -502,7 +528,9 @@ const PlaylistDetailPage: React.FC<Props> = ({ source, onBack, onOpenPlayer, onO
               <span className="inline-block w-3 h-3 border-2 rounded-full animate-spin align-middle"
                 style={{ borderColor: `${C.faint}40`, borderTopColor: C.primary }} />
               <span className="ml-2 align-middle">
-                {neteaseTracks.length > 0 ? `已加载 ${neteaseTracks.length} 首，还在继续…` : '加载歌单中…'}
+                {fromCache
+                  ? '已显示上次的曲目 · 正在同步最新…'
+                  : neteaseTracks.length > 0 ? `已加载 ${neteaseTracks.length} 首，还在继续…` : '加载歌单中…'}
               </span>
             </div>
           )}

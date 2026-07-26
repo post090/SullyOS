@@ -296,6 +296,7 @@ const GlobalMiniPlayer: React.FC = () => {
     return (
       <div
         ref={wrapRef}
+        data-floating-bubble="music"
         className="absolute z-[55] pointer-events-none"
         style={positional}
       >

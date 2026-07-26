@@ -12,6 +12,7 @@ import React, {
   useMemo, useRef, useState,
 } from 'react';
 import { cachedCall as _cachedCall, invalidate as _invalidateCache, clearAll as _clearAllCache } from '../utils/musicCache';
+import { neteaseCacheClearAll } from '../utils/neteaseCache';
 import { DB } from '../utils/db';
 import { getProxyWorkerUrl, DEFAULT_PROXY_WORKER, PROXY_WORKER_CHANGED_EVENT } from '../utils/proxyWorker';
 import type { PostProcessMusicHooks } from '../utils/applyAssistantPostProcessing';
@@ -71,6 +72,24 @@ export interface NeteaseProfile {
 const LS_CFG_KEY = 'sully_music_cfg_v1';
 const LS_STATE_KEY = 'sully_music_state_v1';
 const LS_LOCAL_ALBUM_KEY = 'sully_music_local_album_v1';
+const LS_PROFILE_KEY = 'sully_music_profile_cache_v1'; // profile 快照，冷启动免等 /login/status
+
+// profile 快照带 cookie 尾 8 位做盐 —— 换账号不会闪现上一个账号的头像昵称
+const loadCachedProfile = (cookie: string): NeteaseProfile | null => {
+  if (!cookie) return null;
+  try {
+    const raw = localStorage.getItem(LS_PROFILE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed?.salt === cookie.slice(-8) && parsed?.profile?.userId ? parsed.profile : null;
+  } catch { return null; }
+};
+const saveCachedProfile = (cookie: string, profile: NeteaseProfile | null) => {
+  try {
+    if (!cookie || !profile) localStorage.removeItem(LS_PROFILE_KEY);
+    else localStorage.setItem(LS_PROFILE_KEY, JSON.stringify({ salt: cookie.slice(-8), profile }));
+  } catch {}
+};
 
 const loadLocalAlbum = (): Song[] => {
   try {
@@ -377,6 +396,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       // cookie / workerUrl 变了 → 上一个账号的缓存全部失效，避免看到旧账号数据
       if (prev.cookie !== next.cookie || prev.workerUrl !== next.workerUrl) {
         _clearAllCache();
+        neteaseCacheClearAll(); // 离线快照层也一起清
       }
       return next;
     });
@@ -389,7 +409,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const onProxyChanged = () => {
       setCfgState(prev => {
         const next = loadCfg();
-        if (next.workerUrl !== prev.workerUrl) _clearAllCache();
+        if (next.workerUrl !== prev.workerUrl) { _clearAllCache(); neteaseCacheClearAll(); }
         return next;
       });
     };
@@ -462,8 +482,8 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     toastHandlerRef.current = h;
   }, []);
 
-  // 用户信息
-  const [profile, setProfile] = useState<NeteaseProfile | null>(null);
+  // 用户信息 — 先用本地快照水合（秒出头像昵称），refreshProfile 在后台照常校验覆盖
+  const [profile, setProfile] = useState<NeteaseProfile | null>(() => loadCachedProfile(loadCfg().cookie));
   // profile 拉取状态：让 UI 能区分"未登录"和"cookie 在但拉取中/失败"
   // 避免 NeteaseProfilePage 在网络抖动时误显示登录面板（用户以为要重新扫码）
   const [profileLoading, setProfileLoading] = useState<boolean>(false);
@@ -478,11 +498,12 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (!p) {
         // cookie 在但 profile=null：cookie 可能失效（一年后），按"未登录"处理
         setProfile(null);
+        saveCachedProfile('', null);
         setProfileError(false);
         setProfileLoading(false);
         return;
       }
-      setProfile({
+      const fresh: NeteaseProfile = {
         userId: p.userId,
         nickname: p.nickname || '',
         avatarUrl: toHttps(p.avatarUrl || ''),
@@ -495,11 +516,13 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         follows: p.follows,
         eventCount: p.eventCount,
         playlistCount: p.playlistCount,
-      });
+      };
+      setProfile(fresh);
+      saveCachedProfile(cfg.cookie, fresh);
       setProfileError(false);
     } catch {
-      // 网络/服务端错误：cookie 可能仍有效，标记为 error 让 UI 显示重试而非登录面板
-      setProfile(null);
+      // 网络/服务端错误：cookie 可能仍有效 —— 有快照就继续用快照撑着，别把页面打回加载卡
+      setProfile(prev => prev || null);
       setProfileError(true);
     }
     setProfileLoading(false);

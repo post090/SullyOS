@@ -47,6 +47,9 @@ const ApiFloatBall: React.FC = () => {
     const [panel, setPanel] = useState<{ side: 'left' | 'right'; top: number }>({ side: 'right', top: 120 });
     // 拖动中的实时像素位（null = 没在拖，用 config 的持久化位置）
     const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null);
+    // 音乐球避让位（null = 没重叠）：两球叠在同一个坑里时，API 球 z 更高会把音乐球
+    // 盖得严严实实（看起来就像"不会同时显示"）—— 渲染时自动让位，不改存的位置
+    const [avoidPos, setAvoidPos] = useState<{ x: number; y: number } | null>(null);
     const [hidden, setHidden] = useState<boolean>(() => {
         try { return sessionStorage.getItem(HIDDEN_KEY) === '1'; } catch { return false; }
     });
@@ -97,6 +100,51 @@ const ApiFloatBall: React.FC = () => {
             y: (config.yPct / 100) * parentH,
         };
     };
+
+    // ─── 音乐球碰撞避让 ───
+    // 两球是 PhoneShell 里的兄弟节点；监听音乐球的挂载/移位，重叠就往它上/下方让开。
+    useEffect(() => {
+        const root = rootRef.current;
+        const host = root?.parentElement;
+        if (!root || !host) return;
+        const GAP = 8;
+        const check = () => {
+            if (dragState.current) return; // 拖动中不插手，松手后 childList/style 变化会再触发
+            const music = host.querySelector(':scope > [data-floating-bubble="music"]') as HTMLElement | null;
+            if (!music) { setAvoidPos(null); return; }
+            const hostRect = host.getBoundingClientRect();
+            const m = music.getBoundingClientRect();
+            const { x, y } = ballXY(hostRect.width, hostRect.height);
+            const size = config.size;
+            const mL = m.left - hostRect.left, mT = m.top - hostRect.top;
+            const overlap = x < mL + m.width + GAP && x + size > mL - GAP
+                && y < mT + m.height + GAP && y + size > mT - GAP;
+            if (!overlap) { setAvoidPos(null); return; }
+            // 优先往音乐球上方让；头顶没空间就往下方让，最后 clamp 兜住边界
+            const up = mT - GAP - size;
+            const ny = up >= 56 ? up : mT + m.height + GAP;
+            setAvoidPos(clampBubblePos(x, ny, {
+                parentW: hostRect.width, parentH: hostRect.height,
+                ...computeInsets(host), bubble: size,
+            }));
+        };
+        check();
+        // 音乐球挂载/卸载 → 重新盯它的 style（拖动时 style 变）；只监听直接子节点，不扫全屏子树
+        let styleMo: MutationObserver | null = null;
+        const watchMusic = () => {
+            styleMo?.disconnect();
+            styleMo = null;
+            const music = host.querySelector(':scope > [data-floating-bubble="music"]');
+            if (music) {
+                styleMo = new MutationObserver(check);
+                styleMo.observe(music, { attributes: true, attributeFilter: ['style'] });
+            }
+        };
+        watchMusic();
+        const childMo = new MutationObserver(() => { watchMusic(); check(); });
+        childMo.observe(host, { childList: true });
+        return () => { childMo.disconnect(); styleMo?.disconnect(); };
+    }, [config.x, config.y, config.side, config.yPct, config.size]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const hide = useCallback(() => {
         setHidden(true);
@@ -182,7 +230,7 @@ const ApiFloatBall: React.FC = () => {
         const host = rootRef.current?.parentElement;
         const w = host?.clientWidth || window.innerWidth;
         const h = host?.clientHeight || window.innerHeight;
-        const { x, y } = ballXY(w, h);
+        const { x, y } = avoidPos ?? ballXY(w, h);
         const side: 'left' | 'right' = x + config.size / 2 < w / 2 ? 'left' : 'right';
         const top = Math.min(Math.max(y - 60, 56), Math.max(56, h - 300));
         setPanel({ side, top });
@@ -197,12 +245,14 @@ const ApiFloatBall: React.FC = () => {
 
     const positional: React.CSSProperties = dragPos
         ? { left: dragPos.x, top: dragPos.y, transition: 'none' }
-        : (config.x != null && config.y != null)
-            ? { left: config.x, top: config.y }
-            : {
-                top: `${config.yPct}%`,
-                ...(config.side === 'left' ? { left: 8 } : { right: 8 }),
-            };
+        : avoidPos
+            ? { left: avoidPos.x, top: avoidPos.y }
+            : (config.x != null && config.y != null)
+                ? { left: config.x, top: config.y }
+                : {
+                    top: `${config.yPct}%`,
+                    ...(config.side === 'left' ? { left: 8 } : { right: 8 }),
+                };
 
     return (
         <div ref={rootRef} className="absolute inset-0 z-[58] pointer-events-none">

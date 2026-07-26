@@ -11,6 +11,7 @@ import {
 } from './MusicUI';
 import { MagnifyingGlass, Gear, User as UserIcon } from '@phosphor-icons/react';
 import NeteaseLoginPanel from './NeteaseLoginPanel';
+import { neteaseCacheGet, neteaseCacheSet } from '../../utils/neteaseCache';
 
 export interface Playlist {
   id: number;
@@ -25,6 +26,13 @@ interface RecordItem {
   song: Song;
   score: number;
   playCount: number;
+}
+
+/** 「我的」页三件套的离线快照（IndexedDB，SWR：先上屏再后台刷新） */
+interface HomeSnapshot {
+  playlists: Playlist[];
+  records: RecordItem[];
+  cloud: Song[];
 }
 
 interface Props {
@@ -210,6 +218,11 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
         musicApi.userCloud(curCfg),
       ]);
 
+      // 本次拉到的新鲜数据（null = 该项失败，落快照时用旧值兜底）
+      let nextPl: Playlist[] | null = null;
+      let nextRec: RecordItem[] | null = null;
+      let nextCloud: Song[] | null = null;
+
       if (plRes.status === 'fulfilled') {
         const arr = (plRes.value?.playlist || []).map((p: any): Playlist => ({
           id: p.id,
@@ -219,6 +232,7 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
           subscribed: !!p.subscribed,
           creatorNickname: p.creator?.nickname,
         }));
+        nextPl = arr;
         setPlaylists(arr);
       }
 
@@ -237,6 +251,7 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
             fee: r.song?.fee ?? 0,
           },
         }));
+        nextRec = mapped;
         setRecords(mapped);
       }
 
@@ -251,13 +266,38 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
           duration: (c.simpleSong?.dt || 0) / 1000,
           fee: 0,
         }));
+        nextCloud = mapped;
         setCloud(mapped);
+      }
+
+      // 落离线快照：失败的项用旧快照兜底，别拿空数组把好数据盖没了
+      if (nextPl || nextRec || nextCloud) {
+        const prev = await neteaseCacheGet<HomeSnapshot>(`home:${uid}`);
+        neteaseCacheSet(`home:${uid}`, {
+          playlists: nextPl ?? prev?.data.playlists ?? [],
+          records: nextRec ?? prev?.data.records ?? [],
+          cloud: nextCloud ?? prev?.data.cloud ?? [],
+        } satisfies HomeSnapshot);
       }
     } catch (e: any) {
       toastRef.current(`加载失败：${e.message}`, 'error');
     } finally {
       setLoading(false);
     }
+  }, [uid]);
+
+  // 离线快照水合：进页先把上次的三件套上屏（秒开），reload 拉到最新后自然覆盖。
+  // 用函数式 set + 非空检查：网络比 IDB 先回来时，旧快照不会倒车盖新数据。
+  useEffect(() => {
+    if (!uid) return;
+    let cancelled = false;
+    neteaseCacheGet<HomeSnapshot>(`home:${uid}`).then(hit => {
+      if (cancelled || !hit) return;
+      setPlaylists(prev => (prev.length ? prev : hit.data.playlists || []));
+      setRecords(prev => (prev.length ? prev : hit.data.records || []));
+      setCloud(prev => (prev.length ? prev : hit.data.cloud || []));
+    });
+    return () => { cancelled = true; };
   }, [uid]);
 
   useEffect(() => { reload(); }, [reload]);
