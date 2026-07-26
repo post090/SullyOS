@@ -73,6 +73,7 @@ const LS_CFG_KEY = 'sully_music_cfg_v1';
 const LS_STATE_KEY = 'sully_music_state_v1';
 const LS_LOCAL_ALBUM_KEY = 'sully_music_local_album_v1';
 const LS_PROFILE_KEY = 'sully_music_profile_cache_v1'; // profile 快照，冷启动免等 /login/status
+const LS_PLAYMODE_KEY = 'sully_music_playmode_v1'; // 播放模式（loop/shuffle/single）长期记忆
 
 // profile 快照带 cookie 尾 8 位做盐 —— 换账号不会闪现上一个账号的头像昵称
 const loadCachedProfile = (cookie: string): NeteaseProfile | null => {
@@ -579,8 +580,18 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, [current, cfg, likedSet, localAlbumSongs, addLocalSong, removeLocalSong, toast]);
 
-  // 播放模式
-  const [playMode, setPlayMode] = useState<PlayMode>('loop');
+  // 播放模式 —— 持久化到 localStorage：列表循环/随机/单曲是用户的长期习惯，
+  // 重启一次就失忆退回 loop 会让人每次都得重新点一遍
+  const [playMode, _setPlayMode] = useState<PlayMode>(() => {
+    try {
+      const v = localStorage.getItem(LS_PLAYMODE_KEY);
+      return v === 'shuffle' || v === 'single' ? v : 'loop';
+    } catch { return 'loop'; }
+  });
+  const setPlayMode = useCallback((m: PlayMode) => {
+    _setPlayMode(m);
+    try { localStorage.setItem(LS_PLAYMODE_KEY, m); } catch {}
+  }, []);
 
   // 一起听 - char 加入后在 miniPlayer / 播放页显示徽标；切歌 / 结束自动清空
   const [listeningTogetherWith, setListeningTogetherWith] = useState<string[]>([]);

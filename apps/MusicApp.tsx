@@ -14,6 +14,9 @@ import NeteaseProfilePage from './music/NeteaseProfilePage';
 import CharVisitPage from './music/CharVisitPage';
 import PlaylistDetailPage, { PlaylistSource } from './music/PlaylistDetailPage';
 import SongCommentsPage from './music/SongCommentsPage';
+import {
+  MINIPLAYER_ENABLED_KEY, MINIPLAYER_CMD_EVENT, MiniPlayerCmd,
+} from '../components/os/GlobalMiniPlayer';
 
 // ------------------------- 工具 -------------------------
 const fmtTime = (s: number) => {
@@ -41,6 +44,13 @@ const MusicApp: React.FC = () => {
     regeneratingId, regeneratingStatus,
   } = useMusic();
   const [showQueue, setShowQueue] = useState(false);
+  // 全局音乐悬浮球开关（状态存 localStorage，改动时用 CustomEvent 即时通知球本体）
+  const [miniBallOn, setMiniBallOn] = useState<boolean>(() => {
+    try { return localStorage.getItem(MINIPLAYER_ENABLED_KEY) !== '0'; } catch { return true; }
+  });
+  const sendMiniBallCmd = (cmd: MiniPlayerCmd) => {
+    window.dispatchEvent(new CustomEvent(MINIPLAYER_CMD_EVENT, { detail: cmd }));
+  };
   const isCurrentRegenerating = !!current && current.id === regeneratingId;
   // 把对轴入口和单曲循环按钮移到 SubActions 里，避免散乱
   // 下载本地生成的歌曲到本地文件系统
@@ -557,6 +567,50 @@ const MusicApp: React.FC = () => {
               ))}
             </div>
             <div className="text-[9px] mt-1.5 italic" style={{ color: C.faint }}>lossless / hires 需要黑胶 SVIP</div>
+          </div>
+          <div className="rounded-2xl p-3.5 shizuku-glass" style={{ boxShadow: `0 2px 16px ${C.glow}08` }}>
+            <div className="text-[10px] mb-2 tracking-wider flex items-center gap-1.5" style={{ color: C.muted }}>
+              <Sparkle size={6} color={C.primary} delay={1.5} /> 音乐悬浮球
+            </div>
+            <div className="flex items-center justify-between">
+              <div className="min-w-0 pr-3">
+                <div className="text-[11px]" style={{ color: C.text }}>在其他 App 里显示悬浮球</div>
+                <div className="text-[9px] mt-0.5 italic" style={{ color: C.faint }}>后台放歌时可快捷控制播放</div>
+              </div>
+              <button
+                onClick={() => {
+                  const next = !miniBallOn;
+                  setMiniBallOn(next);
+                  try {
+                    if (next) localStorage.removeItem(MINIPLAYER_ENABLED_KEY);
+                    else localStorage.setItem(MINIPLAYER_ENABLED_KEY, '0');
+                  } catch {}
+                  sendMiniBallCmd({ type: 'set-enabled', enabled: next });
+                }}
+                className="shrink-0 w-11 h-6 rounded-full relative transition-all"
+                style={{
+                  background: miniBallOn ? `linear-gradient(135deg, ${C.primary}, ${C.accent})` : 'rgba(0,0,0,0.12)',
+                  boxShadow: miniBallOn ? `0 2px 10px ${C.glow}40` : 'none',
+                }}
+                aria-label="开关音乐悬浮球"
+              >
+                <div
+                  className="absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all"
+                  style={{ left: miniBallOn ? 'calc(100% - 22px)' : '2px', boxShadow: '0 1px 4px rgba(0,0,0,0.2)' }}
+                />
+              </button>
+            </div>
+            <button
+              onClick={() => {
+                sendMiniBallCmd({ type: 'reset-pos' });
+                addToast('悬浮球已回到默认位置（右下角）', 'success');
+              }}
+              className="w-full mt-2.5 py-2 rounded-xl text-[10px] tracking-wider shizuku-glass transition-all"
+              style={{ color: C.muted, border: '1px solid rgba(255,255,255,0.3)' }}
+            >恢复默认位置（球不见了点这里）</button>
+            <div className="text-[9px] mt-1.5 italic" style={{ color: C.faint }}>
+              会把球拉回右下角，并解除长按隐藏。拖到屏幕外、长按误触都能用它救回来
+            </div>
           </div>
           <div className="space-y-3 pt-1">
             <button

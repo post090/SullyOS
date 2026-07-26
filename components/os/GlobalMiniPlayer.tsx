@@ -24,6 +24,15 @@ const HIDDEN_KEY = 'globalMiniPlayer.hidden.v1';
 const EXPANDED_BOTTOM_KEY = 'globalMiniPlayer.expandedBottom.v1';
 const DRAG_THRESHOLD = 4; // 像素：超过这个位移算拖动，不触发点击
 
+// —— 对外接口：音乐 App 设置页控制悬浮球 ——
+// localStorage 总开关（'0' = 关，缺省 = 开）+ 同窗口 CustomEvent 即时通知
+// （storage 事件只在跨窗口才触发，同窗口改 localStorage 得自己吆喝一声）。
+export const MINIPLAYER_ENABLED_KEY = 'globalMiniPlayer.enabled.v1';
+export const MINIPLAYER_CMD_EVENT = 'sully-miniplayer-cmd';
+export type MiniPlayerCmd =
+  | { type: 'set-enabled'; enabled: boolean }
+  | { type: 'reset-pos' };
+
 type Pos = { x: number; y: number } | null;
 
 const readPos = (): Pos => {
@@ -88,6 +97,9 @@ const GlobalMiniPlayer: React.FC = () => {
   const [expandedBottom, setExpandedBottom] = useState<number | null>(() => readExpandedBottom()); // 展开态距底部像素
   const [hidden, setHidden] = useState<boolean>(() => {
     try { return sessionStorage.getItem(HIDDEN_KEY) === '1'; } catch { return false; }
+  });
+  const [enabled, setEnabled] = useState<boolean>(() => {
+    try { return localStorage.getItem(MINIPLAYER_ENABLED_KEY) !== '0'; } catch { return true; }
   });
 
   const expandedRef = useRef<HTMLDivElement | null>(null);
@@ -199,6 +211,73 @@ const GlobalMiniPlayer: React.FC = () => {
     try { sessionStorage.setItem(HIDDEN_KEY, '1'); } catch {}
   }, []);
 
+  const bubbleVisible =
+    !!current &&
+    // 重新进入项目时音乐是暂停的（从未真正播放过本次会话）→ 不显示悬浮球
+    (everPlayed || playing) &&
+    activeApp !== AppID.Music &&
+    activeApp !== AppID.Launcher && // Launcher 的 dock 够用了
+    activeApp !== AppID.Call &&     // 通话中不打扰
+    !hidden &&
+    enabled;
+
+  // 音乐 App 设置页发来的指令：开关显隐 / 一键回默认位置
+  useEffect(() => {
+    const onCmd = (e: Event) => {
+      const cmd = (e as CustomEvent).detail as MiniPlayerCmd | undefined;
+      if (!cmd) return;
+      if (cmd.type === 'set-enabled') {
+        setEnabled(cmd.enabled);
+        if (cmd.enabled) {
+          // 用户明确说"我要看到球" → 顺带解除长按误触留下的隐藏态
+          setHidden(false);
+          try { sessionStorage.removeItem(HIDDEN_KEY); } catch {}
+        }
+      } else if (cmd.type === 'reset-pos') {
+        setPos(null);
+        setExpandedBottom(null);
+        setExpanded(false);
+        setHidden(false);
+        try {
+          localStorage.removeItem(STORAGE_KEY);
+          localStorage.removeItem(EXPANDED_BOTTOM_KEY);
+          sessionStorage.removeItem(HIDDEN_KEY);
+        } catch {}
+      }
+    };
+    window.addEventListener(MINIPLAYER_CMD_EVENT, onCmd);
+    return () => window.removeEventListener(MINIPLAYER_CMD_EVENT, onCmd);
+  }, []);
+
+  // 越界自愈：保存的坐标是绝对像素，可能来自另一个视口（网页 ↔ APK，
+  // 或横竖屏切换）——直接拿来用可能整颗球落在屏幕外，看起来就像"球消失了"。
+  // 挂载/尺寸变化/重新可见时 clamp 一把拉回屏内；拖动中不插手（拖动自己会 clamp）。
+  useEffect(() => {
+    if (expanded || !bubbleVisible) return;
+    const ensureInBounds = () => {
+      if (dragState.current) return;
+      const el = wrapRef.current;
+      const parent = el?.parentElement as HTMLElement | null;
+      if (!el || !parent) return;
+      const parentRect = parent.getBoundingClientRect();
+      if (parentRect.width < 60 || parentRect.height < 60) return; // 布局还没站稳，别乱改
+      const { insetTop, insetBottom } = computeInsets(parent);
+      setPos(prev => {
+        if (!prev) return prev; // 默认右下角（right/bottom 定位）永远在屏内，不用管
+        const next = clampBubblePos(prev.x, prev.y, {
+          parentW: parentRect.width,
+          parentH: parentRect.height,
+          insetTop,
+          insetBottom,
+        });
+        return Math.abs(next.x - prev.x) > 1 || Math.abs(next.y - prev.y) > 1 ? next : prev;
+      });
+    };
+    ensureInBounds();
+    window.addEventListener('resize', ensureInBounds);
+    return () => window.removeEventListener('resize', ensureInBounds);
+  }, [expanded, bubbleVisible]);
+
   const onPointerDown = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
     const el = wrapRef.current;
     if (!el) return;
@@ -278,13 +357,7 @@ const GlobalMiniPlayer: React.FC = () => {
     try { (e.currentTarget as any).releasePointerCapture?.(e.pointerId); } catch {}
   }, []);
 
-  if (!current) return null;
-  // 重新进入项目时音乐是暂停的（从未真正播放过本次会话）→ 不显示悬浮球
-  if (!everPlayed && !playing) return null;
-  if (activeApp === AppID.Music) return null;
-  if (activeApp === AppID.Launcher) return null; // Launcher 的 dock 够用了
-  if (activeApp === AppID.Call) return null;     // 通话中不打扰
-  if (hidden) return null;
+  if (!bubbleVisible || !current) return null;
 
   const pct = duration > 0 ? (progress / duration) * 100 : 0;
 
