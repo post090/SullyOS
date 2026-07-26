@@ -583,7 +583,7 @@ const MemoApp: React.FC = () => {
     const renderHeader = () => (
         <div
             className="bg-white border-b border-slate-200 shrink-0 sticky top-0 z-10"
-            style={{ paddingTop: 'var(--safe-top)' }}
+            style={{ paddingTop: 'var(--chrome-top)' }}
         >
             <div className="flex items-center px-4 py-2">
                 <div className="flex items-center gap-2 w-full">
@@ -612,7 +612,7 @@ const MemoApp: React.FC = () => {
     );
 
     return (
-        <div className="h-full w-full bg-white flex flex-col text-stone-900">
+        <div className="h-full w-full bg-white flex flex-col text-stone-900" style={{ paddingBottom: 'var(--safe-bottom)' }}>
             {renderHeader()}
             {mode === 'list' ? renderList() : renderDetail()}
             {renderEditor()}
