@@ -2329,6 +2329,17 @@ export const DB = {
       });
   },
 
+  deleteWorldEpisode: async (id: string): Promise<void> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_WORLD_EPISODES)) return;
+      const tx = db.transaction(STORE_WORLD_EPISODES, 'readwrite');
+      tx.objectStore(STORE_WORLD_EPISODES).delete(id);
+      return new Promise((resolve, reject) => {
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+      });
+  },
+
   // --- 彼方独立 API + 调用记录（vr_settings 单例 store）---
   getVRApiConfig: async (): Promise<any | null> => {
       const db = await openDB();

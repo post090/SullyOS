@@ -34,16 +34,20 @@ import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } fr
 import type { WorldProfile, WorldEpisode, WorldHomeMode, WorldTimeMode, WorldHouse, WorldThread, WorldChatMessage, WorldNarrativeStyle, CharacterProfile, WorldCharBeat, APIConfig, ApiPreset } from '../types';
 
 /**
- * 家园里「生成内容」的可编辑/删除目标（手机里的动态/备忘/聊天）。
+ * 家园里「生成内容」的可编辑/删除目标（手机里的动态/备忘/聊天 + 纪事正文）。
  * newText=null 表示删除；否则替换文本。
  *  - post/memo 落在 episode.beats[charId] 上（按 round 定位 episode）
  *  - msg 落在 world.threads[threadId].messages 上（按 msgId 定位）
+ *  - beat/npcScene/summary 直接改 episode 对应字段（只编辑不删除）
  */
 type WHEditTarget =
     | { type: 'post'; round: number; charId: string; idx: number }
     | { type: 'memo'; round: number; charId: string; idx: number }
     | { type: 'msg'; threadId: string; msgId: string }
-    | { type: 'comment'; key: string; idx: number };
+    | { type: 'comment'; key: string; idx: number }
+    | { type: 'beat'; round: number; charId: string }
+    | { type: 'npcScene'; round: number }
+    | { type: 'summary'; round: number };
 
 /** 自定义文风的本地收藏 / 家园全局 API 的 localStorage key —— 与备份工具共用同一组，避免漂移。 */
 const CUSTOM_STYLE_KEY = WORLD_CUSTOM_STYLE_KEY;
@@ -239,7 +243,9 @@ const PhoneModal: React.FC<{
     onClose: () => void;
     /** 编辑/删除生成内容（动态/备忘/聊天）；newText=null 表示删除 */
     onEditContent?: (target: WHEditTarget, newText: string | null) => void | Promise<void>;
-}> = ({ ownerId, world, episodes, members, initialTab, onClose, onEditContent }) => {
+    /** 群聊手动改名（传空串 = 回退默认名） */
+    onRenameGroup?: (newName: string) => void | Promise<void>;
+}> = ({ ownerId, world, episodes, members, initialTab, onClose, onEditContent, onRenameGroup }) => {
     const [tab, setTab] = useState<'feed' | 'dm' | 'group' | 'memo'>(initialTab || 'feed');
     const owner = members.find(m => m.id === ownerId);
     const ownerName = owner?.name || '?';
@@ -301,6 +307,8 @@ const PhoneModal: React.FC<{
     // 编辑/删除某条生成内容的弹层
     const [editing, setEditing] = useState<{ target: WHEditTarget; text: string; title: string; canDelete: boolean } | null>(null);
     const [confirmDel, setConfirmDel] = useState(false);
+    // 群名内联改名（null=非编辑态）
+    const [renamingGroup, setRenamingGroup] = useState<string | null>(null);
     useEffect(() => { setConfirmDel(false); }, [editing]);
     const submitEdit = async (newText: string | null) => {
         if (editing && onEditContent) await onEditContent(editing.target, newText);
@@ -484,7 +492,28 @@ const PhoneModal: React.FC<{
                                         const shownGroup = folded ? { ...group, messages: group.messages.slice(-FOLD) } : group;
                                         return (
                                             <div className="space-y-1.5">
-                                                <div className="text-center text-[9px] text-white/40 font-bold pb-1">「{group.name}」 · {group.memberIds.length} 人{world.npcs.length > 0 ? ` + ${world.npcs.length} NPC` : ''}{onEditContent ? ' · 点按消息可编辑/删除' : ''}</div>
+                                                {renamingGroup !== null && onRenameGroup ? (
+                                                    <div className="flex items-center justify-center gap-1.5 pb-1">
+                                                        <input
+                                                            value={renamingGroup}
+                                                            onChange={e => setRenamingGroup(e.target.value)}
+                                                            autoFocus
+                                                            placeholder={`${world.name}·大家的群（留空回退默认）`}
+                                                            className="flex-1 max-w-[220px] bg-white/10 border border-white/20 rounded-full px-3 py-1 text-[10px] text-white/90 outline-none placeholder:text-white/30"
+                                                        />
+                                                        <button onClick={() => { void onRenameGroup(renamingGroup); setRenamingGroup(null); }} className="text-[10px] font-bold text-emerald-300 px-1.5 active:scale-95">保存</button>
+                                                        <button onClick={() => setRenamingGroup(null)} className="text-[10px] font-bold text-white/40 px-1.5 active:scale-95">取消</button>
+                                                    </div>
+                                                ) : (
+                                                    <div className="text-center text-[9px] text-white/40 font-bold pb-1 flex items-center justify-center gap-1">
+                                                        <span>「{group.name}」 · {group.memberIds.length} 人{world.npcs.length > 0 ? ` + ${world.npcs.length} NPC` : ''}{onEditContent ? ' · 点按消息可编辑/删除' : ''}</span>
+                                                        {onRenameGroup && (
+                                                            <button onClick={() => setRenamingGroup(group.name || '')} className="text-white/40 active:scale-90" title="修改群名">
+                                                                <NotePencil size={11} />
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                )}
                                                 {folded && (
                                                     <button onClick={() => setGroupExpanded(true)} className="w-full text-[10px] font-bold py-1.5 rounded-full bg-white/10 text-white/60 active:scale-95 transition-transform">
                                                         展开更早的 {group.messages.length - FOLD} 条
@@ -613,7 +642,7 @@ const WorldEditor: React.FC<{
             }, 2, 0, { appName: '家园', purpose: `roll NPC · ${w.name || '新世界'}` });
             const rolled = parseRolledNpcs(data.choices?.[0]?.message?.content || '', w.npcs.map(n => n.name));
             if (rolled.length === 0) { addToast('这次没 roll 出新的，再试一次？', 'error'); return; }
-            upd({ npcs: [...w.npcs, ...rolled.map(n => ({ id: genId('npc'), name: n.name, persona: n.persona, emoji: n.emoji }))] });
+            upd({ npcs: [...w.npcs, ...rolled.map(n => ({ id: genId('npc'), name: n.name, persona: n.persona, emoji: n.emoji, tier: n.tier }))] });
             addToast(`roll 到 ${rolled.length} 个 NPC，可以再改`, 'success');
         } catch (e) {
             addToast('roll 失败了，检查下 API', 'error');
@@ -900,12 +929,24 @@ const WorldEditor: React.FC<{
                                 onChange={e => upd({ npcs: w.npcs.map(x => x.id === n.id ? { ...x, emoji: e.target.value } : x) })} />
                             <input className="flex-1 px-2 py-1 rounded-lg bg-stone-50 border border-stone-100 text-[12px]" value={n.name} placeholder="名字"
                                 onChange={e => upd({ npcs: w.npcs.map(x => x.id === n.id ? { ...x, name: e.target.value } : x) })} />
+                            {/* 重要度双档：核心每轮都写，背景低频出场（不设=核心，向后兼容） */}
+                            <div className="flex rounded-lg overflow-hidden border border-stone-200 shrink-0">
+                                {([['major', '核心'], ['minor', '背景']] as const).map(([tv, tl]) => (
+                                    <button key={tv} onClick={() => upd({ npcs: w.npcs.map(x => x.id === n.id ? { ...x, tier: tv } : x) })}
+                                        className={`text-[10px] font-bold px-2 py-1 transition-colors ${(n.tier || 'major') === tv ? (tv === 'major' ? 'bg-amber-500 text-white' : 'bg-stone-500 text-white') : 'bg-stone-50 text-stone-400'}`}>
+                                        {tl}
+                                    </button>
+                                ))}
+                            </div>
                             <button onClick={() => upd({ npcs: w.npcs.filter(x => x.id !== n.id) })} className="p-1 text-stone-400"><X size={14} /></button>
                         </div>
                         <input className="w-full px-2 py-1 rounded-lg bg-stone-50 border border-stone-100 text-[12px]" value={n.persona} placeholder="一句话人设（面包店老板娘，热心肠爱塞吃的）"
                             onChange={e => upd({ npcs: w.npcs.map(x => x.id === n.id ? { ...x, persona: e.target.value } : x) })} />
                     </div>
                 ))}
+                {w.npcs.some(n => n.tier === 'minor') && (
+                    <div className="text-[9.5px] text-stone-400 leading-snug">背景 NPC 不会每轮都被描写——被剧情点名或隔几轮才露个脸，世界更像真的小镇。</div>
+                )}
             </div>
 
             {pairs.length > 0 && (
@@ -943,6 +984,15 @@ const WorldEditor: React.FC<{
                     <div className="text-[10px] text-stone-400 leading-snug">世界靠你主动「观测」推进一段（早/午/晚/凌晨四段时光流逝），需要的时候来点一下就行。</div>
                 </div>
             )}
+
+            <div className={sectionCls}>
+                <div className={labelCls}>通知</div>
+                <label className="flex items-center justify-between">
+                    <span className="text-[12px] text-stone-700">演绎完成后推送通知</span>
+                    <input type="checkbox" checked={!!w.notifyOnEpisode} onChange={e => upd({ notifyOnEpisode: e.target.checked })} className="w-4 h-4 accent-amber-500" />
+                </label>
+                <div className="text-[10px] text-stone-400 leading-snug">每轮演绎完成后弹一条「“{w.name.trim() || '世界名'}”推进到了周五夜晚……」，点通知直达这个世界。仅安卓 APK 且开启常驻服务时生效。</div>
+            </div>
 
             {onDelete && (
                 <button onClick={onDelete} className="w-full py-2.5 rounded-2xl border border-red-200 bg-white/70 text-red-500 text-[12px] font-bold flex items-center justify-center gap-1.5">
@@ -1297,6 +1347,23 @@ const WorldView: React.FC<{
 
     /** 编辑/删除手机里的生成内容（动态/备忘落 episode；私聊/群聊落 world.threads）。newText=null 表示删除。 */
     const applyContentEdit = async (target: WHEditTarget, newText: string | null) => {
+        if (target.type === 'beat' || target.type === 'npcScene' || target.type === 'summary') {
+            // 纪事正文类：直接改 episode 字段落库，后续演绎自然以改后内容为上下文
+            const ep = episodes.find(e => e.round === target.round);
+            if (!ep || newText === null) return;
+            let updatedEp: WorldEpisode;
+            if (target.type === 'beat') {
+                updatedEp = { ...ep, beats: ep.beats.map(b => b.charId === target.charId ? { ...b, narrative: newText } : b) };
+            } else if (target.type === 'npcScene') {
+                updatedEp = { ...ep, npcScene: newText };
+            } else {
+                updatedEp = { ...ep, summary: newText };
+            }
+            await DB.saveWorldEpisode(updatedEp);
+            await loadEpisodes();
+            addToast('已更新', 'success');
+            return;
+        }
         if (target.type === 'comment') {
             // 朋友圈评论删除：feedReactions[key].comments 按下标删一条；删空了就把整条反应去掉
             const rx = world.feedReactions?.[target.key];
@@ -1390,6 +1457,17 @@ const WorldView: React.FC<{
         if (s && (Math.abs(e.clientX - s.x) > 10 || Math.abs(e.clientY - s.y) > 10)) cancelSeedPress();
     };
 
+    // 纪事正文编辑弹层（beat 叙述/NPC 群像/本轮摘要）+ 整轮纪事删除二次确认
+    const [wvEdit, setWvEdit] = useState<{ target: WHEditTarget; text: string; title: string } | null>(null);
+    const [pendingDelEp, setPendingDelEp] = useState<WorldEpisode | null>(null);
+    const deleteEpisode = async (ep: WorldEpisode) => {
+        // 同轮已注入聊天的卡片不回收（已发生的对话不追改）；相邻轮 round 编号不重排
+        await DB.deleteWorldEpisode(ep.id);
+        if (openEpisodeId === ep.id) setOpenEpisodeId(null);
+        await loadEpisodes();
+        addToast('这一轮纪事已删除', 'success');
+    };
+
     // 主题 token：昼/夜两套
     const t = isNight ? {
         pageBg: 'linear-gradient(180deg,#11142a 0%,#171b35 30%,#1b2038 100%)',
@@ -1429,6 +1507,40 @@ const WorldView: React.FC<{
                 boxSizing: 'border-box',
             }}
         >
+            {/* 纪事正文编辑弹层（beat/NPC 群像/摘要） */}
+            {wvEdit && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/45 backdrop-blur-sm p-5" onClick={() => setWvEdit(null)}>
+                    <div className="w-full max-w-[340px] rounded-2xl bg-[#f7f3ea] shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+                        <div className="px-4 pt-4 pb-3">
+                            <div className="text-[14px] font-black text-stone-800 flex items-center gap-1.5"><NotePencil size={15} weight="fill" className="text-violet-500" />{wvEdit.title}</div>
+                            <textarea value={wvEdit.text} onChange={e => setWvEdit({ ...wvEdit, text: e.target.value })} rows={8}
+                                className="mt-2.5 w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-[12px] leading-relaxed text-stone-800 focus:outline-none focus:border-violet-300 resize-none" />
+                            <p className="text-[10px] text-stone-400 mt-1">改完直接落库，后续演绎会以改后的内容为准。</p>
+                        </div>
+                        <div className="flex border-t border-stone-200">
+                            <button onClick={() => setWvEdit(null)} className="flex-1 py-2.5 text-[13px] font-bold text-stone-500 active:bg-black/5">取消</button>
+                            <button onClick={() => { const txt = wvEdit.text.trim(); if (txt) void applyContentEdit(wvEdit.target, txt); setWvEdit(null); }}
+                                className="flex-1 py-2.5 text-[13px] font-bold text-violet-600 border-l border-stone-200 active:bg-violet-50">保存</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {/* 整轮纪事删除二次确认 */}
+            {pendingDelEp && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/45 backdrop-blur-sm p-6" onClick={() => setPendingDelEp(null)}>
+                    <div className="w-full max-w-[300px] rounded-2xl bg-[#f7f3ea] shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+                        <div className="px-4 pt-4 pb-3">
+                            <div className="text-[14px] font-black text-stone-800 flex items-center gap-1.5"><Trash size={15} weight="fill" className="text-rose-400" />删除第 {pendingDelEp.round} 轮纪事？</div>
+                            <p className="text-[11.5px] text-stone-500 leading-relaxed mt-2">{pendingDelEp.storyTime} · {pendingDelEp.summary.slice(0, 40)}{pendingDelEp.summary.length > 40 ? '…' : ''}</p>
+                            <p className="text-[10px] text-stone-400 mt-1.5">这一轮的演绎、动态、备忘都会一起删掉，无法恢复；已发到聊天里的卡片不受影响。</p>
+                        </div>
+                        <div className="flex border-t border-stone-200">
+                            <button onClick={() => setPendingDelEp(null)} className="flex-1 py-2.5 text-[13px] font-bold text-stone-500 active:bg-black/5">取消</button>
+                            <button onClick={() => { void deleteEpisode(pendingDelEp); setPendingDelEp(null); }} className="flex-1 py-2.5 text-[13px] font-bold text-rose-500 border-l border-stone-200 active:bg-rose-50">删除</button>
+                        </div>
+                    </div>
+                </div>
+            )}
             {/* 伏笔删除确认（自定义弹窗，非原生） */}
             {pendingSeed && (
                 <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/45 backdrop-blur-sm p-6" onClick={() => setPendingSeed(null)}>
@@ -1789,6 +1901,10 @@ const WorldView: React.FC<{
                     <div className={`rounded-2xl border p-3.5 ${t.panel}`}>
                         <div className={`text-[10px] font-black tracking-[0.25em] uppercase flex items-center gap-1.5 mb-2 ${t.textLabel}`}>
                             <Sparkle size={11} weight="fill" />镇上的动静 · {latest.storyTime}
+                            <button onClick={() => setWvEdit({ target: { type: 'npcScene', round: latest.round }, text: latest.npcScene!, title: '编辑镇上的动静' })}
+                                className={`ml-auto p-1 rounded-md active:scale-90 transition-transform ${t.chip}`} title="编辑">
+                                <NotePencil size={12} weight="bold" />
+                            </button>
                         </div>
                         <p className={`text-[12px] leading-[1.7] whitespace-pre-wrap ${t.textMain} opacity-90`}>{latest.npcScene}</p>
                         {world.npcs.length > 0 && (
@@ -1824,12 +1940,34 @@ const WorldView: React.FC<{
                                         </button>
                                         {open && (
                                             <div className={`px-3 pb-3 space-y-2 border-t ${t.divider}`}>
-                                                {ep.npcScene && <p className={`text-[11px] leading-relaxed italic whitespace-pre-wrap pt-2 ${t.textSub}`}>{ep.npcScene}</p>}
+                                                {/* 本轮摘要 + 编辑/删除入口 */}
+                                                <div className="flex items-start gap-1.5 pt-2">
+                                                    <p className={`flex-1 text-[10.5px] leading-relaxed ${t.textSub}`}>{ep.summary}</p>
+                                                    <button onClick={() => setWvEdit({ target: { type: 'summary', round: ep.round }, text: ep.summary, title: '编辑本轮摘要' })}
+                                                        className={`shrink-0 p-1 rounded-md active:scale-90 transition-transform ${t.chip}`} title="编辑摘要">
+                                                        <NotePencil size={12} weight="bold" />
+                                                    </button>
+                                                    <button onClick={() => setPendingDelEp(ep)}
+                                                        className="shrink-0 p-1 rounded-md bg-rose-500/15 text-rose-400 active:scale-90 transition-transform" title="删除这一轮">
+                                                        <Trash size={12} weight="bold" />
+                                                    </button>
+                                                </div>
+                                                {ep.npcScene && (
+                                                    <div className="flex items-start gap-1.5">
+                                                        <p className={`flex-1 text-[11px] leading-relaxed italic whitespace-pre-wrap ${t.textSub}`}>{ep.npcScene}</p>
+                                                        <button onClick={() => setWvEdit({ target: { type: 'npcScene', round: ep.round }, text: ep.npcScene!, title: '编辑 NPC 群像' })}
+                                                            className={`shrink-0 p-1 rounded-md active:scale-90 transition-transform ${t.chip}`} title="编辑">
+                                                            <NotePencil size={12} weight="bold" />
+                                                        </button>
+                                                    </div>
+                                                )}
                                                 {ep.beats.map(b => (
                                                     <div key={b.charId} className={`rounded-xl border p-2.5 ${t.panelSolid}`}>
                                                         <div className="flex items-center gap-2">
                                                             <span className={`text-[11px] font-black ${t.textMain}`}>{b.charName} · {b.location} · {b.mood}</span>
-                                                            <button onClick={() => setPhoneView({ ownerId: b.charId })} className="ml-auto p-1 rounded-md bg-slate-900 text-white active:scale-90 shrink-0"><DeviceMobile size={11} weight="fill" /></button>
+                                                            <button onClick={() => setWvEdit({ target: { type: 'beat', round: ep.round, charId: b.charId }, text: b.narrative, title: `编辑 ${b.charName} 这一段` })}
+                                                                className={`ml-auto p-1 rounded-md active:scale-90 shrink-0 ${t.chip}`} title="编辑正文"><NotePencil size={11} weight="bold" /></button>
+                                                            <button onClick={() => setPhoneView({ ownerId: b.charId })} className="p-1 rounded-md bg-slate-900 text-white active:scale-90 shrink-0"><DeviceMobile size={11} weight="fill" /></button>
                                                         </div>
                                                         <div className="mt-1.5 space-y-1.5">
                                                             {b.narrative.split(/\n+/).filter(Boolean).map((para, i) => (
@@ -1872,6 +2010,13 @@ const WorldView: React.FC<{
                     initialTab={phoneView.tab}
                     onClose={() => setPhoneView(null)}
                     onEditContent={applyContentEdit}
+                    onRenameGroup={async (newName) => {
+                        // 写回 world.threads 里 group 的 name；清空回退默认名
+                        const fallback = `${world.name}·大家的群`;
+                        const threads = (world.threads || []).map(th => th.kind === 'group' ? { ...th, name: newName.trim() || fallback } : th);
+                        await mutateWorld({ threads });
+                        addToast('群名已更新', 'success');
+                    }}
                 />
             )}
         </div>
@@ -1899,6 +2044,14 @@ const WorldHomeApp: React.FC<{ embedded?: boolean; onFullscreen?: (full: boolean
             if (migrateWorldDaySegs(w)) await DB.saveWorld(w).catch(() => {});
         }
         setWorlds(all);
+        // 通知点进来的直达标记（openRoute 写入）：定位到对应世界
+        try {
+            const focus = localStorage.getItem('sully-world-home-focus');
+            if (focus) {
+                localStorage.removeItem('sully-world-home-focus');
+                if (all.some(w => w.id === focus)) { setActiveId(focus); setView('world'); }
+            }
+        } catch { /* ignore */ }
     }, []);
     useEffect(() => { reload(); }, [reload]);
     // 内嵌进「小小窝」时：开始玩（进世界/编辑）就让外层隐去三栏，回列表恢复

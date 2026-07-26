@@ -1258,6 +1258,8 @@ export interface WorldNPC {
     persona: string;
     /** 可视化兜底 emoji（NPC 不走捏人系统） */
     emoji?: string;
+    /** 重要度分档：major=核心（每轮都写），minor=背景（被点名/低频轮换才出场）。不设 = major，向后兼容。 */
+    tier?: 'major' | 'minor';
 }
 
 /** 居住安排：一间小屋及其住户。不在任何小屋里的成员视为独居（各自的小屋）。 */
@@ -1392,6 +1394,8 @@ export interface WorldProfile {
     clockSegs?: number;
     /** 生成内容是否注入各成员的 1v1 聊天（默认 true） */
     injectToChat?: boolean;
+    /** 每轮演绎完成后推送系统通知（「"XX世界"推进到了周五夜晚……」；仅原生 APK + 常驻服务开启时生效，默认 false） */
+    notifyOnEpisode?: boolean;
     /** 该世界专属 API 覆盖；不设则回落全局 apiConfig */
     api?: { baseUrl: string; apiKey: string; model: string };
     createdAt: number;

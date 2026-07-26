@@ -27,8 +27,9 @@ import { getLocalDailySchedule } from '../dailySchedule';
 import {
     worldTimeLabel, buildWorldSystemAddendum, buildWorldCharTurn, buildNpcTurn,
     parseCharBeat, parseNpcScene, realObserveTarget, formatRealClock, migrateWorldDaySegs,
-    alignCharToWorldClock,
+    alignCharToWorldClock, worldPushTimeLabel,
 } from './prompts';
+import { showNativeRoleEventNotification } from '../runtime/nativeRuntime';
 import { ensureThreads, applyBeatToThreads, applyNpcGroupLines, applyNpcDms, npcInboxes } from './threads';
 import { shouldCloseChapter, summarizeChapter, SIM_CHAPTER_CLOCKS } from './chapters';
 
@@ -538,6 +539,16 @@ export async function runWorldEpisode(deps: WorldEpisodeDeps): Promise<WorldEpis
                     }
                 }
             } catch { /* 记忆失败不影响主流程 */ }
+        }
+
+        // 演绎完成通知（可选开关；仅原生 APK + 常驻服务开启时真的会弹）
+        if (world.notifyOnEpisode) {
+            void showNativeRoleEventNotification({
+                title: `「${world.name}」`,
+                body: `推进到了${worldPushTimeLabel(world, realTarget)}……`,
+                tag: `world-ep-${world.id}-${episode.round}`,
+                route: `world:${world.id}`,
+            }).catch(() => {});
         }
 
         dispatch('world-episode-done', { worldId: world.id, episodeId: episode.id, storyTime, round: episode.round });

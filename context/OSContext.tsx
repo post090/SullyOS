@@ -1018,6 +1018,10 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
         setActiveApp(AppID.Call);
       } else if (value.startsWith('music')) {
         setActiveApp(AppID.Music);
+      } else if (value.startsWith('world:')) {
+        // 家园演绎完成通知 → 直达对应世界（WorldHomeApp 挂载时消费该 focus 标记）
+        try { localStorage.setItem('sully-world-home-focus', value.slice(6)); } catch {}
+        setActiveApp(AppID.WorldHome);
       } else {
         setActiveApp(AppID.Chat);
         setActiveCharacterId(value);

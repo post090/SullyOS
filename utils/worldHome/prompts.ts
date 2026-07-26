@@ -79,6 +79,17 @@ export function storyTimeLabel(storyClock: number): string {
     return `第${day}天${SEGMENT_LABELS[seg]}`;
 }
 
+/** 通知推送用的短时间标签：real=「周五晚上」（按世界时区的那一段），sim=「第N天晚上」。 */
+export function worldPushTimeLabel(world: WorldProfile, rc?: { dayKey: string; seg: number } | null): string {
+    if (world.timeMode === 'sim') return storyTimeLabel(world.storyClock);
+    const target = rc || world.realClock;
+    if (!target) return SEGMENT_LABELS[0];
+    const d = new Date(`${target.dayKey}T00:00:00`);
+    if (isNaN(d.getTime())) return SEGMENT_LABELS[target.seg] || '';
+    if (target.seg === LATE_NIGHT_SEG) d.setDate(d.getDate() + 1);
+    return `${WEEKDAYS[d.getDay()]}${SEGMENT_LABELS[target.seg] || ''}`;
+}
+
 /**
  * 旧存档（一天三段制）的一次性时钟迁移。
  * sim 模式的 storyClock/simSummarizedClock 是「累计段数」，一天从 3 段变 4 段后
@@ -407,7 +418,15 @@ ${describeHousing(world, members)}
 
 ## 同世界的人
 ${others.length > 0 ? others.map(m => `- ${m.name}`).join('\n') : '（暂时只有你）'}
-${world.npcs.length > 0 ? `\n## 镇上的 NPC\n${world.npcs.map(n => `- ${n.name}：${n.persona}`).join('\n')}` : ''}
+${world.npcs.length > 0 ? `\n## 镇上的 NPC\n${(() => {
+    // 按重要度分组注入：核心详细、背景只给名字+一句人设，避免背景板抢戏
+    const major = world.npcs.filter(n => (n.tier || 'major') === 'major');
+    const minor = world.npcs.filter(n => n.tier === 'minor');
+    const parts: string[] = [];
+    if (major.length > 0) parts.push(major.map(n => `- ${n.name}：${n.persona}`).join('\n'));
+    if (minor.length > 0) parts.push(`背景配角（你平时很少打交道，不必主动提及）：${minor.map(n => `${n.name}（${n.persona.slice(0, 20)}）`).join('、')}`);
+    return parts.join('\n');
+})()}` : ''}
 
 ## 你的关系
 ${describeRelationsFor(world, char.id, members, npcNames)}
@@ -493,17 +512,17 @@ ${worldview || '（一个安静的小世界，作者还没细写，请你据角�
 ${members.length > 0 ? members.map(m => `- ${m.name}：${m.persona || '（没写人设）'}`).join('\n') : '（暂时没有主角信息）'}
 ${existingNames.length > 0 ? `\n## 已有的 NPC（别重名、别重复）\n${existingNames.join('、')}` : ''}
 
-要求：贴合世界观与主角们的生活场景（他们会去的店、会打交道的人、住在隔壁的邻居……），名字自然，人设一句话点到为止、各有记忆点，彼此别雷同。严格输出一个 JSON 对象（建议 \`\`\`json 包裹，不要输出 JSON 之外的正文）：
+要求：贴合世界观与主角们的生活场景（他们会去的店、会打交道的人、住在隔壁的邻居……），名字自然，人设一句话点到为止、各有记忆点，彼此别雷同。每个 NPC 要标一个重要度：major=核心（和主角们有稳定交集、剧情里常出现），minor=背景（市井氛围板，偶尔一笔带过），两档都要有。严格输出一个 JSON 对象（建议 \`\`\`json 包裹，不要输出 JSON 之外的正文）：
 {
   "npcs": [
-    { "name": "NPC名字", "persona": "一句话人设（身份+一个鲜明特点，例：面包店老板娘，热心肠爱给人塞吃的）", "emoji": "一个能代表ta的 emoji" }
+    { "name": "NPC名字", "persona": "一句话人设（身份+一个鲜明特点，例：面包店老板娘，热心肠爱给人塞吃的）", "emoji": "一个能代表ta的 emoji", "tier": "major 或 minor" }
   ]
 }
 只要 ${count} 个，宁缺毋滥。`;
 }
 
-/** 解析 roll 出来的 NPC。返回 {name, persona, emoji}[]，过滤空名/重名。 */
-export function parseRolledNpcs(raw: string, existingNames: string[] = []): { name: string; persona: string; emoji: string }[] {
+/** 解析 roll 出来的 NPC。返回 {name, persona, emoji, tier}[]，过滤空名/重名。 */
+export function parseRolledNpcs(raw: string, existingNames: string[] = []): { name: string; persona: string; emoji: string; tier: 'major' | 'minor' }[] {
     const j = extractJson(raw);
     let arr: any[] = Array.isArray(j?.npcs) ? j.npcs : Array.isArray(j) ? j : [];
     if (arr.length === 0) {
@@ -512,7 +531,7 @@ export function parseRolledNpcs(raw: string, existingNames: string[] = []): { na
         if (m) { try { const a = JSON.parse(m[0]); if (Array.isArray(a)) arr = a; } catch { /* ignore */ } }
     }
     const seen = new Set(existingNames.map(n => n.trim()));
-    const out: { name: string; persona: string; emoji: string }[] = [];
+    const out: { name: string; persona: string; emoji: string; tier: 'major' | 'minor' }[] = [];
     for (const n of arr) {
         if (!n || typeof n.name !== 'string') continue;
         const name = n.name.trim().slice(0, 16);
@@ -522,6 +541,7 @@ export function parseRolledNpcs(raw: string, existingNames: string[] = []): { na
             name,
             persona: (typeof n.persona === 'string' ? n.persona.trim() : '').slice(0, 60),
             emoji: (typeof n.emoji === 'string' && n.emoji.trim() ? n.emoji.trim() : '🙂').slice(0, 4),
+            tier: n.tier === 'minor' ? 'minor' : 'major',
         });
         if (out.length >= 8) break;
     }
@@ -557,7 +577,15 @@ export function buildNpcTurn(args: {
 ${world.worldview || '（一个安静的小世界）'}
 
 ## NPC 名单
-${world.npcs.map(n => `- ${n.name}：${n.persona}`).join('\n')}
+${(() => {
+    // 核心 NPC 每轮都写；背景 NPC 不必每轮描写，偶尔一笔带过即可（背景板呼吸感）
+    const major = world.npcs.filter(n => (n.tier || 'major') === 'major');
+    const minor = world.npcs.filter(n => n.tier === 'minor');
+    const parts: string[] = [];
+    if (major.length > 0) parts.push(`【核心】（每轮都要有戏份）\n${major.map(n => `- ${n.name}：${n.persona}`).join('\n')}`);
+    if (minor.length > 0) parts.push(`【背景】（不必每轮描写：被剧情点名、或隔个三四轮低频轮换出场一下就好；其余时候只当背景里的人影，路过式一笔带过即可）\n${minor.map(n => `- ${n.name}：${n.persona}`).join('\n')}`);
+    return parts.join('\n');
+})()}
 
 ## 世界的主角们（你不扮演他们，只能让 NPC 与他们擦肩、寒暄、留下钩子）
 ${members.map(m => m.name).join('、')}
