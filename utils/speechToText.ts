@@ -21,6 +21,18 @@ export interface SttCallbacks {
   onError?: (message: string) => void;
   /** Fired when the session ends for any reason (success, error, or stop). */
   onEnd?: () => void;
+  /** Cloud mode only: mic input level 0..1, ~10 times/sec — drives the waveform UI. */
+  onLevel?: (level: number) => void;
+  /** Cloud mode only: recording stopped, upload/recognition in flight — show a busy state. */
+  onRecognizing?: () => void;
+}
+
+/** Cloud STT settings (OpenAI-compatible /v1/audio/transcriptions). */
+export interface SttProviderConfig {
+  provider?: 'system' | 'cloud';
+  baseUrl?: string;
+  apiKey?: string;
+  model?: string;
 }
 
 export interface SttSession {
@@ -39,7 +51,11 @@ const getWebCtor = (): any =>
   (typeof window !== 'undefined' && ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)) || null;
 
 /** Whether voice input is usable in the current environment. */
-export const isSttSupported = (): boolean => {
+export const isSttSupported = (cfg?: SttProviderConfig): boolean => {
+  if (cfg?.provider === 'cloud' && cfg.apiKey) {
+    return typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia
+      && typeof MediaRecorder !== 'undefined';
+  }
   if (isNative()) return true; // plugin present; actual availability resolved at start()
   return !!getWebCtor();
 };
@@ -288,11 +304,128 @@ const startNative = async (lang: string, cb: SttCallbacks): Promise<SttSession> 
 };
 
 /**
+ * Cloud STT: record with MediaRecorder, then POST to an OpenAI-compatible
+ * /v1/audio/transcriptions endpoint (SiliconFlow SenseVoice / Groq Whisper / OpenAI).
+ * We own the mic here, so a real AnalyserNode level feed drives the waveform UI.
+ */
+const resolveTranscriptionUrl = (baseUrl: string): string => {
+  const b = (baseUrl || '').trim().replace(/\/+$/, '');
+  if (!b) return '';
+  if (/\/audio\/transcriptions$/i.test(b)) return b;
+  if (/\/v\d+$/i.test(b)) return `${b}/audio/transcriptions`;
+  return `${b}/v1/audio/transcriptions`;
+};
+
+const DEFAULT_CLOUD_STT_BASE = 'https://api.siliconflow.cn/v1';
+
+const startCloud = async (lang: string, cb: SttCallbacks, cfg: SttProviderConfig): Promise<SttSession> => {
+  // Base URL 留空 → 默认 SiliconFlow（与设置页文案一致）
+  const url = resolveTranscriptionUrl(cfg.baseUrl?.trim() || DEFAULT_CLOUD_STT_BASE);
+  if (!cfg.apiKey) throw new Error('先在设置→其他 API 里填云端 STT 的 API Key');
+  if (typeof MediaRecorder === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+    throw new Error('当前环境不支持录音（MediaRecorder 不可用）');
+  }
+
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => {
+    throw new Error('麦克风权限被拒绝，去系统设置里允许一下');
+  });
+
+  // ── 实时音量：AnalyserNode 取时域 RMS，~100ms 一次推给 UI 画波形 ──
+  let audioCtx: AudioContext | null = null;
+  let levelTimer: ReturnType<typeof setInterval> | null = null;
+  try {
+    const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
+    if (Ctx) {
+      audioCtx = new Ctx();
+      const srcNode = audioCtx!.createMediaStreamSource(stream);
+      const analyser = audioCtx!.createAnalyser();
+      analyser.fftSize = 512;
+      srcNode.connect(analyser);
+      const buf = new Uint8Array(analyser.fftSize);
+      levelTimer = setInterval(() => {
+        analyser.getByteTimeDomainData(buf);
+        let sum = 0;
+        for (let i = 0; i < buf.length; i += 1) {
+          const v = (buf[i] - 128) / 128;
+          sum += v * v;
+        }
+        // RMS 平时说话大概 0.02~0.2，放大到 0..1 好看些
+        const level = Math.min(1, Math.sqrt(sum / buf.length) * 4);
+        cb.onLevel?.(level);
+      }, 100);
+    }
+  } catch { /* 波形是锦上添花，失败不影响录音 */ }
+
+  const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', '']
+    .find(m => !m || (typeof MediaRecorder.isTypeSupported === 'function' && MediaRecorder.isTypeSupported(m))) ?? '';
+  const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  const chunks: Blob[] = [];
+  recorder.ondataavailable = (e: BlobEvent) => { if (e.data && e.data.size > 0) chunks.push(e.data); };
+
+  let stopped = false;
+  const releaseMic = () => {
+    if (levelTimer) { clearInterval(levelTimer); levelTimer = null; }
+    try { audioCtx?.close(); } catch { /* ignore */ }
+    audioCtx = null;
+    try { stream.getTracks().forEach(t => t.stop()); } catch { /* ignore */ }
+  };
+
+  recorder.onstop = async () => {
+    releaseMic();
+    // 录音结束 → 进入「识别中」，UI 据此显示思考态而不是瞎等
+    cb.onRecognizing?.();
+    try {
+      const blob = new Blob(chunks, { type: mime || 'audio/webm' });
+      if (blob.size < 1024) {
+        cb.onError?.('没录到声音，再试一次？');
+        cb.onEnd?.();
+        return;
+      }
+      const fd = new FormData();
+      const ext = /mp4/.test(mime) ? 'm4a' : 'webm';
+      fd.append('file', blob, `voice.${ext}`);
+      fd.append('model', cfg.model?.trim() || 'FunAudioLLM/SenseVoiceSmall');
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${cfg.apiKey}` },
+        body: fd,
+      });
+      if (!resp.ok) {
+        const body = await resp.text().catch(() => '');
+        throw new Error(`识别接口返回 ${resp.status}：${body.slice(0, 160) || '无详情'}`);
+      }
+      const data = await resp.json().catch(() => ({}));
+      const text = typeof data?.text === 'string' ? data.text.trim() : '';
+      if (text) cb.onFinal?.(text);
+      else cb.onError?.('没有识别到内容，再说一次？');
+    } catch (e: any) {
+      const raw = (e && (e.message || String(e))) || '识别失败';
+      cb.onError?.(typeof raw === 'string' ? raw : String(raw));
+    }
+    cb.onEnd?.();
+  };
+
+  // timeslice：定期落盘，录很长也不丢数据
+  recorder.start(250);
+
+  return {
+    stop: () => {
+      if (stopped) return;
+      stopped = true;
+      try { recorder.stop(); } catch { releaseMic(); cb.onEnd?.(); }
+    },
+  };
+};
+
+/**
  * Start a speech-to-text session. Resolves to a handle you can `stop()`.
  * All transcripts arrive via the callbacks.
+ * Pass `cfg`（来自 APIConfig 的 stt* 字段）选择云端识别；缺省走系统/浏览器识别。
  */
-export const startStt = async (lang: string, cb: SttCallbacks): Promise<SttSession> => {
+export const startStt = async (lang: string, cb: SttCallbacks, cfg?: SttProviderConfig): Promise<SttSession> => {
   const language = lang || 'zh-CN';
+  // 选了云端但没填 Key → 自动回退系统/浏览器识别（与设置页文案一致）
+  if (cfg?.provider === 'cloud' && cfg.apiKey) return startCloud(language, cb, cfg);
   if (isNative()) return startNative(language, cb);
   return startWeb(language, cb);
 };

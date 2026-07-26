@@ -376,6 +376,11 @@ const Settings: React.FC = () => {
     apiConfig.minimaxRegion === 'overseas' ? 'overseas' : 'domestic'
   );
   const [localAceStepKey, setLocalAceStepKey] = useState(apiConfig.aceStepApiKey || '');
+  // 语音输入 STT：系统识别 or 云端识别（OpenAI 兼容 /audio/transcriptions）
+  const [localSttProvider, setLocalSttProvider] = useState<'system' | 'cloud'>(apiConfig.sttProvider === 'cloud' ? 'cloud' : 'system');
+  const [localSttBaseUrl, setLocalSttBaseUrl] = useState(apiConfig.sttBaseUrl || '');
+  const [localSttKey, setLocalSttKey] = useState(apiConfig.sttApiKey || '');
+  const [localSttModel, setLocalSttModel] = useState(apiConfig.sttModel || '');
   const [localTtsProvider, setLocalTtsProvider] = useState<'minimax' | 'fishaudio' | 'elevenlabs'>(
     apiConfig.ttsProvider === 'fishaudio' ? 'fishaudio' : apiConfig.ttsProvider === 'elevenlabs' ? 'elevenlabs' : 'minimax'
   );
@@ -708,6 +713,10 @@ const Settings: React.FC = () => {
       setLocalMiniMaxGroupId(apiConfig.minimaxGroupId || '');
       setLocalMiniMaxRegion(apiConfig.minimaxRegion === 'overseas' ? 'overseas' : 'domestic');
       setLocalAceStepKey(apiConfig.aceStepApiKey || '');
+            setLocalSttProvider(apiConfig.sttProvider === 'cloud' ? 'cloud' : 'system');
+            setLocalSttBaseUrl(apiConfig.sttBaseUrl || '');
+            setLocalSttKey(apiConfig.sttApiKey || '');
+            setLocalSttModel(apiConfig.sttModel || '');
       setLocalTtsProvider(
         apiConfig.ttsProvider === 'fishaudio' ? 'fishaudio'
         : apiConfig.ttsProvider === 'elevenlabs' ? 'elevenlabs'
@@ -769,6 +778,10 @@ const Settings: React.FC = () => {
       minimaxGroupId: localMiniMaxGroupId,
       minimaxRegion: localMiniMaxRegion,
       aceStepApiKey: localAceStepKey,
+      sttProvider: localSttProvider,
+      sttBaseUrl: localSttBaseUrl.trim(),
+      sttApiKey: localSttKey.trim(),
+      sttModel: localSttModel.trim(),
       ttsProvider: localTtsProvider,
       fishAudioApiKey: localFishKey,
       fishAudioModel: localFishModel,
@@ -2223,6 +2236,57 @@ const Settings: React.FC = () => {
                                     </div>
                                 );
                             })}
+                        </div>
+                    )}
+                </div>
+
+                {/* 语音输入 STT —— 通话页面麦克风转文字用哪家 */}
+                <div className="group rounded-2xl border border-slate-200/70 bg-slate-50/60 p-3">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-0.5 block">语音输入（STT 语音转文字）</label>
+                    <p className="text-[11px] text-slate-400 mb-2.5">电话页面点麦克风说话时，用哪家把声音转成文字。</p>
+                    <div className="flex bg-white/50 border border-slate-200/60 rounded-xl p-1 gap-1">
+                        <button
+                            type="button"
+                            onClick={() => setLocalSttProvider('system')}
+                            className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-all ${localSttProvider === 'system' ? 'bg-primary text-white shadow-sm' : 'text-slate-600 active:bg-white/60'}`}
+                        >
+                            系统识别
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setLocalSttProvider('cloud')}
+                            className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-all ${localSttProvider === 'cloud' ? 'bg-primary text-white shadow-sm' : 'text-slate-600 active:bg-white/60'}`}
+                        >
+                            云端识别
+                        </button>
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-1.5 pl-1 leading-relaxed">
+                        {localSttProvider === 'system'
+                            ? '用手机自带的语音识别，边说边出字、不用配 Key。但国产 ROM 上经常反应慢甚至没反应——遇到这种情况建议切「云端识别」。'
+                            : '录完一段后上传识别（说完才出字），识别准、不看系统脸色。需要下面配一个 OpenAI 兼容的语音转写 API。'}
+                    </p>
+
+                    {localSttProvider === 'cloud' && (
+                        <div className="mt-3 space-y-3">
+                            <div className="rounded-xl bg-emerald-50/80 border border-emerald-200/60 px-3 py-2">
+                                <p className="text-[11px] text-emerald-700 leading-relaxed">
+                                    🆓 推荐硅基流动 SiliconFlow：<span className="font-mono">SenseVoiceSmall</span> 模型完全免费、中文效果好、国内直连不用梯子。去 <a href="https://cloud.siliconflow.cn/account/ak" target="_blank" rel="noopener noreferrer" className="font-semibold underline">siliconflow.cn 密钥页</a> 免费注册拿个 Key 填下面就行，Base URL 和模型留空用默认即可。
+                                </p>
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block pl-1">STT Base URL（可选）</label>
+                                <input type="text" spellCheck={false} value={localSttBaseUrl} onChange={(e) => setLocalSttBaseUrl(e.target.value)} placeholder="默认 https://api.siliconflow.cn/v1" className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-4 py-2.5 text-sm font-mono focus:bg-white transition-all" />
+                                <p className="text-[11px] text-slate-400 mt-1 pl-1">任何 OpenAI 兼容的 /audio/transcriptions 接口都行（Groq / OpenAI 等，那两家需要梯子）。</p>
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block pl-1">STT API Key</label>
+                                <input type="password" name="stt-api-key" autoComplete="new-password" spellCheck={false} value={localSttKey} onChange={(e) => setLocalSttKey(e.target.value)} placeholder="sk-xxx（不填则云端识别不可用，自动回退系统识别）" className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-4 py-2.5 text-sm font-mono focus:bg-white transition-all" />
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block pl-1">STT 模型（可选）</label>
+                                <input type="text" spellCheck={false} value={localSttModel} onChange={(e) => setLocalSttModel(e.target.value)} placeholder="默认 FunAudioLLM/SenseVoiceSmall（硬基流动免费）" className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-4 py-2.5 text-sm font-mono focus:bg-white transition-all" />
+                                <p className="text-[11px] text-slate-400 mt-1 pl-1">用其它家时改成对应模型，如 Groq 的 <span className="font-mono">whisper-large-v3</span>。改完记得点下面「保存其他 API」。</p>
+                            </div>
                         </div>
                     )}
                 </div>

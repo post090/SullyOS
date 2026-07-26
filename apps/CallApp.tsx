@@ -10,7 +10,7 @@ import { normalizeVoiceTags } from '../utils/sanitize';
 import { FISH_VOICE_ACTING_GUIDE, synthesizeSpeechFishDetailed, resolveFishAudioApiKey, cleanTextForTtsFish, stripFishMarkupForDisplay } from '../utils/fishAudioTts';
 import { ELEVEN_VOICE_ACTING_GUIDE, synthesizeSpeechElevenDetailed, resolveElevenLabsApiKey, cleanTextForTtsEleven, stripElevenMarkupForDisplay } from '../utils/elevenLabsTts';
 import { resolveTtsProvider, getTtsProvider, getVoicePromptOverride } from '../utils/ttsProvider';
-import { startStt, isSttSupported, type SttSession } from '../utils/speechToText';
+import { startStt, isSttSupported, type SttSession, type SttProviderConfig } from '../utils/speechToText';
 import { startNativeCallNotification, updateNativeCallNotification, stopNativeCallNotification, getNativeCallState } from '../utils/runtime/nativeRuntime';
 import { ContextBuilder } from '../utils/context';
 import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
@@ -308,8 +308,19 @@ const CallApp: React.FC = () => {
   const [currentSessionId, setCurrentSessionId] = useState<string>(() => `call-${Date.now()}`);
   const [draftInput, setDraftInput] = useState('');
   const [isListening, setIsListening] = useState(false);
+  // 云端 STT：录完上传识别中的状态（UI 显示转圈而不是瞎等）
+  const [sttRecognizing, setSttRecognizing] = useState(false);
+  // 录音波形：最近的音量采样（云端=真实音量，系统=伪随机律动，因为麦被 RecognitionService 占用拿不到音频流）
+  const [sttLevels, setSttLevels] = useState<number[]>([]);
   const sttSessionRef = useRef<SttSession | null>(null);
-  const sttSupported = useMemo(() => isSttSupported(), []);
+  const sttCfg = useMemo<SttProviderConfig>(() => ({
+    // 没填 Key 时 startStt 会回退系统识别，这里也按 system 处理，伪波形才会正常补上
+    provider: apiConfig?.sttProvider === 'cloud' && apiConfig?.sttApiKey ? 'cloud' : 'system',
+    baseUrl: apiConfig?.sttBaseUrl,
+    apiKey: apiConfig?.sttApiKey,
+    model: apiConfig?.sttModel,
+  }), [apiConfig?.sttProvider, apiConfig?.sttBaseUrl, apiConfig?.sttApiKey, apiConfig?.sttModel]);
+  const sttSupported = useMemo(() => isSttSupported(sttCfg), [sttCfg]);
   const [audioUrl, setAudioUrl] = useState<string>('');
   const [traceId, setTraceId] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState('');
@@ -483,7 +494,18 @@ const CallApp: React.FC = () => {
   const isListeningRef = useRef(false);
   useEffect(() => { isListeningRef.current = isListening; }, [isListening]);
 
+  // 系统识别模式下没有真实音量回调 → 用伪随机律动补上波形反馈
+  useEffect(() => {
+    if (!isListening || sttCfg.provider === 'cloud') return;
+    const t = window.setInterval(() => {
+      setSttLevels(prev => [...prev.slice(-27), 0.2 + Math.random() * 0.55]);
+    }, 110);
+    return () => window.clearInterval(t);
+  }, [isListening, sttCfg.provider]);
+
   const toggleStt = async () => {
+    // 识别中（云端上传阶段）忽略点击，避免重入
+    if (sttRecognizing) return;
     // If we are currently listening (sync ref), stop immediately
     if (isListeningRef.current) {
       isListeningRef.current = false;
@@ -504,19 +526,25 @@ const CallApp: React.FC = () => {
     try {
       isListeningRef.current = true;
       setIsListening(true);
+      setSttLevels([]);
       sttSessionRef.current = await startStt('zh-CN', {
         onPartial: (t) => setDraftInput(t),
         onFinal: (t) => setDraftInput(t),
         onError: (m) => { if (m) addToast(m, 'info'); },
+        onLevel: (lv) => setSttLevels(prev => [...prev.slice(-27), lv]),
+        onRecognizing: () => setSttRecognizing(true),
         onEnd: () => {
           isListeningRef.current = false;
           setIsListening(false);
+          setSttRecognizing(false);
+          setSttLevels([]);
           sttSessionRef.current = null;
         },
-      });
+      }, sttCfg);
     } catch (e: any) {
       isListeningRef.current = false;
       setIsListening(false);
+      setSttRecognizing(false);
       sttSessionRef.current = null;
       // native 端的异常 e.message 可能是对象（Capacitor 原生 Error），String 兜底防 toast 渲染成 [object Object]。
       const raw = (e && (e.message || String(e))) || '无法启动语音输入';
@@ -1649,12 +1677,14 @@ const CallApp: React.FC = () => {
             {sttSupported && (
               <button
                 onClick={toggleStt}
-                disabled={sendingBusy}
-                title={isListening ? '结束语音输入' : '按一下开始说话'}
-                className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 transition active:scale-90 disabled:opacity-40"
-                style={isListening ? { background: '#f0569f', boxShadow: '0 0 14px #f0569f99' } : { background: 'rgba(255,255,255,0.08)' }}
+                disabled={sendingBusy || sttRecognizing}
+                title={sttRecognizing ? '识别中…' : isListening ? '结束语音输入' : '按一下开始说话'}
+                className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 transition active:scale-90 disabled:opacity-60"
+                style={isListening || sttRecognizing ? { background: '#f0569f', boxShadow: '0 0 14px #f0569f99' } : { background: 'rgba(255,255,255,0.08)' }}
               >
-                <Microphone size={18} weight="fill" className={isListening ? 'text-white animate-pulse' : 'text-white/70'} />
+                {sttRecognizing
+                  ? <span className="w-4 h-4 rounded-full border-2 border-white/30 animate-spin" style={{ borderTopColor: '#fff' }} />
+                  : <Microphone size={18} weight="fill" className={isListening ? 'text-white animate-pulse' : 'text-white/70'} />}
               </button>
             )}
             <input
@@ -1666,7 +1696,32 @@ const CallApp: React.FC = () => {
             />
             <button onClick={handleTurn} disabled={sendingBusy} className="shrink-0 px-4 py-2 rounded-xl text-sm font-medium text-white disabled:opacity-40 transition active:scale-95" style={{ backgroundColor: accentColor, boxShadow: `0 0 16px ${accentColor}66` }}>{sendingBusy ? '…' : '说'}</button>
           </div>
-          {isListening && <div className="text-[10px] text-white/40 mt-1 px-1 animate-pulse">正在聆听，点麦克风结束</div>}
+          {isListening && (
+            <div className="flex items-center gap-2 mt-1.5 px-1">
+              {/* 录音波形律动：云端=真实音量，系统=伪随机，都让用户知道「在录了」 */}
+              <div className="flex items-center gap-[2px] h-5 flex-1 overflow-hidden">
+                {sttLevels.slice(-28).map((lv, i) => (
+                  <span
+                    key={i}
+                    className="w-[3px] rounded-full shrink-0"
+                    style={{
+                      height: `${Math.max(3, Math.round(lv * 18))}px`,
+                      background: '#f0569f',
+                      opacity: 0.35 + lv * 0.65,
+                      transition: 'height 90ms linear',
+                    }}
+                  />
+                ))}
+              </div>
+              <span className="text-[10px] text-white/40 shrink-0">在听了，点麦克风结束</span>
+            </div>
+          )}
+          {sttRecognizing && (
+            <div className="flex items-center gap-2 mt-1.5 px-1">
+              <span className="w-3 h-3 rounded-full border-2 border-white/20 shrink-0 animate-spin" style={{ borderTopColor: '#f0569f' }} />
+              <span className="text-[10px] text-white/50 animate-pulse">正在识别语音…</span>
+            </div>
+          )}
         </div>
       )}
       <div className="px-7 pb-7 pt-1.5">

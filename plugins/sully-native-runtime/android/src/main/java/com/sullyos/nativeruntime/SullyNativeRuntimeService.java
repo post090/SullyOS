@@ -49,6 +49,8 @@ public class SullyNativeRuntimeService extends Service {
     private static final String CHANNEL_ID = "sully_native_runtime";
     private static final String CHANNEL_CALL = "sully_call";
     private static final String CHANNEL_MUSIC = "sully_music";
+    // Custom action id for the like/heart button on the system media card.
+    private static final String CUSTOM_ACTION_LIKE = "com.sullyos.nativeruntime.TOGGLE_LIKE";
     private static final int NOTIFICATION_ID = 31090;
     private static final int NOTIFICATION_CALL_ID = 31091;
     private static final int NOTIFICATION_MUSIC_ID = 31092;
@@ -187,53 +189,68 @@ public class SullyNativeRuntimeService extends Service {
         }
         if (ACTION_MUSIC_ACTION.equals(action)) {
             String musicAction = intent.getStringExtra("musicAction");
+            boolean silent = intent.getBooleanExtra("silent", false);
             if (musicAction != null && !musicAction.trim().isEmpty()) {
                 // Store pending action for JS to consume on resume
                 getSharedPreferences("sully_native_runtime", MODE_PRIVATE).edit()
                     .putString("pending_music_action", musicAction)
                     .putLong("pending_music_action_at", System.currentTimeMillis())
                     .apply();
-                // Launch app so JS can handle it
-                Intent launchIntent = getPackageManager().getLaunchIntentForPackage(getPackageName());
-                if (launchIntent != null) {
-                    launchIntent.putExtra("sully_music_action", musicAction);
-                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-                    try { startActivity(launchIntent); } catch (Exception ignored) {}
+                if ("like".equals(musicAction) || "unlike".equals(musicAction)) {
+                    // Optimistically flip the heart on the notification while JS persists it.
+                    musicLiked = "like".equals(musicAction);
+                    if (musicActive) {
+                        showMusicNotification(musicTitle, musicArtist, musicAlbum, musicPlaying, musicLiked,
+                            musicSongId, musicCoverUrl, musicDurationMs, currentMusicPositionMs());
+                    }
+                }
+                if (!silent) {
+                    // Launch app so JS can handle it
+                    Intent launchIntent = getPackageManager().getLaunchIntentForPackage(getPackageName());
+                    if (launchIntent != null) {
+                        launchIntent.putExtra("sully_music_action", musicAction);
+                        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                        try { startActivity(launchIntent); } catch (Exception ignored) {}
+                    }
                 }
             }
             return START_NOT_STICKY;
         }
         if (ACTION_START_FOREGROUND.equals(action)) {
             manualForeground = true;
+            // Restore persisted call state BEFORE anchoring the foreground so an active
+            // call keeps the CallStyle card as the foreground notification and the
+            // generic persistent notification is posted alongside instead.
+            if (callStartedAtMs == 0) {
+                boolean wasCallActive = getSharedPreferences("sully_native_runtime", MODE_PRIVATE).getBoolean("call_active", false);
+                if (wasCallActive) {
+                    String savedName = getSharedPreferences("sully_native_runtime", MODE_PRIVATE).getString("call_char_name", null);
+                    long savedStarted = getSharedPreferences("sully_native_runtime", MODE_PRIVATE).getLong("call_started_at", System.currentTimeMillis());
+                    String savedCharId = getSharedPreferences("sully_native_runtime", MODE_PRIVATE).getString("call_char_id", null);
+                    String savedAvatar = getSharedPreferences("sully_native_runtime", MODE_PRIVATE).getString("call_avatar", null);
+                    if (savedName != null) {
+                        callCharName = savedName;
+                        callCharId = savedCharId;
+                        callStartedAtMs = savedStarted;
+                        if (savedAvatar != null && !savedAvatar.isEmpty()) callAvatar = savedAvatar;
+                    }
+                }
+            }
             startForegroundCompat(
                 intent.getStringExtra("title"),
                 intent.getStringExtra("text")
             );
             resumePendingJobs();
-            // If there was an active call persisted, restore its notification
-            boolean wasCallActive = getSharedPreferences("sully_native_runtime", MODE_PRIVATE).getBoolean("call_active", false);
-            if (wasCallActive) {
-                String savedName = getSharedPreferences("sully_native_runtime", MODE_PRIVATE).getString("call_char_name", null);
-                long savedStarted = getSharedPreferences("sully_native_runtime", MODE_PRIVATE).getLong("call_started_at", System.currentTimeMillis());
-                String savedCharId = getSharedPreferences("sully_native_runtime", MODE_PRIVATE).getString("call_char_id", null);
-                String savedAvatar = getSharedPreferences("sully_native_runtime", MODE_PRIVATE).getString("call_avatar", null);
-                if (savedName != null) {
-                    callCharName = savedName;
-                    callCharId = savedCharId;
-                    callStartedAtMs = savedStarted;
-                    if (savedAvatar != null && !savedAvatar.isEmpty()) callAvatar = savedAvatar;
-                    // Re-show call notification as foreground? We already have foreground from persistent,
-                    // so show call as separate notification (not foreground) to avoid replacing persistent.
-                    updateCallNotification(savedName, savedStarted);
-                    maybeFetchCallAvatar();
-                }
-            }
+            if (callStartedAtMs != 0) maybeFetchCallAvatar();
             return START_STICKY;
         }
         if (ACTION_STOP_FOREGROUND.equals(action)) {
             manualForeground = false;
             // If call is still active, keep service alive for call
             if (callStartedAtMs != 0) {
+                // Drop the tagged generic notification that rode alongside the call anchor.
+                NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                if (nm != null) nm.cancel("sully-fg", NOTIFICATION_ID);
                 return START_STICKY;
             }
             maybeStop();
@@ -382,10 +399,13 @@ public class SullyNativeRuntimeService extends Service {
 
     /** Re-establish whichever foreground the service should currently hold, or stop if none. */
     private void reassertForeground() {
-        if (manualForeground) {
-            startForegroundCompat("SullyOS 正在运行", "");
-        } else if (callStartedAtMs != 0) {
+        if (callStartedAtMs != 0) {
+            // The active call must own the foreground anchor (CallStyle is rejected when
+            // posted via notify); the persistent notification rides alongside if enabled.
             startForegroundCompatWithCall(callCharName, callStartedAtMs);
+            if (manualForeground) postGenericAlongside(null, null);
+        } else if (manualForeground) {
+            startForegroundCompat("SullyOS 正在运行", "");
         } else if (musicActive) {
             showMusicNotification(musicTitle, musicArtist, musicAlbum, musicPlaying, musicLiked, musicSongId,
                 musicCoverUrl, musicDurationMs, currentMusicPositionMs());
@@ -405,6 +425,8 @@ public class SullyNativeRuntimeService extends Service {
     }
 
     private void stopForegroundAndSelf() {
+        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm != null) nm.cancel("sully-fg", NOTIFICATION_ID);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             stopForeground(STOP_FOREGROUND_REMOVE);
         } else {
@@ -431,6 +453,10 @@ public class SullyNativeRuntimeService extends Service {
                 @Override public void onPause() { handleMediaButton("pause"); }
                 @Override public void onSkipToNext() { handleMediaButton("next"); }
                 @Override public void onSkipToPrevious() { handleMediaButton("prev"); }
+                @Override public void onSeekTo(long pos) { handleSeekTo(pos); }
+                @Override public void onCustomAction(String customAction, android.os.Bundle args) {
+                    if (CUSTOM_ACTION_LIKE.equals(customAction)) handleLikeToggle();
+                }
             }, new android.os.Handler(android.os.Looper.getMainLooper()));
             s.setActive(true);
             mediaSession = s;
@@ -438,6 +464,29 @@ public class SullyNativeRuntimeService extends Service {
             mediaSession = null;
         }
         return mediaSession;
+    }
+
+    /** Seek from the system media card: optimistic native update while JS moves the <audio>. */
+    private void handleSeekTo(long positionMs) {
+        long pos = Math.max(0, positionMs);
+        if (musicDurationMs > 0 && pos > musicDurationMs) pos = musicDurationMs;
+        musicPositionMs = pos;
+        musicPositionCapturedAt = System.currentTimeMillis();
+        handleMediaButton("seek:" + pos);
+        if (musicActive) {
+            showMusicNotification(musicTitle, musicArtist, musicAlbum, musicPlaying, musicLiked, musicSongId,
+                musicCoverUrl, musicDurationMs, pos);
+        }
+    }
+
+    /** Like toggled from the media card custom action: flip the heart now, JS persists it. */
+    private void handleLikeToggle() {
+        handleMediaButton(musicLiked ? "unlike" : "like");
+        musicLiked = !musicLiked;
+        if (musicActive) {
+            showMusicNotification(musicTitle, musicArtist, musicAlbum, musicPlaying, musicLiked, musicSongId,
+                musicCoverUrl, musicDurationMs, currentMusicPositionMs());
+        }
     }
 
     private void updateMediaSessionMetadata(String title, String artist, String album, boolean isPlaying,
@@ -466,17 +515,25 @@ public class SullyNativeRuntimeService extends Service {
                 | android.media.session.PlaybackState.ACTION_PAUSE
                 | android.media.session.PlaybackState.ACTION_PLAY_PAUSE
                 | android.media.session.PlaybackState.ACTION_SKIP_TO_NEXT
-                | android.media.session.PlaybackState.ACTION_SKIP_TO_PREVIOUS;
+                | android.media.session.PlaybackState.ACTION_SKIP_TO_PREVIOUS
+                | android.media.session.PlaybackState.ACTION_SEEK_TO;
             // Real position + speed lets the system extrapolate the progress bar on its own.
-            android.media.session.PlaybackState ps = new android.media.session.PlaybackState.Builder()
+            android.media.session.PlaybackState.Builder psb = new android.media.session.PlaybackState.Builder()
                 .setActions(actions)
                 .setState(
                     isPlaying ? android.media.session.PlaybackState.STATE_PLAYING
                               : android.media.session.PlaybackState.STATE_PAUSED,
                     positionMs >= 0 ? positionMs : android.media.session.PlaybackState.PLAYBACK_POSITION_UNKNOWN,
-                    isPlaying ? 1.0f : 0f)
-                .build();
-            s.setPlaybackState(ps);
+                    isPlaying ? 1.0f : 0f);
+            // Heart button on the system media card, rendered from the custom action icon.
+            try {
+                psb.addCustomAction(new android.media.session.PlaybackState.CustomAction.Builder(
+                    CUSTOM_ACTION_LIKE,
+                    musicLiked ? "取消喜欢" : "喜欢",
+                    musicLiked ? R.drawable.ic_sully_liked : R.drawable.ic_sully_like
+                ).build());
+            } catch (Exception ignored) {}
+            s.setPlaybackState(psb.build());
             if (!s.isActive()) s.setActive(true);
         } catch (Exception ignored) {}
     }
@@ -719,12 +776,39 @@ public class SullyNativeRuntimeService extends Service {
 
     private void startForegroundCompat(String title, String text) {
         ensureChannel(this);
-        startForegroundTyped(NOTIFICATION_ID, buildNotification(
+        Notification generic = buildNotification(
             title == null || title.trim().isEmpty() ? "SullyOS 正在运行" : title,
             text == null || text.trim().isEmpty() ? "" : text,
             true,
             null
-        ), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+        );
+        if (callStartedAtMs != 0) {
+            // An active call owns the foreground anchor: CallStyle is rejected by the
+            // system when posted via notify(), so never displace it. Re-assert the call
+            // anchor (satisfies the startForegroundService contract) and post the
+            // generic notification alongside with a tag.
+            startForegroundCompatWithCall(callCharName, callStartedAtMs);
+            NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (manager != null) {
+                try { manager.notify("sully-fg", NOTIFICATION_ID, generic); } catch (Exception ignored) {}
+            }
+            return;
+        }
+        startForegroundTyped(NOTIFICATION_ID, generic, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+    }
+
+    /** Post the generic persistent notification without touching the foreground anchor. */
+    private void postGenericAlongside(String title, String text) {
+        ensureChannel(this);
+        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager == null) return;
+        Notification generic = buildNotification(
+            title == null || title.trim().isEmpty() ? "SullyOS 正在运行" : title,
+            text == null || text.trim().isEmpty() ? "" : text,
+            true,
+            null
+        );
+        try { manager.notify("sully-fg", NOTIFICATION_ID, generic); } catch (Exception ignored) {}
     }
 
     private void startForegroundCompatWithCall(String charName, long startedAtMs) {
@@ -736,7 +820,7 @@ public class SullyNativeRuntimeService extends Service {
         Notification notification = buildCallNotification(
             charName,
             charName == null || charName.trim().isEmpty() ? "通话中" : "正在与 " + charName + " 通话",
-            "轻触返回通话 · " + formatCallDuration(System.currentTimeMillis() - startedAtMs),
+            "轻触返回通话",
             startedAtMs,
             routeCallId
         );
@@ -746,9 +830,10 @@ public class SullyNativeRuntimeService extends Service {
     private void updateCallNotification(String charName, long startedAtMs) {
         ensureChannel(this);
         ensureCallChannel(this);
-        // When the call anchors the foreground (posted without a tag), update through
-        // startForeground again so we don't create a second tagged notification.
-        if (callStartedAtMs != 0 && !manualForeground) {
+        // CallStyle is only accepted from a foreground service, so an active call must
+        // always update through startForeground — the notify() path gets silently
+        // rejected by the system and the card disappears.
+        if (callStartedAtMs != 0) {
             startForegroundCompatWithCall(charName, startedAtMs);
             return;
         }
@@ -759,19 +844,11 @@ public class SullyNativeRuntimeService extends Service {
         Notification notification = buildCallNotification(
             charName,
             charName == null || charName.trim().isEmpty() ? "通话中" : "正在与 " + charName + " 通话",
-            "轻触返回通话 · " + formatCallDuration(System.currentTimeMillis() - startedAtMs),
+            "轻触返回通话",
             startedAtMs,
             routeCallId
         );
         try { manager.notify("sully-call", NOTIFICATION_CALL_ID, notification); } catch (Exception ignored) {}
-    }
-
-    private static String formatCallDuration(long elapsedMs) {
-        if (elapsedMs <= 0) return "00:00";
-        long totalSec = elapsedMs / 1000;
-        long min = totalSec / 60;
-        long sec = totalSec % 60;
-        return String.format("%02d:%02d", min, sec);
     }
 
     private void stopCallNotification() {
@@ -956,18 +1033,27 @@ public class SullyNativeRuntimeService extends Service {
         }
 
         // Build action pending intents
-        PendingIntent prevPending = buildMusicActionPendingIntent("prev", 94092);
-        PendingIntent togglePending = buildMusicActionPendingIntent(isPlaying ? "pause" : "play", 94093);
-        PendingIntent nextPending = buildMusicActionPendingIntent("next", 94094);
-        PendingIntent likePending = buildMusicActionPendingIntent(isLiked ? "unlike" : "like", 94095);
+        PendingIntent prevPending = buildMusicActionPendingIntent("prev", 94092, false);
+        PendingIntent togglePending = buildMusicActionPendingIntent(isPlaying ? "pause" : "play", 94093, false);
+        PendingIntent nextPending = buildMusicActionPendingIntent("next", 94094, false);
+        // Like is silent: it just persists the state, no need to yank the app foreground.
+        PendingIntent likePending = buildMusicActionPendingIntent(isLiked ? "unlike" : "like", 94095, true);
 
-        // Order: like, prev, play/pause, next
+        // Order: like, prev, play/pause, next — icons are required for MIUI/HyperOS to render them.
         String likeTitle = isLiked ? "取消喜欢" : "喜欢";
-        builder.addAction(new Notification.Action.Builder(null, likeTitle, likePending).build());
-        builder.addAction(new Notification.Action.Builder(null, "上一首", prevPending).build());
+        builder.addAction(new Notification.Action.Builder(
+            android.graphics.drawable.Icon.createWithResource(this, isLiked ? R.drawable.ic_sully_liked : R.drawable.ic_sully_like),
+            likeTitle, likePending).build());
+        builder.addAction(new Notification.Action.Builder(
+            android.graphics.drawable.Icon.createWithResource(this, R.drawable.ic_sully_prev),
+            "上一首", prevPending).build());
         String toggleTitle = isPlaying ? "暂停" : "播放";
-        builder.addAction(new Notification.Action.Builder(null, toggleTitle, togglePending).build());
-        builder.addAction(new Notification.Action.Builder(null, "下一首", nextPending).build());
+        builder.addAction(new Notification.Action.Builder(
+            android.graphics.drawable.Icon.createWithResource(this, isPlaying ? R.drawable.ic_sully_pause : R.drawable.ic_sully_play),
+            toggleTitle, togglePending).build());
+        builder.addAction(new Notification.Action.Builder(
+            android.graphics.drawable.Icon.createWithResource(this, R.drawable.ic_sully_next),
+            "下一首", nextPending).build());
 
         // MediaStyle + MediaSession so media buttons / lockscreen controls work (API 21+).
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -984,10 +1070,11 @@ public class SullyNativeRuntimeService extends Service {
         return builder.build();
     }
 
-    private PendingIntent buildMusicActionPendingIntent(String action, int requestCode) {
+    private PendingIntent buildMusicActionPendingIntent(String action, int requestCode, boolean silent) {
         Intent intent = new Intent(this, SullyNativeRuntimeService.class);
         intent.setAction(ACTION_MUSIC_ACTION);
         intent.putExtra("musicAction", action);
+        intent.putExtra("silent", silent);
         int flags = PendingIntent.FLAG_UPDATE_CURRENT;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) flags |= PendingIntent.FLAG_IMMUTABLE;
         return PendingIntent.getService(this, requestCode, intent, flags);

@@ -19,6 +19,15 @@ import java.util.Iterator;
 @CapacitorPlugin(name = "SullyNativeRuntime")
 public class SullyNativeRuntimePlugin extends Plugin {
 
+    // PluginCall.getLong only accepts Long instances, but small JS numbers arrive
+    // as Integer through the bridge (durationMs/positionMs), which silently fell
+    // back to the default value. Accept any Number instead.
+    private static long readLong(PluginCall call, String name, long defaultValue) {
+        Object value = call.getData().opt(name);
+        if (value instanceof Number) return ((Number) value).longValue();
+        return defaultValue;
+    }
+
     @PluginMethod
     public void ping(PluginCall call) {
         JSObject ret = new JSObject();
@@ -73,7 +82,7 @@ public class SullyNativeRuntimePlugin extends Plugin {
             job.put("createdAt", now);
             job.put("updatedAt", now);
             job.put("timeoutMs", call.getInt("timeoutMs", 120000));
-            long runAt = call.getLong("runAt", 0L);
+            long runAt = readLong(call, "runAt", 0L);
             if (runAt > 0L) job.put("runAt", runAt);
             job.put("responseType", call.getString("responseType", "json"));
 
@@ -328,7 +337,7 @@ public class SullyNativeRuntimePlugin extends Plugin {
     public void startCallNotification(PluginCall call) {
         String charName = call.getString("charName", "通话中");
         String charId = call.getString("charId", "");
-        long startedAt = call.getLong("startedAt", System.currentTimeMillis());
+        long startedAt = readLong(call, "startedAt", System.currentTimeMillis());
         String avatar = call.getString("avatar", "");
         Intent intent = new Intent(getContext(), SullyNativeRuntimeService.class);
         intent.setAction(SullyNativeRuntimeService.ACTION_CALL_START);
@@ -344,7 +353,7 @@ public class SullyNativeRuntimePlugin extends Plugin {
     public void updateCallNotification(PluginCall call) {
         String charName = call.getString("charName", "通话中");
         String charId = call.getString("charId", "");
-        long startedAt = call.getLong("startedAt", 0L);
+        long startedAt = readLong(call, "startedAt", 0L);
         String avatar = call.getString("avatar", "");
         Intent intent = new Intent(getContext(), SullyNativeRuntimeService.class);
         intent.setAction(SullyNativeRuntimeService.ACTION_CALL_UPDATE);
@@ -373,8 +382,8 @@ public class SullyNativeRuntimePlugin extends Plugin {
         boolean isLiked = call.getBoolean("isLiked", false);
         String songId = call.getString("songId", "");
         String coverUrl = call.getString("coverUrl", "");
-        long durationMs = call.getLong("durationMs", 0L);
-        long positionMs = call.getLong("positionMs", 0L);
+        long durationMs = readLong(call, "durationMs", 0L);
+        long positionMs = readLong(call, "positionMs", 0L);
         Intent intent = new Intent(getContext(), SullyNativeRuntimeService.class);
         intent.setAction(SullyNativeRuntimeService.ACTION_MUSIC_SHOW);
         intent.putExtra("title", title);
@@ -399,8 +408,8 @@ public class SullyNativeRuntimePlugin extends Plugin {
         boolean isLiked = call.getBoolean("isLiked", false);
         String songId = call.getString("songId", "");
         String coverUrl = call.getString("coverUrl", "");
-        long durationMs = call.getLong("durationMs", 0L);
-        long positionMs = call.getLong("positionMs", 0L);
+        long durationMs = readLong(call, "durationMs", 0L);
+        long positionMs = readLong(call, "positionMs", 0L);
         Intent intent = new Intent(getContext(), SullyNativeRuntimeService.class);
         intent.setAction(SullyNativeRuntimeService.ACTION_MUSIC_UPDATE);
         intent.putExtra("title", title);

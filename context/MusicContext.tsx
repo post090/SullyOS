@@ -902,7 +902,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return () => { if (nativeMusicSyncRef.current === send) nativeMusicSyncRef.current = null; };
   }, [current?.id, current?.name, current?.artists, current?.album, playing, liked]);
 
-  // 轮询原生侧音乐控制按钮（通知栏点击） - prev/next/toggle/like
+  // 轮询原生侧音乐控制按钮（通知栏点击） - prev/next/toggle/like/seek
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setInterval> | null = null;
@@ -912,6 +912,15 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         const { getPendingNativeMusicAction } = await import('../utils/runtime/nativeRuntime');
         const action = await getPendingNativeMusicAction();
         if (!action) return;
+        // 系统媒体卡片拖动进度条 → 原生写入 "seek:<ms>"，这里应用到 audio 元素
+        if (action.startsWith('seek:')) {
+          const ms = Number(action.slice(5));
+          const a = audioRef.current;
+          if (a && Number.isFinite(ms)) {
+            a.currentTime = Math.max(0, ms / 1000);
+          }
+          return;
+        }
         switch (action) {
           case 'prev':
             prevSong();

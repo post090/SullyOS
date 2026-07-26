@@ -241,6 +241,15 @@ export interface APIConfig {
   };
   // Replicate token (r8_xxx) for ACE-Step song generation in 写歌 App.
   aceStepApiKey?: string;
+  // 语音输入（STT）方案：'system'（缺省）用系统 RecognitionService（国产 ROM 常被裁剪/很慢）；
+  // 'cloud' 走 OpenAI 兼容 /v1/audio/transcriptions（录完一次性上传识别）。
+  // 推荐免费方案：硅基流动 SiliconFlow 的 FunAudioLLM/SenseVoiceSmall（免费、中文效果好）。
+  sttProvider?: 'system' | 'cloud';
+  // 云端 STT 接口地址（如 https://api.siliconflow.cn），仅 sttProvider === 'cloud' 时使用。
+  sttBaseUrl?: string;
+  sttApiKey?: string;
+  // 云端 STT 模型，缺省 'FunAudioLLM/SenseVoiceSmall'。
+  sttModel?: string;
   model: string;
   // Per-API streaming toggle. Some endpoints only support stream:true.
   // Missing → false (默认非流式).
