@@ -12,6 +12,8 @@ import {
 } from './music/MusicUI';
 import NeteaseProfilePage from './music/NeteaseProfilePage';
 import CharVisitPage from './music/CharVisitPage';
+import PlaylistDetailPage, { PlaylistSource } from './music/PlaylistDetailPage';
+import SongCommentsPage from './music/SongCommentsPage';
 
 // ------------------------- 工具 -------------------------
 const fmtTime = (s: number) => {
@@ -21,7 +23,7 @@ const fmtTime = (s: number) => {
   return `${m}:${ss.toString().padStart(2, '0')}`;
 };
 
-type View = 'search' | 'settings' | 'player' | 'profile' | 'visit_char';
+type View = 'search' | 'settings' | 'player' | 'profile' | 'visit_char' | 'playlist_detail' | 'comments';
 
 // ========================= 主组件 =========================
 const MusicApp: React.FC = () => {
@@ -101,6 +103,10 @@ const MusicApp: React.FC = () => {
   const [showLyricSync, setShowLyricSync] = useState(false);
   const [syncDraft, setSyncDraft] = useState<number[]>([]);
   const [visitCharId, setVisitCharId] = useState<string | null>(null);
+  // 歌单详情页 / 评论区页的路由状态
+  const [plDetail, setPlDetail] = useState<PlaylistSource | null>(null);
+  const [commentSong, setCommentSong] = useState<Song | null>(null);
+  const [commentsFrom, setCommentsFrom] = useState<View>('player'); // 评论区返回哪一页
   const [keyword, setKeyword] = useState('');
   const [results, setResults] = useState<Song[]>([]);
   const [searching, setSearching] = useState(false);
@@ -480,6 +486,8 @@ const MusicApp: React.FC = () => {
               onDownload={downloadCurrentLocal}
               playMode={playMode}
               onCyclePlayMode={cyclePlayMode}
+              showComments={!current.local}
+              onComments={() => { setCommentSong(current); setCommentsFrom('player'); setView('comments'); }}
             />
           </div>
         </div>
@@ -598,6 +606,7 @@ const MusicApp: React.FC = () => {
           onOpenSearch={() => setView('search')}
           onOpenSettings={() => setView('settings')}
           onVisitChar={id => { setVisitCharId(id); setView('visit_char'); }}
+          onOpenPlaylist={pl => { setPlDetail({ kind: 'netease', playlist: pl }); setView('playlist_detail'); }}
         />
       )}
       {/* 手动对轴 modal — 全屏覆盖，不开新 view */}
@@ -770,7 +779,21 @@ const MusicApp: React.FC = () => {
           charId={visitCharId}
           onBack={() => { setView('profile'); setVisitCharId(null); }}
           onOpenPlayer={() => setView('player')}
+          onOpenPlaylist={plId => { setPlDetail({ kind: 'char', charId: visitCharId, playlistId: plId }); setView('playlist_detail'); }}
         />
+      )}
+
+      {view === 'playlist_detail' && plDetail && (
+        <PlaylistDetailPage
+          source={plDetail}
+          onBack={() => setView(plDetail.kind === 'char' ? 'visit_char' : 'profile')}
+          onOpenPlayer={() => setView('player')}
+          onOpenComments={s => { setCommentSong(s); setCommentsFrom('playlist_detail'); setView('comments'); }}
+        />
+      )}
+
+      {view === 'comments' && commentSong && (
+        <SongCommentsPage song={commentSong} onBack={() => setView(commentsFrom)} />
       )}
     </div>
   );

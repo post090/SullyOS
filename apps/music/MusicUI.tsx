@@ -28,6 +28,17 @@ export const C = {
   danger:   '#ba1a1a',
 } as const;
 
+/* ══════════ 歌单封面渐变 — coverStyle 标识 → CSS 渐变（char 歌单通用） ══════════ */
+export const gradientMap: Record<string, string> = {
+  'gradient-01': `linear-gradient(135deg, ${C.primary}, ${C.accent})`,
+  'gradient-02': `linear-gradient(135deg, ${C.sakura}, ${C.lavender})`,
+  'gradient-03': `linear-gradient(135deg, ${C.accent}, ${C.glow})`,
+  'gradient-04': `linear-gradient(135deg, ${C.lavender}, ${C.primary})`,
+  'gradient-05': `linear-gradient(135deg, ${C.vip}, ${C.sakura})`,
+  'gradient-06': `linear-gradient(135deg, ${C.glow}, ${C.lavender})`,
+};
+export const gradientFor = (key?: string) => gradientMap[key || 'gradient-01'] || gradientMap['gradient-01'];
+
 /* ══════════ 全局 CSS 动画 (注入一次) ══════════ */
 const STYLE_ID = '__shizuku_anims';
 const injectStyles = () => {
@@ -484,7 +495,9 @@ export const SubActions: React.FC<{
   playMode?: SubPlayMode;
   onCyclePlayMode?: () => void;    // 循环模式切换
   onAdd?: () => void;
-}> = ({ onLike, liked, onSync, showSync, onDownload, showDownload, playMode = 'loop', onCyclePlayMode, onAdd }) => {
+  onComments?: () => void;         // 打开真实评论区 (仅网易云歌显示)
+  showComments?: boolean;
+}> = ({ onLike, liked, onSync, showSync, onDownload, showDownload, playMode = 'loop', onCyclePlayMode, onAdd, onComments, showComments }) => {
   const Item = ({ icon, label, onClick, active }: { icon: React.ReactNode; label: string; onClick?: () => void; active?: boolean }) => (
     <button onClick={onClick}
       className="flex flex-col items-center gap-1 transition-opacity active:scale-95"
@@ -530,6 +543,14 @@ export const SubActions: React.FC<{
       <path d="M7 20l-3-3 3-3" /><path d="M4 17h12a4 4 0 0 0 4-4v0" />
     </svg>
   );
+  const commentSvg = (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.primary} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 11.5a7.5 7.5 0 0 1-7.5 7.5H8l-4 3.5V11.5A7.5 7.5 0 0 1 11.5 4h2a7.5 7.5 0 0 1 7.5 7.5z" />
+      <circle cx="9.3" cy="11.5" r="0.7" fill={C.primary} stroke="none" />
+      <circle cx="12.5" cy="11.5" r="0.7" fill={C.primary} stroke="none" />
+      <circle cx="15.7" cy="11.5" r="0.7" fill={C.primary} stroke="none" />
+    </svg>
+  );
   const addSvg = (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.primary} strokeWidth="1.5">
       <path d="M3 6h13M3 12h13M3 18h9M17 15v6M14 18h6" />
@@ -548,6 +569,7 @@ export const SubActions: React.FC<{
   return (
     <div className="flex items-end justify-around gap-4 max-w-[280px] mx-auto">
       <Item onClick={onLike} active={liked} label="Like" icon={heartSvg} />
+      {showComments && onComments && <Item onClick={onComments} active label="Talk" icon={commentSvg} />}
       {showSync && onSync && <Item onClick={onSync} active label="Sync" icon={syncSvg} />}
       {showDownload && onDownload && <Item onClick={onDownload} active label="Save" icon={downloadSvg} />}
       {onCyclePlayMode && <Item onClick={onCyclePlayMode} active={playMode !== 'loop'} label={playModeLabel[playMode]} icon={loopSvg} />}

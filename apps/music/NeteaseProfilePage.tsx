@@ -12,7 +12,7 @@ import {
 import { MagnifyingGlass, Gear, User as UserIcon } from '@phosphor-icons/react';
 import NeteaseLoginPanel from './NeteaseLoginPanel';
 
-interface Playlist {
+export interface Playlist {
   id: number;
   name: string;
   coverImgUrl: string;
@@ -33,6 +33,8 @@ interface Props {
   onOpenSearch?: () => void;
   onOpenSettings?: () => void;
   onVisitChar?: (charId: string) => void;
+  /** 点歌单行进统一歌单详情页（只读全曲目） */
+  onOpenPlaylist?: (pl: Playlist) => void;
 }
 
 // ─── 「一起写的歌」本地专辑卡 — 写歌 App 同步过来的 ACE-Step / MiniMax 出歌 ───
@@ -149,7 +151,7 @@ const LocalAlbumCard: React.FC<LocalAlbumCardProps> = ({ songs, expanded, setExp
   </div>
 );
 
-const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearch, onOpenSettings, onVisitChar }) => {
+const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearch, onOpenSettings, onVisitChar, onOpenPlaylist }) => {
   const { addToast, characters, userProfile } = useOS();
   const {
     cfg, setCfg, profile, refreshProfile, playSong,
@@ -175,8 +177,6 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
   const [records, setRecords] = useState<RecordItem[]>([]);
   const [cloud, setCloud] = useState<Song[]>([]);
   const [loading, setLoading] = useState(false);
-  const [expandedPl, setExpandedPl] = useState<number | null>(null);
-  const [plTracks, setPlTracks] = useState<Record<number, Song[]>>({});
   const [signedIn, setSignedIn] = useState(false);
 
   const uid = profile?.userId;
@@ -261,41 +261,6 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
   }, [uid]);
 
   useEffect(() => { reload(); }, [reload]);
-
-  // 展开歌单 — 同样用 ref 去稳定化 cfg / addToast
-  // 分页拉全整单（最多 10000 首）：之前只取前 100 首，千首大歌单翻来覆去都是那几首
-  const expandPlaylist = useCallback(async (pl: Playlist) => {
-    if (expandedPl === pl.id) { setExpandedPl(null); return; }
-    setExpandedPl(pl.id);
-    if (plTracks[pl.id]) return;
-    try {
-      const MAX_TRACKS = 10000;
-      const PAGE = 500;
-      const total = Math.min(pl.trackCount || MAX_TRACKS, MAX_TRACKS);
-      const mapSong = (s: any): Song => ({
-        id: s.id,
-        name: s.name,
-        artists: (s.ar || []).map((a: any) => a.name).join(' / '),
-        album: s.al?.name || '',
-        albumPic: toHttps(s.al?.picUrl || ''),
-        duration: (s.dt || 0) / 1000,
-        fee: s.fee ?? 0,
-      });
-      const all: Song[] = [];
-      for (let offset = 0; offset < total; offset += PAGE) {
-        const r = await musicApi.playlistTrackAll(cfgRef.current, pl.id, PAGE, offset);
-        const page: Song[] = (r?.songs || []).map(mapSong);
-        if (!page.length) break;
-        all.push(...page);
-        // 第一页先上屏，剩下的后台继续补齐，不让用户等整单拉完
-        if (offset === 0) setPlTracks(prev => ({ ...prev, [pl.id]: page }));
-        if (page.length < PAGE) break;
-      }
-      setPlTracks(prev => ({ ...prev, [pl.id]: all.slice(0, MAX_TRACKS) }));
-    } catch (e: any) {
-      toastRef.current(`加载歌单失败：${e.message}`, 'error');
-    }
-  }, [expandedPl, plTracks]);
 
   // 签到
   const doSignIn = useCallback(async () => {
@@ -731,7 +696,7 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
             {playlists.map(pl => (
               <div key={pl.id} className="rounded-2xl shizuku-glass overflow-hidden">
                 <button
-                  onClick={() => expandPlaylist(pl)}
+                  onClick={() => onOpenPlaylist?.(pl)}
                   className="w-full flex items-center gap-3 p-2.5 text-left"
                 >
                   <img src={pl.coverImgUrl} alt=""
@@ -745,35 +710,9 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
                     </div>
                   </div>
                   <div className="text-[10px] shrink-0" style={{ color: C.accent }}>
-                    {expandedPl === pl.id ? '收起' : '展开'}
+                    ›
                   </div>
                 </button>
-                {expandedPl === pl.id && (
-                  <div className="border-t px-2 py-1" style={{ borderColor: `${C.faint}20` }}>
-                    {(plTracks[pl.id] || []).slice(0, 30).map(s => (
-                      <button key={s.id}
-                        onClick={() => {
-                          playSong(s, { replaceQueue: plTracks[pl.id], startIdx: plTracks[pl.id].findIndex(x => x.id === s.id) });
-                          onOpenPlayer();
-                        }}
-                        className="w-full text-left flex items-center gap-2 py-1.5 px-1">
-                        <img src={s.albumPic} alt="" className="w-7 h-7 rounded-md object-cover" />
-                        <div className="flex-1 min-w-0">
-                          <div className="text-[11px] truncate" style={{ color: C.text }}>{s.name}</div>
-                          <div className="text-[9px] truncate" style={{ color: C.muted }}>{s.artists}</div>
-                        </div>
-                      </button>
-                    ))}
-                    {(plTracks[pl.id] || []).length === 0 && (
-                      <div className="text-[10px] text-center py-2" style={{ color: C.faint }}>加载中...</div>
-                    )}
-                    {(plTracks[pl.id] || []).length > 30 && (
-                      <div className="text-[9px] text-center py-1.5" style={{ color: C.faint }}>
-                        已加载 {plTracks[pl.id].length} 首 · 点任意一首整单入队
-                      </div>
-                    )}
-                  </div>
-                )}
               </div>
             ))}
           </div>
