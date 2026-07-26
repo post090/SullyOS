@@ -49,7 +49,9 @@ export function renderMemosForPrompt(
     memos: CharacterMemo[] | undefined,
     scene: MemoScene,
 ): string {
-    if (!memos || memos.length === 0) {
+    // 已划掉的不再喂给角色（用户在 MemoApp 里划掉的条目仅自己可见）
+    const visible = (memos || []).filter(m => m.status !== 'done');
+    if (visible.length === 0) {
         // 单聊场景即便没备忘录也要告诉 AI 怎么用标签（这样 AI 知道这个能力存在）
         if (scene === 'chat') {
             return renderEmptyMemoWithInstructions();
@@ -57,17 +59,15 @@ export function renderMemosForPrompt(
         return '';
     }
 
-    // 按 updatedAt 倒序，最近改的排前面
-    const sorted = [...memos].sort((a, b) => b.updatedAt - a.updatedAt);
+    // 按 updatedAt 倒序，最近改的排前面（序号跟 applyMemoDirectives 的可见视图一致）
+    const sorted = [...visible].sort((a, b) => b.updatedAt - a.updatedAt);
     const lines: string[] = [];
-    const lastSync = new Date(Math.max(...memos.map(m => m.updatedAt)))
+    const lastSync = new Date(Math.max(...visible.map(m => m.updatedAt)))
         .toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 
-    lines.push(`【你的备忘录 · 共 ${memos.length}/${MEMO_MAX_COUNT} 条 · 最后修改 ${lastSync}】`);
+    lines.push(`【你的备忘录 · 共 ${visible.length}/${MEMO_MAX_COUNT} 条 · 最后修改 ${lastSync}】`);
     sorted.forEach((m, i) => {
-        const typeLabel = m.type === 'todo'
-            ? (m.status === 'done' ? '[待办·已划掉]' : '[待办]')
-            : (m.status === 'done' ? '[备忘·已划掉]' : '[备忘]');
+        const typeLabel = m.type === 'todo' ? '[待办]' : '[备忘]';
         const tagsStr = m.tags && m.tags.length > 0 ? ` #${m.tags.join(' #')}` : '';
         lines.push(`${i + 1}. ${typeLabel} ${m.content}${tagsStr}`);
     });
@@ -99,7 +99,7 @@ function renderMemoInstructions(): string {
     return [
         '你可以用以下标签管理自己的备忘录（用户不可见，标签会被自动剥离）：',
         `- 新建：[[MEMO_ADD:内容|type:note或todo|tags:标签1,标签2]] —— 上限 ${MEMO_MAX_COUNT} 条，满了会被拒绝；type 可省略默认 note；tags 可省略`,
-        `- 编辑：[[MEMO_EDIT:编号|content:新内容|status:active或done|type:note或todo|tags:新标签]] —— 任意字段组合，编号就是上面的序号；status=done 表示划掉`,
+        `- 编辑：[[MEMO_EDIT:编号|content:新内容|status:active或done|type:note或todo|tags:新标签]] —— 任意字段组合，编号就是上面的序号；status=done 表示划掉，划掉即完成，会直接从备忘录里删除`,
         `- 删除：[[MEMO_DEL:编号]]`,
         '编号是上面列表里的序号（从 1 开始）。备忘录是随手记的性质，写短句即可，单条不超过 200 字。',
         '只有当前的【单聊】场景才能用这些标签；其他场景（主动消息/通话/小小窝）你只能看不能改。',
@@ -228,7 +228,8 @@ function sanitizeTags(raw: string): string[] {
  * 应用一批指令到角色备忘录上，返回新备忘录数组（不可变）+ 执行报告。
  * 调用方负责把新数组塞回 character.memos 并 saveCharacter 落库。
  *
- * - 序号基于当前 memos 的 updatedAt 倒序排列（跟 renderMemosForPrompt 一致）
+ * - 序号基于当前 memos 的 updatedAt 倒序排列且过滤掉已划掉条目（跟 renderMemosForPrompt 一致）
+ * - EDIT status=done 视为划掉即完成，直接删除该条（不再留尸体持续喂给角色）
  * - ADD 超过上限会被拒绝并记入 report.rejected
  * - EDIT 序号越界会被拒绝
  * - DEL 序号越界会被拒绝
@@ -246,8 +247,10 @@ export function applyMemoDirectives(
     changedItems: { op: 'add' | 'edit' | 'del'; content: string; status?: string }[];
 } {
     const rejected: { directive: MemoDirective; reason: string }[] = [];
-    // 工作副本（renderMemosForPrompt 按 updatedAt 倒序展示，所以序号也按这个排序）
+    // 工作副本（renderMemosForPrompt 按 updatedAt 倒序展示且过滤已划掉，所以序号也基于同一个可见视图）
     const sorted = [...(memos || [])].sort((a, b) => b.updatedAt - a.updatedAt);
+    // AI 看到的可见视图（已划掉的不在其中），每次变更后重算保持序号语义一致
+    const visibleView = () => sorted.filter(m => m.status !== 'done');
     let added = 0, edited = 0, deleted = 0;
     const changedItems: { op: 'add' | 'edit' | 'del'; content: string; status?: string }[] = [];
 
@@ -270,9 +273,16 @@ export function applyMemoDirectives(
             added++;
             changedItems.push({ op: 'add', content: d.content, status: 'active' });
         } else if (d.kind === 'edit') {
-            const target = sorted[d.index - 1];
+            const target = visibleView()[d.index - 1];
             if (!target) {
                 rejected.push({ directive: d, reason: `序号 ${d.index} 不存在` });
+                continue;
+            }
+            if (d.status === 'done') {
+                // 划掉即完成：直接删除，不留尸体持续喂给角色
+                sorted.splice(sorted.indexOf(target), 1);
+                deleted++;
+                changedItems.push({ op: 'del', content: target.content, status: 'done' });
                 continue;
             }
             if (d.content !== undefined) target.content = d.content;
@@ -283,14 +293,14 @@ export function applyMemoDirectives(
             edited++;
             changedItems.push({ op: 'edit', content: target.content, status: target.status });
         } else if (d.kind === 'del') {
-            const idx = d.index - 1;
-            if (idx < 0 || idx >= sorted.length) {
+            const target = visibleView()[d.index - 1];
+            if (!target) {
                 rejected.push({ directive: d, reason: `序号 ${d.index} 不存在` });
                 continue;
             }
-            const removed = sorted.splice(idx, 1)[0];
+            sorted.splice(sorted.indexOf(target), 1);
             deleted++;
-            changedItems.push({ op: 'del', content: removed.content });
+            changedItems.push({ op: 'del', content: target.content });
         }
     }
 

@@ -3354,6 +3354,21 @@ const SettingsView: React.FC<{
                                         </button>
                                     ))}
                                 </div>
+                                {/* 睡眠时间跳过：读角色主动消息里设的睡眠窗口，手动“现在去逛”不受限 */}
+                                <div className="flex items-center justify-between gap-2 mt-2.5">
+                                    <div className="min-w-0">
+                                        <div className="text-[11px] text-indigo-200/80 font-semibold">睡着时不去逛</div>
+                                        <div className="text-[9.5px] text-indigo-300/45 leading-snug">
+                                            {char.proactiveConfig?.sleepStart && char.proactiveConfig?.sleepEnd
+                                                ? `${char.proactiveConfig.sleepStart} ~ ${char.proactiveConfig.sleepEnd} 内跳过自主登入`
+                                                : '角色还没设睡眠时间，开了也不会生效'}
+                                        </div>
+                                    </div>
+                                    <button onClick={() => updateCharacter(char.id, { vrState: { ...st!, sleepSkip: !st?.sleepSkip } })}
+                                        className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${st?.sleepSkip ? 'bg-indigo-400' : 'bg-white/15'}`}>
+                                        <span className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white transition-transform ${st?.sleepSkip ? 'translate-x-5' : ''}`} />
+                                    </button>
+                                </div>
                                 <button onClick={() => setPickFor(char)}
                                     className="mt-2.5 text-[11px] text-amber-200 font-semibold flex items-center gap-1 active:opacity-70">
                                     <Play size={12} weight="fill" /> 让 ta 现在去逛一次

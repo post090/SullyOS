@@ -701,7 +701,7 @@ const ScheduleApp: React.FC = () => {
                     {/* 标题 */}
                     <div>
                         <label className={`text-[10px] font-bold uppercase tracking-widest ${theme.textSub} block mb-2`}>契约标题</label>
-                        <input autoFocus value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} placeholder="例如：每天背 30 个单词" className={`w-full px-4 py-3 text-sm focus:outline-none ${currentThemeMode === 'minimal' ? 'bg-[#eef2f6] text-slate-700 rounded-xl shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff]' : currentThemeMode === 'soft' ? 'bg-pink-50 text-slate-700 border border-pink-100 rounded-xl' : 'bg-slate-800 text-white rounded-xl border-none'}`} />
+                        <input value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} placeholder="例如：每天背 30 个单词" className={`w-full px-4 py-3 text-sm focus:outline-none ${currentThemeMode === 'minimal' ? 'bg-[#eef2f6] text-slate-700 rounded-xl shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff]' : currentThemeMode === 'soft' ? 'bg-pink-50 text-slate-700 border border-pink-100 rounded-xl' : 'bg-slate-800 text-white rounded-xl border-none'}`} />
                     </div>
 
                     {/* 类型 */}

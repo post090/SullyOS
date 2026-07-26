@@ -117,10 +117,10 @@ const MemoApp: React.FC = () => {
     const {
         closeApp,
         characters,
-        activeCharacterId,
         characterGroups,
         updateCharacter,
         addToast,
+        registerBackHandler,
     } = useOS();
 
     const [mode, setMode] = useState<'list' | 'detail'>('list');
@@ -133,16 +133,6 @@ const MemoApp: React.FC = () => {
 
     // 删除确认 Modal
     const [deletingId, setDeletingId] = useState<string | null>(null);
-
-    // 打开时如果有当前角色，直接进该角色的备忘录视图（从聊天/通话里跳过来的常见路径）
-    useEffect(() => {
-        if (activeCharacterId && characters.some(c => c.id === activeCharacterId)) {
-            setSelectedCharId(activeCharacterId);
-            setMode('detail');
-        }
-        // 仅初始挂载时跑一次
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
 
     // ─── 派生 ────────────────────────────────────
     const selectedChar = useMemo(
@@ -165,6 +155,14 @@ const MemoApp: React.FC = () => {
         setMode('list');
         setSelectedCharId(null);
     };
+
+    // 系统返回手势：先关弹层、再退详情页，都没有才交回默认（关闭 App）
+    useEffect(() => registerBackHandler(() => {
+        if (editorOpen) { setEditorOpen(false); return true; }
+        if (deletingId) { setDeletingId(null); return true; }
+        if (mode === 'detail') { handleBack(); return true; }
+        return false;
+    }), [registerBackHandler, editorOpen, deletingId, mode]);
 
     const openNewEditor = () => {
         if (!selectedChar) return;
@@ -191,16 +189,23 @@ const MemoApp: React.FC = () => {
         const tags = parseTagsInput(editor.tagsInput);
 
         if (editor.id) {
-            // 编辑
-            updateCharacter(selectedChar.id, prev => ({
-                memos: userEditMemo(prev, editor.id!, {
-                    content,
-                    type: editor.type,
-                    status: editor.status,
-                    tags,
-                }),
-            }));
-            addToast('备忘录已更新', 'success');
+            // 编辑；若在弹窗里手动切成「已完成」→ 划掉即完成即删除（跟角色侧、跟列表勾选一个待遇）
+            if (editor.status === 'done') {
+                updateCharacter(selectedChar.id, prev => ({
+                    memos: userDeleteMemo(prev, editor.id!),
+                }));
+                addToast('已完成，收工！', 'success');
+            } else {
+                updateCharacter(selectedChar.id, prev => ({
+                    memos: userEditMemo(prev, editor.id!, {
+                        content,
+                        type: editor.type,
+                        status: editor.status,
+                        tags,
+                    }),
+                }));
+                addToast('备忘录已更新', 'success');
+            }
         } else {
             // 新建
             const result = userAddMemo(selectedChar, content, editor.type, tags);
@@ -216,11 +221,11 @@ const MemoApp: React.FC = () => {
 
     const handleToggleDone = (m: CharacterMemo) => {
         if (!selectedChar) return;
+        // 划掉即完成即删除：勾一下就真没了，不留划线尸体（跟角色 [[MEMO_EDIT:status:done]] 一致）
         updateCharacter(selectedChar.id, prev => ({
-            memos: userEditMemo(prev, m.id, {
-                status: m.status === 'done' ? 'active' : 'done',
-            }),
+            memos: userDeleteMemo(prev, m.id),
         }));
+        addToast('已完成，收工！', 'success');
     };
 
     const handleConfirmDelete = () => {

@@ -2,7 +2,7 @@
 import { CharacterProfile, UserProfile, DailySchedule } from '../types';
 import { normalizeUserImpression } from './impression';
 import { getFlowNarrativeKey, isScheduleFeatureOn } from './scheduleGenerator';
-import { resolveCharTimeZone, nowInTimeZone, tzAwarenessNote, interactionGapNote } from './timezone';
+import { resolveCharTimeZone, nowInTimeZone, tzAwarenessNote, interactionGapNote, tzLabel } from './timezone';
 import {
     formatWorldbookSection,
     resolveWorldbookEntries,
@@ -119,6 +119,8 @@ export const ContextBuilder = {
             lastInteractionTs?: number;
             /** 抑制整段时间感知（当前时间/时差/距上次联系）。见面纯架空（dateTimeAwarenessEnabled=false）时用。 */
             skipTimeAwareness?: boolean;
+            /** 用户自己的 IANA 时区（不传则自动取 user.timezone），时间感知里做双时区换算。 */
+            userTimezone?: string;
             /** Recent messages used to activate keyword-based worldbook entries. */
             worldbookMessages?: WorldbookScanMessage[];
         },
@@ -157,7 +159,7 @@ export const ContextBuilder = {
         // deferVolatile 时不在这里输出（时间精确到分钟、每轮都变，会打断 prompt 前缀缓存），
         // 改由调用方经 buildVolatileCoreState 放到消息数组末尾。
         if (!layout?.deferVolatile) {
-            context += ContextBuilder.buildTimeAwarenessBlock(char, timeOptions);
+            context += ContextBuilder.buildTimeAwarenessBlock(char, { ...timeOptions, userTimezone: timeOptions?.userTimezone ?? user?.timezone });
         }
 
         // 1b. 自我领悟词条 (Self Insights) — 消化过程中反刍产生的常驻自我认知
@@ -338,7 +340,7 @@ export const ContextBuilder = {
      */
     buildTimeAwarenessBlock: (
         char: CharacterProfile,
-        timeOptions?: { lastInteractionTs?: number; skipTimeAwareness?: boolean },
+        timeOptions?: { lastInteractionTs?: number; skipTimeAwareness?: boolean; userTimezone?: string },
     ): string => {
         // skipTimeAwareness：见面纯架空时由调用方传入，彻底抑制时间注入（修「线下时间感知」关掉后仍漏时间）。
         if (char.timeAwarenessEnabled === false || timeOptions?.skipTimeAwareness) return '';
@@ -357,6 +359,20 @@ export const ContextBuilder = {
         context += `现在是 ${dateStr} ${dayNames[now.getDay()]} ${timeOfDay} ${timeStr}。请据此自然地拥有真实的时间观念（早晚作息、工作日/周末、距离上次互动多久等），不要凭空假设时间。\n`;
         const tzNote = tzAwarenessNote(charTz);
         if (tzNote) context += `${tzNote.trim()}\n`;
+        // 用户设了自己的时区且与角色墙上时间不一致 → 同时注入用户那边的时间（双向时差）。
+        const userTz = timeOptions?.userTimezone;
+        if (userTz) {
+            const userNow = nowInTimeZone(userTz);
+            const sameWallClock = Math.abs(userNow.getTime() - now.getTime()) < 60_000;
+            if (!sameWallClock) {
+                const uh = userNow.getHours();
+                const userTimeOfDay =
+                    uh < 5 ? '凌晨' : uh < 9 ? '早晨' : uh < 12 ? '上午' : uh < 14 ? '中午'
+                    : uh < 17 ? '下午' : uh < 19 ? '傍晚' : uh < 22 ? '晚上' : '深夜';
+                const userTimeStr = `${uh.toString().padStart(2, '0')}:${userNow.getMinutes().toString().padStart(2, '0')}`;
+                context += `🌏 对方（用户）身处「${tzLabel(userTz)}」时区，ta 那边现在是 ${userNow.getMonth() + 1}月${userNow.getDate()}日 ${dayNames[userNow.getDay()]} ${userTimeOfDay} ${userTimeStr}。聊天时把这个时差自然地考虑进去（比如 ta 那边深夜时别叫 ta 去吃午饭）。\n`;
+            }
+        }
         // 距离上次联系多久（统一口径）：传了 lastInteractionTs 才注入。
         // 让查手机/人际关系等无内联消息流的路径，也像聊天一样知道「用户多久没联系我了」。
         const gapNote = interactionGapNote(timeOptions?.lastInteractionTs);
@@ -375,7 +391,7 @@ export const ContextBuilder = {
         options?: {
             includeDetailedMemories?: boolean;
             memoryPalaceContext?: string;
-            timeOptions?: { lastInteractionTs?: number; skipTimeAwareness?: boolean };
+            timeOptions?: { lastInteractionTs?: number; skipTimeAwareness?: boolean; userTimezone?: string };
         },
     ): string => {
         let context = ContextBuilder.buildTimeAwarenessBlock(char, options?.timeOptions);

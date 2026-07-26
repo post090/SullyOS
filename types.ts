@@ -1099,6 +1099,8 @@ export interface VRWorldCharState {
     enabled: boolean;
     /** 自主登入间隔（分钟，30 对齐；默认 120 = 2h） */
     intervalMinutes: number;
+    /** 睡眠时间内跳过自主登入（读 proactiveConfig 的睡眠窗口；手动“现在去逛”不受限） */
+    sleepSkip?: boolean;
     /**
      * 每本小说的独立书签：novelId -> 下一次该从第几个 segment 开始读。
      * 这是"每个角色书签不一样"的落点。
@@ -2619,6 +2621,9 @@ export interface UserProfile {
     name: string;
     avatar: string;
     bio: string;
+    /** 用户自己的时区（IANA id，档案 App 设置）。不设 = 跟随本机。
+     *  角色开了时间感知时，若用户时间与角色时间不一致，会同时注入双方时间（异国恋双向时差）。 */
+    timezone?: string;
     /** 分角色聊天头像（档案 App 设置）：charId → 头像（http(s) URL 或 data:image）。
      *  私聊里「你」的头像取 perCharAvatars[charId] || avatar（上面的整体头像作宏观默认）；
      *  群聊/其他场合仍用整体头像。删角色留下的孤儿键无害，读取端永远按当前 charId 取。 */

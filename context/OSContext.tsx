@@ -2738,10 +2738,18 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       }
 
       // 「彼方」自主登入 —— 独立调度，复用同一批 refs 拿最新状态
-      const runVR = async (charId: string, room?: string, letterId?: string) => {
+      const runVR = async (charId: string, room?: string, letterId?: string, manual?: boolean) => {
           const char = charactersRef.current.find(c => c.id === charId);
           if (!char || !char.vrState?.enabled) return;
           if (!userProfileRef.current) return;
+          // 睡眠时间内跳过自动登入（用户手动“现在去逛”不受限）
+          if (!manual && char.vrState.sleepSkip) {
+              const { sleepStart, sleepEnd } = char.proactiveConfig || {};
+              if (isInTimeWindow(new Date(), sleepStart, sleepEnd)) {
+                  console.log(`[VRWorld] ${char.name} 在睡眠时间内，跳过本次自主登入`);
+                  return;
+              }
+          }
           try {
               const result = await runVRSession({
                   char,
@@ -2771,7 +2779,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               console.error('[VRWorld] runVR error', e);
           }
       };
-      VRScheduler.onTrigger((charId: string, room?: string, letterId?: string) => { void runVR(charId, room, letterId); });
+      VRScheduler.onTrigger((charId: string, room?: string, letterId?: string, manual?: boolean) => { void runVR(charId, room, letterId, manual); });
 
       // 以角色 vrState 为准对账调度表：调度表存 localStorage、不随备份迁移，
       // 导入备份后角色虽 enabled 但调度表为空，这里补建/清理使其按时触发。

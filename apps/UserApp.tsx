@@ -4,6 +4,7 @@ import { useOS } from '../context/OSContext';
 import { processImage } from '../utils/file';
 import LifeRecordPanel from '../components/lifeRecord/LifeRecordPanel';
 import PerCharAvatarPicker from '../components/user/PerCharAvatarPicker';
+import { COMMON_TIMEZONES } from '../utils/timezone';
 
 const UserApp: React.FC = () => {
     const { closeApp, userProfile, updateUserProfile, addToast } = useOS();
@@ -119,6 +120,30 @@ const UserApp: React.FC = () => {
                         className="w-full h-52 bg-slate-50 focus:bg-white border border-slate-100 focus:border-primary/30 rounded-2xl px-4 py-3 text-sm text-slate-700 leading-relaxed resize-none outline-none transition-all placeholder:text-slate-300"
                         placeholder="描述你自己..."
                     />
+                </div>
+
+                {/* Timezone card：用户自己的时区，供时间感知里做双时区换算（异地/异国场景） */}
+                <div className="bg-white rounded-[1.75rem] shadow-[0_10px_30px_-12px_rgba(80,70,120,0.18)] border border-slate-100 p-5">
+                    <div className="flex items-center gap-2 mb-1">
+                        <span className="w-7 h-7 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.8} stroke="currentColor" className="w-4 h-4">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M3.6 9h16.8M3.6 15h16.8M12 3a15.3 15.3 0 0 1 0 18M12 3a15.3 15.3 0 0 0 0 18" />
+                            </svg>
+                        </span>
+                        <h2 className="text-sm font-bold text-slate-700">我的时区</h2>
+                    </div>
+                    <p className="text-[11px] text-slate-400 mb-3 leading-relaxed">如果你人在国外或跨时区生活，选一下你所在的时区。角色感知时间时会同时知道你那边几点，聊天更贴心。默认跟随手机本机时区。</p>
+                    <select
+                        value={userProfile.timezone || ''}
+                        onChange={(e) => updateUserProfile({ timezone: e.target.value || undefined })}
+                        className="w-full bg-slate-50 focus:bg-white border border-slate-100 focus:border-primary/30 rounded-2xl px-4 py-3 text-sm text-slate-700 outline-none transition-all appearance-none"
+                    >
+                        <option value="">跟随本机（默认）</option>
+                        {COMMON_TIMEZONES.map(tz => (
+                            <option key={tz.id} value={tz.id}>{tz.label}</option>
+                        ))}
+                    </select>
                 </div>
                 </>}
             </div>

@@ -1697,9 +1697,9 @@ const Settings: React.FC = () => {
                                         addToast('后台运行未能启动: ' + String((err as any)?.message || err), 'error');
                                     }
                                 }}
-                                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${persistentRuntimeEnabled ? 'bg-emerald-500' : 'bg-slate-200'}`}
+                                className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${persistentRuntimeEnabled ? 'bg-emerald-500' : 'bg-slate-200'}`}
                             >
-                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${persistentRuntimeEnabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                                <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${persistentRuntimeEnabled ? 'translate-x-[22px]' : 'translate-x-0.5'}`} />
                             </button>
                         </div>
                         <div className="flex items-center justify-between gap-3">
@@ -1715,9 +1715,9 @@ const Settings: React.FC = () => {
                                     setNativeChatEnabledState(next);
                                     addToast(next ? '主聊天将使用原生请求' : '主聊天已切回旧请求链路', 'info');
                                 }}
-                                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${nativeChatEnabled ? 'bg-emerald-500' : 'bg-slate-200'}`}
+                                className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${nativeChatEnabled ? 'bg-emerald-500' : 'bg-slate-200'}`}
                             >
-                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${nativeChatEnabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                                <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${nativeChatEnabled ? 'translate-x-[22px]' : 'translate-x-0.5'}`} />
                             </button>
                         </div>
                     </div>
