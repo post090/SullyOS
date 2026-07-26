@@ -9,6 +9,7 @@ import { nativeFetch } from '../utils/nativeFetch';
 import { EXPORT_CHUNK_SIZE, sliceRanges } from '../utils/backupExport';
 import { formatBackupTimestamp } from '../utils/format';
 import Modal from '../components/os/Modal';
+import GlassSelect from '../components/os/GlassSelect';
 import { NotionManager, FeishuManager, RealtimeContextManager, fetchOwmWeather, fetchOpenMeteoWeather } from '../utils/realtimeContext';
 import { XhsMcpClient } from '../utils/xhsMcpClient';
 import { getMcdToken, setMcdToken as saveMcdToken, isMcdEnabled, setMcdEnabled as saveMcdEnabled, testMcdConnection, resetMcdSession } from '../utils/mcdMcpClient';
@@ -30,6 +31,10 @@ import { isPushVapidReady } from '../utils/pushVapid';
 import ApiCallLogModal from '../components/settings/ApiCallLogModal';
 import { DB } from '../utils/db';
 import { deriveStations, findActiveStation, stationKey, presetNameFor, renameStationInMeta, loadStationMeta, saveStationMeta, isStationViewConfirmed, markStationViewConfirmed, loadFloatBallConfig, saveFloatBallConfig, type FloatBallConfig, type Station } from '../utils/apiStations';
+
+// 自动云备份间隔档位（小时）：滑条按下标选档
+ const AUTO_BACKUP_STEPS = [6, 12, 24, 48, 72, 168];
+ const autoBackupLabel = (h: number) => h < 24 ? `${h} 小时` : `${Math.round(h / 24)} 天`;
 import { getBackupReminderState, setBackupReminderIntervalDays, daysSinceLastBackup, BACKUP_REMINDER_MIN_DAYS, BACKUP_REMINDER_MAX_DAYS } from '../utils/backupReminder';
 import { getNativeChatRuntimeUserEnabled, setNativeChatRuntimeUserEnabled, getNativeRuntimeUserEnabled, setNativeRuntimeUserEnabled, getPersistentNativeRuntimeUserEnabled, setPersistentNativeRuntimeUserEnabled, startPersistentNativeRuntime, stopPersistentNativeRuntime, requestNativeNotificationPermission, getNativeSystemStatus, requestBatteryOptimizationExemption, openNativeNotificationSettings, openBatterySettings, type NativeSystemStatus } from '../utils/runtime/nativeRuntime';
 
@@ -1748,6 +1753,43 @@ const Settings: React.FC = () => {
                         </p>
                     )}
 
+                    {/* 自动全量备份：到点静默跑一次 full；App 被杀后台时不跑，下次打开补 */}
+                    <div className="rounded-xl bg-slate-50 border border-slate-200 px-3 py-2.5 space-y-2">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <span className="text-[11px] font-bold text-slate-600">自动备份（全量）</span>
+                                <p className="text-[9px] text-slate-400 mt-0.5">App 打开着才会跑；错过时间点就下次打开时补</p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => updateCloudBackupConfig({ autoBackupEnabled: !cloudBackupConfig.autoBackupEnabled })}
+                                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0 ${cloudBackupConfig.autoBackupEnabled ? 'bg-primary' : 'bg-slate-200'}`}
+                            >
+                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${cloudBackupConfig.autoBackupEnabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                            </button>
+                        </div>
+                        {cloudBackupConfig.autoBackupEnabled && (
+                            <div>
+                                <div className="flex items-center justify-between mb-1">
+                                    <span className="text-[10px] text-slate-400">备份间隔</span>
+                                    <span className="text-[10px] font-mono font-bold text-primary">{autoBackupLabel(cloudBackupConfig.autoBackupIntervalHours || 24)}</span>
+                                </div>
+                                <input
+                                    type="range"
+                                    min="0"
+                                    max={AUTO_BACKUP_STEPS.length - 1}
+                                    step="1"
+                                    value={Math.max(0, AUTO_BACKUP_STEPS.indexOf(cloudBackupConfig.autoBackupIntervalHours || 24))}
+                                    onChange={e => updateCloudBackupConfig({ autoBackupIntervalHours: AUTO_BACKUP_STEPS[parseInt(e.target.value, 10)] })}
+                                    className="w-full accent-primary"
+                                />
+                                <div className="flex justify-between text-[8px] text-slate-300 px-0.5">
+                                    {AUTO_BACKUP_STEPS.map(h => <span key={h}>{autoBackupLabel(h).replace(' ', '')}</span>)}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
                     <div className="grid grid-cols-2 gap-2">
                         <button
                             onClick={() => handleCloudBackup('text_only')}
@@ -1994,16 +2036,12 @@ const Settings: React.FC = () => {
                             </button>
                         )}
                     </div>
-                    <select
+                    <GlassSelect
                         value={activeStation?.key || ''}
-                        onChange={e => { const st = stations.find(s => s.key === e.target.value); if (st) applyStation(st); }}
-                        className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-4 py-3 text-sm text-slate-700 shadow-sm appearance-none"
-                    >
-                        {!activeStation && <option value="">{stations.length ? '当前连接不在任何站点里…' : '还没有站点，点右上角＋新站点'}</option>}
-                        {stations.map(s => (
-                            <option key={s.key} value={s.key}>{s.name}（{s.models.length} 个模型）</option>
-                        ))}
-                    </select>
+                        placeholder={stations.length ? '当前连接不在任何站点里…' : '还没有站点，点右上角＋新站点'}
+                        options={stations.map(s => ({ value: s.key, label: s.name, sub: `${s.models.length} 个模型` }))}
+                        onChange={v => { const st = stations.find(s => s.key === v); if (st) applyStation(st); }}
+                    />
                 </div>
                 <div>
                     <div className="flex justify-between items-center mb-1.5 pl-1">
@@ -2017,20 +2055,13 @@ const Settings: React.FC = () => {
                             </button>
                         )}
                     </div>
-                    <select
+                    <GlassSelect
                         value={activeStation?.models.find(m => m.model === apiConfig.model)?.presetId || ''}
-                        onChange={e => { if (activeStation && e.target.value) applyStation(activeStation, e.target.value); }}
                         disabled={!activeStation}
-                        className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-4 py-3 text-sm text-slate-700 shadow-sm appearance-none disabled:opacity-50"
-                    >
-                        {!activeStation && <option value="">先选一个站点</option>}
-                        {activeStation && !activeStation.models.some(m => m.model === apiConfig.model) && (
-                            <option value="">当前: {apiConfig.model}（不在站内）</option>
-                        )}
-                        {activeStation?.models.map(m => (
-                            <option key={m.presetId} value={m.presetId}>{m.label}{m.label !== m.model ? ` — ${m.model}` : ''}</option>
-                        ))}
-                    </select>
+                        placeholder={activeStation ? `当前: ${apiConfig.model}（不在站内）` : '先选一个站点'}
+                        options={(activeStation?.models || []).map(m => ({ value: m.presetId, label: m.label, sub: m.label !== m.model ? m.model : undefined }))}
+                        onChange={v => { if (activeStation && v) applyStation(activeStation, v); }}
+                    />
                 </div>
                 <p className="text-[10px] text-slate-300 leading-relaxed pl-1">
                     选完即生效，不用再点保存。底层仍是官方预设格式，备份导回官方版零障碍。

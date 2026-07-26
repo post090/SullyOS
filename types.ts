@@ -3507,6 +3507,10 @@ export interface CloudBackupConfig {
 
     lastBackupTime?: number;    // timestamp
     lastBackupSize?: number;    // bytes
+
+    // 自动全量备份（App 在前台时到点静默跑 full 备份；后台被杀时不跑，下次打开补）
+    autoBackupEnabled?: boolean;
+    autoBackupIntervalHours?: number;   // 6 / 12 / 24 / 48 / 72 / 168
 }
 
 export interface CloudBackupFile {

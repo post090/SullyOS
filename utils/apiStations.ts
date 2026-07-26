@@ -136,8 +136,10 @@ export interface FloatBallConfig {
     size: number;        // 直径 px
     opacity: number;     // 0.2 ~ 1
     color: string;       // 'auto' = 跟随主题色，否则 hex
-    side: 'left' | 'right';
-    yPct: number;        // 垂直位置（视口高度百分比 0~100）
+    side: 'left' | 'right';   // 旧版吸边位置（仅作为没有 x/y 时的初始位兑底）
+    yPct: number;        // 旧版垂直百分比（同上）
+    x?: number;          // 自由摆放像素位（相对 PhoneShell 内容区，同音乐球）
+    y?: number;
 }
 
 export const DEFAULT_FLOATBALL: FloatBallConfig = {

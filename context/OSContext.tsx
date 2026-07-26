@@ -3054,6 +3054,30 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       }
   };
 
+  // ─── 自动全量云备份：App 在前台时到点静默跑一次 full 备份 ───
+  // 后台被杀时不会跑（Web 技术限制），下次打开发现超期就补。失败不重试，等下个周期。
+  const autoBackupBusyRef = useRef(false);
+  const autoBackupCtxRef = useRef({ cloudBackupConfig, cloudBackupToWebDAV });
+  autoBackupCtxRef.current = { cloudBackupConfig, cloudBackupToWebDAV };
+  useEffect(() => {
+      const check = () => {
+          const { cloudBackupConfig: cfg, cloudBackupToWebDAV: run } = autoBackupCtxRef.current;
+          if (autoBackupBusyRef.current) return;
+          if (!cfg.enabled || !cfg.autoBackupEnabled) return;
+          const ready = cfg.provider === 'github'
+              ? !!cfg.githubToken
+              : !!(cfg.webdavUrl && cfg.username && cfg.password);
+          if (!ready) return;
+          const hours = cfg.autoBackupIntervalHours || 24;
+          if (Date.now() - (cfg.lastBackupTime || 0) < hours * 3600_000) return;
+          autoBackupBusyRef.current = true;
+          run('full').catch(() => { /* 失败静默，下个周期再试 */ }).finally(() => { autoBackupBusyRef.current = false; });
+      };
+      const t0 = window.setTimeout(check, 45_000);       // 启动后缓 45s，别跟冷启动抢资源
+      const t = window.setInterval(check, 10 * 60_000);  // 之后每 10 分钟看一眼
+      return () => { window.clearTimeout(t0); window.clearInterval(t); };
+  }, []);
+
   const cloudRestoreFromWebDAV = async (file: CloudBackupFile) => {
       const { downloadBackup } = await loadBackupProvider();
       try {
