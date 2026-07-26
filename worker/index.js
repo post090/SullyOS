@@ -21,12 +21,13 @@ function corsHeaders(origin) {
   };
 }
 
-function jsonResponse(obj, { status = 200, origin } = {}) {
+function jsonResponse(obj, { status = 200, origin, headers = {} } = {}) {
   return new Response(JSON.stringify(obj), {
     status,
     headers: {
       "Content-Type": "application/json; charset=utf-8",
       ...corsHeaders(origin),
+      ...headers,
     },
   });
 }
@@ -1750,6 +1751,52 @@ export default {
       } finally {
         clearTimeout(timer);
       }
+    }
+
+    // ========== B站视频封面批量查询 ==========
+    // 热点 App 用：orz.ai 的 bilibili 热榜只给视频 URL（含 BV 号）不给封面，
+    // 这里拿 BV 号批量换封面图 URL。GET /bili/covers?bvids=BV1xx,BV2yy（最多 25 个）
+    if (url.pathname === '/bili/covers') {
+      if (request.method !== 'GET') {
+        return jsonResponse({ error: 'Method not allowed. Use GET.' }, { status: 405, origin });
+      }
+      const bvids = String(url.searchParams.get('bvids') || '')
+        .split(',')
+        .map(s => s.trim())
+        .filter(s => /^BV[0-9A-Za-z]{5,12}$/.test(s))
+        .slice(0, 25);
+      if (bvids.length === 0) {
+        return jsonResponse({ error: '缺 bvids 参数（逗号分隔的 BV 号）' }, { status: 400, origin });
+      }
+      const covers = {};
+      const debug = url.searchParams.get('debug') === '1';
+      const diag = {};
+      await Promise.all(bvids.map(async (bvid) => {
+        const c = new AbortController();
+        const t = setTimeout(() => c.abort(), 6000);
+        try {
+          const r = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+              'Referer': `https://www.bilibili.com/video/${bvid}`,
+              'Origin': 'https://www.bilibili.com',
+              'Accept': 'application/json, text/plain, */*',
+              'Accept-Language': 'zh-CN,zh;q=0.9',
+              // 伪 buvid 可绕过部分 412 风控（B站 WAF 对无 Cookie 的机房 IP 更严）
+              'Cookie': `buvid3=${crypto.randomUUID().toUpperCase()}infoc; b_nut=${Math.floor(Date.now() / 1000)}`,
+            },
+            signal: c.signal,
+          });
+          if (!r.ok) { if (debug) diag[bvid] = `HTTP ${r.status}`; return; }
+          const j = await r.json().catch(() => null);
+          if (debug && j) diag[bvid] = `code ${j.code} ${j.message || ''}`.trim();
+          const pic = j && j.code === 0 && j.data && typeof j.data.pic === 'string' ? j.data.pic : '';
+          // B站封面域名带防盗链，前端用 no-referrer 可直接加载；升级成 https 避免混合内容
+          if (pic) covers[bvid] = pic.replace(/^http:/, 'https:');
+        } catch (e) { if (debug) diag[bvid] = `ERR ${String((e && e.message) || e)}`; } finally { clearTimeout(t); }
+      }));
+      const body = debug ? { covers, diag } : { covers };
+      return jsonResponse(body, { origin, headers: { 'Cache-Control': 'public, max-age=3600' } });
     }
 
     // ========== RSS 代理 ==========
