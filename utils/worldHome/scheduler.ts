@@ -7,10 +7,17 @@
  * 主线程轮询三重兜底），所以"早上没开 App，中午打开"会把早上那轮补上——
  * 这正是"我不看的时候世界慢慢走，我一看就加速"的体验。
  *
+ * 时段判定按**每个世界自己的时区**（WorldProfile.timezone，不设=本机）：不然「东京家园的早上」
+ * 会在本机凌晨触发，和世界钟（realNowSeg）对不上。日历日也一样按世界时区算，否则跨日的
+ * fired 记录会在错误的时刻清零、当天配额被多烧一轮。
+ *
  * 存储（localStorage，独立键，不与 vr_schedules / proactive 挤占）：
- *   - world_tick_slots: { [worldId]: ('latenight'|'morning'|'noon'|'evening')[] }
+ *   - world_tick_slots: { [worldId]: { slots: slot[]; tz?: string } }（旧格式 slot[] 读时自动兼容）
  *   - world_tick_fired: { [worldId]: { date: 'YYYY-MM-DD', fired: slot[] } }
  */
+
+import type { WorldProfile } from '../../types';
+import { nowInTimeZone } from '../timezone';
 
 export type WorldTickSlot = 'latenight' | 'morning' | 'noon' | 'evening';
 
@@ -18,11 +25,34 @@ const SLOTS_KEY = 'world_tick_slots';
 const FIRED_KEY = 'world_tick_fired';
 const MAIN_THREAD_CHECK_INTERVAL = 60_000;
 
-/** 各时段的起火时刻（小时，本地时间）。latenight 按当天日历日的凌晨 2 点计。 */
+/** 各时段的起火时刻（小时，世界当地时间）。latenight 按当天日历日的凌晨 2 点计。 */
 const SLOT_HOUR: Record<WorldTickSlot, number> = { latenight: 2, morning: 9, noon: 14, evening: 21 };
 
-type SlotsMap = Record<string, WorldTickSlot[]>;
+/** 一个世界的调度项。tz 空 = 跟随本机。 */
+type SlotEntry = { slots: WorldTickSlot[]; tz?: string };
+/** 旧格式（值直接是 slot 数组）也要读得动——老用户的 localStorage 里就是它。 */
+type SlotsMap = Record<string, SlotEntry | WorldTickSlot[]>;
 type FiredMap = Record<string, { date: string; fired: WorldTickSlot[] }>;
+
+/** 兼容读取：旧格式 slot[] → { slots }。 */
+const normalizeEntry = (v: SlotEntry | WorldTickSlot[] | undefined): SlotEntry =>
+    Array.isArray(v) ? { slots: v } : { slots: v?.slots || [], tz: v?.tz };
+
+const sameSlots = (a: WorldTickSlot[], b: WorldTickSlot[]): boolean =>
+    a.length === b.length && a.every(slot => b.includes(slot));
+
+/**
+ * 世界列表 → reconcile 的入参（三处调用点共用一份口径，避免漏传时区）。
+ * 只收开了离线 tick 的世界；sim（虚拟时间）世界不跟世界时区，按本机时刻触发。
+ */
+export const toTickEntries = (worlds: WorldProfile[]): { worldId: string; slots: WorldTickSlot[]; tz?: string }[] =>
+    worlds
+        .filter(w => (w.offlineTickSlots?.length || 0) > 0)
+        .map(w => ({
+            worldId: w.id,
+            slots: w.offlineTickSlots!,
+            tz: (w.timeMode ?? 'real') === 'sim' ? undefined : w.timezone,
+        }));
 
 function load<T>(key: string): T {
     try {
@@ -39,9 +69,13 @@ function save(key: string, value: object) {
     else localStorage.setItem(key, JSON.stringify(value));
 }
 
-const todayKey = () => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+/** 某世界当地的「今天」与「现在几点」。tz 空 = 本机。 */
+const localNow = (tz?: string) => {
+    const d = nowInTimeZone(tz);
+    return {
+        date: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
+        hour: d.getHours(),
+    };
 };
 
 let triggerCallback: ((worldId: string, trigger: 'observe' | 'tick') => void | Promise<void>) | null = null;
@@ -53,12 +87,13 @@ function checkDue() {
     if (!triggerCallback) return;
     const slotsMap = load<SlotsMap>(SLOTS_KEY);
     const firedMap = load<FiredMap>(FIRED_KEY);
-    const date = todayKey();
-    const hour = new Date().getHours();
     let changed = false;
 
-    for (const [worldId, slots] of Object.entries(slotsMap)) {
-        if (!Array.isArray(slots) || slots.length === 0) continue;
+    for (const [worldId, raw] of Object.entries(slotsMap)) {
+        const { slots, tz } = normalizeEntry(raw);
+        if (slots.length === 0) continue;
+        // 时段/日历日按这个世界自己的时区判定
+        const { date, hour } = localNow(tz);
         let rec = firedMap[worldId];
         if (!rec || rec.date !== date) {
             rec = { date, fired: [] };
@@ -81,31 +116,33 @@ function checkDue() {
     scheduleNativeForNextSlots();
 }
 
-function nextSlotTimestamp(slot: WorldTickSlot): number {
+/** 下一次某时段的触发时刻（epoch ms，给原生 AlarmManager 用）。
+ *  按世界时区算“当地几点”，再换算回真实 epoch：东京家园的早 9 点，
+ *  对本机而言可能是凌晨 8 点——闹钟得定在那个真实时刻。 */
+function nextSlotTimestamp(slot: WorldTickSlot, tz?: string): number {
     const now = new Date();
-    const today = new Date(now);
-    today.setHours(SLOT_HOUR[slot], 0, 0, 0);
-    if (today.getTime() <= now.getTime()) {
-        // tomorrow
-        const tomorrow = new Date(today);
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        return tomorrow.getTime();
-    }
-    return today.getTime();
+    const zoned = nowInTimeZone(tz, now); // 世界当地墙钟（用本机帧承载）
+    const target = new Date(zoned);
+    target.setHours(SLOT_HOUR[slot], 0, 0, 0);
+    if (target.getTime() <= zoned.getTime()) target.setDate(target.getDate() + 1);
+    // 从世界墙钟帧换回真实 epoch：减掉两帧之差
+    return target.getTime() - (zoned.getTime() - now.getTime());
 }
 
 function scheduleNativeForNextSlots() {
     try {
         const slotsMap = load<SlotsMap>(SLOTS_KEY);
         const firedMap = load<FiredMap>(FIRED_KEY);
-        const date = todayKey();
         void import('../runtime/nativeScheduler').then(m => {
-            for (const [worldId, slots] of Object.entries(slotsMap)) {
+            for (const [worldId, raw] of Object.entries(slotsMap)) {
+                const { slots, tz } = normalizeEntry(raw);
+                // 当天已烧记录按该世界当地日历日判新旧
+                const { date } = localNow(tz);
                 const rec = firedMap[worldId];
                 const fired = rec && rec.date === date ? rec.fired : [];
                 for (const slot of slots) {
                     if (fired.includes(slot)) continue;
-                    const ts = nextSlotTimestamp(slot);
+                    const ts = nextSlotTimestamp(slot, tz);
                     m.scheduleNativeWorldTimer(worldId, ts).catch(() => {});
                     break; // only next slot per world
                 }
@@ -160,17 +197,26 @@ export const WorldScheduler = {
      * 注意：新加入调度的世界，"今天已经过去的时段"视为已耗尽，不补火——
      * 避免用户刚配置完就瞬间连烧几轮 LLM 调用。
      */
-    reconcile(active: { worldId: string; slots: WorldTickSlot[] }[]) {
+    reconcile(active: { worldId: string; slots: WorldTickSlot[]; tz?: string }[]) {
+        const previousSlotsMap = load<SlotsMap>(SLOTS_KEY);
         const slotsMap: SlotsMap = {};
         const firedMap = load<FiredMap>(FIRED_KEY);
-        const date = todayKey();
-        const hour = new Date().getHours();
         let firedChanged = false;
 
         for (const a of active) {
             if (a.slots.length === 0) continue;
-            slotsMap[a.worldId] = a.slots;
-            if (!firedMap[a.worldId] || firedMap[a.worldId].date !== date) {
+            slotsMap[a.worldId] = { slots: a.slots, tz: a.tz };
+            // "今天已经过去的时段"按该世界当地时间算——换了时区的世界跟着一起挪
+            const { date, hour } = localNow(a.tz);
+            const previousRaw = previousSlotsMap[a.worldId];
+            const previous = normalizeEntry(previousRaw);
+            const configChanged = previousRaw === undefined
+                || previous.tz !== a.tz
+                || !sameSlots(previous.slots, a.slots);
+            // 同一日内换时区也必须重算：例如东京 21 点切到洛杉矶 5 点，东京已经
+            // fired 的 evening 在洛杉矶仍是未来，不能继续占着配额；反向切换则要
+            // 把新时区已经过去的时段标为耗尽，避免配置一保存就补火。
+            if (!firedMap[a.worldId] || firedMap[a.worldId].date !== date || configChanged) {
                 firedMap[a.worldId] = { date, fired: a.slots.filter(s => hour >= SLOT_HOUR[s]) };
                 firedChanged = true;
             }

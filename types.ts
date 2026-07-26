@@ -1351,6 +1351,11 @@ export interface WorldProfile {
     timeMode?: WorldTimeMode;
     /** sim 模式的起始日期（不设时按创建当天） */
     simStartDate?: WorldSimDate;
+    /** real 模式：这个世界活在哪个时区（IANA id，如 'Asia/Tokyo'）。不设 = 跟随本机。
+     *  一个世界只有一个钟——它同时决定「早/中/晚/凌晨」的段判定、离线 tick 的触发时刻，
+     *  并**覆盖**成员各自的 customTimezone（同一个世界里的人不可能各活一个时区，
+     *  否则世界钟和角色 prompt 里的「当前时间」会互相打架）。sim 模式不使用此字段。 */
+    timezone?: string;
     /** real 模式：世界已演到的「现实段」（早/中/晚/凌晨跟着真实时钟走）。dayKey=YYYY-MM-DD，
      *  seg=0早/1中/2晚/3凌晨（凌晨发生在 dayKey **次日**的 0~5 点，排在该剧情日末尾以保证段序单调）。
      *  只能补当天错过的段，过了今天就补不了；未演过时为空。 */

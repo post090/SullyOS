@@ -27,6 +27,7 @@ import { getLocalDailySchedule } from '../dailySchedule';
 import {
     worldTimeLabel, buildWorldSystemAddendum, buildWorldCharTurn, buildNpcTurn,
     parseCharBeat, parseNpcScene, realObserveTarget, formatRealClock, migrateWorldDaySegs,
+    alignCharToWorldClock,
 } from './prompts';
 import { ensureThreads, applyBeatToThreads, applyNpcGroupLines, applyNpcDms, npcInboxes } from './threads';
 import { shouldCloseChapter, summarizeChapter, SIM_CHAPTER_CLOCKS } from './chapters';
@@ -349,7 +350,8 @@ export async function runWorldEpisode(deps: WorldEpisodeDeps): Promise<WorldEpis
                 const contextLimit = char.contextLimit || 500;
                 const historyMsgs = await DB.getRecentMessagesByCharId(char.id, contextLimit);
                 const payload = await buildChatRequestPayload({
-                    char, userProfile, groups, emojis: [], categories: [],
+                    // 时区对齐世界钟：否则「当前时间」会跟世界的早/中/晚/凌晨打架
+                    char: alignCharToWorldClock(world, char), userProfile, groups, emojis: [], categories: [],
                     historyMsgs, contextLimit, realtimeConfig, recallQueryHint,
                     // 家园可配独立 API（可能不支持视觉，image_url 会 400）→ 历史图片压平成文本占位
                     stripImages: true,
@@ -587,7 +589,8 @@ export async function rerollWorldCharBeat(
         const contextLimit = char.contextLimit || 500;
         const historyMsgs = await DB.getRecentMessagesByCharId(char.id, contextLimit);
         const payload = await buildChatRequestPayload({
-            char, userProfile, groups, emojis: [], categories: [],
+            // 同上：时区对齐世界钟
+            char: alignCharToWorldClock(world, char), userProfile, groups, emojis: [], categories: [],
             historyMsgs, contextLimit, realtimeConfig, recallQueryHint,
             // 同上：独立 API 可能不支持视觉 → 历史图片压平成文本占位
             stripImages: true,

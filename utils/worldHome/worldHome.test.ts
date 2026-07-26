@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { extractJson, parseCharBeat, parseNpcScene, storyTimeLabel, buildModeRule, buildWorldCharTurn, buildNpcTurn, parseRolledNpcs, buildNpcRollPrompt, NARRATIVE_STYLES, narrationPersonGuide, realNowSeg, realObserveTarget, worldTimeLabel, formatRealClock, migrateWorldDaySegs, SEGMENTS_PER_DAY } from './prompts';
+import { extractJson, parseCharBeat, parseNpcScene, storyTimeLabel, buildModeRule, buildWorldCharTurn, buildNpcTurn, parseRolledNpcs, buildNpcRollPrompt, NARRATIVE_STYLES, narrationPersonGuide, realNowSeg, realObserveTarget, worldTimeLabel, formatRealClock, migrateWorldDaySegs, SEGMENTS_PER_DAY, worldNow, worldTzLabel, clampRealClockToNow, alignCharToWorldClock } from './prompts';
 import { applyRelationshipDeltas, collectSeeds, buildSummary, dropDuplicatePosts } from './engine';
 import { ensureThreads, applyBeatToThreads, applyNpcGroupLines, applyNpcDms, npcInboxes, dmThreadsOf, groupThreadOf, formatThreadForPrompt, dmThreadId, GROUP_THREAD_ID } from './threads';
 import { WorldScheduler } from './scheduler';
@@ -273,6 +273,50 @@ describe('真实时间（跟现实早/中/晚/凌晨同步，错过当天可补�
         const w = mkWorld({ timeMode: 'real', realClock: { dayKey: '2026-06-15', seg: 2 } });
         expect(worldTimeLabel(w)).toContain('2026年6月15日');
         expect(worldTimeLabel(w)).toContain('晚上');
+    });
+
+    it('世界时区决定当前墙上时间与观测段', () => {
+        vi.useFakeTimers();
+        try {
+            vi.setSystemTime(new Date('2026-06-11T00:30:00.000Z'));
+            const w = mkWorld({ timeMode: 'real', timezone: 'Asia/Tokyo' });
+            const now = worldNow(w);
+            expect([now.getFullYear(), now.getMonth() + 1, now.getDate(), now.getHours(), now.getMinutes()])
+                .toEqual([2026, 6, 11, 9, 30]);
+            expect(realObserveTarget(w)).toEqual({ dayKey: '2026-06-11', seg: 0 });
+            expect(worldTzLabel(w)).toContain('东京');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('往西切时区会把未来的 realClock 压回世界当下', () => {
+        const w = mkWorld({
+            timeMode: 'real',
+            timezone: 'America/Los_Angeles',
+            realClock: { dayKey: '2026-06-11', seg: 2 },
+        });
+        const losAngelesNow = worldNow(w, new Date('2026-06-11T12:00:00.000Z')); // 当地 05:00
+        expect(clampRealClockToNow(w, losAngelesNow)).toBe(true);
+        expect(w.realClock).toEqual({ dayKey: '2026-06-11', seg: 0 });
+        expect(clampRealClockToNow(w, losAngelesNow)).toBe(false);
+    });
+
+    it('real 世界用世界时区覆盖角色时区，sim 世界保留角色设置', () => {
+        const char = { ...mkChar('a', '阿岚'), customTimezoneEnabled: true, customTimezone: 'Asia/Tokyo' };
+        const aligned = alignCharToWorldClock(
+            mkWorld({ timeMode: 'real', timezone: 'America/Los_Angeles' }),
+            char,
+        );
+        expect(aligned).not.toBe(char);
+        expect(aligned.customTimezoneEnabled).toBe(true);
+        expect(aligned.customTimezone).toBe('America/Los_Angeles');
+        expect(char.customTimezone).toBe('Asia/Tokyo'); // 不污染角色卡
+
+        const followingDevice = alignCharToWorldClock(mkWorld({ timeMode: 'real' }), char);
+        expect(followingDevice.customTimezoneEnabled).toBe(false);
+        expect(followingDevice.customTimezone).toBe('');
+        expect(alignCharToWorldClock(mkWorld({ timeMode: 'sim' }), char)).toBe(char);
     });
 });
 
@@ -641,5 +685,42 @@ describe('WorldScheduler', () => {
         expect(JSON.parse(localStorage.getItem('world_tick_slots')!).w1).toBeTruthy();
         WorldScheduler.reconcile([]);
         expect(localStorage.getItem('world_tick_slots')).toBeNull();
+    });
+
+    it('每个世界按自己的时区计算日期和已耗尽时段', () => {
+        vi.setSystemTime(new Date('2026-06-11T00:30:00.000Z'));
+        WorldScheduler.reconcile([
+            { worldId: 'tokyo', slots: ['noon'], tz: 'Asia/Tokyo' },
+            { worldId: 'los-angeles', slots: ['noon'], tz: 'America/Los_Angeles' },
+        ]);
+        const fired = JSON.parse(localStorage.getItem('world_tick_fired')!);
+        expect(fired.tokyo).toEqual({ date: '2026-06-11', fired: [] }); // 东京 09:30
+        expect(fired['los-angeles']).toEqual({ date: '2026-06-10', fired: ['noon'] }); // 洛杉矶 17:30
+    });
+
+    it('兼容旧版 slot[] 存储格式', () => {
+        vi.setSystemTime(new Date(2026, 5, 11, 9, 30));
+        localStorage.setItem('world_tick_slots', JSON.stringify({ legacy: ['morning'] }));
+        localStorage.setItem('world_tick_fired', JSON.stringify({
+            legacy: { date: '2026-06-11', fired: [] },
+        }));
+        const fired: string[] = [];
+        WorldScheduler.onTrigger((id) => { fired.push(id); });
+        expect(fired).toEqual(['legacy']);
+    });
+
+    it('同一日内换时区会重算配额，未来时段仍能在新时区触发', () => {
+        vi.setSystemTime(new Date('2026-06-11T12:00:00.000Z')); // 东京 21:00，洛杉矶 05:00
+        const fired: string[] = [];
+        WorldScheduler.onTrigger((id) => { fired.push(id); });
+        WorldScheduler.reconcile([{ worldId: 'w1', slots: ['evening'], tz: 'Asia/Tokyo' }]);
+        expect(JSON.parse(localStorage.getItem('world_tick_fired')!).w1.fired).toEqual(['evening']);
+
+        WorldScheduler.reconcile([{ worldId: 'w1', slots: ['evening'], tz: 'America/Los_Angeles' }]);
+        expect(JSON.parse(localStorage.getItem('world_tick_fired')!).w1.fired).toEqual([]);
+
+        vi.setSystemTime(new Date('2026-06-12T04:30:00.000Z')); // 洛杉矶仍是 6/11，21:30
+        vi.advanceTimersByTime(61_000);
+        expect(fired).toEqual(['w1']);
     });
 });

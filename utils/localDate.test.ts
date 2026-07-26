@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from 'vitest';
-import { addLocalDays, getCalendarDayDifference, getLocalDateKey, getLocalDayRange, parseLocalDateKey } from './localDate';
+import { addLocalDays, getCalendarDayDifference, getLocalDateKey, getLocalDayRange, getVirtualDayKey, parseLocalDateKey } from './localDate';
 
 const originalTimeZone = process.env.TZ;
 
@@ -38,5 +38,18 @@ describe('local calendar dates', () => {
         const autumn = getLocalDayRange('2026-11-01');
         expect(spring && spring.end - spring.start).toBe(23 * 60 * 60 * 1000);
         expect(autumn && autumn.end - autumn.start).toBe(25 * 60 * 60 * 1000);
+    });
+
+    it('virtual day changes at 06:00 and handles month boundaries', () => {
+        process.env.TZ = 'Asia/Shanghai';
+        expect(getVirtualDayKey(new Date(2026, 2, 1, 5, 59))).toBe('2026-02-28');
+        expect(getVirtualDayKey(new Date(2026, 2, 1, 6, 0))).toBe('2026-03-01');
+    });
+
+    it('does not mutate the supplied wall-clock date', () => {
+        const input = new Date(2026, 6, 21, 3, 30);
+        const before = input.getTime();
+        expect(getVirtualDayKey(input)).toBe('2026-07-20');
+        expect(input.getTime()).toBe(before);
     });
 });

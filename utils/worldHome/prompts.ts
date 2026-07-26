@@ -11,6 +11,7 @@
 
 import type { CharacterProfile, WorldProfile, WorldHouse, WorldCharBeat, WorldHomeMode, WorldNarrativeStyle } from '../../types';
 import { dmThreadsOf, groupThreadOf, formatThreadForPrompt } from './threads';
+import { nowInTimeZone, tzLabel } from '../timezone';
 
 /** 大段正文的文风预设（世界编辑器里选）。 */
 export const NARRATIVE_STYLES: Record<Exclude<WorldNarrativeStyle, 'custom'>, { name: string; guide: string }> = {
@@ -98,6 +99,20 @@ export function migrateWorldDaySegs(world: WorldProfile): boolean {
 
 const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 
+/**
+ * 「此刻」按这个世界自己的时钟读。world.timezone 不设 = 跟随本机（旧世界的行为）。
+ * 返回的 Date 用本地 getter 读出来正好是世界当地墙上时间，所以下游 getHours/getDate
+ * 这些读法完全不用改。sim 模式不看真实时钟，与此无关。
+ */
+export function worldNow(world: Pick<WorldProfile, 'timezone'>, base?: Date): Date {
+    return nowInTimeZone(world.timezone, base ?? new Date());
+}
+
+/** 世界时区的友好标签；跟随本机时返回空串（不必向模型解释"本机"）。 */
+export function worldTzLabel(world: Pick<WorldProfile, 'timezone'>): string {
+    return world.timezone ? tzLabel(world.timezone) : '';
+}
+
 const pad2 = (n: number) => (n < 10 ? `0${n}` : `${n}`);
 const dayKeyOf = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 /**
@@ -126,14 +141,30 @@ export function formatRealClock(rc: { dayKey: string; seg: number }): string {
  *   - 落后于今天 → 补今天还没补的下一段（不超过现在）；
  *   - 落后于过去某天 → 直接跳到今天最早一段（过去错过的补不回来）；
  *   - 已追上现实 → null（这一段还没过去，没东西可演）。
+ * 「现在」按**世界自己的时区**读（world.timezone；不设=本机）。
  */
-export function realObserveTarget(world: WorldProfile, now: Date = new Date()): { dayKey: string; seg: number } | null {
+export function realObserveTarget(world: WorldProfile, now: Date = worldNow(world)): { dayKey: string; seg: number } | null {
     const cur = world.realClock;
     const nw = realNowSeg(now);
     if (!cur) return nw;
     if (cur.dayKey < nw.dayKey) return { dayKey: nw.dayKey, seg: 0 }; // 过去的天丢掉，跳到今天最早一段
     if (cur.dayKey > nw.dayKey) return null; // 数据异常（时钟回拨），不补
     return cur.seg < nw.seg ? { dayKey: nw.dayKey, seg: cur.seg + 1 } : null; // 同一天：补下一段，或已追上
+}
+
+/**
+ * 把 realClock 收回到「不超过世界当下」——换时区时必须调一次。
+ * 往西换时区（比如东京 → 洛杉矶）会让世界的「现在」瞬间倒退，此时旧 realClock 落在
+ * 未来，realObserveTarget 会一路返回 null（当成"已追上现实"），用户会莫名卡住、
+ * 观测按钮点了没反应。这里原地把时钟压回当下那一段，返回是否有改动（决定要不要写回 DB）。
+ */
+export function clampRealClockToNow(world: WorldProfile, now: Date = worldNow(world)): boolean {
+    const cur = world.realClock;
+    if (!cur || world.timeMode === 'sim') return false;
+    const nw = realNowSeg(now);
+    if (cur.dayKey < nw.dayKey || (cur.dayKey === nw.dayKey && cur.seg <= nw.seg)) return false;
+    world.realClock = nw;
+    return true;
 }
 
 /**
@@ -160,6 +191,21 @@ export function worldTimeLabel(world: WorldProfile, storyClock: number = world.s
 export function isNightWorld(world: WorldProfile): boolean {
     if (world.timeMode !== 'sim' && world.realClock) return world.realClock.seg >= 2;
     return isNightClock(world.storyClock);
+}
+
+/**
+ * 演绎某角色前，把 ta 的「自定义时区」对齐到世界时钟。
+ *
+ * 家园是大家共同生活的**一个**地方，只有一个钟：段判定（realNowSeg）按 world.timezone 走，
+ * 而 buildChatRequestPayload → buildCoreContext 会按 char.customTimezone 注入「当前时间」。
+ * 两者不一致时，同一个 prompt 里会出现两个互相矛盾的时间（角色那边 00:10，世界这边"晚上"），
+ * 模型只能瞎猜一个。所以 real 模式下一律以世界时区为准覆盖角色自己的时区——包括「跟随本机」
+ * 时把角色的自定义时区清掉。返回浅拷贝，不动原角色（角色卡里的设置照旧，只在家园语境内覆盖）。
+ * sim 模式不看真实时钟，原样返回。
+ */
+export function alignCharToWorldClock(world: WorldProfile, char: CharacterProfile): CharacterProfile {
+    if ((world.timeMode ?? 'real') === 'sim') return char;
+    return { ...char, customTimezoneEnabled: !!world.timezone, customTimezone: world.timezone || '' };
 }
 
 /** 找出某成员住在哪（不在任何小屋 = 独居）。 */

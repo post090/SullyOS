@@ -8,6 +8,17 @@ export function getLocalDateKey(date: Date = new Date()): string {
     return `${year}-${month}-${day}`;
 }
 
+/**
+ * 「虚拟日」日期 key：凌晨 6 点前算前一天（小屋/房间的一天以起床为界，不是以午夜为界）。
+ * 传入的 Date 必须已经是**目标时区的墙上时间**（角色开了自定义时区就传 nowInTimeZone(tz)），
+ * 这样同一份 6 点分界逻辑对本机和角色时区都成立。不改动传入的 Date。
+ */
+export function getVirtualDayKey(now: Date = new Date()): string {
+    const d = new Date(now);
+    if (d.getHours() < 6) d.setDate(d.getDate() - 1);
+    return getLocalDateKey(d);
+}
+
 /** Parse YYYY-MM-DD as local calendar midnight, never as UTC midnight. */
 export function parseLocalDateKey(key: string): Date | null {
     const match = DATE_KEY_RE.exec(key);

@@ -22,9 +22,10 @@ import {
 } from '@phosphor-icons/react';
 import { DB } from '../utils/db';
 import { getChibi } from '../utils/vrWorld/chibi';
-import { WorldScheduler } from '../utils/worldHome/scheduler';
+import { WorldScheduler, toTickEntries } from '../utils/worldHome/scheduler';
 import { isWorldRunning, injectWorldCard } from '../utils/worldHome/engine';
-import { worldTimeLabel, isNightWorld, houseOf, NARRATIVE_STYLES, buildNpcRollPrompt, parseRolledNpcs, realObserveTarget, migrateWorldDaySegs, SEGMENTS_PER_DAY } from '../utils/worldHome/prompts';
+import { worldTimeLabel, worldTzLabel, isNightWorld, houseOf, NARRATIVE_STYLES, buildNpcRollPrompt, parseRolledNpcs, realObserveTarget, clampRealClockToNow, migrateWorldDaySegs, SEGMENTS_PER_DAY } from '../utils/worldHome/prompts';
+import { COMMON_TIMEZONES } from '../utils/timezone';
 import { SIM_CHAPTER_DAYS, SIM_CHAPTER_CLOCKS } from '../utils/worldHome/chapters';
 import { dmThreadsOf, groupThreadOf } from '../utils/worldHome/threads';
 import { safeFetchJson } from '../utils/safeApi';
@@ -739,6 +740,28 @@ const WorldEditor: React.FC<{
                             <span className="text-[12px] text-violet-600">日</span>
                         </div>
                         <div className="text-[9.5px] text-violet-500 leading-snug">每 {SIM_CHAPTER_DAYS} 天（{SIM_CHAPTER_CLOCKS} 次观测/tick）自动结一卷：生成小说体总结 + 每个角色单方面视角，归档原文。不写入聊天与记忆。</div>
+                    </div>
+                )}
+                {(w.timeMode || 'real') === 'real' && (
+                    <div className="rounded-xl border border-sky-200 bg-sky-50/60 p-2.5 space-y-2">
+                        <div className="text-[10.5px] font-bold text-sky-700">世界所在时区（随时可改）</div>
+                        <select className={inputCls} value={w.timezone || ''}
+                            onChange={e => {
+                                const tz = e.target.value || undefined;
+                                const patch: Partial<WorldProfile> = { timezone: tz };
+                                // 往西换时区会让世界的「现在」倒退，旧时钟落在未来 → 观测一路判"已追上现实"
+                                // 直接卡死。这里顺手把时钟压回当下那一段。
+                                const probe: WorldProfile = { ...w, timezone: tz };
+                                if (clampRealClockToNow(probe)) patch.realClock = probe.realClock;
+                                upd(patch);
+                            }}>
+                            <option value="">跟随本机时间（默认）</option>
+                            {COMMON_TIMEZONES.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+                        </select>
+                        <div className="text-[9.5px] text-sky-600 leading-snug">
+                            一个世界只有一把钟：设了之后，早/中/晚/凌晨的段判定、离线运转的触发时刻、以及注入给<b>每个成员</b>的「当前时间」都按这个时区走。
+                            它会<b>覆盖</b>成员在「神经链接」里各自设的自定义时区——同一个世界里的人不可能各活一个时区，不覆盖的话世界钟和角色的时间会互相打架。
+                        </div>
                     </div>
                 )}
             </div>
@@ -1498,6 +1521,10 @@ const WorldView: React.FC<{
                             <div className="text-[22px] font-black text-white leading-tight font-serif" style={{ textShadow: '0 2px 10px rgba(0,0,0,.3)' }}>
                                 {worldTimeLabel(world)}
                             </div>
+                            {/* 设了世界时区就标出来：不然用户看到的段和自己手机时间对不上会以为是 bug */}
+                            {worldTzLabel(world) && (
+                                <div className="text-[9.5px] font-bold text-white/60 tracking-wide mt-0.5">🌐 {worldTzLabel(world)} 当地时间</div>
+                            )}
                         </div>
                         <button onClick={observe} disabled={!!progress}
                             className="relative overflow-hidden wh-sheen shrink-0 px-4 py-2.5 rounded-2xl text-[12.5px] font-black tracking-wide text-amber-950 shadow-[0_6px_18px_rgba(255,180,60,.45)] disabled:opacity-60 active:scale-95 transition-transform"
@@ -1893,7 +1920,7 @@ const WorldHomeApp: React.FC<{ embedded?: boolean; onFullscreen?: (full: boolean
         await DB.saveWorld(w);
         // 调度表对账：所有世界的离线 tick 设置一起重建
         const all = await DB.getWorlds();
-        WorldScheduler.reconcile(all.filter(x => (x.offlineTickSlots?.length || 0) > 0).map(x => ({ worldId: x.id, slots: x.offlineTickSlots! })));
+        WorldScheduler.reconcile(toTickEntries(all));
         setWorlds(all);
         setActiveId(w.id);
         setDraft(null);
@@ -1904,7 +1931,7 @@ const WorldHomeApp: React.FC<{ embedded?: boolean; onFullscreen?: (full: boolean
     const deleteWorld = async (id: string) => {
         await DB.deleteWorld(id);
         const all = await DB.getWorlds();
-        WorldScheduler.reconcile(all.filter(x => (x.offlineTickSlots?.length || 0) > 0).map(x => ({ worldId: x.id, slots: x.offlineTickSlots! })));
+        WorldScheduler.reconcile(toTickEntries(all));
         setWorlds(all);
         setDraft(null);
         setActiveId(null);

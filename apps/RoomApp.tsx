@@ -20,7 +20,8 @@ import { useDreamSim, dreamSimStore } from '../utils/dreamSimStore';
 import { roomLaunch } from '../utils/roomLaunch';
 import { characterLaunch } from '../utils/characterLaunch';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
-import { getLocalDateKey } from '../utils/localDate';
+import { getVirtualDayKey } from '../utils/localDate';
+import { resolveCharTimeZone, nowInTimeZone, tzLabel } from '../utils/timezone';
 
 const TWEMOJI_BASE = 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72';
 const twemojiUrl = (codepoint: string) => `${TWEMOJI_BASE}/${codepoint}.png`;
@@ -497,13 +498,10 @@ const RoomApp: React.FC = () => {
     }, []);
 
     // Helper: Get Virtual "Day" (Reset at 6 AM)
-    const getVirtualDay = (): string => {
-        const now = new Date();
-        if (now.getHours() < 6) {
-            now.setDate(now.getDate() - 1);
-        }
-        return getLocalDateKey(now);
-    };
+    // 角色开了「自定义时区」就按 ta 自己的时间算这一天——房间是 ta 的房间，
+    // 一天的分界（以及今天的日程/todo/待办属于哪天）要跟着 ta 的作息，不是跟着我的手机。
+    const getVirtualDay = (c?: CharacterProfile | null): string =>
+        getVirtualDayKey(nowInTimeZone(resolveCharTimeZone(c)));
 
     // Calculate Time Gap - Duplicated logic from other apps for self-containment
     const getTimeGapHint = (lastMsgTimestamp: number | undefined): string => {
@@ -547,7 +545,7 @@ const RoomApp: React.FC = () => {
         
         setItems(loadedItems || []);
         
-        const today = getVirtualDay();
+        const today = getVirtualDay(c);
         const hasCache = c.lastRoomDate === today && c.savedRoomState;
 
         if (hasCache && c.savedRoomState) {
@@ -556,7 +554,10 @@ const RoomApp: React.FC = () => {
             
             const existingTodo = await DB.getRoomTodo(c.id, today);
             const existingNotes = await DB.getRoomNotes(c.id);
-            const existingSchedule = await DB.getDailySchedule(c.id, today);
+            // 日程按**本机**日历日取：日程是全局共用数据（聊天/桌面/日程 App 都按本机日期写读），
+            // 房间若按角色时区去取会落到一个没人写过的 key，日程直接空掉。
+            // 「日程也跟角色时区」是另一条线（要连生成端一起改），这轮不动。
+            const existingSchedule = await DB.getDailySchedule(c.id, getVirtualDay());
             setTodaysTodo(existingTodo);
             setNotebookEntries(existingNotes.sort((a, b) => b.timestamp - a.timestamp));
             setRoomSchedule(existingSchedule);
@@ -568,7 +569,7 @@ const RoomApp: React.FC = () => {
             // 这里只把聊天期间可能已生成的 todo / 随笔 / 日程读出来填上。
             const existingTodo = await DB.getRoomTodo(c.id, today);
             const existingNotes = await DB.getRoomNotes(c.id);
-            const existingSchedule = await DB.getDailySchedule(c.id, today);
+            const existingSchedule = await DB.getDailySchedule(c.id, getVirtualDay()); // 同上：日程按本机日历日
             setTodaysTodo(existingTodo);
             setNotebookEntries(existingNotes.sort((a, b) => b.timestamp - a.timestamp));
             setRoomSchedule(existingSchedule);
@@ -652,7 +653,7 @@ const RoomApp: React.FC = () => {
                         ? parsed.welcomeMessage.trim()
                         : (cleanText.slice(0, 200) || "...");
 
-                const todayStr = getVirtualDay();
+                const todayStr = getVirtualDay(c);
                 setAiBubble({ text: welcomeMessage, visible: true });
                 // Use generic descriptions for items in fallback mode
                 const fallbackItems: Record<string, any> = {};
@@ -698,14 +699,19 @@ const RoomApp: React.FC = () => {
         }, 1200);
 
         try {
-            const todayStr = getVirtualDay();
-            const now = new Date();
+            const todayStr = getVirtualDay(c);
+            // 时间一律按角色自己的时区读（没开自定义时区就是本机）。
+            // 必须和 buildCoreContext 注入的「当前时间」同源：那边早就按角色时区折算了，
+            // 这里再塞一份本机时间就等于在同一个 prompt 里给了模型两个互相矛盾的钟。
+            const charTz = resolveCharTimeZone(c);
+            const now = nowInTimeZone(charTz);
             const nowTimeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             const nowDateStr = now.toLocaleDateString();
+            const tzSuffix = charTz ? `（你所在时区：${tzLabel(charTz)}，这是你那边的当地时间）` : '';
             
             let existingTodo = await DB.getRoomTodo(c.id, todayStr);
             const existingNotes = await DB.getRoomNotes(c.id);
-            const existingSchedule = await DB.getDailySchedule(c.id, todayStr);
+            const existingSchedule = await DB.getDailySchedule(c.id, getVirtualDay()); // 同上：日程按本机日历日
             setNotebookEntries(existingNotes.sort((a, b) => b.timestamp - a.timestamp));
             setRoomSchedule(existingSchedule);
             
@@ -738,7 +744,7 @@ const RoomApp: React.FC = () => {
             let prompt = `${baseContext}
 
 ### [Environment Context - Critical]
-**当前现实时间**: ${nowDateStr} ${nowTimeStr}
+**当前现实时间**: ${nowDateStr} ${nowTimeStr}${tzSuffix}
 **与用户上次互动距离现在**: ${timeGapHint}
 **最近互动记录 (Latest 50)**:
 ${chatContext}
@@ -1849,7 +1855,7 @@ ${!shouldGenerateTodo ? `(系统: 今日待办已存在，无需生成，请忽�
     const isSully = char?.id === 'preset-sully-v2' || char?.name === 'Sully';
 
     // 今天的房间是否已生成（lastRoomDate 命中今日即视为已生成）——决定是否提示「更新这一天」
-    const todayGenerated = !!char && char.lastRoomDate === getVirtualDay();
+    const todayGenerated = !!char && char.lastRoomDate === getVirtualDay(char);
 
     const renderTemplateButton = (template: BuiltInRoomTemplate, onSelect: (template: BuiltInRoomTemplate) => void, actionLabel: string) => (
         <button
