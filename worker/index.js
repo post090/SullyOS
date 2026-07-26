@@ -122,6 +122,26 @@ function extractRssLinkHref(block) {
   return mAny ? mAny[1].trim() : '';
 }
 
+// 从一个 <item>/<entry> 块里提取配图 URL：media:thumbnail / media:content / enclosure 优先，
+// 都没有则捞 description / content:encoded 里的第一张 <img>（可能被实体转义过，先解一层）
+function extractRssImage(block) {
+  const pick = (re, s) => { const m = s.match(re); return m ? m[1] : ''; };
+  let u = pick(/<media:thumbnail[^>]*\burl=["']([^"']+)["']/i, block)
+    || pick(/<media:content[^>]*\btype=["']image\/[^"']*["'][^>]*\burl=["']([^"']+)["']/i, block)
+    || pick(/<media:content[^>]*\burl=["']([^"']+\.(?:jpe?g|png|gif|webp)[^"']*)["']/i, block)
+    || pick(/<enclosure[^>]*\btype=["']image\/[^"']*["'][^>]*\burl=["']([^"']+)["']/i, block)
+    || pick(/<enclosure[^>]*\burl=["']([^"']+)["'][^>]*\btype=["']image\//i, block);
+  if (!u) {
+    const decoded = block
+      .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+    u = pick(/<img[^>]*\bsrc=["']([^"']+)["']/i, decoded);
+  }
+  if (!u) return '';
+  u = u.replace(/&amp;/g, '&').trim();
+  return /^https?:\/\//i.test(u) ? u : '';
+}
+
 function parseRssXml(xml) {
   if (!xml || typeof xml !== 'string') return { title: '', items: [] };
 
@@ -145,7 +165,7 @@ function parseRssXml(xml) {
     if (!link) link = extractRssLinkHref(block);
     const desc = extractRssTag(block, 'description') || extractRssTag(block, 'content:encoded') || extractRssTag(block, 'content');
     const pubDate = extractRssTag(block, 'pubDate') || extractRssTag(block, 'dc:date') || extractRssTag(block, 'published') || extractRssTag(block, 'updated');
-    items.push({ title, link, desc: desc.slice(0, 400), pubDate });
+    items.push({ title, link, desc: desc.slice(0, 400), pubDate, image: extractRssImage(block) });
     if (items.length >= 50) break;
   }
 
@@ -158,7 +178,7 @@ function parseRssXml(xml) {
     const link = extractRssLinkHref(block) || extractRssTag(block, 'link');
     const desc = extractRssTag(block, 'summary') || extractRssTag(block, 'content');
     const pubDate = extractRssTag(block, 'published') || extractRssTag(block, 'updated');
-    items.push({ title, link, desc: desc.slice(0, 400), pubDate });
+    items.push({ title, link, desc: desc.slice(0, 400), pubDate, image: extractRssImage(block) });
     if (items.length >= 50) break;
   }
 

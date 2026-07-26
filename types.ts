@@ -481,6 +481,7 @@ export interface HotNewsItem {
   source?: string;  // 平台展示名，如「微博」
   url?: string;
   desc?: string;    // 热点简介（API 的 desc 字段，可能为空）
+  image?: string;   // 配图 URL（目前只有 RSS 源能给，orz.ai 热榜接口不返图）
   origin?: string;  // 源标识：hot_news 平台 key（如 'weibo'）或 RSS URL，用于角色级订阅过滤 / 占比加权
 }
 

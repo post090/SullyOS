@@ -24,6 +24,7 @@ export interface NewsItem {
     origin?: string;  // 源标识：hot_news 平台 key（如 'weibo'）或 RSS URL，用于角色级订阅过滤 / 占比加权
     url?: string;
     desc?: string;
+    image?: string;   // 配图 URL（目前只有 RSS 源能给，orz.ai 热榜接口不返图）
 }
 
 /**
@@ -443,6 +444,7 @@ export const RealtimeContextManager = {
                             origin: rawUrl,
                             url: typeof it.link === 'string' ? it.link : undefined,
                             desc: desc && desc !== it.title ? desc.slice(0, 280) : undefined,
+                            image: typeof it.image === 'string' && /^https?:\/\//i.test(it.image) ? it.image : undefined,
                         };
                     });
                 console.log(`[rss] ${label} ✓ 取 ${picked.length}/${items.length} 条`);
@@ -540,8 +542,9 @@ export const RealtimeContextManager = {
      * 分时段热点：每天每时段最多拉一次，持久化在 IndexedDB，全角色共享。
      * - 本时段已有快照且【平台集 + RSS 源集】都一致 → 直接复用，不发请求
      * - 否则并发拉 orz.ai 热榜 + RSS 订阅源，合并后存快照；拉失败则退回最近一次快照
+     * - force=true：无视快照命中和在飞请求，强制重拉（热点 App 的真·刷新走这里，不再自带一份复制粘贴逻辑）
      */
-    getSlottedHotNews: async (config: RealtimeConfig): Promise<NewsItem[]> => {
+    getSlottedHotNews: async (config: RealtimeConfig, force = false): Promise<NewsItem[]> => {
         const { id, date, slot, label } = RealtimeContextManager.getHotNewsSlot();
         const platforms = (config.newsPlatforms && config.newsPlatforms.length > 0)
             ? config.newsPlatforms
@@ -556,8 +559,8 @@ export const RealtimeContextManager = {
         const customFp = (arr: { url: string; name: string }[] = []) =>
             arr.map(c => `${c.name}|${c.url}`).sort().join('§');
 
-        // 1. 命中本时段快照（平台集 + RSS 源集 + 自定义源集都一致）→ 复用
-        try {
+        // 1. 命中本时段快照（平台集 + RSS 源集 + 自定义源集都一致）→ 复用；force 时跳过
+        if (!force) try {
             const snap = await DB.getHotNewsSnapshot(id);
             if (snap && snap.items?.length > 0
                 && sameSet(snap.platforms, platforms)
@@ -569,9 +572,11 @@ export const RealtimeContextManager = {
             }
         } catch { /* 读快照失败就当没有，继续去拉 */ }
 
-        // 2. in-flight 锁：本时段已有在飞请求就复用
-        const inflight = RealtimeContextManager._hotNewsInFlight.get(id);
-        if (inflight) return inflight;
+        // 2. in-flight 锁：本时段已有在飞请求就复用；force 时无视，另起新请求
+        if (!force) {
+            const inflight = RealtimeContextManager._hotNewsInFlight.get(id);
+            if (inflight) return inflight;
+        }
 
         const job = (async (): Promise<NewsItem[]> => {
             console.log(`%c[hot_news] 触发今日${label}拉取…`, 'color:#2563eb;font-weight:bold');
@@ -587,23 +592,46 @@ export const RealtimeContextManager = {
                     : Promise.resolve([] as NewsItem[]),
             ]);
 
+            // 半边失败打捞：一边拉挂、另一边成功时，从最近快照捞回挂掉那边的旧条目，
+            // 避免「只剩 RSS」/「只剩热榜」的残缺快照覆盖本时段（热榜集体蒸发 bug）。
+            // 两边都挂则不打捞，走下面的「退回最近快照且不写盘」老路，保留重试机会。
+            let hotFinal = hotItems;
+            let rssFinal = rssItems;
+            const anyFresh = hotItems.length > 0 || rssItems.length > 0;
+            if (anyFresh && (hotItems.length === 0 || (hasRss && rssItems.length === 0))) {
+                try {
+                    const prev = await DB.getLatestHotNewsSnapshot();
+                    if (prev && prev.items?.length > 0) {
+                        const isRssItem = (n: NewsItem) => typeof n.origin === 'string' && /^https?:/i.test(n.origin);
+                        if (hotItems.length === 0) {
+                            hotFinal = prev.items.filter(n => !isRssItem(n));
+                            if (hotFinal.length > 0) console.warn(`[hot_news] orz.ai 全挂但 RSS 活着 → 从最近快照打捞热榜 ${hotFinal.length} 条`);
+                        }
+                        if (hasRss && rssItems.length === 0) {
+                            rssFinal = prev.items.filter(isRssItem);
+                            if (rssFinal.length > 0) console.warn(`[rss] RSS 全挂但热榜活着 → 从最近快照打捞 RSS ${rssFinal.length} 条`);
+                        }
+                    }
+                } catch { /* 打捞失败不影响主流程 */ }
+            }
+
             // 合并：先把 RSS 均匀穿插进 orz.ai 列表里（每 5 条插 1 条 RSS），让 AI 看到的池子更混合
             const merged: NewsItem[] = [];
             let rssIdx = 0;
-            for (let i = 0; i < hotItems.length; i++) {
-                merged.push(hotItems[i]);
-                if (rssIdx < rssItems.length && (i + 1) % 5 === 0) {
-                    merged.push(rssItems[rssIdx++]);
+            for (let i = 0; i < hotFinal.length; i++) {
+                merged.push(hotFinal[i]);
+                if (rssIdx < rssFinal.length && (i + 1) % 5 === 0) {
+                    merged.push(rssFinal[rssIdx++]);
                 }
             }
-            while (rssIdx < rssItems.length) merged.push(rssItems[rssIdx++]);
+            while (rssIdx < rssFinal.length) merged.push(rssFinal[rssIdx++]);
 
             if (merged.length > 0) {
                 try {
                     await DB.saveHotNewsSnapshot({ id, date, slot, slotLabel: label, items: merged, platforms, rssUrls, rssCustom, fetchedAt: Date.now() });
                     DB.pruneHotNewsSnapshots(12).catch(() => {});
                 } catch { /* 存快照失败不影响返回 */ }
-                console.log(`%c[hot_news] ${label}拉取完成：orz.ai ${hotItems.length} 条 + RSS ${rssItems.length} 条 → 合并 ${merged.length} 条`, 'color:#16a34a;font-weight:bold');
+                console.log(`%c[hot_news] ${label}拉取完成：orz.ai ${hotFinal.length} 条 + RSS ${rssFinal.length} 条 → 合并 ${merged.length} 条`, 'color:#16a34a;font-weight:bold');
                 return merged;
             }
             // 拉取失败 → 退回最近一次快照（不写本时段，下条消息会再试）
