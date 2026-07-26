@@ -17,15 +17,15 @@
 
 **Always-On 持续运行（核心）**
 - Foreground Service 常驻通知固定 `SullyOS 正在运行`，`START_STICKY` + `resumePendingJobs()`，进程被杀后能恢复
-- 可恢复 HTTP 任务队列（`native-jobs/*.json` + `runAt`），`BOOT_COMPLETED` 重启后自动拉起
-- 主动消息/彼方/家园调度从纯 JS 定时器接入原生可恢复队列：`nativeScheduler.ts` → `runAt` 持久化闹钟，回前台自动补火 `proactive-native-wake / vr-native-wake / world-native-wake`
-- 角色事件通知通道：角色名 + 角色化短句（“给你发了一条消息”“刚刚去了「雨夜车站」”），名称预览（彼方房间名/任务名），去重 7 天 TTL，短时间合并避免刷屏
+- 可恢复 HTTP 任务队列，重启后自动拉起
+- 主动消息/彼方/家园调度从纯 JS 定时器接入原生可恢复队列
+- 角色事件通知通道：角色名 + 角色化短句，名称预览（彼方房间名/任务名），去重 7 天 TTL，短时间合并避免刷屏
 - 点击路由：冷/热启动都能跳，`task:`→日程、`vr:`→彼方、`call:`→通话、`music`→音乐，否则→聊天；`SharedPreferences launch_route` + `__sullyTryConsumeLaunchRoute` 兜底
 - 睡眠窗口 + 思念值保底：`shouldSkipProactiveForSleep()` 统一三处（SW / 主线程 / runProactive），`missCount>=5` 保底仍触发
 - 实机自检面板：设置→持续运行里可刷新通知总开关/运行时权限/忽略电池优化/重启恢复，提供一键打开通知设置/请求忽略电池优化/打开电池列表
 
 **通话**
-- 保活 + 通知：通话时前台通知带计时器（`setUsesChronometer`），像 QQ 显示“正在与 X 通话 · 01:23”，挂断 Action，`call_active` 持久化，进程被杀/重启后通知可恢复，点通知回到通话可续
+- 保活 + 通知：通话时前台通知带计时器（`setUsesChronometer`），通知栏显示“正在与 X 通话 · 01:23”，挂断 Action，`call_active` 持久化，进程被杀/重启后通知可恢复，点通知回到通话可续
 
 **音乐**
 - 原生媒体通知：歌曲信息 + 操作（喜欢/上一首/暂停/下一首），`ACTION_MUSIC_ACTION` 存 `pending_music_action` 并拉起 App，`MusicContext` 每秒轮询执行
