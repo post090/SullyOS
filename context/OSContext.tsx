@@ -304,6 +304,7 @@ interface OSContextType {
   // API Presets
   apiPresets: ApiPreset[];
   addApiPreset: (name: string, config: APIConfig) => void;
+  savePresets: (presets: ApiPreset[]) => void; // 批量覆写（站点视图的增删改用）
   removeApiPreset: (id: string) => void;
 
   // 实时配置 (天气、新闻、Notion等)
@@ -4717,6 +4718,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     setAvailableModels,
     apiPresets,
     addApiPreset,
+    savePresets,
     removeApiPreset,
     realtimeConfig,
     updateRealtimeConfig,

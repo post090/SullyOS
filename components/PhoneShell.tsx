@@ -144,6 +144,7 @@ import { Capacitor } from '@capacitor/core';
 import { isIOSStandaloneWebApp, isStatusBarHidden } from '../utils/iosStandalone';
 import AppErrorBoundary from './os/AppErrorBoundary';
 import GlobalMiniPlayer from './os/GlobalMiniPlayer';
+import ApiFloatBall from './ApiFloatBall';
 import PersonaSimIndicator from './os/PersonaSimIndicator';
 import DreamSimIndicator from './os/DreamSimIndicator';
 import ErrorDialog from './os/ErrorDialog';
@@ -915,6 +916,9 @@ const PhoneShell: React.FC = () => {
 
           {/* Overlays: Global Mini Player (when music is playing in background) */}
           <GlobalMiniPlayer />
+
+          {/* Overlays: API 切换悬浮球（设置里可开关，默认关） */}
+          <ApiFloatBall />
 
           {/* Overlays: 人格模拟生成全局指示条 */}
           <PersonaSimIndicator />

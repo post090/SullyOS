@@ -29,6 +29,7 @@ import { LoyalUserRecruitmentController } from '../components/LoyalUserRecruitme
 import { isPushVapidReady } from '../utils/pushVapid';
 import ApiCallLogModal from '../components/settings/ApiCallLogModal';
 import { DB } from '../utils/db';
+import { deriveStations, findActiveStation, stationKey, presetNameFor, renameStationInMeta, loadStationMeta, saveStationMeta, isStationViewConfirmed, markStationViewConfirmed, loadFloatBallConfig, saveFloatBallConfig, type FloatBallConfig, type Station } from '../utils/apiStations';
 import { getBackupReminderState, setBackupReminderIntervalDays, daysSinceLastBackup, BACKUP_REMINDER_MIN_DAYS, BACKUP_REMINDER_MAX_DAYS } from '../utils/backupReminder';
 import { getNativeChatRuntimeUserEnabled, setNativeChatRuntimeUserEnabled, getNativeRuntimeUserEnabled, setNativeRuntimeUserEnabled, getPersistentNativeRuntimeUserEnabled, setPersistentNativeRuntimeUserEnabled, startPersistentNativeRuntime, stopPersistentNativeRuntime, requestNativeNotificationPermission, getNativeSystemStatus, requestBatteryOptimizationExemption, openNativeNotificationSettings, openBatterySettings, type NativeSystemStatus } from '../utils/runtime/nativeRuntime';
 
@@ -350,7 +351,7 @@ const Settings: React.FC = () => {
   const {
       apiConfig, updateApiConfig, closeApp, availableModels, setAvailableModels,
       exportSystem, importSystem, addToast, showError, resetSystem,
-      apiPresets, addApiPreset, removeApiPreset,
+      apiPresets, addApiPreset, removeApiPreset, savePresets,
       sysOperation, // Get progress state
       realtimeConfig, updateRealtimeConfig, // 实时感知配置
       cloudBackupConfig, updateCloudBackupConfig,
@@ -408,6 +409,19 @@ const Settings: React.FC = () => {
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showPresetModal, setShowPresetModal] = useState(false);
   const [showApiCallLog, setShowApiCallLog] = useState(false);
+  // ─── 站点视图（新版 API 管理）状态 ───
+  const [showMergeModal, setShowMergeModal] = useState(false);
+  const [mergeDraft, setMergeDraft] = useState<Station[]>([]);
+  const mergeDismissedRef = useRef(false); // 本次会话「稍后再说」后不再重弹
+  const [stationEdit, setStationEdit] = useState<{ key: string; name: string; baseUrl: string; apiKey: string } | null>(null);
+  const [showNewStation, setShowNewStation] = useState(false);
+  const [newStation, setNewStation] = useState({ name: '', baseUrl: '', apiKey: '', model: '', label: '' });
+  const [modelManageKey, setModelManageKey] = useState<string | null>(null);
+  const [newModel, setNewModel] = useState({ model: '', label: '' });
+  const [stationModelList, setStationModelList] = useState<string[]>([]);
+  const [stationModelLoading, setStationModelLoading] = useState(false);
+  const [showCompatZone, setShowCompatZone] = useState(false); // 官方原版界面折叠区
+  const [fbConfig, setFbConfig] = useState<FloatBallConfig>(() => loadFloatBallConfig());
   const [showRealtimeModal, setShowRealtimeModal] = useState(false);
   const [showMcpModal, setShowMcpModal] = useState(false);
   const [showMcpHelp, setShowMcpHelp] = useState(false);
@@ -759,6 +773,129 @@ const Settings: React.FC = () => {
       setShowPresetModal(false);
       addToast('预设已保存', 'success');
   };
+
+  // ─── 站点视图：官方预设的派生分组（底层数据不动，界面换个活法）───
+  const stations = useMemo(() => deriveStations(apiPresets), [apiPresets]);
+  const activeStation = findActiveStation(stations, apiConfig);
+  const presetsOfStation = (key: string) => apiPresets.filter(p => stationKey(p.config.baseUrl, p.config.apiKey) === key);
+
+  // 首次归并确认：老用户有预设且没确认过 → 弹清单让用户过目；新用户直接标记确认
+  useEffect(() => {
+      if (isStationViewConfirmed() || mergeDismissedRef.current) return;
+      if (apiPresets.length === 0) { markStationViewConfirmed(); return; }
+      setMergeDraft(deriveStations(apiPresets));
+      setShowMergeModal(true);
+  }, [apiPresets]);
+
+  // 切站 / 切模型 — 即选即生效，不用再点保存
+  const applyStation = (st: Station, presetId?: string) => {
+      const m = (presetId ? st.models.find(x => x.presetId === presetId) : undefined)
+          || st.models.find(x => x.model === apiConfig.model)
+          || st.models[0];
+      if (!m) { addToast('这个站还没有模型', 'error'); return; }
+      updateApiConfig({ baseUrl: st.baseUrl, apiKey: st.apiKey, model: m.model, stream: m.stream, temperature: m.temperature });
+      addToast(`已切到 ${st.name} · ${m.label}`, 'success');
+  };
+
+  const saveStationEdit = () => {
+      if (!stationEdit) return;
+      const { key, name, baseUrl, apiKey } = stationEdit;
+      if (!name.trim() || !baseUrl.trim() || !apiKey.trim()) { addToast('站名 / URL / KEY 都不能空', 'error'); return; }
+      const newKey = stationKey(baseUrl, apiKey);
+      // URL / KEY 变了 → 批量改写该站名下所有官方预设的 config（预设名不动）
+      savePresets(apiPresets.map(p =>
+          stationKey(p.config.baseUrl, p.config.apiKey) === key
+              ? { ...p, config: { ...p.config, baseUrl: baseUrl.trim(), apiKey: apiKey.trim() } }
+              : p
+      ));
+      // meta 键迁移 + 站名落地
+      const meta = loadStationMeta();
+      if (newKey !== key) delete meta[key];
+      meta[newKey] = { ...meta[newKey], name: name.trim() };
+      saveStationMeta(meta);
+      // 正在用的连接就是这个站 → apiConfig 跟着走
+      if (stationKey(apiConfig.baseUrl, apiConfig.apiKey) === key) {
+          updateApiConfig({ baseUrl: baseUrl.trim(), apiKey: apiKey.trim() });
+      }
+      setStationEdit(null);
+      addToast('站点已更新', 'success');
+  };
+
+  const deleteStation = (key: string) => {
+      const group = presetsOfStation(key);
+      if (!window.confirm(`删除这个站？它名下的 ${group.length} 个模型预设会一起删除（不影响当前正在用的连接）。`)) return;
+      savePresets(apiPresets.filter(p => stationKey(p.config.baseUrl, p.config.apiKey) !== key));
+      const meta = loadStationMeta();
+      delete meta[key];
+      saveStationMeta(meta);
+      setStationEdit(null);
+      addToast('站点已删除', 'success');
+  };
+
+  const createStation = () => {
+      const { name, baseUrl, apiKey, model, label } = newStation;
+      if (!name.trim() || !baseUrl.trim() || !apiKey.trim() || !model.trim()) { addToast('站名 / URL / KEY / 模型都要填', 'error'); return; }
+      const lbl = label.trim() || model.trim();
+      // 底层就是一条官方预设：「站名（模型标签）」，跟老命名习惯完全一致
+      addApiPreset(presetNameFor(name.trim(), lbl), {
+          baseUrl: baseUrl.trim(), apiKey: apiKey.trim(), model: model.trim(),
+          stream: apiConfig.stream === true,
+          temperature: typeof apiConfig.temperature === 'number' ? apiConfig.temperature : 0.85,
+      });
+      renameStationInMeta(stationKey(baseUrl, apiKey), name.trim());
+      updateApiConfig({ baseUrl: baseUrl.trim(), apiKey: apiKey.trim(), model: model.trim() });
+      setShowNewStation(false);
+      setNewStation({ name: '', baseUrl: '', apiKey: '', model: '', label: '' });
+      addToast(`站点「${name.trim()}」已创建并启用`, 'success');
+  };
+
+  const addModelToStation = () => {
+      if (!modelManageKey) return;
+      const st = stations.find(s => s.key === modelManageKey);
+      if (!st) return;
+      const { model, label } = newModel;
+      if (!model.trim()) { addToast('模型 id 不能空', 'error'); return; }
+      if (st.models.some(m => m.model === model.trim())) { addToast('这个模型已经在站里了', 'error'); return; }
+      const first = st.models[0];
+      addApiPreset(presetNameFor(st.name, label.trim() || model.trim()), {
+          baseUrl: st.baseUrl, apiKey: st.apiKey, model: model.trim(),
+          stream: first ? first.stream : false, // 继承站内既有模型的流式/温度习惯
+          temperature: first ? first.temperature : 0.85,
+      });
+      setNewModel({ model: '', label: '' });
+      addToast('模型已加入站点', 'success');
+  };
+
+  const fetchStationModels = async (st: Station) => {
+      setStationModelLoading(true);
+      try {
+          const res = await nativeFetch(`${st.baseUrl.trim().replace(/\/+$/, '')}/models`, {
+              headers: { 'Authorization': `Bearer ${st.apiKey}` },
+          });
+          const data = await safeResponseJson(res);
+          const ids: string[] = (data.data || data.models || []).map((m: any) => m.id || m.name).filter(Boolean);
+          setStationModelList(ids);
+          if (!ids.length) addToast('接口没返回模型列表', 'info');
+      } catch (e: any) {
+          addToast(`拉取失败: ${e.message}`, 'error');
+      } finally {
+          setStationModelLoading(false);
+      }
+  };
+
+  const confirmMerge = () => {
+      const meta = loadStationMeta();
+      for (const st of mergeDraft) {
+          if (st.name.trim()) meta[st.key] = { ...meta[st.key], name: st.name.trim() };
+      }
+      saveStationMeta(meta);
+      markStationViewConfirmed();
+      setShowMergeModal(false);
+      addToast(`已归并成 ${mergeDraft.length} 个站点`, 'success');
+  };
+
+  // 悬浮球配置：写 localStorage + 广播事件（球挂在 PhoneShell，跨组件同步）
+  const updateFb = (patch: Partial<FloatBallConfig>) => setFbConfig(saveFloatBallConfig(patch));
 
   const handleSaveApi = () => {
     updateApiConfig({
@@ -1838,11 +1975,86 @@ const Settings: React.FC = () => {
                 </div>
             }
             actions={
-                <button onClick={() => setShowPresetModal(true)} className="text-[10px] bg-slate-100 text-slate-600 px-3 py-1.5 rounded-full font-bold shadow-sm active:scale-95 transition-transform">
-                    保存为预设
+                <button onClick={() => setShowNewStation(true)} className="text-[10px] bg-primary/10 text-primary px-3 py-1.5 rounded-full font-bold shadow-sm active:scale-95 transition-transform">
+                    ＋新站点
                 </button>
             }
         >
+            {/* ─── 站点视图（新版）：站点 + 模型双下拉，即选即生效 ─── */}
+            <div className="space-y-3 mb-4">
+                <div>
+                    <div className="flex justify-between items-center mb-1.5 pl-1">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">API 站点</label>
+                        {activeStation && (
+                            <button
+                                onClick={() => setStationEdit({ key: activeStation.key, name: activeStation.name, baseUrl: activeStation.baseUrl, apiKey: activeStation.apiKey })}
+                                className="text-[10px] text-primary font-bold"
+                            >
+                                编辑站点
+                            </button>
+                        )}
+                    </div>
+                    <select
+                        value={activeStation?.key || ''}
+                        onChange={e => { const st = stations.find(s => s.key === e.target.value); if (st) applyStation(st); }}
+                        className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-4 py-3 text-sm text-slate-700 shadow-sm appearance-none"
+                    >
+                        {!activeStation && <option value="">{stations.length ? '当前连接不在任何站点里…' : '还没有站点，点右上角＋新站点'}</option>}
+                        {stations.map(s => (
+                            <option key={s.key} value={s.key}>{s.name}（{s.models.length} 个模型）</option>
+                        ))}
+                    </select>
+                </div>
+                <div>
+                    <div className="flex justify-between items-center mb-1.5 pl-1">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">主模型</label>
+                        {activeStation && (
+                            <button
+                                onClick={() => { setModelManageKey(activeStation.key); setStationModelList([]); setNewModel({ model: '', label: '' }); }}
+                                className="text-[10px] text-primary font-bold"
+                            >
+                                管理模型
+                            </button>
+                        )}
+                    </div>
+                    <select
+                        value={activeStation?.models.find(m => m.model === apiConfig.model)?.presetId || ''}
+                        onChange={e => { if (activeStation && e.target.value) applyStation(activeStation, e.target.value); }}
+                        disabled={!activeStation}
+                        className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-4 py-3 text-sm text-slate-700 shadow-sm appearance-none disabled:opacity-50"
+                    >
+                        {!activeStation && <option value="">先选一个站点</option>}
+                        {activeStation && !activeStation.models.some(m => m.model === apiConfig.model) && (
+                            <option value="">当前: {apiConfig.model}（不在站内）</option>
+                        )}
+                        {activeStation?.models.map(m => (
+                            <option key={m.presetId} value={m.presetId}>{m.label}{m.label !== m.model ? ` — ${m.model}` : ''}</option>
+                        ))}
+                    </select>
+                </div>
+                <p className="text-[10px] text-slate-300 leading-relaxed pl-1">
+                    选完即生效，不用再点保存。底层仍是官方预设格式，备份导回官方版零障碍。
+                </p>
+            </div>
+
+            {/* ─── 官方兼容视图（原版胶囊墙 + 手填配置），默认折叠 ─── */}
+            <div className="pt-2 border-t border-slate-100">
+                <button
+                    type="button"
+                    onClick={() => setShowCompatZone(v => !v)}
+                    className="text-[10px] text-slate-300 hover:text-slate-400 transition-colors flex items-center gap-1 pl-1 active:scale-95"
+                >
+                    <span>官方兼容视图（原版预设 / 手填配置）</span>
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className={`w-2.5 h-2.5 transition-transform ${showCompatZone ? 'rotate-180' : ''}`}>
+                        <path fillRule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
+                    </svg>
+                </button>
+            {showCompatZone && (<div className="mt-3">
+            <div className="flex justify-end mb-2">
+                <button onClick={() => setShowPresetModal(true)} className="text-[10px] bg-slate-100 text-slate-600 px-3 py-1.5 rounded-full font-bold shadow-sm active:scale-95 transition-transform">
+                    保存为预设
+                </button>
+            </div>
             {/* Presets List */}
             {apiPresets.length > 0 && (
                 <div className="mb-4">
@@ -2006,6 +2218,76 @@ const Settings: React.FC = () => {
                     </div>
                 )}
             </div>
+            </div>)}
+            </div>
+        </SettingsSection>
+
+        {/* API 切换悬浮球 — 全局小球，点开快速切站/切模型 */}
+        <SettingsSection
+            title="API 悬浮球"
+            icon={
+                <div className="p-2 bg-violet-100/50 rounded-xl text-violet-600">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z" />
+                    </svg>
+                </div>
+            }
+            actions={
+                <button
+                    type="button"
+                    onClick={() => updateFb({ enabled: !fbConfig.enabled })}
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${fbConfig.enabled ? 'bg-primary' : 'bg-slate-200'}`}
+                >
+                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${fbConfig.enabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                </button>
+            }
+        >
+            <p className="text-[10px] text-slate-400 leading-relaxed mb-3">
+                开启后桌面会多一颗可拖动的小球，点一下就能切 API 站和主模型，不用每次钻进设置。拖到屏幕两侧自动吸边。
+            </p>
+            {fbConfig.enabled && (
+                <div className="space-y-4">
+                    <div>
+                        <div className="flex items-center justify-between mb-1">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">大小</span>
+                            <span className="text-[10px] font-mono text-slate-400">{fbConfig.size}px</span>
+                        </div>
+                        <input type="range" min="36" max="64" step="2" value={fbConfig.size}
+                            onChange={e => updateFb({ size: parseInt(e.target.value, 10) })}
+                            className="w-full accent-primary" />
+                    </div>
+                    <div>
+                        <div className="flex items-center justify-between mb-1">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">透明度</span>
+                            <span className="text-[10px] font-mono text-slate-400">{Math.round(fbConfig.opacity * 100)}%</span>
+                        </div>
+                        <input type="range" min="0.3" max="1" step="0.05" value={fbConfig.opacity}
+                            onChange={e => updateFb({ opacity: parseFloat(e.target.value) })}
+                            className="w-full accent-primary" />
+                    </div>
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">颜色跟随主题</span>
+                            <p className="text-[9px] text-slate-300 mt-0.5">换主题时球的默认样式会跟着变</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            {fbConfig.color !== 'auto' && (
+                                <input type="color" value={fbConfig.color}
+                                    onChange={e => updateFb({ color: e.target.value })}
+                                    className="w-8 h-8 rounded-lg border border-slate-200 bg-transparent cursor-pointer" />
+                            )}
+                            <button
+                                type="button"
+                                onClick={() => updateFb({ color: fbConfig.color === 'auto' ? '#8b5cf6' : 'auto' })}
+                                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${fbConfig.color === 'auto' ? 'bg-primary' : 'bg-slate-200'}`}
+                            >
+                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${fbConfig.color === 'auto' ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </SettingsSection>
 
         {/* API 调用记录入口 — 点开看最近 5 天各 App / 角色 / 用途的调用明细 */}
@@ -3106,6 +3388,174 @@ const Settings: React.FC = () => {
               <label className="text-[10px] font-bold text-slate-400 uppercase">预设名称 (例如: DeepSeek)</label>
               <input value={newPresetName} onChange={e => setNewPresetName(e.target.value)} className="w-full bg-slate-100 rounded-xl px-4 py-3 text-sm focus:outline-primary" autoFocus placeholder="Name..." />
           </div>
+      </Modal>
+
+      {/* ─── 站点视图：首次归并确认 ─── */}
+      <Modal
+          isOpen={showMergeModal}
+          title="预设归并成站点"
+          onClose={() => { mergeDismissedRef.current = true; setShowMergeModal(false); }}
+          footer={
+              <div className="flex gap-2 w-full">
+                  <button onClick={() => { mergeDismissedRef.current = true; setShowMergeModal(false); }} className="flex-1 py-3 bg-slate-100 text-slate-600 font-bold rounded-2xl">稍后再说</button>
+                  <button onClick={confirmMerge} className="flex-[2] py-3 bg-primary text-white font-bold rounded-2xl">确认归并</button>
+              </div>
+          }
+      >
+          <div className="space-y-3">
+              <p className="text-xs text-slate-500 leading-relaxed">
+                  检测到你有 {apiPresets.length} 个老预设，按 URL+KEY 自动归并成下面 {mergeDraft.length} 个站点。
+                  站名可以直接改；<b>底层预设数据一个字节都不会动</b>，随时能导回官方版。
+              </p>
+              <div className="max-h-[45vh] overflow-y-auto no-scrollbar space-y-2">
+                  {mergeDraft.map((st, i) => (
+                      <div key={st.key} className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-1.5">
+                          <input
+                              value={st.name}
+                              onChange={e => setMergeDraft(d => d.map((x, j) => j === i ? { ...x, name: e.target.value } : x))}
+                              className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm font-bold text-slate-700 focus:outline-primary"
+                          />
+                          <p className="text-[10px] font-mono text-slate-400 break-all">{st.baseUrl}</p>
+                          <div className="flex flex-wrap gap-1">
+                              {st.models.map(m => (
+                                  <span key={m.presetId} className="text-[10px] bg-white border border-slate-200 text-slate-500 px-2 py-0.5 rounded-full">{m.label}</span>
+                              ))}
+                          </div>
+                      </div>
+                  ))}
+              </div>
+          </div>
+      </Modal>
+
+      {/* ─── 站点视图：编辑站点 ─── */}
+      <Modal
+          isOpen={!!stationEdit}
+          title="编辑站点"
+          onClose={() => setStationEdit(null)}
+          footer={<button onClick={saveStationEdit} className="w-full py-3 bg-primary text-white font-bold rounded-2xl">保存</button>}
+      >
+          {stationEdit && (
+              <div className="space-y-3">
+                  <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 block">站名</label>
+                      <input value={stationEdit.name} onChange={e => setStationEdit(s => s && { ...s, name: e.target.value })} className="w-full bg-slate-100 rounded-xl px-4 py-3 text-sm focus:outline-primary" />
+                  </div>
+                  <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 block">URL</label>
+                      <input value={stationEdit.baseUrl} onChange={e => setStationEdit(s => s && { ...s, baseUrl: e.target.value })} className="w-full bg-slate-100 rounded-xl px-4 py-3 text-sm font-mono focus:outline-primary" placeholder="https://..." />
+                  </div>
+                  <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 block">Key</label>
+                      <input type="password" value={stationEdit.apiKey} onChange={e => setStationEdit(s => s && { ...s, apiKey: e.target.value })} className="w-full bg-slate-100 rounded-xl px-4 py-3 text-sm font-mono focus:outline-primary" placeholder="sk-..." />
+                  </div>
+                  <p className="text-[10px] text-slate-400 leading-relaxed">
+                      改 URL / KEY 会同步更新该站名下所有模型预设；如果当前正在用这个站，连接也会跟着切过去。
+                  </p>
+                  <button
+                      onClick={() => deleteStation(stationEdit.key)}
+                      className="w-full py-2.5 rounded-2xl font-bold text-sm border border-red-200 text-red-500 bg-red-50 active:scale-95 transition-all"
+                  >
+                      删除这个站点
+                  </button>
+              </div>
+          )}
+      </Modal>
+
+      {/* ─── 站点视图：新建站点 ─── */}
+      <Modal
+          isOpen={showNewStation}
+          title="新建 API 站点"
+          onClose={() => setShowNewStation(false)}
+          footer={<button onClick={createStation} className="w-full py-3 bg-primary text-white font-bold rounded-2xl">创建并启用</button>}
+      >
+          <div className="space-y-3">
+              <div>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 block">站名</label>
+                  <input value={newStation.name} onChange={e => setNewStation(s => ({ ...s, name: e.target.value }))} className="w-full bg-slate-100 rounded-xl px-4 py-3 text-sm focus:outline-primary" autoFocus placeholder="例如：肘子" />
+              </div>
+              <div>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 block">URL</label>
+                  <input value={newStation.baseUrl} onChange={e => setNewStation(s => ({ ...s, baseUrl: e.target.value }))} className="w-full bg-slate-100 rounded-xl px-4 py-3 text-sm font-mono focus:outline-primary" placeholder="https://.../v1" />
+              </div>
+              <div>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 block">Key</label>
+                  <input type="password" value={newStation.apiKey} onChange={e => setNewStation(s => ({ ...s, apiKey: e.target.value }))} className="w-full bg-slate-100 rounded-xl px-4 py-3 text-sm font-mono focus:outline-primary" placeholder="sk-..." />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                  <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 block">首个模型 id</label>
+                      <input value={newStation.model} onChange={e => setNewStation(s => ({ ...s, model: e.target.value }))} className="w-full bg-slate-100 rounded-xl px-3 py-3 text-xs font-mono focus:outline-primary" placeholder="gpt-4o" />
+                  </div>
+                  <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 block">别名（可空）</label>
+                      <input value={newStation.label} onChange={e => setNewStation(s => ({ ...s, label: e.target.value }))} className="w-full bg-slate-100 rounded-xl px-3 py-3 text-xs focus:outline-primary" placeholder="例如：4o" />
+                  </div>
+              </div>
+              <p className="text-[10px] text-slate-400 leading-relaxed">
+                  建好后可在「管理模型」里继续加模型。底层会生成一条官方格式预设「站名（别名）」。
+              </p>
+          </div>
+      </Modal>
+
+      {/* ─── 站点视图：管理模型 ─── */}
+      <Modal
+          isOpen={!!modelManageKey}
+          title={`管理模型 — ${stations.find(s => s.key === modelManageKey)?.name || ''}`}
+          onClose={() => { setModelManageKey(null); setStationModelList([]); }}
+      >
+          {(() => {
+              const st = stations.find(s => s.key === modelManageKey);
+              if (!st) return <p className="text-xs text-slate-400 text-center py-6">站点不存在（可能刚被删除）</p>;
+              return (
+                  <div className="space-y-4">
+                      <div className="space-y-2">
+                          {st.models.map(m => (
+                              <div key={m.presetId} className="flex items-center bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 gap-2">
+                                  <div className="flex-1 min-w-0">
+                                      <p className="text-sm font-bold text-slate-600">{m.label}</p>
+                                      {m.label !== m.model && <p className="text-[10px] font-mono text-slate-400 break-all">{m.model}</p>}
+                                  </div>
+                                  {m.model === apiConfig.model && stationKey(apiConfig.baseUrl, apiConfig.apiKey) === st.key && (
+                                      <span className="text-[9px] bg-primary/10 text-primary px-2 py-0.5 rounded-full font-bold shrink-0">使用中</span>
+                                  )}
+                                  <button
+                                      onClick={() => { if (window.confirm(`删除模型「${m.label}」？`)) removeApiPreset(m.presetId); }}
+                                      className="p-1.5 rounded-full text-slate-300 hover:bg-red-50 hover:text-red-400 transition-colors shrink-0"
+                                  >
+                                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5"><path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" /></svg>
+                                  </button>
+                              </div>
+                          ))}
+                          {st.models.length === 0 && <p className="text-xs text-slate-400 text-center py-4">这个站还没有模型</p>}
+                      </div>
+                      <div className="border-t border-slate-100 pt-3 space-y-2">
+                          <div className="grid grid-cols-2 gap-2">
+                              <input value={newModel.model} onChange={e => setNewModel(s => ({ ...s, model: e.target.value }))} className="bg-slate-100 rounded-xl px-3 py-2.5 text-xs font-mono focus:outline-primary" placeholder="模型 id" />
+                              <input value={newModel.label} onChange={e => setNewModel(s => ({ ...s, label: e.target.value }))} className="bg-slate-100 rounded-xl px-3 py-2.5 text-xs focus:outline-primary" placeholder="别名（可空）" />
+                          </div>
+                          <div className="flex gap-2">
+                              <button onClick={addModelToStation} className="flex-1 py-2.5 bg-primary text-white text-xs font-bold rounded-xl active:scale-95 transition-transform">添加模型</button>
+                              <button onClick={() => fetchStationModels(st)} disabled={stationModelLoading} className="flex-1 py-2.5 bg-slate-100 text-slate-600 text-xs font-bold rounded-xl active:scale-95 transition-transform">
+                                  {stationModelLoading ? '拉取中...' : '拉取模型列表'}
+                              </button>
+                          </div>
+                          {stationModelList.length > 0 && (
+                              <div className="max-h-[30vh] overflow-y-auto no-scrollbar space-y-1">
+                                  {stationModelList.map(id => (
+                                      <button
+                                          key={id}
+                                          onClick={() => setNewModel(s => ({ ...s, model: id }))}
+                                          className={`w-full text-left px-3 py-2 rounded-lg text-xs font-mono break-all ${newModel.model === id ? 'bg-primary/10 text-primary font-bold' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'}`}
+                                      >
+                                          {id}
+                                      </button>
+                                  ))}
+                              </div>
+                          )}
+                      </div>
+                  </div>
+              );
+          })()}
       </Modal>
 
       {/* 强制导出 Modal */}
