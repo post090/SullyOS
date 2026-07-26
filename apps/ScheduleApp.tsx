@@ -515,7 +515,8 @@ const ScheduleApp: React.FC = () => {
                         <span className={`text-sm font-bold tracking-wide ${currentThemeMode === 'cyber' ? 'uppercase' : ''}`}>时光契约</span>
                     </div>
                     <div className="flex gap-2">
-                        <button onClick={toggleTheme} className={`p-2 rounded-full active:scale-90 transition-transform ${currentThemeMode === 'minimal' ? 'shadow-[4px_4px_8px_#d1d9e6,-4px_-4px_8px_#ffffff]' : 'hover:bg-black/5'}`} aria-label="切换主题">
+                        <button onClick={toggleTheme} className={`px-2.5 h-8 flex items-center gap-1.5 rounded-full active:scale-90 transition-all ${currentThemeMode === 'minimal' ? 'shadow-[4px_4px_8px_#d1d9e6,-4px_-4px_8px_#ffffff] active:shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff]' : currentThemeMode === 'soft' ? 'bg-white/70 hover:bg-white shadow-sm border border-pink-100/60' : 'bg-white/5 hover:bg-white/10 border border-white/10'}`} aria-label="切换主题">
+                            <span className={`w-1.5 h-1.5 rounded-full ${theme.accent.replace('text-', 'bg-')}`} />
                             <span className={`text-[10px] font-bold uppercase tracking-widest ${theme.textSub}`}>{currentThemeMode}</span>
                         </button>
                         <button onClick={() => activeTab === 'quest' ? (resetForm(), setEditTask(null), setShowTaskModal(true)) : setShowAnniModal(true)} className={`p-2 rounded-full active:scale-90 transition-transform ${currentThemeMode === 'minimal' ? 'shadow-[4px_4px_8px_#d1d9e6,-4px_-4px_8px_#ffffff]' : 'hover:bg-black/5'}`} aria-label="新建">
@@ -548,21 +549,21 @@ const ScheduleApp: React.FC = () => {
                             <div className="flex items-center justify-between mb-3">
                                 <div>
                                     <div className={`text-[10px] font-bold uppercase tracking-widest ${theme.textSub}`}>今日进度</div>
-                                    <div className={`text-2xl font-bold ${theme.text} mt-0.5`}>
+                                    <div className={`text-2xl font-bold tabular-nums ${theme.text} mt-0.5`}>
                                         {todayStats.doneToday} <span className={theme.textSub}>/ {todayStats.total}</span>
                                     </div>
                                 </div>
                                 <div className="flex gap-4">
                                     <div className="text-right">
                                         <div className={`text-[10px] font-bold uppercase tracking-widest ${theme.textSub}`}>最长连胜</div>
-                                        <div className={`text-xl font-bold flex items-center gap-1 ${theme.streakColor}`}>
+                                        <div className={`text-xl font-bold tabular-nums flex items-center gap-1 ${theme.streakColor}`}>
                                             <Trophy size={16} weight="fill" />
                                             {bestStreak}
                                         </div>
                                     </div>
                                     <div className="text-right">
                                         <div className={`text-[10px] font-bold uppercase tracking-widest ${theme.textSub}`}>本周结算</div>
-                                        <div className={`text-xl font-bold flex items-center gap-1 ${weekCoins >= 0 ? theme.coinColor : theme.iconMissed}`}>
+                                        <div className={`text-xl font-bold tabular-nums flex items-center gap-1 ${weekCoins >= 0 ? theme.coinColor : theme.iconMissed}`}>
                                             <Coins size={16} weight="fill" />
                                             {weekCoins >= 0 ? '+' : ''}{weekCoins}
                                         </div>
@@ -570,8 +571,8 @@ const ScheduleApp: React.FC = () => {
                                 </div>
                             </div>
                             {todayStats.total > 0 && (
-                                <div className={`h-1.5 ${theme.progressTrack} rounded-full overflow-hidden`}>
-                                    <div className={`h-full ${theme.progressFill} transition-all duration-500`} style={{ width: `${(todayStats.doneToday / todayStats.total) * 100}%` }} />
+                                <div className={`h-2 ${theme.progressTrack} rounded-full overflow-hidden`}>
+                                    <div className={`h-full ${theme.progressFill} rounded-full transition-all duration-700 ease-out`} style={{ width: `${(todayStats.doneToday / todayStats.total) * 100}%` }} />
                                 </div>
                             )}
                         </div>
@@ -952,11 +953,22 @@ const TaskCard: React.FC<{
     const statusText = isDoneToday ? '今日已完成' : isSkippedToday ? '今日请假' : (task.type === 'recurring' ? '今日未打卡' : '未开始');
 
     return (
-        <div className={`${theme.card} p-4 transition-all`}>
+        <div className={`${theme.card} p-4 transition-all ${themeMode === 'cyber' ? 'hover:bg-slate-900/80 hover:border-slate-600/60' : themeMode === 'soft' ? 'hover:shadow-md hover:shadow-pink-100/60' : ''}`}>
             <div className="flex items-start gap-3">
-                {/* 头像 */}
+                {/* 头像：监督人有图就带主题化描边；没监督人给主题化占位而不是灰方块 */}
                 <div className="relative shrink-0">
-                    {supervisor ? <img src={supervisor.avatar} className="w-12 h-12 rounded-xl object-cover" alt="" /> : <div className="w-12 h-12 rounded-xl bg-slate-300" />}
+                    {supervisor ? (
+                        <img src={supervisor.avatar} className={`w-12 h-12 rounded-xl object-cover ${themeMode === 'cyber' ? 'ring-1 ring-slate-600/60' : themeMode === 'soft' ? 'ring-2 ring-white shadow-sm' : 'shadow-[3px_3px_8px_#d1d9e6,-3px_-3px_8px_#ffffff]'}`} alt="" />
+                    ) : (
+                        <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${themeMode === 'cyber' ? 'bg-gradient-to-br from-slate-700 to-slate-800 text-cyan-400/70' : themeMode === 'soft' ? 'bg-gradient-to-br from-pink-100 to-rose-100 text-pink-400' : 'bg-gradient-to-br from-slate-200 to-slate-300 text-indigo-400'}`}>
+                            <TimerIcon size={20} weight="fill" />
+                        </div>
+                    )}
+                    {isDoneToday && (
+                        <span className={`absolute -bottom-1 -right-1 rounded-full ${themeMode === 'cyber' ? 'bg-[#0f172a]' : 'bg-white'} p-[1px] leading-none`}>
+                            <CheckCircle size={14} weight="fill" className={theme.iconDone} />
+                        </span>
+                    )}
                 </div>
 
                 {/* 主体 */}
@@ -977,11 +989,11 @@ const TaskCard: React.FC<{
                     {task.type === 'recurring' && (
                         <div className="mt-2.5">
                             <div className="flex items-center justify-between mb-1">
-                                <span className={`text-[10px] ${theme.textSub}`}>{weekDone} / {weekTarget} 本周</span>
+                                <span className={`text-[10px] tabular-nums ${theme.textSub}`}>{weekDone} / {weekTarget} 本周</span>
                                 <span className={`text-[10px] font-bold ${isDoneToday ? theme.iconDone : isSkippedToday ? theme.iconSkipped : theme.textSub}`}>{statusText}</span>
                             </div>
-                            <div className={`h-1.5 ${theme.progressTrack} rounded-full overflow-hidden`}>
-                                <div className={`h-full ${theme.progressFill} transition-all duration-500`} style={{ width: `${progress}%` }} />
+                            <div className={`h-2 ${theme.progressTrack} rounded-full overflow-hidden`}>
+                                <div className={`h-full ${theme.progressFill} rounded-full transition-all duration-700 ease-out`} style={{ width: `${progress}%` }} />
                             </div>
                         </div>
                     )}
@@ -996,22 +1008,22 @@ const TaskCard: React.FC<{
                         </div>
                     )}
 
-                    {/* 信息行 */}
-                    <div className="flex items-center gap-3 mt-2 text-[10px]">
+                    {/* 信息行：连胜 / 奖惩做成小 chip，奖惩用底色区分正负 */}
+                    <div className="flex items-center gap-1.5 mt-2 text-[10px]">
                         {task.type === 'recurring' && (
-                            <div className={`flex items-center gap-1 ${theme.streakColor}`}>
+                            <div className={`flex items-center gap-1 px-2 py-1 rounded-lg ${theme.streakColor} ${themeMode === 'cyber' ? 'bg-white/5' : themeMode === 'soft' ? 'bg-amber-50' : 'bg-black/[0.03]'}`}>
                                 <Fire size={12} weight="fill" />
-                                <span className="font-bold">{streak}</span>
+                                <span className="font-bold tabular-nums">{streak}</span>
                                 <span className={theme.textSub}>连胜</span>
                             </div>
                         )}
-                        <div className={`flex items-center gap-1 ${theme.coinColor}`}>
+                        <div className={`flex items-center gap-1 px-2 py-1 rounded-lg ${theme.coinColor} ${themeMode === 'cyber' ? 'bg-white/5' : themeMode === 'soft' ? 'bg-amber-50' : 'bg-black/[0.03]'}`}>
                             <Coins size={12} weight="fill" />
-                            <span className="font-bold">+{task.rewardCoins}</span>
+                            <span className="font-bold tabular-nums">+{task.rewardCoins}</span>
                         </div>
-                        <div className={`flex items-center gap-1 ${theme.iconMissed}`}>
+                        <div className={`flex items-center gap-1 px-2 py-1 rounded-lg ${theme.iconMissed} ${themeMode === 'cyber' ? 'bg-rose-500/10' : themeMode === 'soft' ? 'bg-rose-50' : 'bg-rose-500/[0.06]'}`}>
                             <Coins size={12} weight="fill" />
-                            <span className="font-bold">-{task.penaltyCoins}</span>
+                            <span className="font-bold tabular-nums">-{task.penaltyCoins}</span>
                         </div>
                     </div>
 
@@ -1020,7 +1032,7 @@ const TaskCard: React.FC<{
                         <button
                             onClick={onCheckin}
                             disabled={isDoneToday || isProcessing}
-                            className={`flex-1 py-2.5 text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${isDoneToday ? theme.buttonGhost + ' opacity-50' : theme.buttonPrimary}`}
+                            className={`flex-1 py-2.5 text-xs font-bold transition-all active:scale-[0.98] flex items-center justify-center gap-1.5 ${isDoneToday ? theme.buttonGhost + ' opacity-50' : theme.buttonPrimary}`}
                         >
                             {isProcessing ? (
                                 <span className="animate-pulse">处理中…</span>
@@ -1201,7 +1213,7 @@ const TaskDetail: React.FC<{
                     <div className="text-center">
                         <div className={`flex items-center gap-1 justify-center ${theme.streakColor}`}>
                             <Fire size={18} weight="fill" />
-                            <span className="text-2xl font-bold">{streak}</span>
+                            <span className="text-2xl font-bold tabular-nums">{streak}</span>
                         </div>
                         <div className={`text-[10px] ${theme.textSub} mt-1`}>当前连胜</div>
                     </div>
@@ -1209,7 +1221,7 @@ const TaskDetail: React.FC<{
                     <div className="text-center">
                         <div className={`flex items-center gap-1 justify-center ${theme.streakColor}`}>
                             <Trophy size={18} weight="fill" />
-                            <span className="text-2xl font-bold">{best}</span>
+                            <span className="text-2xl font-bold tabular-nums">{best}</span>
                         </div>
                         <div className={`text-[10px] ${theme.textSub} mt-1`}>最佳连胜</div>
                     </div>
@@ -1219,7 +1231,7 @@ const TaskDetail: React.FC<{
             {/* 30 天热力图 */}
             <div>
                 <div className={`text-[10px] font-bold uppercase tracking-widest ${theme.textSub} mb-2`}>最近 30 天</div>
-                <div className="grid grid-cols-10 gap-1">
+                <div className="grid grid-cols-10 gap-1.5">
                     {recent30.map(d => {
                         const isDone = d.status === 'done';
                         const isMissed = d.status === 'missed';
@@ -1228,7 +1240,7 @@ const TaskDetail: React.FC<{
                             <div
                                 key={d.date}
                                 title={`${d.date} · ${isDone ? '完成' : isMissed ? '漏做' : isSkipped ? '请假' : '未记录'}`}
-                                className={`aspect-square rounded-sm ${isDone ? (themeMode === 'cyber' ? 'bg-cyan-500' : themeMode === 'soft' ? 'bg-pink-400' : 'bg-indigo-500') : isMissed ? (themeMode === 'cyber' ? 'bg-rose-500/60' : themeMode === 'soft' ? 'bg-rose-300' : 'bg-rose-300') : isSkipped ? (themeMode === 'cyber' ? 'bg-slate-600' : themeMode === 'soft' ? 'bg-slate-200' : 'bg-slate-300') : (themeMode === 'cyber' ? 'bg-slate-800' : themeMode === 'soft' ? 'bg-pink-50' : 'bg-[#e2e8f0]')}`}
+                                className={`aspect-square rounded-[4px] transition-transform hover:scale-125 ${isDone ? (themeMode === 'cyber' ? 'bg-cyan-500 shadow-[0_0_6px_rgba(34,211,238,0.5)]' : themeMode === 'soft' ? 'bg-pink-400 shadow-sm shadow-pink-200' : 'bg-indigo-500') : isMissed ? (themeMode === 'cyber' ? 'bg-rose-500/60' : themeMode === 'soft' ? 'bg-rose-300' : 'bg-rose-300') : isSkipped ? (themeMode === 'cyber' ? 'bg-slate-600' : themeMode === 'soft' ? 'bg-slate-200' : 'bg-slate-300') : (themeMode === 'cyber' ? 'bg-slate-800/80' : themeMode === 'soft' ? 'bg-pink-50' : 'bg-[#e2e8f0]')}`}
                             />
                         );
                     })}

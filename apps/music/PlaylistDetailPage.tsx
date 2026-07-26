@@ -152,6 +152,8 @@ const PlaylistDetailPage: React.FC<Props> = ({ source, onBack, onOpenPlayer, onO
   }, [songs, filter]);
 
   useEffect(() => { setVisibleCount(80); }, [filter]);
+  // 切换歌单时重置按需渲染计数，避免带着上一个千首大歌单的满屏值进新歌单
+  useEffect(() => { setVisibleCount(80); }, [source.kind, neteaseId, charPl?.id]);
 
   // 滚近底部再多挂一批（大歌单渲染保护）
   const onListScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {

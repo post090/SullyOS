@@ -69,10 +69,15 @@ const SongCommentsPage: React.FC<Props> = ({ song, onBack }) => {
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  // 用 ref 追踪当前有效的歌曲请求，避免旧请求覆盖新歌评论 / 卸载后 setState
+  const reqSongRef = useRef<number | null>(song.id);
+
   const load = useCallback(async (offset: number) => {
+    const reqId = song.id;
     setLoading(true);
     try {
-      const r = await musicApi.call(cfgRef.current, '/comment/music', { id: song.id, limit: PAGE, offset });
+      const r = await musicApi.call(cfgRef.current, '/comment/music', { id: reqId, limit: PAGE, offset });
+      if (reqSongRef.current !== reqId) return; // 已切歌 / 卸载，丢弃过期结果
       const latest: CommentItem[] = (r?.comments || []).map(mapComment);
       if (offset === 0) {
         setHotComments((r?.hotComments || []).map(mapComment));
@@ -83,13 +88,22 @@ const SongCommentsPage: React.FC<Props> = ({ song, onBack }) => {
       setTotal(r?.total || 0);
       setHasMore(!!r?.more);
     } catch (e: any) {
-      toastRef.current(`加载评论失败：${e.message}`, 'error');
+      if (reqSongRef.current === reqId) toastRef.current(`加载评论失败：${e.message}`, 'error');
     } finally {
-      setLoading(false);
+      if (reqSongRef.current === reqId) setLoading(false);
     }
   }, [song.id]);
 
-  useEffect(() => { load(0); }, [load]);
+  useEffect(() => {
+    reqSongRef.current = song.id;
+    // 切歌时先清空旧评论，避免短暂串显上一首的内容
+    setHotComments([]);
+    setComments([]);
+    setTotal(0);
+    setHasMore(false);
+    load(0);
+    return () => { reqSongRef.current = null; };
+  }, [song.id, load]);
 
   const CommentRow: React.FC<{ c: CommentItem }> = ({ c }) => (
     <div className="flex gap-2.5 px-3.5 py-2.5">
