@@ -12,12 +12,13 @@ import {
     DigestReportDB, PLATE_TITLES,
     bootstrapPlatesFromHistory, markPlateBootstrapDone,
     getBootstrapResume, setBootstrapResume, clearBootstrapResume,
-    rebuildAllVectors,
+    rebuildAllVectors, embedMissingVectors,
 } from '../utils/memoryPalace';
 import type { Anticipation, MigrationProgress, DigestResult, MemoryLink, EventBox, DigestReport } from '../utils/memoryPalace';
 import { confirmExportSafety } from '../utils/exportGuard';
 import type { Message } from '../types';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
+import GlassSelect from '../components/os/GlassSelect';
 import {
     CONTEXT_RANGE_POLICY_VERSION,
     DEFAULT_MANUAL_CONTEXT_LIMIT,
@@ -480,6 +481,40 @@ export default function MemoryPalaceApp() {
     const [rebuilding, setRebuilding] = useState(false);
     const [rebuildProgress, setRebuildProgress] = useState<{ rebuilt: number; total: number } | null>(null);
     const [rebuildResult, setRebuildResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+    // 向量维护（补齐/全量重建）目标角色 —— 默认跟随当前角色；
+    // 从选择页直接进"全局设置"时 activeCharacterId 可能残留着上一个（常是第一个）角色，
+    // 显式下拉让"到底在给谁跑"一目了然
+    const [vecTargetId, setVecTargetId] = useState<string | null>(null);
+    const vecTargetChar = characters.find(c => c.id === (vecTargetId ?? activeCharacterId ?? '')) ?? null;
+    const [vecStats, setVecStats] = useState<{ total: number; embedded: number; missing: number } | null>(null);
+    const [fixingMissing, setFixingMissing] = useState(false);
+    const [fixProgress, setFixProgress] = useState<{ done: number; total: number } | null>(null);
+    const [fixResult, setFixResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+    const reloadVecStats = useCallback(async () => {
+        const id = vecTargetId ?? activeCharacterId;
+        if (!id) { setVecStats(null); return; }
+        try {
+            const nodes = await MemoryNodeDB.getByCharId(id);
+            const embedded = nodes.filter(n => n.embedded).length;
+            setVecStats({ total: nodes.length, embedded, missing: nodes.length - embedded });
+        } catch { setVecStats(null); }
+    }, [vecTargetId, activeCharacterId]);
+
+    // 每次进设置页都重置为"跟随当前角色"，避免上次手选的角色残留
+    useEffect(() => {
+        if (view === 'settings' || view === 'globalSettings') {
+            setVecTargetId(null);
+            setFixResult(null);
+            setRebuildResult(null);
+        }
+    }, [view]);
+
+    useEffect(() => {
+        if (view !== 'settings' && view !== 'globalSettings') return;
+        reloadVecStats();
+    }, [view, reloadVecStats]);
 
     // 月份选择（导入旧记忆）
     const [availableMonths, setAvailableMonths] = useState<string[]>([]);
@@ -2989,6 +3024,129 @@ export default function MemoryPalaceApp() {
                         </div>
                     )}
 
+                    {/* 向量维护：目标角色选择（补齐 & 全量重建共用） */}
+                    <div style={{ marginTop: 12 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: '#475569', marginBottom: 6 }}>
+                            向量维护 · 作用角色
+                        </div>
+                        <GlassSelect
+                            value={vecTargetChar?.id ?? ''}
+                            options={characters.map(c => ({ value: c.id, label: c.name }))}
+                            onChange={id => { setVecTargetId(id); setRebuildResult(null); setFixResult(null); }}
+                            placeholder="选择角色…"
+                            disabled={rebuilding || fixingMissing}
+                        />
+                        {vecStats && vecTargetChar && (
+                            <div style={{ marginTop: 6, fontSize: 11, color: '#64748b' }}>
+                                {vecTargetChar.name}：共 {vecStats.total} 条记忆 · 已向量化 {vecStats.embedded} 条
+                                {vecStats.missing > 0
+                                    ? <span style={{ color: '#dc2626', fontWeight: 700 }}> · 缺失 {vecStats.missing} 条</span>
+                                    : <span style={{ color: '#16a34a', fontWeight: 700 }}> · 无缺失 ✓</span>}
+                            </div>
+                        )}
+                        <div style={{ marginTop: 4, fontSize: 10, color: '#9ca3af' }}>
+                            下面两个操作都只作用于这里选中的角色
+                        </div>
+                    </div>
+
+                    {/* 补齐缺失向量：只给 embedded=false 的孤儿上户口，已有向量不碰 */}
+                    <div style={{
+                        marginTop: 12, padding: 12, borderRadius: 12,
+                        background: '#f0fdf4', border: '1px solid #bbf7d0',
+                    }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: '#166534', marginBottom: 4 }}>
+                            补齐缺失向量（推荐先用这个）
+                        </div>
+                        <div style={{ fontSize: 11, color: '#15803d', lineHeight: 1.6, marginBottom: 8 }}>
+                            只给还没有向量的记忆生成向量，已有的一概不动、不花冗余 API 请求。
+                            部分记忆（期盼、事件盒摘要、导入的旧记忆等）要等下次聊天时才顺路补向量，
+                            那次没跑成就会一直缺着、召回搜不到——这里一键补上。
+                        </div>
+                        <button
+                            onClick={async () => {
+                                if (!vecTargetChar || !hasEmbeddingConfig || fixingMissing || rebuilding) return;
+                                setFixingMissing(true);
+                                setFixProgress(null);
+                                setFixResult(null);
+                                try {
+                                    const config = {
+                                        baseUrl: embUrl.trim(),
+                                        apiKey: embKey.trim(),
+                                        model: embModel.trim() || 'BAAI/bge-m3',
+                                        dimensions: embDimensions || 1024,
+                                    };
+                                    const result = await embedMissingVectors(vecTargetChar.id, config, undefined, (done, total) => {
+                                        setFixProgress({ done, total });
+                                    });
+                                    setFixResult({ ok: true, msg: result.embedded === 0 ? '没有缺失的向量，不需要补' : `完成：补齐了 ${result.embedded} 条缺失向量` });
+                                } catch (err: any) {
+                                    setFixResult({ ok: false, msg: `失败：${err.message || String(err)}` });
+                                } finally {
+                                    setFixingMissing(false);
+                                    reloadVecStats();
+                                }
+                            }}
+                            disabled={fixingMissing || rebuilding || !hasEmbeddingConfig || !vecTargetChar || !vecStats || vecStats.missing === 0}
+                            style={{
+                                width: '100%',
+                                padding: '10px 0',
+                                borderRadius: 12,
+                                border: '1px solid #22c55e',
+                                fontWeight: 600,
+                                fontSize: 13,
+                                color: '#15803d',
+                                background: 'white',
+                                cursor: (fixingMissing || rebuilding || !hasEmbeddingConfig || !vecTargetChar || !vecStats || vecStats.missing === 0) ? 'not-allowed' : 'pointer',
+                                opacity: (fixingMissing || rebuilding || !hasEmbeddingConfig || !vecTargetChar || !vecStats || vecStats.missing === 0) ? 0.6 : 1,
+                            }}
+                        >
+                            {fixingMissing
+                                ? '正在补齐...'
+                                : vecStats && vecStats.missing === 0
+                                    ? '✓ 没有缺失的向量'
+                                    : `补齐缺失向量（${vecStats?.missing ?? '?'} 条）`}
+                        </button>
+
+                        {fixingMissing && fixProgress && fixProgress.total > 0 && (
+                            <div style={{ marginTop: 8 }}>
+                                <div style={{
+                                    display: 'flex', justifyContent: 'space-between',
+                                    fontSize: 11, color: '#166534', marginBottom: 4,
+                                }}>
+                                    <span>{fixProgress.done === 0 ? '准备中...' : `已补齐 ${fixProgress.done}/${fixProgress.total} 条`}</span>
+                                    <span>{Math.round(fixProgress.done / fixProgress.total * 100)}%</span>
+                                </div>
+                                <div style={{
+                                    width: '100%', height: 6, background: '#bbf7d0',
+                                    borderRadius: 3, overflow: 'hidden',
+                                }}>
+                                    <div style={{
+                                        width: `${fixProgress.done / fixProgress.total * 100}%`,
+                                        height: '100%', background: '#22c55e',
+                                        transition: 'width 0.3s ease',
+                                    }} />
+                                </div>
+                            </div>
+                        )}
+
+                        {fixResult && (
+                            <div style={{
+                                marginTop: 8, fontSize: 12, padding: '8px 12px', borderRadius: 8,
+                                background: fixResult.ok ? '#f0fdf4' : '#fef2f2',
+                                color: fixResult.ok ? '#16a34a' : '#dc2626',
+                                border: fixResult.ok ? '1px solid #bbf7d0' : '1px solid #fecaca',
+                            }}>
+                                {fixResult.msg}
+                            </div>
+                        )}
+
+                        {!hasEmbeddingConfig && (
+                            <div style={{ marginTop: 6, fontSize: 11, color: '#9ca3af' }}>
+                                需先填写并保存 Embedding 配置
+                            </div>
+                        )}
+                    </div>
+
                     {/* 全量重新生成向量 */}
                     <div style={{
                         marginTop: 12, padding: 12, borderRadius: 12,
@@ -2998,17 +3156,19 @@ export default function MemoryPalaceApp() {
                             全量重新生成向量
                         </div>
                         <div style={{ fontSize: 11, color: '#a16207', lineHeight: 1.6, marginBottom: 8 }}>
-                            用当前配置的模型，把 {char?.name ?? '该角色'} 所有已向量化的记忆重新 embedding 一遍。
+                            用当前配置的模型，把 {vecTargetChar?.name ?? '所选角色'} 已向量化的记忆全部重新 embedding 一遍。
                             适用：换模型后、向量损坏、维度对不上、召回不准。
+                            注意：它只重做已有向量的条目，缺失的请用上面的补齐功能。
                         </div>
                         <button
                             onClick={async () => {
-                                if (!char || !hasEmbeddingConfig) return;
-                                if (rebuilding) return;
+                                if (!vecTargetChar || !hasEmbeddingConfig) return;
+                                if (rebuilding || fixingMissing) return;
+                                const embeddedCount = vecStats?.embedded ?? 0;
                                 // 二次确认（如果记忆很多）
-                                if (totalCount > 100) {
+                                if (embeddedCount > 100) {
                                     const ok = window.confirm(
-                                        `将重新生成 ${totalCount} 条记忆的向量，会发送较多 API 请求。继续？`
+                                        `将重新生成 ${vecTargetChar.name} 的 ${embeddedCount} 条记忆向量，会发送较多 API 请求。继续？`
                                     );
                                     if (!ok) return;
                                 }
@@ -3023,7 +3183,7 @@ export default function MemoryPalaceApp() {
                                         dimensions: embDimensions || 1024,
                                     };
                                     // 只重建本地向量；远程 Supabase 同步交给后续 pipeline 自然补上
-                                    const result = await rebuildAllVectors(char.id, config, undefined, (rebuilt, total) => {
+                                    const result = await rebuildAllVectors(vecTargetChar.id, config, undefined, (rebuilt, total) => {
                                         setRebuildProgress({ rebuilt, total });
                                     });
                                     setRebuildResult({ ok: true, msg: `完成：${result.rebuilt} 条向量已重新生成` });
@@ -3031,9 +3191,10 @@ export default function MemoryPalaceApp() {
                                     setRebuildResult({ ok: false, msg: `失败：${err.message || String(err)}` });
                                 } finally {
                                     setRebuilding(false);
+                                    reloadVecStats();
                                 }
                             }}
-                            disabled={rebuilding || !hasEmbeddingConfig || !char || totalCount === 0}
+                            disabled={rebuilding || fixingMissing || !hasEmbeddingConfig || !vecTargetChar || !vecStats || vecStats.embedded === 0}
                             style={{
                                 width: '100%',
                                 padding: '10px 0',
@@ -3043,11 +3204,11 @@ export default function MemoryPalaceApp() {
                                 fontSize: 13,
                                 color: '#b45309',
                                 background: 'white',
-                                cursor: (rebuilding || !hasEmbeddingConfig || !char || totalCount === 0) ? 'not-allowed' : 'pointer',
-                                opacity: (rebuilding || !hasEmbeddingConfig || !char || totalCount === 0) ? 0.6 : 1,
+                                cursor: (rebuilding || fixingMissing || !hasEmbeddingConfig || !vecTargetChar || !vecStats || vecStats.embedded === 0) ? 'not-allowed' : 'pointer',
+                                opacity: (rebuilding || fixingMissing || !hasEmbeddingConfig || !vecTargetChar || !vecStats || vecStats.embedded === 0) ? 0.6 : 1,
                             }}
                         >
-                            {rebuilding ? '正在重新生成...' : `全量重新生成（${totalCount} 条记忆）`}
+                            {rebuilding ? '正在重新生成...' : `全量重新生成（${vecStats?.embedded ?? '?'} 条已向量化）`}
                         </button>
 
                         {/* 进度条 */}
@@ -3094,9 +3255,9 @@ export default function MemoryPalaceApp() {
                                 需先填写并保存 Embedding 配置
                             </div>
                         )}
-                        {hasEmbeddingConfig && totalCount === 0 && !rebuilding && (
+                        {hasEmbeddingConfig && vecStats && vecStats.total === 0 && !rebuilding && (
                             <div style={{ marginTop: 6, fontSize: 11, color: '#9ca3af' }}>
-                                当前角色还没有任何记忆，无需重建
+                                所选角色还没有任何记忆，无需重建
                             </div>
                         )}
                     </div>

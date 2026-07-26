@@ -194,3 +194,68 @@ export async function rebuildAllVectors(
     console.log(`✅ [VectorStore] 重建完成：${rebuilt} 条向量已更新为 ${embeddingConfig.model}`);
     return { rebuilt };
 }
+
+/**
+ * 补齐缺失向量：只处理 embedded=false 的节点，已有向量的一概不碰。
+ *
+ * 和 rebuildAllVectors 正好互补：rebuild 只重做已向量化的（filter n.embedded），
+ * 而系统里很多路径会产生 embedded=false 的节点（期盼实现/落空、反刍回看、
+ * 事件盒压缩 summary、纠正批注、无向量导入…），全指望后续 pipeline 顺路补——
+ * pipeline 那次没跑成，它们就永远没有向量，召回时完全搜不到。
+ * 这个函数就是给这些孤儿一个户口。
+ *
+ * 不做语义去重：这些节点已经在库里（提取时该挡的重复早挡过了），
+ * 现在只是补上缺失的向量，去重反而会误杀内容相近的合法节点。
+ */
+export async function embedMissingVectors(
+    charId: string,
+    embeddingConfig: EmbeddingConfig,
+    remoteVectorConfig?: RemoteVectorConfig,
+    onProgress?: (done: number, total: number) => void,
+): Promise<{ embedded: number }> {
+    const missing = await MemoryNodeDB.getUnembedded(charId);
+    const total = missing.length;
+    if (total === 0) {
+        onProgress?.(0, 0);
+        return { embedded: 0 };
+    }
+
+    console.log(`🩹 [VectorStore] 开始补齐 ${total} 条缺失向量（${embeddingConfig.model}）...`);
+    onProgress?.(0, total);
+
+    // 分窗策略同 rebuildAllVectors：控制内存峰值
+    const WINDOW_SIZE = 50;
+    let done = 0;
+
+    for (let start = 0; start < total; start += WINDOW_SIZE) {
+        const end = Math.min(start + WINDOW_SIZE, total);
+        const windowNodes = missing.slice(start, end);
+        const vectors = await getEmbeddings(windowNodes.map(n => n.content), embeddingConfig);
+
+        for (let i = 0; i < windowNodes.length; i++) {
+            const node = windowNodes[i];
+            const mv: MemoryVector = {
+                memoryId: node.id,
+                charId,
+                vector: vectors[i],
+                dimensions: embeddingConfig.dimensions,
+                model: embeddingConfig.model,
+            };
+            await MemoryVectorDB.save(mv);
+
+            // 先落向量再翻 embedded 标记：中途失败不会留下"标记说有、库里没有"的幽灵
+            node.embedded = true;
+            await MemoryNodeDB.save(node);
+
+            if (remoteVectorConfig?.enabled && remoteVectorConfig.initialized) {
+                remoteUpsert(remoteVectorConfig, node.id, charId, vectors[i], node, embeddingConfig.dimensions, embeddingConfig.model).catch(() => {});
+            }
+        }
+
+        done += windowNodes.length;
+        onProgress?.(done, total);
+    }
+
+    console.log(`✅ [VectorStore] 补齐完成：${done} 条缺失向量已生成`);
+    return { embedded: done };
+}
