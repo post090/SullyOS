@@ -920,9 +920,9 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   // with future runAt; when it completes we dispatch sully-native-timer.
   useEffect(() => {
     if (!isNativeRuntimePlatform()) return;
-    if (!getPersistentNativeRuntimeUserEnabled()) return;
     let cancelled = false;
     let interval: ReturnType<typeof setInterval> | null = null;
+    let loopsStarted = false;
 
     const drain = async () => {
       if (cancelled) return;
@@ -937,18 +937,35 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       }
     };
 
-    // Initial drain shortly after boot
-    setTimeout(() => { void drain(); }, 1500);
-
-    // Poll every 45s while always-on is enabled (foreground service keeps JS alive somewhat,
-    // but WebView timers may be throttled; this is a safety net).
-    interval = setInterval(() => { void drain(); }, 45_000);
+    const startLoops = () => {
+      if (loopsStarted) return;
+      loopsStarted = true;
+      // Initial drain shortly after enabling / boot
+      setTimeout(() => { void drain(); }, 1500);
+      // Poll every 45s while always-on is enabled (foreground service keeps JS alive somewhat,
+      // but WebView timers may be throttled; this is a safety net).
+      interval = setInterval(() => { void drain(); }, 45_000);
+    };
+    const stopLoops = () => {
+      if (interval) { clearInterval(interval); interval = null; }
+      loopsStarted = false;
+    };
 
     // Also drain on visibility changes (user returns)
     const onVisible = () => {
       if (document.visibilityState === 'visible') void drain();
     };
     document.addEventListener('visibilitychange', onVisible);
+
+    // React to the always-on toggle without requiring an app restart.
+    const onPersistentChanged = (e: Event) => {
+      const enabled = !!((e as CustomEvent).detail?.enabled);
+      if (enabled) startLoops(); else stopLoops();
+    };
+    window.addEventListener('sully-persistent-runtime-changed', onPersistentChanged as EventListener);
+
+    // Start immediately if always-on is already enabled at mount.
+    if (getPersistentNativeRuntimeUserEnabled()) startLoops();
 
     // Listen for native timer events dispatched by the drain itself (or by other code calling schedule)
     const onNativeTimer = (e: Event) => {
@@ -971,9 +988,10 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
 
     return () => {
       cancelled = true;
-      if (interval) clearInterval(interval);
+      stopLoops();
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('sully-native-timer', onNativeTimer as EventListener);
+      window.removeEventListener('sully-persistent-runtime-changed', onPersistentChanged as EventListener);
     };
   }, []);
 

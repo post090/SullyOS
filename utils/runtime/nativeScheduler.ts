@@ -100,6 +100,28 @@ export async function cancelNativeTimer(tag: string): Promise<void> {
 }
 
 /**
+ * Clear ALL durable native timer jobs regardless of status or the enabled flag.
+ * Called when the user turns OFF always-on so completed/pending timer jobs do not
+ * leak in the native queue (they would never be drained again while disabled).
+ * Returns the number of timer jobs cleared.
+ */
+export async function clearAllNativeTimers(): Promise<number> {
+  if (!isNativeRuntimePlatform()) return 0;
+  let cleared = 0;
+  try {
+    const jobs = await listNativeJobs();
+    for (const job of jobs) {
+      if (!isTimerJobId(job.jobId)) continue;
+      await clearNativeJob(job.jobId).catch(() => {});
+      cleared += 1;
+    }
+  } catch (e) {
+    console.warn('[NativeScheduler] clearAll failed', e);
+  }
+  return cleared;
+}
+
+/**
  * Poll native jobs for completed timers, dispatch events, and clean up.
  * Returns number of timers drained.
  */

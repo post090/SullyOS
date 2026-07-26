@@ -145,7 +145,9 @@ public class SullyNativeRuntimePlugin extends Plugin {
             Intent intent = new Intent(getContext(), SullyNativeRuntimeService.class);
             intent.setAction(SullyNativeRuntimeService.ACTION_CANCEL_JOB);
             intent.putExtra("jobId", jobId);
-            getContext().startService(intent);
+            // Clear any scheduled exact alarm for this job even if the service can't start.
+            SullyNativeRuntimeService.cancelAlarm(getContext(), jobId);
+            try { getContext().startService(intent); } catch (Exception ignored) { /* background start limits */ }
             SullyNativeRuntimeService.markCancelled(getContext(), jobId);
             call.resolve();
         } catch (Exception e) {
@@ -316,6 +318,7 @@ public class SullyNativeRuntimePlugin extends Plugin {
             call.reject("jobId is required");
             return;
         }
+        SullyNativeRuntimeService.cancelAlarm(getContext(), jobId);
         File f = SullyNativeRuntimeService.jobFile(getContext(), jobId);
         if (f.exists()) f.delete();
         call.resolve();
@@ -373,7 +376,7 @@ public class SullyNativeRuntimePlugin extends Plugin {
         intent.putExtra("isPlaying", isPlaying);
         intent.putExtra("isLiked", isLiked);
         intent.putExtra("songId", songId);
-        getContext().startService(intent);
+        SullyNativeRuntimeService.startCompat(getContext(), intent);
         call.resolve();
     }
 
@@ -393,7 +396,7 @@ public class SullyNativeRuntimePlugin extends Plugin {
         intent.putExtra("isPlaying", isPlaying);
         intent.putExtra("isLiked", isLiked);
         intent.putExtra("songId", songId);
-        getContext().startService(intent);
+        SullyNativeRuntimeService.startCompat(getContext(), intent);
         call.resolve();
     }
 
@@ -401,7 +404,9 @@ public class SullyNativeRuntimePlugin extends Plugin {
     public void stopMusicNotification(PluginCall call) {
         Intent intent = new Intent(getContext(), SullyNativeRuntimeService.class);
         intent.setAction(SullyNativeRuntimeService.ACTION_MUSIC_STOP);
-        getContext().startService(intent);
+        // Plain startService: if the service isn't running there is nothing to stop, and
+        // startForegroundService would force a foreground contract we don't want here.
+        try { getContext().startService(intent); } catch (Exception ignored) { /* background start limits */ }
         call.resolve();
     }
 

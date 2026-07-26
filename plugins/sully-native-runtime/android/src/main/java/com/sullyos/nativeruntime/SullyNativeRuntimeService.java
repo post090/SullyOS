@@ -1,5 +1,6 @@
 package com.sullyos.nativeruntime;
 
+import android.app.AlarmManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -7,6 +8,7 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ServiceInfo;
 import android.os.Build;
 import android.os.IBinder;
 
@@ -42,6 +44,7 @@ public class SullyNativeRuntimeService extends Service {
     public static final String ACTION_MUSIC_UPDATE = "com.sullyos.nativeruntime.MUSIC_UPDATE";
     public static final String ACTION_MUSIC_STOP = "com.sullyos.nativeruntime.MUSIC_STOP";
     public static final String ACTION_MUSIC_ACTION = "com.sullyos.nativeruntime.MUSIC_ACTION";
+    public static final String ACTION_ALARM_WAKE = "com.sullyos.nativeruntime.ALARM_WAKE";
 
     private static final String CHANNEL_ID = "sully_native_runtime";
     private static final String CHANNEL_CALL = "sully_call";
@@ -54,15 +57,39 @@ public class SullyNativeRuntimeService extends Service {
     private static final Set<String> CANCELLED = ConcurrentHashMap.newKeySet();
     private static final Set<String> ACTIVE_JOB_IDS = ConcurrentHashMap.newKeySet();
     private static final ConcurrentHashMap<String, HttpURLConnection> CONNECTIONS = new ConcurrentHashMap<>();
+    // Jobs whose runAt is farther than this are scheduled via AlarmManager instead of
+    // parking a worker thread on Thread.sleep (survives Doze / process death).
+    private static final long ALARM_THRESHOLD_MS = 60_000L;
     private static volatile boolean manualForeground = false;
     // Call tracking for resume
     private static volatile long callStartedAtMs = 0;
     private static volatile String callCharId = null;
     private static volatile String callCharName = null;
+    // Music tracking so we can keep the service foreground while playing and rebuild the
+    // media notification when another foreground (call/persistent) is torn down.
+    private static volatile boolean musicActive = false;
+    private static volatile String musicTitle = null;
+    private static volatile String musicArtist = null;
+    private static volatile String musicAlbum = null;
+    private static volatile String musicSongId = null;
+    private static volatile boolean musicPlaying = false;
+    private static volatile boolean musicLiked = false;
+    private android.media.session.MediaSession mediaSession;
 
     @Override
     public IBinder onBind(Intent intent) {
         return null;
+    }
+
+    @Override
+    public void onDestroy() {
+        try {
+            if (mediaSession != null) {
+                mediaSession.release();
+                mediaSession = null;
+            }
+        } catch (Exception ignored) {}
+        super.onDestroy();
     }
 
     @Override
@@ -76,7 +103,7 @@ public class SullyNativeRuntimeService extends Service {
                 intent.getStringExtra("tag"),
                 intent.getStringExtra("route")
             );
-            if (manualForeground) {
+            if (manualForeground || callStartedAtMs != 0 || musicActive) {
                 return START_STICKY;
             }
             stopSelf(startId);
@@ -110,7 +137,6 @@ public class SullyNativeRuntimeService extends Service {
             return START_STICKY;
         }
         if (ACTION_CALL_END.equals(action)) {
-            stopCallNotification();
             callCharId = null;
             callCharName = null;
             callStartedAtMs = 0;
@@ -120,6 +146,7 @@ public class SullyNativeRuntimeService extends Service {
                 .remove("call_char_name")
                 .remove("call_started_at")
                 .apply();
+            stopCallNotification();
             maybeStop();
             return START_NOT_STICKY;
         }
@@ -192,6 +219,7 @@ public class SullyNativeRuntimeService extends Service {
             String jobId = intent.getStringExtra("jobId");
             if (jobId != null) {
                 CANCELLED.add(jobId);
+                cancelAlarm(this, jobId);
                 HttpURLConnection conn = CONNECTIONS.get(jobId);
                 if (conn != null) conn.disconnect();
                 try { markCancelled(this, jobId); } catch (Exception ignored) {}
@@ -202,6 +230,20 @@ public class SullyNativeRuntimeService extends Service {
         if (ACTION_ENQUEUE_HTTP.equals(action)) {
             String jobId = intent.getStringExtra("jobId");
             if (jobId == null) return START_NOT_STICKY;
+            long runAt = readJobRunAt(jobId);
+            // Far-future jobs: hand off to AlarmManager instead of parking a worker thread.
+            if (runAt > System.currentTimeMillis() + ALARM_THRESHOLD_MS) {
+                scheduleExactAlarm(this, jobId, runAt);
+                // We were started via startForegroundService; satisfy that contract first,
+                // then release the foreground unless something else needs it. The alarm wakes us.
+                startForegroundCompat(
+                    intent.getStringExtra("title"),
+                    intent.getStringExtra("text")
+                );
+                restoreMusicForegroundIfIdle();
+                maybeStop();
+                return START_NOT_STICKY;
+            }
             startForegroundCompat(
                 intent.getStringExtra("title"),
                 intent.getStringExtra("text")
@@ -212,12 +254,27 @@ public class SullyNativeRuntimeService extends Service {
             }
             return START_REDELIVER_INTENT;
         }
+        if (ACTION_ALARM_WAKE.equals(action)) {
+            // An exact alarm fired. Ensure foreground within 5s, run due jobs, then release.
+            startForegroundCompat("SullyOS 正在运行", "");
+            String jobId = intent.getStringExtra("jobId");
+            if (jobId != null && ACTIVE_JOB_IDS.add(jobId)) {
+                RUNNING_JOBS.incrementAndGet();
+                EXECUTOR.execute(() -> runHttpJob(jobId));
+            }
+            // Also pick up any other jobs whose runAt has elapsed.
+            resumePendingJobs();
+            restoreMusicForegroundIfIdle();
+            maybeStop();
+            return START_NOT_STICKY;
+        }
         return START_NOT_STICKY;
     }
 
     private void resumePendingJobs() {
         File[] files = jobsDir(this).listFiles();
         if (files == null) return;
+        long now = System.currentTimeMillis();
         for (File file : files) {
             try {
                 JSONObject job = new JSONObject(readAll(new FileInputStream(file)));
@@ -225,11 +282,165 @@ public class SullyNativeRuntimeService extends Service {
                 if (!"queued".equals(status) && !"running".equals(status)) continue;
                 String jobId = job.optString("jobId", "");
                 if (jobId.isEmpty()) continue;
+                long runAt = job.optLong("runAt", 0L);
+                if (runAt > now + ALARM_THRESHOLD_MS) {
+                    // Not due yet: (re)schedule an alarm instead of parking a worker thread.
+                    scheduleExactAlarm(this, jobId, runAt);
+                    continue;
+                }
                 if (!ACTIVE_JOB_IDS.add(jobId)) continue;
                 RUNNING_JOBS.incrementAndGet();
                 EXECUTOR.execute(() -> runHttpJob(jobId));
             } catch (Exception ignored) { /* malformed job is left for recovery diagnostics */ }
         }
+    }
+
+    private long readJobRunAt(String jobId) {
+        try {
+            JSONObject job = readJob(this, jobId);
+            if (job != null) return job.optLong("runAt", 0L);
+        } catch (Exception ignored) {}
+        return 0L;
+    }
+
+    private static PendingIntent alarmPendingIntent(Context ctx, String jobId) {
+        Intent i = new Intent(ctx, SullyNativeRuntimeAlarmReceiver.class);
+        i.setAction(SullyNativeRuntimeAlarmReceiver.ACTION_ALARM_FIRE);
+        i.putExtra("jobId", jobId);
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) flags |= PendingIntent.FLAG_IMMUTABLE;
+        // Stable request code derived from jobId so cancel() matches the same PendingIntent.
+        return PendingIntent.getBroadcast(ctx, jobId.hashCode(), i, flags);
+    }
+
+    static void scheduleExactAlarm(Context ctx, String jobId, long runAt) {
+        AlarmManager am = (AlarmManager) ctx.getSystemService(Context.ALARM_SERVICE);
+        if (am == null || jobId == null) return;
+        PendingIntent pi = alarmPendingIntent(ctx, jobId);
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                if (am.canScheduleExactAlarms()) {
+                    am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, runAt, pi);
+                } else {
+                    // No exact-alarm permission: inexact but still fires in Doze (may be delayed).
+                    am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, runAt, pi);
+                }
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, runAt, pi);
+            } else {
+                am.setExact(AlarmManager.RTC_WAKEUP, runAt, pi);
+            }
+        } catch (Exception e) {
+            try { am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, runAt, pi); }
+            catch (Exception ignored) {}
+        }
+    }
+
+    static void cancelAlarm(Context ctx, String jobId) {
+        if (jobId == null) return;
+        AlarmManager am = (AlarmManager) ctx.getSystemService(Context.ALARM_SERVICE);
+        if (am == null) return;
+        try { am.cancel(alarmPendingIntent(ctx, jobId)); } catch (Exception ignored) {}
+    }
+
+    /** startForeground with an explicit FGS type on Android 14+, falling back to the plain form. */
+    private void startForegroundTyped(int id, Notification notification, int type) {
+        if (Build.VERSION.SDK_INT >= 34) {
+            try {
+                startForeground(id, notification, type);
+                return;
+            } catch (Exception e) {
+                // Fall back to the manifest-declared union of types.
+            }
+        }
+        startForeground(id, notification);
+    }
+
+    /** Re-establish whichever foreground the service should currently hold, or stop if none. */
+    private void reassertForeground() {
+        if (manualForeground) {
+            startForegroundCompat("SullyOS 正在运行", "");
+        } else if (callStartedAtMs != 0) {
+            startForegroundCompatWithCall(callCharName, callStartedAtMs);
+        } else if (musicActive) {
+            showMusicNotification(musicTitle, musicArtist, musicAlbum, musicPlaying, musicLiked, musicSongId);
+        } else if (RUNNING_JOBS.get() > 0) {
+            // Keep the service foreground for in-flight jobs with the generic notification.
+            startForegroundCompat(null, null);
+        } else {
+            stopForegroundAndSelf();
+        }
+    }
+
+    /** If a transient job foreground displaced the media anchor, put the music notification back. */
+    private void restoreMusicForegroundIfIdle() {
+        if (musicActive && !manualForeground && callStartedAtMs == 0 && RUNNING_JOBS.get() == 0) {
+            reassertForeground();
+        }
+    }
+
+    private void stopForegroundAndSelf() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE);
+        } else {
+            stopForeground(true);
+        }
+        stopSelf();
+    }
+
+    private void handleMediaButton(String action) {
+        if (action == null || action.trim().isEmpty()) return;
+        getSharedPreferences("sully_native_runtime", MODE_PRIVATE).edit()
+            .putString("pending_music_action", action)
+            .putLong("pending_music_action_at", System.currentTimeMillis())
+            .apply();
+    }
+
+    private android.media.session.MediaSession ensureMediaSession() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return null;
+        if (mediaSession != null) return mediaSession;
+        try {
+            android.media.session.MediaSession s = new android.media.session.MediaSession(this, "SullyOSMusic");
+            s.setCallback(new android.media.session.MediaSession.Callback() {
+                @Override public void onPlay() { handleMediaButton("play"); }
+                @Override public void onPause() { handleMediaButton("pause"); }
+                @Override public void onSkipToNext() { handleMediaButton("next"); }
+                @Override public void onSkipToPrevious() { handleMediaButton("prev"); }
+            }, new android.os.Handler(android.os.Looper.getMainLooper()));
+            s.setActive(true);
+            mediaSession = s;
+        } catch (Exception e) {
+            mediaSession = null;
+        }
+        return mediaSession;
+    }
+
+    private void updateMediaSessionMetadata(String title, String artist, boolean isPlaying) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return;
+        android.media.session.MediaSession s = ensureMediaSession();
+        if (s == null) return;
+        try {
+            android.media.MediaMetadata meta = new android.media.MediaMetadata.Builder()
+                .putString(android.media.MediaMetadata.METADATA_KEY_TITLE, title == null ? "" : title)
+                .putString(android.media.MediaMetadata.METADATA_KEY_ARTIST, artist == null ? "" : artist)
+                .build();
+            s.setMetadata(meta);
+            long actions = android.media.session.PlaybackState.ACTION_PLAY
+                | android.media.session.PlaybackState.ACTION_PAUSE
+                | android.media.session.PlaybackState.ACTION_PLAY_PAUSE
+                | android.media.session.PlaybackState.ACTION_SKIP_TO_NEXT
+                | android.media.session.PlaybackState.ACTION_SKIP_TO_PREVIOUS;
+            android.media.session.PlaybackState ps = new android.media.session.PlaybackState.Builder()
+                .setActions(actions)
+                .setState(
+                    isPlaying ? android.media.session.PlaybackState.STATE_PLAYING
+                              : android.media.session.PlaybackState.STATE_PAUSED,
+                    android.media.session.PlaybackState.PLAYBACK_POSITION_UNKNOWN,
+                    1.0f)
+                .build();
+            s.setPlaybackState(ps);
+            if (!s.isActive()) s.setActive(true);
+        } catch (Exception ignored) {}
     }
 
     private void runHttpJob(String jobId) {
@@ -282,6 +493,8 @@ public class SullyNativeRuntimeService extends Service {
             CANCELLED.remove(jobId);
             ACTIVE_JOB_IDS.remove(jobId);
             RUNNING_JOBS.decrementAndGet();
+            // If the job foreground displaced the media notification, restore it once idle.
+            restoreMusicForegroundIfIdle();
             maybeStop();
         }
     }
@@ -389,12 +602,12 @@ public class SullyNativeRuntimeService extends Service {
 
     private void startForegroundCompat(String title, String text) {
         ensureChannel(this);
-        startForeground(NOTIFICATION_ID, buildNotification(
+        startForegroundTyped(NOTIFICATION_ID, buildNotification(
             title == null || title.trim().isEmpty() ? "SullyOS 正在运行" : title,
             text == null || text.trim().isEmpty() ? "" : text,
             true,
             null
-        ));
+        ), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
     }
 
     private void startForegroundCompatWithCall(String charName, long startedAtMs) {
@@ -409,7 +622,7 @@ public class SullyNativeRuntimeService extends Service {
             startedAtMs,
             routeCallId
         );
-        startForeground(NOTIFICATION_CALL_ID, notification);
+        startForegroundTyped(NOTIFICATION_CALL_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
     }
 
     private void updateCallNotification(String charName, long startedAtMs) {
@@ -441,16 +654,8 @@ public class SullyNativeRuntimeService extends Service {
         if (manager != null) {
             manager.cancel("sully-call", NOTIFICATION_CALL_ID);
         }
-        // If persistent mode is still enabled, restore its foreground notification
-        if (manualForeground) {
-            startForegroundCompat("SullyOS 正在运行", "");
-        } else {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                stopForeground(STOP_FOREGROUND_REMOVE);
-            } else {
-                stopForeground(true);
-            }
-        }
+        // Restore whichever foreground still applies (persistent / music), or stop the service.
+        reassertForeground();
     }
 
     private Notification buildCallNotification(String title, String text, long startedAtMs, String charIdForRoute) {
@@ -507,18 +712,46 @@ public class SullyNativeRuntimeService extends Service {
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager == null) return;
 
+        // Remember state so reassertForeground() can rebuild this notification later.
+        musicTitle = title;
+        musicArtist = artist;
+        musicAlbum = album;
+        musicPlaying = isPlaying;
+        musicLiked = isLiked;
+        musicSongId = songId;
+        musicActive = true;
+
         String contentTitle = title != null && !title.trim().isEmpty() ? title : "SullyOS 音乐";
         String contentText = artist != null && !artist.trim().isEmpty() ? artist : (album != null ? album : "正在播放");
 
+        updateMediaSessionMetadata(contentTitle, contentText, isPlaying);
         Notification notification = buildMusicNotification(contentTitle, contentText, isPlaying, isLiked, songId);
-        manager.notify("sully-music", NOTIFICATION_MUSIC_ID, notification);
+        if (manualForeground || callStartedAtMs != 0) {
+            // Another notification already anchors the foreground; post music alongside it
+            // so we don't displace the persistent/call notification.
+            manager.notify("sully-music", NOTIFICATION_MUSIC_ID, notification);
+        } else {
+            // Anchor the service's foreground on the media notification so playback
+            // controls keep working with the app in background / screen off.
+            startForegroundTyped(NOTIFICATION_MUSIC_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
+        }
     }
 
     private void stopMusicNotification() {
+        musicActive = false;
+        musicPlaying = false;
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager != null) {
+            // The notification may have been posted with a tag (notify path) or without
+            // one (startForeground path); cancel both forms.
             manager.cancel("sully-music", NOTIFICATION_MUSIC_ID);
+            manager.cancel(NOTIFICATION_MUSIC_ID);
         }
+        if (mediaSession != null) {
+            try { mediaSession.setActive(false); } catch (Exception ignored) {}
+        }
+        // Restore whichever foreground still applies (persistent / call), or stop the service.
+        reassertForeground();
     }
 
     private Notification buildMusicNotification(String title, String artist, boolean isPlaying, boolean isLiked, String songId) {
@@ -566,7 +799,18 @@ public class SullyNativeRuntimeService extends Service {
         builder.addAction(new Notification.Action.Builder(null, toggleTitle, togglePending).build());
         builder.addAction(new Notification.Action.Builder(null, "下一首", nextPending).build());
 
-        // For Android 10+, we could use MediaStyle, but keep simple for compatibility
+        // MediaStyle + MediaSession so media buttons / lockscreen controls work (API 21+).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            try {
+                android.media.session.MediaSession session = ensureMediaSession();
+                if (session != null) {
+                    Notification.MediaStyle style = new Notification.MediaStyle()
+                        .setMediaSession(session.getSessionToken())
+                        .setShowActionsInCompactView(1, 2, 3); // prev / play-pause / next
+                    builder.setStyle(style);
+                }
+            } catch (Exception ignored) { /* fall back to plain notification */ }
+        }
         return builder.build();
     }
 
@@ -613,7 +857,7 @@ public class SullyNativeRuntimeService extends Service {
     }
 
     private void maybeStop() {
-        if (manualForeground || RUNNING_JOBS.get() > 0 || callStartedAtMs != 0) return;
+        if (manualForeground || RUNNING_JOBS.get() > 0 || callStartedAtMs != 0 || musicActive) return;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             stopForeground(STOP_FOREGROUND_REMOVE);
         } else {

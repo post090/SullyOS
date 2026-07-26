@@ -93,6 +93,13 @@ export function setPersistentNativeRuntimeUserEnabled(enabled: boolean): void {
     if (enabled) localStorage.setItem(NATIVE_RUNTIME_PERSISTENT_KEY, '1');
     else localStorage.removeItem(NATIVE_RUNTIME_PERSISTENT_KEY);
   } catch { /* ignore */ }
+  // Notify listeners (e.g. OSContext drain loop) so the always-on toggle takes
+  // effect immediately without requiring an app restart.
+  try {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('sully-persistent-runtime-changed', { detail: { enabled } }));
+    }
+  } catch { /* ignore */ }
 }
 
 export function getNativeChatRuntimeUserEnabled(): boolean {
@@ -147,6 +154,12 @@ export async function startPersistentNativeRuntime(): Promise<void> {
 export async function stopPersistentNativeRuntime(): Promise<void> {
   if (await isNativeRuntimeAvailable()) await NativeRuntime.setPersistentEnabled({ enabled: false });
   await stopNativeForegroundTask('sully-runtime');
+  // Clean up leftover durable timer jobs so they do not leak in the native queue
+  // while always-on is off (they would never be drained again). Best-effort.
+  try {
+    const { clearAllNativeTimers } = await import('./nativeScheduler');
+    await clearAllNativeTimers();
+  } catch { /* best-effort cleanup */ }
 }
 
 export async function getNativeLaunchRoute(): Promise<string | null> {
