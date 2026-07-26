@@ -1176,6 +1176,36 @@ ${memberTimeline || '(暂无互动记录)'}
         addToast('话题盒和成员私聊卡片已删除', 'success');
     };
 
+    // ⑥ 群聊事件驱动日程修订：回复轮结束后对开了修订的成员逐个 fire
+    // （10 分钟 debounce 防连发轰炸；fire-and-forget，不阻塞群聊主流程）。
+    const fireGroupScheduleRevisions = () => {
+        const group = activeGroup;
+        if (!group) return;
+        void (async () => {
+            try {
+                const { reviseScheduleForEvent, revisionApiOf, isRevisionEnabled, claimGroupRevisionSlot } = await import('../utils/scheduleRevision');
+                const members = characters.filter(ch => group.members.includes(ch.id) && isRevisionEnabled(ch));
+                if (members.length === 0) return;
+                const msgs = await DB.getGroupMessages(group.id);
+                const recent = msgs.slice(-12).map(m => {
+                    const name = m.role === 'user' ? userProfile.name : (characters.find(c => c.id === m.charId)?.name || '成员');
+                    return `${name}: ${messageLogText(m, url => stickerNameFromUrl(emojis, url))}`;
+                }).join('\n').slice(-1200);
+                if (!recent.trim()) return;
+                for (const c of members) {
+                    if (!claimGroupRevisionSlot(c.id)) continue;
+                    void reviseScheduleForEvent({
+                        char: c,
+                        api: revisionApiOf(c, { baseUrl: apiConfig.baseUrl, apiKey: apiConfig.apiKey, model: apiConfig.model }),
+                        source: 'group',
+                        sourceLabel: group.name,
+                        eventSummary: recent,
+                    });
+                }
+            } catch { /* ignore */ }
+        })();
+    };
+
     const triggerDirector = async (currentMsgs: Message[]) => {
         if (!activeGroup) return;
         if (!apiConfig.apiKey) {
@@ -1259,6 +1289,9 @@ ${memberTimeline || '(暂无互动记录)'}
                 userName: userProfile.name,
                 htmlMode: !!activeGroup.htmlModeEnabled,
             });
+
+            // 本轮回复落库完成 → 触发成员日程修订（受 10 分钟 debounce 管）
+            fireGroupScheduleRevisions();
 
         } catch (e: any) {
             if (e?.name === 'AbortError') {
@@ -1380,6 +1413,8 @@ ${memberTimeline || '(暂无互动记录)'}
             } else if (failed.length > 0) {
                 addToast(`${failed.join('、')} 本轮回复失败（已跳过）`, 'error');
             }
+            // 整轮跑完（未被手动停止）→ 触发成员日程修订（受 10 分钟 debounce 管）
+            if (!abort.signal.aborted) fireGroupScheduleRevisions();
         } finally {
             setIsTyping(false);
             setMcpStatus('');

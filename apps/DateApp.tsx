@@ -522,6 +522,15 @@ const DateApp: React.FC = () => {
         if (char) {
             updateCharacter(char.id, { savedDateState: finalState });
             addToast('进度已保存', 'success');
+            // ⑥ 事件驱动日程修订：一场见面可能改变今天之后的安排（fire-and-forget，不阻塞退出流程）
+            const dateChar = char;
+            const lastScene = typeof finalState?.currentText === 'string' ? finalState.currentText.slice(0, 300) : '';
+            void import('../utils/scheduleRevision').then(m => m.reviseScheduleForEvent({
+                char: dateChar,
+                api: m.revisionApiOf(dateChar, { baseUrl: apiConfig.baseUrl, apiKey: apiConfig.apiKey, model: apiConfig.model }),
+                source: 'date',
+                eventSummary: `刚和用户线下见面约会了一场，刚刚结束。${lastScene ? `最后的场景：${lastScene}` : ''}`,
+            })).catch(() => { /* ignore */ });
         }
         // 来自聊天：退出见面回聊天
         if (cameFromChat) { returnToChat(); return; }

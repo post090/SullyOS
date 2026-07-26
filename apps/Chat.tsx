@@ -901,6 +901,18 @@ const Chat: React.FC = () => {
         }).catch(() => {});
     }, [activeCharacterId, char?.scheduleFeatureEnabled, localDateKey]);
 
+    // ⑦ 日程被事件修订后（情绪顺风车/独立调用/群聊/通话/见面/家园）刷新日程 modal 的 diff 角标
+    useEffect(() => {
+        if (!char) return;
+        const onRevised = (e: Event) => {
+            const detail = (e as CustomEvent).detail as { charId?: string } | undefined;
+            if (detail?.charId && detail.charId !== char.id) return;
+            getLocalDailySchedule(char.id).then(s => { if (s) setScheduleData(s); }).catch(() => {});
+        };
+        window.addEventListener('schedule-revised', onRevised);
+        return () => window.removeEventListener('schedule-revised', onRevised);
+    }, [activeCharacterId]);
+
     // 每次真正打开聊天设置时从角色持久化值重新初始化；避免用户在记忆宫殿页
     // 切换全自动模式后，隐藏着的 Chat 组件仍带着旧拉杆状态。
     useEffect(() => {
@@ -3114,6 +3126,7 @@ const Chat: React.FC = () => {
                     updateCharacter(char.id, patch);
                     addToast('提示词已保存', 'success');
                 }}
+                onScheduleConfigChange={(cfg) => updateCharacter(char.id, { scheduleConfig: cfg })}
              />
 
              {/* 小剧场播放器：窥视某个日程时段的角色行为演出 */}

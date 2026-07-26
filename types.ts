@@ -608,6 +608,20 @@ export interface ScheduleSlot {
     theater?: SlotTheater; // 该时段的小剧场（窥视演出），按需生成并缓存
 }
 
+/** 一次事件驱动的日程修订：聊天/群聊/通话/见面/家园事件后，角色把今天后面的安排改一改。 */
+export interface ScheduleRevision {
+    id: string;
+    at: number;                                  // 修订发生的时间戳
+    source: 'chat' | 'group' | 'call' | 'date' | 'world';
+    sourceLabel?: string;                        // 事件补充说明（如通话时长/世界名）
+    reason: string;                              // 角色视角的原因，一句话（第一人称口吻）
+    changes: {
+        type: 'modify' | 'add' | 'remove';
+        before?: ScheduleSlot;                   // modify/remove：改动前的时段
+        after?: ScheduleSlot;                    // modify/add：改动后的时段
+    }[];
+}
+
 export interface DailySchedule {
     id: string;           // `${charId}_${date}`
     charId: string;
@@ -615,6 +629,8 @@ export interface DailySchedule {
     slots: ScheduleSlot[];
     generatedAt: number;
     coverImage?: string;  // 用户自定义角色看板图 (持久化)
+    /** 事件驱动的修订历史（新的在后；不设上限），slots 已是修订后的最新状态 */
+    revisions?: ScheduleRevision[];
     /**
      * 按时段生成的意识流独白。
      * key = slot 的 startTime（如 "08:00"），value = 截止该时段的完整内心独白。
@@ -2441,6 +2457,17 @@ export interface CharacterProfile {
    * - undefined：向后兼容——若 scheduleStyle 已设（老用户已隐式选风格）视为开启；否则默认关闭。
    */
   scheduleFeatureEnabled?: boolean;
+
+  /** 日程个性化配置（数量范围 + 事件驱动修订） */
+  scheduleConfig?: {
+    /** 每日时段数量范围（滑条 5-15；不设默认 5/7） */
+    minSlots?: number;
+    maxSlots?: number;
+    /** 事件驱动日程修订：off=关闭（默认）；merged=单聊搭情绪评估的车零额外调用；standalone=独立轻量调用 */
+    revisionMode?: 'off' | 'merged' | 'standalone';
+    /** 家园演绎完成后是否也修订当天日程（默认 false） */
+    worldAffectsSchedule?: boolean;
+  };
 
   /**
    * HTML 模块模式（per-character）。

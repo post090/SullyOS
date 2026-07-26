@@ -70,6 +70,17 @@ function formatChatHistoryForSchedule(
     return `\n## 最近的聊天记录（与「${user.name}」）\n${lines.join('\n')}\n`;
 }
 
+/** 每日时段数量范围：用户滑条 5-15，不设默认 5-7（向后兼容）。 */
+function slotRangeOf(char: CharacterProfile): { min: number; max: number } {
+    const clamp = (v: unknown, d: number) => {
+        const n = Math.round(Number(v));
+        return Number.isFinite(n) ? Math.max(5, Math.min(15, n)) : d;
+    };
+    const min = clamp(char.scheduleConfig?.minSlots, 5);
+    const max = Math.max(min, clamp(char.scheduleConfig?.maxSlots, 7));
+    return { min, max };
+}
+
 function buildLifestylePrompt(
     baseContext: string,
     char: CharacterProfile,
@@ -90,7 +101,7 @@ ${chatHistoryBlock ? `**重要：上面给了你最近和「${user.name}」的�
 
 ### 第一部分：日程表（用于UI卡片展示）
 
-生成 5-7 个时间段，从早到晚。每个时段：
+生成 ${slotRangeOf(char).min}-${slotRangeOf(char).max} 个时间段，从早到晚。每个时段：
 - startTime: "HH:MM"
 - activity: 活动名（2-6字）
 - description: 一句话描述（可以带动作质感、物件、感官细节）
@@ -198,7 +209,7 @@ ${chatHistoryBlock ? `**重要：上面给了你最近和「${user.name}」的�
 
 ### 第一部分：思绪时间线（用于UI卡片展示）
 
-生成 5-7 个时间段，代表角色一天中不同时刻的内心状态。每个时段：
+生成 ${slotRangeOf(char).min}-${slotRangeOf(char).max} 个时间段，代表角色一天中不同时刻的内心状态。每个时段：
 - startTime: "HH:MM"
 - activity: 状态名（2-6字，如"回想昨天的对话""发呆""整理想法""想找你聊天"）
 - description: 一句话描述此刻在想什么

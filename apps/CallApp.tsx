@@ -823,6 +823,15 @@ const CallApp: React.FC = () => {
         metadata: { source: 'call-end-popup', callSessionId: currentSessionId, ...payload },
       });
       await loadCallRecords(selectedChar.id);
+      // ⑥ 事件驱动日程修订：一通电话可能改变今天之后的安排（fire-and-forget，不阻塞挂断流程）
+      const callChar = selectedChar;
+      void import('../utils/scheduleRevision').then(m => m.reviseScheduleForEvent({
+        char: callChar,
+        api: m.revisionApiOf(callChar, { baseUrl: apiConfig.baseUrl, apiKey: apiConfig.apiKey, model: apiConfig.model }),
+        source: 'call',
+        sourceLabel: formatDuration(elapsedSeconds),
+        eventSummary: `刚和用户通了 ${formatDuration(elapsedSeconds)} 电话（${Math.max(1, userTurns)} 轮对话）${keepsakeLine ? `，印象最深的一句：${keepsakeLine}` : ''}`,
+      })).catch(() => { /* ignore */ });
     }
     clearSuspendedCall();
     resetCurrentCall();

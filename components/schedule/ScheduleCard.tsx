@@ -1,6 +1,6 @@
 
 import React, { useState, useRef } from 'react';
-import { DailySchedule, ScheduleSlot, CharacterProfile } from '../../types';
+import { DailySchedule, ScheduleSlot, ScheduleRevision, CharacterProfile } from '../../types';
 
 interface ScheduleCardProps {
     schedule: DailySchedule | null;
@@ -25,6 +25,18 @@ const getCurrentSlotIndex = (slots: ScheduleSlot[]): number => {
     }
     return -1;
 };
+
+// ⑦ 修订来源角标：事件驱动日程修订（utils/scheduleRevision.ts）的来源 icon
+export const REVISION_SOURCE_ICON: Record<ScheduleRevision['source'], string> = {
+    chat: '💬', group: '👥', call: '📞', date: '🌸', world: '🏠',
+};
+const REVISION_SOURCE_LABEL: Record<ScheduleRevision['source'], string> = {
+    chat: '聊天', group: '群聊', call: '通话', date: '见面', world: '家园',
+};
+
+/** 某个时段命中的修订记录（modify/add 的 after 落在该时段） */
+export const revisionsForSlot = (revisions: ScheduleRevision[] | undefined, startTime: string) =>
+    (revisions || []).filter(r => r.changes.some(c => c.after?.startTime === startTime && (c.type === 'modify' || c.type === 'add')));
 
 const formatDate = (): string => {
     const now = new Date();
@@ -61,6 +73,9 @@ const ScheduleCard: React.FC<ScheduleCardProps> = ({
     // 点了「还没到的时段」的播放按钮 → 在该按钮上方冒一个一闪而过的小提示
     const [lockedHintIdx, setLockedHintIdx] = useState<number | null>(null);
     const lockedHintTimerRef = useRef<number | null>(null);
+    // ⑦ 修订 diff：展开了哪个时段的修订卡片（按 startTime）+ 底部「今日变动」折叠区
+    const [openRevKey, setOpenRevKey] = useState<string | null>(null);
+    const [showRevLog, setShowRevLog] = useState(false);
     const showLockedHint = (idx: number) => {
         if (lockedHintTimerRef.current) window.clearTimeout(lockedHintTimerRef.current);
         setLockedHintIdx(idx);
@@ -219,6 +234,8 @@ const ScheduleCard: React.FC<ScheduleCardProps> = ({
                             const isPast = currentIdx >= 0 && idx < currentIdx;
                             const isFuture = !isPast && !isCurrent; // 还没到的时段：按钮灰着，点了给提示
                             const isEditing = editingIdx === idx;
+                            // ⑦ 该时段命中的修订（被事件改过/新增的时段打角标）
+                            const slotRevs = revisionsForSlot(schedule.revisions, slot.startTime);
 
                             if (isEditing && !compact) {
                                 return (
@@ -279,8 +296,8 @@ const ScheduleCard: React.FC<ScheduleCardProps> = ({
                                 onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
                             } : {};
                             return (
+                                <React.Fragment key={idx}>
                                 <div
-                                    key={idx}
                                     className={`relative flex items-start gap-3 py-2 px-3 rounded-xl transition-all ${
                                         isCurrent ? 'border border-white/20' : 'border border-transparent'
                                     } ${editable ? 'cursor-pointer hover:bg-white/5 select-none' : ''}`}
@@ -318,6 +335,29 @@ const ScheduleCard: React.FC<ScheduleCardProps> = ({
                                         <div className="flex items-center gap-1.5">
                                             {slot.emoji && <span className="text-sm flex-shrink-0">{slot.emoji}</span>}
                                             <span className={`text-sm font-bold ${isCurrent ? '' : ''}`}>{slot.activity}</span>
+                                            {/* ⑦ 修订角标：点开展开改动前后对比 + 原因气泡 */}
+                                            {slotRevs.length > 0 && (
+                                                <button
+                                                    className="flex-shrink-0 text-[9px] font-bold px-1 py-0.5 rounded-md border border-white/20 active:scale-90 transition-all"
+                                                    style={{
+                                                        background: openRevKey === slot.startTime ? accentHsl : 'rgba(255,255,255,0.08)',
+                                                        color: openRevKey === slot.startTime ? cardBg : contentColor,
+                                                    }}
+                                                    title="被事件修订过，点击看改动"
+                                                    onPointerDown={(e) => { e.stopPropagation(); cancelLongPress(); }}
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        longPressTriggeredRef.current = false;
+                                                        setOpenRevKey(k => (k === slot.startTime ? null : slot.startTime));
+                                                    }}
+                                                >
+                                                    ↷{REVISION_SOURCE_ICON[slotRevs[slotRevs.length - 1].source]}
+                                                </button>
+                                            )}
+                                            {/* ⑧ 日程完成度：过去的时段没被事件动过 = 按计划完成 ✓ */}
+                                            {isPast && slotRevs.length === 0 && (
+                                                <span className="flex-shrink-0 text-[9px] opacity-60" title="按计划完成">✓</span>
+                                            )}
                                         </div>
                                         {slot.description && (
                                             <p className="text-[11px] opacity-50 mt-0.5 leading-tight">{slot.description}</p>
@@ -356,6 +396,41 @@ const ScheduleCard: React.FC<ScheduleCardProps> = ({
                                         </div>
                                     )}
                                 </div>
+                                {/* ⑦ 修订展开卡片：改动前划线灰 → 改动后高亮，配角色第一人称原因气泡 */}
+                                {openRevKey === slot.startTime && slotRevs.length > 0 && (
+                                    <div className="ml-[60px] mr-3 mb-1 p-2.5 rounded-xl border border-white/15 space-y-2" style={{ background: 'rgba(255,255,255,0.05)' }}>
+                                        {slotRevs.map(rev => {
+                                            const hits = rev.changes.filter(c => c.after?.startTime === slot.startTime);
+                                            return (
+                                                <div key={rev.id}>
+                                                    <div className="flex items-center gap-1 mb-1">
+                                                        <span className="text-[10px]">{REVISION_SOURCE_ICON[rev.source]}</span>
+                                                        <span className="text-[9px] opacity-50">
+                                                            {REVISION_SOURCE_LABEL[rev.source]}{rev.sourceLabel ? ` · ${rev.sourceLabel}` : ''} · {new Date(rev.at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+                                                        </span>
+                                                    </div>
+                                                    {hits.map((c, ci) => (
+                                                        <div key={ci} className="text-[11px] leading-tight">
+                                                            {c.before && (
+                                                                <p className="line-through opacity-40">{c.before.startTime} {c.before.emoji || ''}{c.before.activity}{c.before.description ? `（${c.before.description}）` : ''}</p>
+                                                            )}
+                                                            {c.before && c.after && <p className="opacity-30 text-[9px] pl-1">↓</p>}
+                                                            {c.after && (
+                                                                <p className="font-bold" style={{ color: c.type === 'add' ? '#86efac' : accentHsl }}>
+                                                                    {c.type === 'add' ? '+ ' : ''}{c.after.startTime} {c.after.emoji || ''}{c.after.activity}{c.after.description ? `（${c.after.description}）` : ''}
+                                                                </p>
+                                                            )}
+                                                        </div>
+                                                    ))}
+                                                    <p className="mt-1.5 text-[10px] leading-snug px-2 py-1.5 rounded-lg rounded-tl-sm opacity-80 inline-block" style={{ background: 'rgba(255,255,255,0.08)' }}>
+                                                        「{rev.reason}」
+                                                    </p>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                                </React.Fragment>
                             );
                         })
                     ) : (
@@ -374,6 +449,48 @@ const ScheduleCard: React.FC<ScheduleCardProps> = ({
                         <div className="pt-2 pl-3">
                             <span className="text-[10px] font-bold tracking-widest opacity-20">OFFLINE</span>
                             <p className="text-[10px] opacity-15">就寝</p>
+                        </div>
+                    )}
+
+                    {/* ⑦ 今日变动折叠区：按时间倒序列出当天所有修订（含被删时段） */}
+                    {schedule && (schedule.revisions?.length || 0) > 0 && (
+                        <div className="pt-2">
+                            <button
+                                className="flex items-center gap-1.5 pl-3 text-[10px] font-bold opacity-50 hover:opacity-80 transition-opacity"
+                                onClick={() => setShowRevLog(v => !v)}
+                            >
+                                <span>↷ 今日变动 {schedule.revisions!.length}</span>
+                                <span className="text-[8px]">{showRevLog ? '▲' : '▼'}</span>
+                            </button>
+                            {showRevLog && (
+                                <div className="mt-1.5 space-y-1.5">
+                                    {[...schedule.revisions!].reverse().map(rev => (
+                                        <div key={rev.id} className="px-3 py-2 rounded-xl border border-white/10" style={{ background: 'rgba(255,255,255,0.04)' }}>
+                                            <div className="flex items-center gap-1.5 mb-0.5">
+                                                <span className="text-[10px]">{REVISION_SOURCE_ICON[rev.source]}</span>
+                                                <span className="text-[9px] font-bold opacity-60">{REVISION_SOURCE_LABEL[rev.source]}{rev.sourceLabel ? ` · ${rev.sourceLabel}` : ''}</span>
+                                                <span className="text-[9px] opacity-35 ml-auto">{new Date(rev.at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
+                                            </div>
+                                            <p className="text-[10px] opacity-70 leading-snug mb-1">「{rev.reason}」</p>
+                                            {rev.changes.map((c, ci) => (
+                                                <div key={ci} className="text-[10px] leading-tight flex items-center gap-1 flex-wrap">
+                                                    {c.type === 'remove' ? (
+                                                        <span className="line-through opacity-40">{c.before!.startTime} {c.before!.activity}</span>
+                                                    ) : c.type === 'add' ? (
+                                                        <span className="font-bold" style={{ color: '#86efac' }}>+ {c.after!.startTime} {c.after!.activity}</span>
+                                                    ) : (
+                                                        <>
+                                                            <span className="line-through opacity-40">{c.before!.startTime} {c.before!.activity}</span>
+                                                            <span className="opacity-40">→</span>
+                                                            <span className="font-bold" style={{ color: accentHsl }}>{c.after!.startTime} {c.after!.activity}</span>
+                                                        </>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>

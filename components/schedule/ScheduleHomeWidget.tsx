@@ -1,6 +1,19 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { CharacterProfile, DailySchedule, ScheduleSlot } from '../../types';
-import ScheduleCard from './ScheduleCard';
+import ScheduleCard, { REVISION_SOURCE_ICON, revisionsForSlot } from './ScheduleCard';
+
+// ⑦ 修订微角标：时段若被事件修订过，在活动名旁标注 ↷+来源icon（点开日程详情可看 diff）
+const RevBadge: React.FC<{ schedule: DailySchedule | null; slot: ScheduleSlot | null }> = ({ schedule, slot }) => {
+    if (!slot) return null;
+    const revs = revisionsForSlot(schedule?.revisions, slot.startTime);
+    if (revs.length === 0) return null;
+    const src = revs[revs.length - 1].source;
+    return (
+        <span className="text-[9px] shrink-0 opacity-80 leading-none" title="该时段被事件修订过">
+            ↷{REVISION_SOURCE_ICON[src]}
+        </span>
+    );
+};
 
 const getCurrentSlotIndex = (slots: ScheduleSlot[]): number => {
     const now = new Date();
@@ -104,11 +117,13 @@ export const ScheduleSquareWidget: React.FC<ScheduleSquareWidgetProps> = ({
                     <span className="text-[13px] font-bold truncate drop-shadow-md leading-tight">
                         {currentSlot?.activity || (schedule ? '休息中' : '未生成')}
                     </span>
+                    <RevBadge schedule={schedule} slot={currentSlot} />
                 </div>
                 {nextSlot ? (
                     <div className="text-[9.5px] opacity-55 truncate leading-tight">
                         <span className="opacity-70 mr-1">→ {nextSlot.startTime}</span>
                         {nextSlot.activity}
+                        <RevBadge schedule={schedule} slot={nextSlot} />
                     </div>
                 ) : (
                     <div className="text-[9.5px] opacity-40 truncate tracking-widest uppercase">
@@ -194,10 +209,12 @@ export const ScheduleHomeWidget: React.FC<ScheduleHomeWidgetProps> = ({
                                 <span className="text-[15px] font-bold truncate leading-tight" style={{ color: '#725d42' }}>
                                     {currentSlot?.activity || (schedule ? '休息中 · 暂无安排' : '尚未生成日程')}
                                 </span>
+                                <RevBadge schedule={schedule} slot={currentSlot} />
                             </div>
                             {nextSlot && (
                                 <div className="text-[10.5px] mt-0.5 truncate" style={{ color: '#a89878' }}>
                                     → {nextSlot.startTime} {nextSlot.emoji ? `${nextSlot.emoji} ` : ''}{nextSlot.activity}
+                                    <RevBadge schedule={schedule} slot={nextSlot} />
                                 </div>
                             )}
                         </div>
@@ -326,6 +343,7 @@ export const ScheduleHomeWidget: React.FC<ScheduleHomeWidgetProps> = ({
                             <span className={`text-[15px] font-bold truncate leading-tight ${paper ? '' : 'drop-shadow-md'}`}>
                                 {currentSlot?.activity || (schedule ? '休息中 · 暂无安排' : '尚未生成日程')}
                             </span>
+                            <RevBadge schedule={schedule} slot={currentSlot} />
                         </div>
                         {(currentSlot?.description || nextSlot) && (
                             <div className="text-[10.5px] opacity-55 truncate mt-0.5 leading-snug">
@@ -335,6 +353,7 @@ export const ScheduleHomeWidget: React.FC<ScheduleHomeWidgetProps> = ({
                                     <>
                                         <span className="opacity-70 mr-1">→ {nextSlot.startTime}</span>
                                         {nextSlot.emoji ? `${nextSlot.emoji} ` : ''}{nextSlot.activity}
+                                        <RevBadge schedule={schedule} slot={nextSlot} />
                                     </>
                                 ) : null}
                             </div>

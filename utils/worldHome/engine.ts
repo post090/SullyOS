@@ -551,6 +551,25 @@ export async function runWorldEpisode(deps: WorldEpisodeDeps): Promise<WorldEpis
             }).catch(() => {});
         }
 
+        // ⑥ 世界事件驱动日程修订：对开了「家园影响日程」独立开关的成员逐个 fire
+        // （fire-and-forget，失败不影响演绎主流程；没日程/没未来时段时引擎内部静默跳过）
+        try {
+            const { reviseScheduleForEvent, revisionApiOf } = await import('../scheduleRevision');
+            for (const beat of beats) {
+                const char = members.find(m => m.id === beat.charId);
+                if (!char?.scheduleConfig?.worldAffectsSchedule) continue;
+                if (!beat.narrative?.trim()) continue;
+                void reviseScheduleForEvent({
+                    char,
+                    api: revisionApiOf(char, { baseUrl: apiConfig.baseUrl, apiKey: apiConfig.apiKey, model: apiConfig.model }),
+                    source: 'world',
+                    sourceLabel: world.name,
+                    eventSummary: `你在「${world.name}」家园世界里刚发生的事：${beat.narrative.slice(0, 600)}`,
+                    skipEnabledCheck: true,
+                });
+            }
+        } catch { /* ignore */ }
+
         dispatch('world-episode-done', { worldId: world.id, episodeId: episode.id, storyTime, round: episode.round });
         return { ok: true, episode };
     } catch (err) {

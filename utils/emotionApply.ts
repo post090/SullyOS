@@ -381,6 +381,13 @@ export async function applyEmotionEvalRaw(
         // 与情绪主链路完全解耦——失败只丢这条动态，不影响 buff。
         await landAmbientEventFromEval(result, charData);
 
+        // merged 日程修订（可选顺风车产出，见 utils/scheduleRevision.ts）：用原始 raw 抠
+        // scheduleRevision 字段（parseEmotionEvalOutput 不保留额外字段），同样在共用落点接，
+        // fire-and-forget，失败只丢这次修订不影响 buff。动态 import 避免与 scheduleRevision 的循环依赖。
+        void import('./scheduleRevision')
+            .then(m => m.applyMergedRevisionFromEvalRaw(rawText || '', charData))
+            .catch(() => { /* ignore */ });
+
         if (!result.changed) {
             console.log('🎭 [Emotion] No change detected, skipping buff update');
             if (innerStateOut) console.log(`🌊 [InnerState] ${charData.name}: ${innerStateOut}`);

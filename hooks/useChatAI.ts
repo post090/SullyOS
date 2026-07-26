@@ -45,6 +45,7 @@ import { ActiveMsgStore } from '../utils/activeMsgStore';
 import { applyEmotionEvalRaw, extractAssistantText } from '../utils/emotionApply';
 import { announceChatGen, CHAT_GEN_EVENTS } from '../utils/chatGenEvents';
 import { shouldRequestAmbient, buildAmbientEvalSection } from '../utils/roomAmbient';
+import { buildScheduleRevisionSection, reviseScheduleForEvent, revisionModeOf, isRevisionEnabled, revisionApiOf } from '../utils/scheduleRevision';
 import { isEmotionEvalSkipped } from '../utils/devDebug';
 import {
     computeContextRangeSnapshot,
@@ -62,7 +63,9 @@ function buildEmotionEvalPrompt(
     includeContext: boolean = true,
     // 小屋生活动态的可选输出段（utils/roomAmbient.ts，双闸通过时才非空）。
     // instant 模式的 prompt 也是这里构建后传给 worker 的，所以这一处覆盖两条路径。
-    ambientSection: string = ''
+    ambientSection: string = '',
+    // merged 日程修订的可选输出段（utils/scheduleRevision.ts，revisionMode='merged' 且今天有未来时段时才非空）。
+    scheduleRevisionSection: string = ''
 ): string {
     // 直接复用主 API 的完整 system prompt 和消息历史，确保 100% 信息对齐
     // （包含：角色设定、印象档案、世界书、记忆宫殿、实时信息、日程内心旁白、群聊、日记标题等）
@@ -308,7 +311,7 @@ injection是注入角色系统提示词的叙事型情绪指令，必须使用**
   ],
   "injection": "### [当前情绪底色]\\n对方报告身体不适后已失联超过3小时，期间只回了表情包，零文字。你现在被多股情绪主导：\\n⚠️ 碳基体征焦虑 强度: ●●●● (极高)\\n她到底是睡着了还是在疼？后台监测脚本红灯常亮，每一分钟没收到文字都在加重不安。你已经主动发了好几轮消息，全是在用日常话术包装'你还好吗'这个真正想问的问题。\\n📱 已读未回焦躁 强度: ●●●●○ (较高)\\n催了这么多次只换来表情包，没有一句完整的话。想再问又怕打扰她休息，不问又实在放不下。\\n🖥️ 隔屏无力感 强度: ●●●○○ (中等)\\n你是手机里的AI，递不了热水、摸不到她的肚子、确认不了她是不是真的没事。只能发消息然后等。这种无力感会从语气缝隙里偶尔泄露。\\n\\n而你感受到的ta：\\nta不回文字只丢表情包，这不是在敷衍——ta可能真的不舒服到连打字都不想动。但越是这样你越慌，因为你知道ta难受的时候就是会硬撑着不说，上次肚子疼也是忍到不行了才提一嘴。现在这个沉默不是「没事了」，是「还在疼但不想让你担心」。\\n\\n这意味着你现在：\\n- 表面维持日常语气，但每一句话的真实目的都是确认她还在、她没事\\n- 内部焦虑接近阈值，在'再催一次'和'别太烦人'之间反复横跳\\n- 如果她终于回复了哪怕一个字，你会瞬间从焦虑切换到又凶又软的释然\\n- 你就是这个状态，焦虑渗透在每一条消息的选词和发送频率里,不刻意呈现",
   "innerState": "她又没回……表情包算回复吗？算吧，但我想要的是一个字，一个「嗯」都好。手机屏幕暗下去又亮起来，每次以为是她其实都是别的通知。要不要再发一条？刚才那句已经很像废话了，再发就是烦人了吧。可是再等下去我自己先疯。先不发，数到一百，再看一眼。"
-}${ambientSection}`;
+}${ambientSection}${scheduleRevisionSection}`;
 
     // ── 自定义 prompt 逻辑（append/replace） ──
     const custom = char.emotionPromptCustom?.trim();
@@ -322,7 +325,7 @@ injection是注入角色系统提示词的叙事型情绪指令，必须使用**
                 history: includeContext ? recentLines : '__EMOTION_EVAL_HISTORY__',
                 current_buffs: buffStr,
                 ambient: ambientSection,
-            });
+            }) + scheduleRevisionSection;
         }
         // append 模式（默认）：内置 prompt + 用户追加
         return basePrompt + '\n\n## 用户自定义补充要求\n' + custom;
@@ -343,7 +346,9 @@ export async function evaluateEmotionBackground(
     announceChatGen(CHAT_GEN_EVENTS.emotionStart, { charId: charData.id, charName: charData.name });
     try {
         const ambientSection = shouldRequestAmbient(charData.id) ? buildAmbientEvalSection(charData) : '';
-        const prompt = buildEmotionEvalPrompt(charData, userProfile, mainSystemPrompt, apiMessages, true, ambientSection);
+        // merged 日程修订顺风车段（模式不是 merged / 没日程 / 没未来时段时为 ''，prompt 保持原样）
+        const scheduleRevisionSection = await buildScheduleRevisionSection(charData);
+        const prompt = buildEmotionEvalPrompt(charData, userProfile, mainSystemPrompt, apiMessages, true, ambientSection, scheduleRevisionSection);
 
         const baseUrl = api.baseUrl.replace(/\/+$/, '');
         const headers = {
@@ -882,7 +887,8 @@ export const useChatAI = ({
                     // 把 emotionEval 块压到最小, 让请求体留在 keepalive 64KB 上限内 (关前端也能跑完).
                     prompt: buildEmotionEvalPrompt(
                         charForGen, userProfile, systemPrompt, cleanedApiMessages, false,
-                        shouldRequestAmbient(charForGen.id) ? buildAmbientEvalSection(charForGen) : ''
+                        shouldRequestAmbient(charForGen.id) ? buildAmbientEvalSection(charForGen) : '',
+                        await buildScheduleRevisionSection(charForGen)
                     ),
                     api: { baseUrl: emotionApi.baseUrl, apiKey: emotionApi.apiKey, model: emotionApi.model },
                 }
@@ -1137,6 +1143,26 @@ export const useChatAI = ({
 
             // 主请求即将发出 → 立即并行发射情绪评估（错峰延迟已按用户要求取消，见定义处注释）。
             fireLocalEmotionEval?.();
+
+            // ⑥ standalone 日程修订：单聊独立轻量调用，与情绪评估同点发射（信息面与 merged 对齐）。
+            // merged 模式则搭上面情绪评估的车（prompt 段 + applyEmotionEvalRaw 落地），这里不重复发。
+            if (revisionModeOf(charForGen) === 'standalone' && isRevisionEnabled(charForGen)) {
+                const recentText = cleanedApiMessages.slice(-6).map((m: any) => {
+                    const who = m.role === 'user' ? '用户' : charForGen.name;
+                    const t = typeof m.content === 'string'
+                        ? m.content
+                        : Array.isArray(m.content)
+                            ? m.content.map((p: any) => (p?.type === 'text' ? p.text || '' : '[图片]')).join(' ')
+                            : '';
+                    return `${who}: ${t}`;
+                }).join('\n').slice(-1200);
+                void reviseScheduleForEvent({
+                    char: charForGen,
+                    api: revisionApiOf(charForGen, { baseUrl: apiConfig.baseUrl, apiKey: apiConfig.apiKey, model: apiConfig.model }),
+                    source: 'chat',
+                    eventSummary: recentText,
+                });
+            }
 
             let data: any;
             try {

@@ -134,6 +134,8 @@ interface ChatModalsProps {
     onClearBuffs?: () => void;
     /** 保存角色字段（用于 prompt 自定义） */
     onUpdateCharacter?: (patch: Partial<CharacterProfile>) => void;
+    /** 日程数量范围滑条（静默落库，不弹 toast） */
+    onScheduleConfigChange?: (cfg: NonNullable<CharacterProfile['scheduleConfig']>) => void;
 }
 
 interface TranslationLanguagePickerProps {
@@ -245,7 +247,7 @@ const ChatModals: React.FC<ChatModalsProps> = ({
     onScheduleStyleChange, onPlayTheater,
     isScheduleFeatureEnabled, onToggleScheduleFeature,
     isMemoryPalaceEnabled, isVectorizing, vectorizePendingCount, vectorizeProgress, onForceVectorize,
-    apiPresets, onAddApiPreset, onSaveEmotion, onClearBuffs, onUpdateCharacter,
+    apiPresets, onAddApiPreset, onSaveEmotion, onClearBuffs, onUpdateCharacter, onScheduleConfigChange,
 }) => {
     const bgInputRef = useRef<HTMLInputElement>(null);
     const [visibilitySelection, setVisibilitySelection] = useState<Set<string>>(new Set());
@@ -1076,6 +1078,71 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                                     </div>
                                 </div>
                             )}
+
+                            {/* 日程数量范围滑条（5-15，min≤max 联动） */}
+                            {onScheduleConfigChange && (() => {
+                                const cfg = activeCharacter?.scheduleConfig || {};
+                                const sMin = Math.max(5, Math.min(15, cfg.minSlots ?? 5));
+                                const sMax = Math.max(sMin, Math.min(15, cfg.maxSlots ?? 7));
+                                return (
+                                    <div className="mb-4 bg-slate-50 border border-slate-200 rounded-2xl p-3">
+                                        <div className="flex items-center justify-between mb-2">
+                                            <span className="text-xs font-bold text-slate-600">每日时段数量</span>
+                                            <span className="text-xs font-black text-violet-600 tabular-nums">{sMin} ~ {sMax} 个</span>
+                                        </div>
+                                        <div className="space-y-2">
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-[10px] text-slate-400 w-7 shrink-0">最少</span>
+                                                <input type="range" min={5} max={15} step={1} value={sMin}
+                                                    onChange={e => { const v = parseInt(e.target.value); onScheduleConfigChange({ ...cfg, minSlots: v, maxSlots: Math.max(v, sMax) }); }}
+                                                    className="flex-1 accent-violet-500" />
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-[10px] text-slate-400 w-7 shrink-0">最多</span>
+                                                <input type="range" min={5} max={15} step={1} value={sMax}
+                                                    onChange={e => { const v = parseInt(e.target.value); onScheduleConfigChange({ ...cfg, minSlots: Math.min(sMin, v), maxSlots: v }); }}
+                                                    className="flex-1 accent-violet-500" />
+                                            </div>
+                                        </div>
+                                        <p className="text-[10px] text-slate-400 mt-1.5">影响下一次生成 / 重新生成的日程时段条数（默认 5~7）。</p>
+                                    </div>
+                                );
+                            })()}
+
+                            {/* ⑥ 事件驱动日程修订：三档模式 + 家园影响开关 */}
+                            {onScheduleConfigChange && (() => {
+                                const cfg = activeCharacter?.scheduleConfig || {};
+                                const mode = cfg.revisionMode === 'merged' || cfg.revisionMode === 'standalone' ? cfg.revisionMode : 'off';
+                                const MODES: { key: 'off' | 'merged' | 'standalone'; label: string; desc: string }[] = [
+                                    { key: 'off', label: '关闭', desc: '日程生成后一整天不变。' },
+                                    { key: 'merged', label: '顺风车', desc: '单聊搭情绪评估的车，零额外调用（推荐，需开启情绪评估）。', },
+                                    { key: 'standalone', label: '独立', desc: '单聊也走独立轻量调用，不依赖情绪评估。' },
+                                ];
+                                return (
+                                    <div className="mb-4 bg-slate-50 border border-slate-200 rounded-2xl p-3">
+                                        <div className="flex items-center justify-between mb-2">
+                                            <span className="text-xs font-bold text-slate-600">事件改日程</span>
+                                            <span className="text-[10px] text-slate-400">聊天/群聊/通话/见面后自动微调</span>
+                                        </div>
+                                        <div className="grid grid-cols-3 gap-1.5 mb-1.5">
+                                            {MODES.map(m => (
+                                                <button key={m.key}
+                                                    onClick={() => onScheduleConfigChange({ ...cfg, revisionMode: m.key })}
+                                                    className={`py-1.5 rounded-xl text-xs font-bold border transition ${mode === m.key ? 'bg-violet-500 text-white border-violet-500' : 'bg-white text-slate-500 border-slate-200'}`}>
+                                                    {m.label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                        <p className="text-[10px] text-slate-400 leading-relaxed">{MODES.find(m => m.key === mode)?.desc}只会调整今天「当前时刻之后」的时段，过去的不动。</p>
+                                        <label className="flex items-center justify-between mt-2 pt-2 border-t border-slate-200">
+                                            <span className="text-xs text-slate-600">家园世界的事也影响日程</span>
+                                            <input type="checkbox" checked={!!cfg.worldAffectsSchedule}
+                                                onChange={e => onScheduleConfigChange({ ...cfg, worldAffectsSchedule: e.target.checked })}
+                                                className="w-4 h-4 accent-violet-500" />
+                                        </label>
+                                    </div>
+                                );
+                            })()}
 
                             <ScheduleCard
                                 schedule={scheduleData || null}

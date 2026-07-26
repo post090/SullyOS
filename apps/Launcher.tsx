@@ -680,6 +680,18 @@ const Launcher: React.FC = () => {
       getLocalDailySchedule(scheduleChar.id).then(s => setScheduleData(s)).catch(() => {});
   }, [scheduleChar, isDataLoaded, localDateKey]);
 
+  // ⑦ 日程被事件修订后（聊天/群聊/通话/见面/家园）桌面小组件即时刷新角标
+  useEffect(() => {
+      if (!scheduleChar) return;
+      const onRevised = (e: Event) => {
+          const detail = (e as CustomEvent).detail as { charId?: string } | undefined;
+          if (detail?.charId && detail.charId !== scheduleChar.id) return;
+          getLocalDailySchedule(scheduleChar.id).then(s => setScheduleData(s)).catch(() => {});
+      };
+      window.addEventListener('schedule-revised', onRevised);
+      return () => window.removeEventListener('schedule-revised', onRevised);
+  }, [scheduleChar]);
+
   // Restore scroll position BEFORE paint to avoid visible flash/slide
   useLayoutEffect(() => {
       const el = scrollContainerRef.current;
