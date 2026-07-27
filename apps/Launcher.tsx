@@ -547,11 +547,15 @@ const Launcher: React.FC = () => {
       const valid = new Set(available);
       const savedKept = (saved || []).filter((id, index, all) => valid.has(id) && all.indexOf(id) === index);
       const missing = available.filter(id => !(saved || []).includes(id));
-      // 钱包/智能家居钦定进首页：老用户已存过排序时插到最前，避免新 App 沉底到最后一页找不到
-      const frontIds = new Set<string>([AppID.Wallet, AppID.SmartHome]);
-      const front = missing.filter(id => frontIds.has(id));
-      const rest = missing.filter(id => !frontIds.has(id));
-      return [...front, ...savedKept, ...rest];
+      // 钱包/智能家居钦定进第一页**末尾**：首页特批 10 席（原 8 个 + 这俩垫尾），
+      // 插到第 8 位之后而非最前——保持神经链接开头、智能家居收尾，原第二页成员不动。
+      // 用户手动拖过位置（已在 saved 里）则完全尊重，不再强插。
+      const firstPageTailIds = new Set<string>([AppID.Wallet, AppID.SmartHome]);
+      const tail = missing.filter(id => firstPageTailIds.has(id));
+      const rest = missing.filter(id => !firstPageTailIds.has(id));
+      const base = [...savedKept, ...rest];
+      base.splice(Math.min(8, base.length), 0, ...tail);
+      return base;
   }, []);
 
   const availableGridIds = useMemo(() => availableGridApps.map(app => app.id), [availableGridApps]);
@@ -605,9 +609,12 @@ const Launcher: React.FC = () => {
   // Pages: 0 = clock+chat+music+grid (original), 1 = pinwheel, 2 = widget images + grid,
   //        3+ = plain grid. Pad to at least 3 slots so the pinwheel/widget pages always exist.
   const APPS_PER_PAGE = 8;
+  // 首页特批 10 席：原 8 个 + 钱包 + 智能家居垫尾；后续页维持 8 个/页不变。
+  const FIRST_PAGE_APPS = 10;
   const appPages = useMemo(() => {
       const pages: typeof INSTALLED_APPS[] = [];
-      for (let i = 0; i < gridApps.length; i += APPS_PER_PAGE) {
+      pages.push(gridApps.slice(0, FIRST_PAGE_APPS));
+      for (let i = FIRST_PAGE_APPS; i < gridApps.length; i += APPS_PER_PAGE) {
           pages.push(gridApps.slice(i, i + APPS_PER_PAGE));
       }
       while (pages.length < 3) pages.push([]);

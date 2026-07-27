@@ -27,7 +27,49 @@ const num = (v: unknown, fallback = 0): number => {
 
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 
-/** 从模型输出里抠出 JSON（容忍 ```json 围栏 / 前后废话） */
+/**
+ * LLM JSON 惯犯修复（状态机单遍扫描）：
+ * 1. 字符串内未转义的双引号 → \"（看后面第一个非空白字符是不是 , } ] : 来判断真收尾）
+ * 2. 字符串内裸换行/回车/制表符 → \n \r \t
+ * 3. 字符串外的尾逗号（, 后面直接 } 或 ]）→ 删
+ */
+function repairLlmJson(s: string): string {
+    let out = '';
+    let inStr = false, esc = false;
+    for (let i = 0; i < s.length; i++) {
+        const ch = s[i];
+        if (!inStr) {
+            if (ch === '"') { inStr = true; out += ch; continue; }
+            if (ch === ',') {
+                let j = i + 1;
+                while (j < s.length && /\s/.test(s[j])) j++;
+                if (s[j] === '}' || s[j] === ']') continue; // 尾逗号，吞掉
+            }
+            out += ch;
+            continue;
+        }
+        if (esc) { out += ch; esc = false; continue; }
+        if (ch === '\\') { out += ch; esc = true; continue; }
+        if (ch === '\n') { out += '\\n'; continue; }
+        if (ch === '\r') { out += '\\r'; continue; }
+        if (ch === '\t') { out += '\\t'; continue; }
+        if (ch === '"') {
+            let j = i + 1;
+            while (j < s.length && /[ \t\n\r]/.test(s[j])) j++;
+            const next = s[j];
+            if (next === ',' || next === '}' || next === ']' || next === ':' || j >= s.length) {
+                inStr = false; out += ch;
+            } else {
+                out += '\\"'; // 字符串内部的裸引号（如 备注: 他说"改天"就走了）
+            }
+            continue;
+        }
+        out += ch;
+    }
+    return out;
+}
+
+/** 从模型输出里抠出 JSON（容忍 ```json 围栏 / 前后废话 / 常见 JSON 内伤） */
 function extractJson(raw: string): any {
     let text = raw.trim();
     const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -35,7 +77,13 @@ function extractJson(raw: string): any {
     const start = text.indexOf('{');
     const end = text.lastIndexOf('}');
     if (start === -1 || end <= start) throw new Error('no JSON object found');
-    return JSON.parse(text.slice(start, end + 1));
+    const slice = text.slice(start, end + 1);
+    try {
+        return JSON.parse(slice);
+    } catch (e) {
+        // 原样解析失败 → 过一遍修复再试；仍失败就抛原始错误方便定位
+        try { return JSON.parse(repairLlmJson(slice)); } catch { throw e; }
+    }
 }
 
 /** 人设摘录：生成 prompt 用，控长度防 token 爆炸 */
@@ -68,7 +116,7 @@ async function callJsonLLM(apiConfig: APIConfig, system: string, user: string): 
 
 // ---------- 钱包生成 ----------
 
-const WALLET_GEN_SYSTEM = `你是一个"角色生活档案生成器"。根据给定的角色人设，为这个角色生成一份**收支自洽**的个人资产档案。只输出一个 JSON 对象，不要输出任何其他文字。
+const WALLET_GEN_SYSTEM = `你是一个"角色生活档案生成器"。根据给定的角色人设，为这个角色生成一份**收支自洽**的个人资产档案。只输出一个 JSON 对象，不要输出任何其他文字。字符串值内部严禁出现英文双引号（要引用请用「」），严禁尾逗号。
 
 JSON 结构（所有数组都允许为空；金额单位为元，整数）：
 {
@@ -181,7 +229,7 @@ export async function generateWalletProfile(
 
 // ---------- 智能家居生成 ----------
 
-const HOME_GEN_SYSTEM = `你是一个"角色住所档案生成器"。根据角色人设生成 ta 家里的房间与物品统计（假装有一个智能家居 App 统计了这些）。只输出一个 JSON 对象，不要输出任何其他文字。
+const HOME_GEN_SYSTEM = `你是一个"角色住所档案生成器"。根据角色人设生成 ta 家里的房间与物品统计（假装有一个智能家居 App 统计了这些）。只输出一个 JSON 对象，不要输出任何其他文字。字符串值内部严禁出现英文双引号（要引用请用「」），严禁尾逗号。
 
 JSON 结构：
 {
