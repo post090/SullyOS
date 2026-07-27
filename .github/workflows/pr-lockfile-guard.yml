@@ -1,0 +1,27 @@
+name: 锁文件检查
+
+# 只在 PR 动到 pnpm-lock.yaml 时跑，几秒钟出结果。
+on:
+  pull_request:
+    paths:
+      - 'pnpm-lock.yaml'
+
+permissions:
+  contents: read
+
+jobs:
+  check-local-links:
+    name: 禁止指向仓库外的本地依赖
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # 脚本零依赖，不用 pnpm install
+      - name: 检查 pnpm-lock.yaml
+        run: node scripts/check-lockfile-links.mjs

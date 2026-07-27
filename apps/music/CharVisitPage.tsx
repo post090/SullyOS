@@ -18,8 +18,9 @@ import { CharMusicPersona } from '../../utils/charMusicPersona';
 import { computeCurrentListening } from '../../utils/charMusicSchedule';
 import { C, Sparkle, MizuHeader, BokehBg, MiniPlayer, gradientFor } from './MusicUI';
 import { MusicNote, Plus, Check, Star, FilmSlate, GameController, Popcorn, MonitorPlay, ArrowClockwise, PencilSimple, X } from '@phosphor-icons/react';
-import { getLocalDailySchedule } from '../../utils/dailySchedule';
+import { getDailyScheduleForChar } from '../../utils/dailySchedule';
 import { useLocalDateKey } from '../../hooks/useLocalDateKey';
+import { resolveCharTimeZone } from '../../utils/timezone';
 
 interface Props {
   charId: string;
@@ -36,7 +37,7 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer, onOpenPl
     current, playing, togglePlay, nextSong, prevSong,
   } = useMusic();
   const char = useMemo(() => characters.find(c => c.id === charId), [characters, charId]);
-  const localDateKey = useLocalDateKey();
+  const charDateKey = useLocalDateKey(resolveCharTimeZone(char));
 
   const [initializing, setInitializing] = useState(false);
   // 新建歌单弹窗
@@ -57,7 +58,7 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer, onOpenPl
     let cancelled = false;
     (async () => {
       try {
-        const schedule = await getLocalDailySchedule(char.id);
+        const schedule = await getDailyScheduleForChar(char);
         if (cancelled) return;
         const cur = computeCurrentListening(char, schedule);
         const prev = char.musicProfile!.currentListening;
@@ -76,7 +77,7 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer, onOpenPl
       }
     })();
     return () => { cancelled = true; };
-  }, [char?.id, initialized, localDateKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [char?.id, char?.customTimezoneEnabled, char?.customTimezone, initialized, charDateKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const doInitialize = useCallback(async () => {
     if (!char || initializing) return;

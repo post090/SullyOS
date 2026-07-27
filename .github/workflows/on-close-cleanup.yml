@@ -1,0 +1,28 @@
+name: 关闭时清理流程标签
+
+# issue / PR 一关闭，就把「还在走流程」类的标签摘掉，
+# 已关闭列表里不会再留着一堆 needs xxx。
+on:
+  issues:
+    types: [closed]
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  remove-pending-labels:
+    name: 摘掉 needs 系列标签
+    runs-on: ubuntu-latest
+    steps:
+      - name: 移除标签
+        # https://github.com/actions-cool/issues-helper
+        uses: actions-cool/issues-helper@a610082f8ac0cf03e357eb8dd0d5e2ba075e017e # v3.6.0
+        with:
+          actions: remove-labels
+          token: ${{ secrets.GITHUB_TOKEN }}
+          issue-number: ${{ github.event.issue.number || github.event.pull_request.number }}
+          labels: 'needs triage,needs info,needs design'

@@ -28,10 +28,11 @@
 import { APIConfig, CharacterProfile, UserProfile, Message, Emoji, RealtimeConfig } from '../types';
 import { DB } from './db';
 import { ChatParser } from './chatParser';
+import { resolveCharTimeZone } from './timezone';
 import { NotionManager, FeishuManager, XhsNote } from './realtimeContext';
 import { enqueuePendingDiary, removePendingDiary } from './pendingDiary';
 import { parseMemoDirectives, applyMemoDirectives, stripMemoTags } from './memos';
-import { XhsMcpClient } from './xhsMcpClient';
+import { parseXhsCount, XhsMcpClient } from './xhsMcpClient';
 import { safeFetchJson } from './safeApi';
 import { extractHtmlBlocks } from './htmlPrompt';
 import {
@@ -65,6 +66,44 @@ const normalizeAiContent = (raw: string): string => {
     return cleaned;
 };
 
+interface MimickedXhsShareBlock {
+    title: string;
+    author: string;
+    interactionText: string;
+    desc: string;
+}
+
+// 模型偶尔会模仿历史上下文里的人类可读卡片摘要，而不是输出 [[XHS_SHARE]].
+// 只吃掉完整的五字段形态，避免误伤普通聊天中提到“标题/作者”的句子。
+const MIMICKED_XHS_SHARE_RE = /(^|\r?\n)[ \t]*\[[^\]\r\n]{0,32}分享了小红书笔记\][ \t]*(?:\r?\n[ \t]*)+标题\s*[:：]\s*([^\r\n]+?)[ \t]*(?:\r?\n[ \t]*)+作者\s*[:：]\s*([^\r\n]+?)[ \t]*(?:\r?\n[ \t]*)+互动\s*[:：]\s*([^\r\n]*?)[ \t]*(?:\r?\n[ \t]*)+简介\s*[:：]\s*([^\r\n]*)(?=\r?\n|$)/gmu;
+
+const extractMimickedXhsShares = (content: string): { cleanedContent: string; shares: MimickedXhsShareBlock[] } => {
+    const shares: MimickedXhsShareBlock[] = [];
+    const cleanedContent = content.replace(
+        MIMICKED_XHS_SHARE_RE,
+        (_match, leadingBreak: string, title: string, author: string, interactionText: string, desc: string) => {
+            shares.push({
+                title: title.trim().replace(/^[《【]|[》】]$/g, ''),
+                author: author.trim(),
+                interactionText: interactionText.trim(),
+                desc: desc.trim(),
+            });
+            return leadingBreak || '';
+        },
+    ).replace(/\n{3,}/g, '\n\n').trim();
+    return { cleanedContent, shares };
+};
+
+const normalizeXhsCardKey = (value: string): string => String(value || '')
+    .trim()
+    .replace(/^[《【"'“‘]+|[》】"'”’]+$/g, '')
+    .replace(/\s+/g, '')
+    .toLocaleLowerCase();
+
+const parseMimickedXhsCount = (interactionText: string, label: string): number => {
+    const match = interactionText.match(new RegExp(`([\\d.,+万千亿kKmMwW]+)\\s*${label}`));
+    return parseXhsCount(match?.[1] || 0);
+};
 // XHS side-effect helpers (POKE-style: 不抽到 agenticTools, 留给 Phase 2 Round 2 的 directive 重放)
 
 async function xhsPublish(conf: { mcpUrl: string }, title: string, content: string, tags: string[]): Promise<{ success: boolean; noteId?: string; message: string }> {
@@ -427,6 +466,9 @@ export async function applyAssistantPostProcessing(
     // ─── Step 1: 初次粗洗 ───
     let aiContent = replayedTagPrefix ? `${replayedTagPrefix}${rawAiContent}` : rawAiContent;
     aiContent = normalizeAiContent(aiContent);
+    // 在任何 lead-in/二轮渲染之前先剥掉仿卡片文本，防止它被 chunkText 拆成灰色普通气泡。
+    const mimickedXhsShares = extractMimickedXhsShares(aiContent);
+    aiContent = mimickedXhsShares.cleanedContent;
 
     // ── 渲染基础设施 (提前声明, 供"执行功能前先展示本轮正文 A" + 末尾展示二轮结果 B 复用) ──
     // 引用/回复标签的匹配 + 清理正则 (提前声明避免 lead-in 渲染时落入 TDZ)。
@@ -1258,7 +1300,7 @@ export async function applyAssistantPostProcessing(
                 const xhsMessages = [
                     ...fullMessages,
                     { role: 'assistant', content: cleanedForXhs },
-                    { role: 'user', content: `[系统: 你在小红书搜索了"${keyword}"，以下是搜索结果]\n\n${xsr.notesText}\n\n[系统: 你已经看完了搜索结果（注意：以上只是摘要，想看某条笔记的完整正文可以用 [[XHS_DETAIL: noteId]]）。现在请你：\n1. 自然地分享你看到的内容，比如"我刚在小红书搜了一下..."、"诶小红书上有人说..."\n2. 可以评价、吐槽、分享感兴趣的内容\n3. 如果觉得某条笔记特别值得分享，可以用 [[XHS_SHARE: 序号]] 把它作为卡片分享给用户（序号从1开始），可以分享多条\n4. 如果想评论某条笔记，可以用 [[XHS_COMMENT: noteId | 评论内容]]\n5. 如果喜欢某条笔记，可以用 [[XHS_LIKE: noteId]] 点赞，[[XHS_FAV: noteId]] 收藏\n6. 如果想看某条笔记的完整内容和评论区，可以用 [[XHS_DETAIL: noteId]]\n7. 严禁再输出[[XHS_SEARCH:...]]标记]` }
+                    { role: 'user', content: `[系统: 你在小红书搜索了"${keyword}"，以下是搜索结果]\n\n${xsr.notesText}\n\n[系统: 你已经看完了搜索结果（注意：以上只是摘要，想看某条笔记的完整正文可以用 [[XHS_DETAIL: noteId]]）。现在请你：\n1. 自然地分享你看到的内容，比如"我刚在小红书搜了一下..."、"诶小红书上有人说..."\n2. 可以评价、吐槽、分享感兴趣的内容\n3. 如果觉得某条笔记特别值得分享，可以用 [[XHS_SHARE: 序号]] 把它作为卡片分享给用户（序号从1开始），可以分享多条；不要手写“[你分享了小红书笔记]”及标题/作者/互动/简介，分享卡片必须使用该标记\n4. 如果想评论某条笔记，可以用 [[XHS_COMMENT: noteId | 评论内容]]\n5. 如果喜欢某条笔记，可以用 [[XHS_LIKE: noteId]] 点赞，[[XHS_FAV: noteId]] 收藏\n6. 如果想看某条笔记的完整内容和评论区，可以用 [[XHS_DETAIL: noteId]]\n7. 严禁再输出[[XHS_SEARCH:...]]标记]` }
                 ];
 
                 data = await safeFetchJson(`${baseUrl}/chat/completions`, {
@@ -1304,7 +1346,7 @@ export async function applyAssistantPostProcessing(
                 const xhsMessages = [
                     ...fullMessages,
                     { role: 'assistant', content: cleanedForXhs },
-                    { role: 'user', content: `[系统: 你刷了一会儿小红书首页，以下是你看到的内容]\n\n${xbr.notesText}\n\n[系统: 你已经看完了（注意：以上只是摘要，想看某条笔记的完整正文可以用 [[XHS_DETAIL: noteId]]）。现在请你：\n1. 像在跟朋友分享一样，随意聊聊你看到了什么有趣的\n2. 不用全部都提，挑你感兴趣的1-3条聊就行\n3. 可以吐槽、感叹、分享想法\n4. 如果觉得某条笔记特别值得分享，可以用 [[XHS_SHARE: 序号]] 把它作为卡片分享给用户（序号从1开始），可以分享多条\n5. 如果想发一条自己的笔记，可以用 [[XHS_POST: 标题 | 内容 | #标签1 #标签2]]\n6. 如果喜欢某条笔记，可以用 [[XHS_LIKE: noteId]] 点赞，[[XHS_FAV: noteId]] 收藏\n7. 如果想看某条笔记的完整内容和评论区，可以用 [[XHS_DETAIL: noteId]]\n8. 严禁再输出[[XHS_BROWSE]]标记]` }
+                    { role: 'user', content: `[系统: 你刷了一会儿小红书首页，以下是你看到的内容]\n\n${xbr.notesText}\n\n[系统: 你已经看完了（注意：以上只是摘要，想看某条笔记的完整正文可以用 [[XHS_DETAIL: noteId]]）。现在请你：\n1. 像在跟朋友分享一样，随意聊聊你看到了什么有趣的\n2. 不用全部都提，挑你感兴趣的1-3条聊就行\n3. 可以吐槽、感叹、分享想法\n4. 如果觉得某条笔记特别值得分享，可以用 [[XHS_SHARE: 序号]] 把它作为卡片分享给用户（序号从1开始），可以分享多条；不要手写“[你分享了小红书笔记]”及标题/作者/互动/简介，分享卡片必须使用该标记\n5. 如果想发一条自己的笔记，可以用 [[XHS_POST: 标题 | 内容 | #标签1 #标签2]]\n6. 如果喜欢某条笔记，可以用 [[XHS_LIKE: noteId]] 点赞，[[XHS_FAV: noteId]] 收藏\n7. 如果想看某条笔记的完整内容和评论区，可以用 [[XHS_DETAIL: noteId]]\n8. 严禁再输出[[XHS_BROWSE]]标记]` }
                 ];
 
                 data = await safeFetchJson(`${baseUrl}/chat/completions`, {
@@ -1329,12 +1371,19 @@ export async function applyAssistantPostProcessing(
     }
     aiContent = aiContent.replace(/\[\[XHS_BROWSE(?::.*?)?\]\]/g, '').trim();
 
+    // Search/browse can replace aiContent with a second-pass LLM response, so scan that result too.
+    const secondPassMimickedXhsShares = extractMimickedXhsShares(aiContent);
+    aiContent = secondPassMimickedXhsShares.cleanedContent;
+    mimickedXhsShares.shares.push(...secondPassMimickedXhsShares.shares);
+
     // [[XHS_SHARE: 序号]]
+    const sharedXhsCardKeys = new Set<string>();
     const xhsShareMatches: Iterable<RegExpMatchArray> = disabledXhsSideEffects ? [] : aiContent.matchAll(/\[\[XHS_SHARE:\s*(\d+)\]\]/g);
     for (const shareMatch of xhsShareMatches) {
         const idx = parseInt(shareMatch[1]) - 1;
         if (idx >= 0 && idx < lastXhsNotesRef.current.length) {
             const note = lastXhsNotesRef.current[idx];
+            sharedXhsCardKeys.add(normalizeXhsCardKey(note.title));
             console.log('📕 [XHS] AI分享笔记卡片:', note.title);
             await DB.saveMessage({
                 charId: char.id,
@@ -1352,6 +1401,49 @@ export async function applyAssistantPostProcessing(
     }
     aiContent = aiContent.replace(/\[\[XHS_SHARE:\s*\d+\]\]/g, '').trim();
 
+    // 掉格式兜底：把模型模仿历史记录写出的五行纯文本恢复成真正的 xhs_card。
+    // 优先复用刚才 search/browse 缓存里的完整 noteId、封面和 xsecToken；缓存丢失时仍给可读卡片。
+    for (const parsed of mimickedXhsShares.shares) {
+        const parsedKey = normalizeXhsCardKey(parsed.title);
+        if (parsedKey && sharedXhsCardKeys.has(parsedKey)) continue;
+        const sameTitle = lastXhsNotesRef.current.filter(note => normalizeXhsCardKey(note.title) === parsedKey);
+        const parsedAuthorKey = normalizeXhsCardKey(parsed.author);
+        const cachedNote = sameTitle.find(note => normalizeXhsCardKey(note.author) === parsedAuthorKey) || sameTitle[0];
+        const parsedNote: XhsNote = {
+            noteId: '',
+            title: parsed.title || '小红书笔记',
+            desc: parsed.desc,
+            likes: parseMimickedXhsCount(parsed.interactionText, '赞'),
+            collects: parseMimickedXhsCount(parsed.interactionText, '收藏'),
+            commentCount: parseMimickedXhsCount(parsed.interactionText, '评论'),
+            shareCount: parseMimickedXhsCount(parsed.interactionText, '分享'),
+            author: parsed.author,
+            authorId: '',
+        };
+        const note: XhsNote = cachedNote ? {
+            ...parsedNote,
+            ...cachedNote,
+            title: cachedNote.title || parsedNote.title,
+            desc: cachedNote.desc || parsedNote.desc,
+            author: cachedNote.author || parsedNote.author,
+            likes: cachedNote.likes ?? parsedNote.likes,
+            collects: cachedNote.collects ?? parsedNote.collects,
+            commentCount: cachedNote.commentCount ?? parsedNote.commentCount,
+            shareCount: cachedNote.shareCount ?? parsedNote.shareCount,
+        } : parsedNote;
+        console.warn('📕 [XHS] 检测到仿卡片文本，已恢复为 xhs_card:', note.title, cachedNote ? '(命中缓存)' : '(文本兜底)');
+        await DB.saveMessage({
+            charId: char.id,
+            role: 'assistant',
+            type: 'xhs_card',
+            content: note.title || '小红书笔记',
+            metadata: { xhsNote: note },
+        });
+        if (parsedKey) sharedXhsCardKeys.add(parsedKey);
+    }
+    if (mimickedXhsShares.shares.length > 0) {
+        setMessages(await DB.getRecentMessagesByCharId(char.id, 200));
+    }
     // [[XHS_POST: 标题 | 内容 | #标签1 #标签2]]
     const xhsPostMatch = aiContent.match(/\[\[XHS_POST:\s*(.+?)\]\]/s);
     if (!disabledXhsSideEffects && xhsPostMatch && xhsConf.enabled) {
@@ -1454,7 +1546,7 @@ export async function applyAssistantPostProcessing(
                         for (let i = 0; i < replyRetries.length && !result.success; i++) {
                             console.warn(`📕 [XHS] 回复失败(${i + 1}/${replyRetries.length})，${replyRetries[i] / 1000}秒后重试:`, result.message);
                             await new Promise(r => setTimeout(r, replyRetries[i]));
-                            result = await xhsReplyComment(xhsConf, noteId, xsecToken, replyContent, commentId, commentUserId, parentCommentId);
+                            result = await xhsReplyComment(xhsConf, noteId, xsecToken || '', replyContent, commentId, commentUserId, parentCommentId);
                         }
                     }
                     if (result.success) {
@@ -1604,13 +1696,16 @@ export async function applyAssistantPostProcessing(
             } else {
                 const detailStr = xdr.detailText;
                 const detailFailed = xdr.failed;
+                const commentsUnavailable = xdr.commentsUnavailable;
                 const cleanedForXhs = aiContent.replace(/\[\[XHS_DETAIL:.*?\]\]/g, '').trim() || '让我看看这条笔记...';
             const xhsMessages = [
                 ...fullMessages,
                 { role: 'assistant', content: cleanedForXhs },
                 { role: 'user', content: detailFailed
                     ? `[系统: 你尝试打开一条小红书笔记（noteId=${noteId}），但加载失败了]\n\n${detailStr}\n\n[系统: 笔记详情页加载失败了。可能的原因：这条笔记需要先通过搜索或浏览才能打开详情。现在请你：\n1. 自然地告知用户"这条笔记打不开/加载不出来"\n2. 可以建议搜索相关关键词再试: [[XHS_SEARCH: 关键词]]\n3. 严禁再输出[[XHS_DETAIL:...]]标记]`
-                    : `[系统: 你点开了一条小红书笔记的详情页（noteId=${noteId}）]\n\n${detailStr}\n\n[系统: 你已经看完了这条笔记的完整内容和评论区。现在请你：\n1. 自然地分享你看到的内容和感受\n2. 如果想评论这条笔记，可以用 [[XHS_COMMENT: ${noteId} | 评论内容]]\n3. 如果想回复某条评论，可以用 [[XHS_REPLY: ${noteId} | commentId | 回复内容]]（commentId 在上面的评论区数据里）\n4. 如果想点赞，可以用 [[XHS_LIKE: ${noteId}]]；想收藏可以用 [[XHS_FAV: ${noteId}]]\n5. 严禁再输出[[XHS_DETAIL:...]]标记]` }
+                    : commentsUnavailable
+                        ? `[系统: 你点开了一条小红书笔记的详情页（noteId=${noteId}）]\n\n${detailStr}\n\n[系统: 正文和互动数量已读取，但真实评论区本次读取失败。你只能谈论已经看到的正文和数量；不要声称帖子没有评论，不要编造、模拟或回复任何评论。严禁再输出[[XHS_DETAIL:...]]标记。]`
+                        : `[系统: 你点开了一条小红书笔记的详情页（noteId=${noteId}）]\n\n${detailStr}\n\n[系统: 你已经看完了这条笔记的完整内容和真实评论区。现在请你：\n1. 自然地分享你看到的内容和感受\n2. 如果想评论这条笔记，可以用 [[XHS_COMMENT: ${noteId} | 评论内容]]\n3. 如果想回复某条评论，可以用 [[XHS_REPLY: ${noteId} | commentId | 回复内容]]（commentId 在上面的评论区数据里）\n4. 如果想点赞，可以用 [[XHS_LIKE: ${noteId}]]；想收藏可以用 [[XHS_FAV: ${noteId}]]\n5. 严禁再输出[[XHS_DETAIL:...]]标记]` }
             ];
 
             data = await safeFetchJson(`${baseUrl}/chat/completions`, {
@@ -1806,7 +1901,7 @@ export async function applyAssistantPostProcessing(
             model: ctx.api.effectiveApi.model,
         } as APIConfig,
     };
-    aiContent = await ChatParser.parseAndExecuteActions(aiContent, char.id, char.name, addToast, musicHooks, taskHooks);
+    aiContent = await ChatParser.parseAndExecuteActions(aiContent, char.id, char.name, addToast, musicHooks, taskHooks, resolveCharTimeZone(char));
 
     // ─── Step 4: thinking chain 抽取 (本轮末尾展示用) ───
     // 跑过二轮 (data !== initialData) → 取二轮 data 的 reasoning; 没跑二轮 → 取一轮 (round1ThinkingChain,

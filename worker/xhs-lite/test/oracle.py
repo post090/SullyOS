@@ -11,6 +11,40 @@ Usage:
 """
 import json
 import random
+import sys
+import types
+
+
+# xhshow imports PyCryptodome's ARC4 for x-s-common. Keep this oracle runnable
+# in a clean Python environment by providing the same tiny RC4 primitive.
+class _Arc4Cipher:
+    def __init__(self, key):
+        state = list(range(256))
+        j = 0
+        for i in range(256):
+            j = (j + state[i] + key[i % len(key)]) & 0xFF
+            state[i], state[j] = state[j], state[i]
+        self.state = state
+        self.i = 0
+        self.j = 0
+
+    def encrypt(self, data):
+        out = bytearray()
+        for byte in data:
+            self.i = (self.i + 1) & 0xFF
+            self.j = (self.j + self.state[self.i]) & 0xFF
+            self.state[self.i], self.state[self.j] = self.state[self.j], self.state[self.i]
+            key_byte = self.state[(self.state[self.i] + self.state[self.j]) & 0xFF]
+            out.append(byte ^ key_byte)
+        return bytes(out)
+
+
+crypto_module = types.ModuleType("Crypto")
+cipher_module = types.ModuleType("Crypto.Cipher")
+cipher_module.ARC4 = types.SimpleNamespace(new=lambda key: _Arc4Cipher(key))
+crypto_module.Cipher = cipher_module
+sys.modules.setdefault("Crypto", crypto_module)
+sys.modules.setdefault("Crypto.Cipher", cipher_module)
 
 # --- Force every random draw to its minimum so results are reproducible. -----
 # build_payload_array draws, in order:

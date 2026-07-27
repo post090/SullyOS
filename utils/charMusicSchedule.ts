@@ -11,6 +11,7 @@
 
 import { CharacterProfile, CharCurrentListening, CharPlaylistSong, DailySchedule, ScheduleSlot } from '../types';
 import { getLocalDateKey } from './localDate';
+import { getScheduleWallClock } from './scheduleTime';
 
 const LISTENING_KEYWORDS = [
     '听歌', '听音乐', '戴耳机', '戴上耳机', '戴着耳机', '耳机',
@@ -94,10 +95,11 @@ export function computeCurrentListening(
 ): CharCurrentListening | null {
     if (!char.musicProfile) return null;
 
-    const slot = getCurrentSlot(schedule, now);
+    const wallNow = getScheduleWallClock(char, now);
+    const slot = getCurrentSlot(schedule, wallNow);
     if (!slot || !slotIsListening(slot)) return null;
 
-    const today = getLocalDateKey(now);
+    const today = getLocalDateKey(wallNow);
     const song = pickSongForSlot(char, slot, today);
     if (!song) return null;
 
@@ -107,6 +109,6 @@ export function computeCurrentListening(
         artists: song.artists,
         albumPic: song.albumPic,
         vibe: slot.innerThought || slot.description || undefined,
-        startedAt: slotStartToDate(slot, now).getTime(),
+        startedAt: slotStartToDate(slot, wallNow).getTime(),
     };
 }

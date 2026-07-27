@@ -497,10 +497,12 @@ export const ContextBuilder = {
      * 1) 当前时段硬事实——每轮都注入，不受 evolvedNarrative 影响
      * 2) 意识流独白——evolvedNarrative > flowNarrative > 当前 slot innerThought
      */
-    buildScheduleInjection: (schedule: DailySchedule | null, evolvedNarrative?: string): string => {
+    buildScheduleInjection: (
+        schedule: DailySchedule | null,
+        evolvedNarrative?: string,
+        now: Date = new Date(),
+    ): string => {
         if (!schedule || !schedule.slots || schedule.slots.length === 0) return '';
-
-        const now = new Date();
         const currentMinutes = now.getHours() * 60 + now.getMinutes();
 
         // 1. 计算当前 / 下一个时段

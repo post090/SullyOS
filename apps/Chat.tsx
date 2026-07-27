@@ -9,8 +9,9 @@ import { buildChatFineTuneCss, mergeChatFineTune } from '../utils/chatFineTuneCs
 import ChatFineTunePanel from '../components/chat/ChatFineTunePanel';
 import { FadersHorizontal } from '@phosphor-icons/react';
 import { generateDailyScheduleForChar, isScheduleFeatureOn } from '../utils/scheduleGenerator';
-import { getLocalDailySchedule } from '../utils/dailySchedule';
+import { getDailyScheduleForChar } from '../utils/dailySchedule';
 import { useLocalDateKey } from '../hooks/useLocalDateKey';
+import { resolveCharTimeZone } from '../utils/timezone';
 import { generateSlotTheater } from '../utils/theaterGenerator';
 import TheaterPlayer from '../components/schedule/TheaterPlayer';
 import { formatMessageWithTime, normalizeMessageContent } from '../utils/messageFormat';
@@ -198,6 +199,7 @@ const Chat: React.FC = () => {
     const [showingTargetIds, setShowingTargetIds] = useState<Set<number>>(new Set());
 
     const char = characters.find(c => c.id === activeCharacterId) || characters[0];
+    const charDateKey = useLocalDateKey(resolveCharTimeZone(char));
     charRef.current = char; // Keep ref in sync for async callbacks
     const historyContextRange = useMemo(() => {
         if (!char) return undefined;
@@ -891,7 +893,7 @@ const Chat: React.FC = () => {
             setScheduleData(null);
             return;
         }
-        getLocalDailySchedule(char.id).then(existing => {
+        getDailyScheduleForChar(char).then(existing => {
             if (!existing) {
                 // Generate in background, don't block chat
                 generateDailySchedule(char, false);
@@ -899,7 +901,7 @@ const Chat: React.FC = () => {
                 setScheduleData(existing);
             }
         }).catch(() => {});
-    }, [activeCharacterId, char?.scheduleFeatureEnabled, localDateKey]);
+    }, [activeCharacterId, char?.scheduleFeatureEnabled, char?.customTimezoneEnabled, char?.customTimezone, charDateKey]);
 
     // ⑦ 日程被事件修订后（情绪顺风车/独立调用/群聊/通话/见面/家园）刷新日程 modal 的 diff 角标
     useEffect(() => {
@@ -1707,7 +1709,7 @@ const Chat: React.FC = () => {
     const loadSchedule = async () => {
         if (!char) return;
         if (!isScheduleFeatureOn(char)) { setScheduleData(null); return; }
-        const s = await getLocalDailySchedule(char.id);
+        const s = await getDailyScheduleForChar(char);
         setScheduleData(s);
     };
 
@@ -1862,7 +1864,7 @@ const Chat: React.FC = () => {
         // 打开后立刻尝试生成（若今日未生成且已选风格）
         const updatedChar = { ...char, ...patch };
         if (updatedChar.scheduleStyle) {
-            const existing = await getLocalDailySchedule(char.id).catch(() => null);
+            const existing = await getDailyScheduleForChar(updatedChar).catch(() => null);
             if (existing) {
                 setScheduleData(existing);
             } else {

@@ -45,3 +45,38 @@ node verify.mjs   # 期望 10 passed, 0 failed —— 直接测 worker/index.js 
 | `test/oracle.py` | Python 参考 oracle（确定性向量） |
 | `test/vectors.json` | 参考输出 |
 | `test/verify.mjs` | 导入 `worker/index.js` 内嵌实现并逐字节比对 |
+## Spider Session v3 comments (default on)
+
+This is an isolated, browserless experiment derived from the public protocol behavior in
+`cv-cat/Spider_XHS` as of 2026-07-25. It does not replace the normal Lite detail path.
+The Worker keeps no account or session database: the browser persists an opaque state containing
+only an `a1` hash tag, `loadts`, counters, and a b1 seed. The raw Cookie remains in the existing
+local SullyOS configuration.
+
+Safety rules:
+
+- The normal `/api/get-feed-detail` path never calls the protected comment endpoint.
+- The experiment requires both `X-Xhs-Experiment-Ack: spider-v3-isolated-cookie` and
+  `acknowledge_risk: true`.
+- Each invocation makes at most one comment request. HTTP 406 opens a per-Cookie circuit breaker;
+  there is no automatic retry or strategy rotation.
+- The default `no-client-hints` strategy removes `sec-ch-ua*` and `x-mns`.
+  `browser-hints` and `legacy-transport` are explicit one-shot A/B controls only.
+- Responses use `Cache-Control: no-store`. Use a disposable test account first.
+
+The client now enables this path by default whenever a Lite detail response has no comments.
+Opening a note automatically patches its comment section; callers do not need a per-note `load_all_comments` flag or a separate API key.
+
+Optional A/B strategy:
+
+```js
+localStorage.setItem('os_xhs_spider_v3_strategy', 'no-client-hints');
+// Other explicit values: 'browser-hints', 'legacy-transport'
+```
+
+Reset the client-owned state and circuit breaker before another isolated trial:
+
+```js
+localStorage.removeItem('os_xhs_spider_v3_session');
+localStorage.removeItem('os_xhs_spider_v3_circuit');
+```

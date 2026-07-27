@@ -44,9 +44,13 @@ export const DATE_VOICE_GUIDE = `4. **语音情绪（跟立绘分开）**: \`[em
  * 时间，但只有"星期 + 时:分"，缺日期，而且没必要让 prompt 构建依赖 React 状态。
  */
 const getRealTimeStr = (tz?: string): string => {
-    const now = nowInTimeZone(tz);
+    // formatDate 自己会按 tz 折算，所以这里要喂真实时刻。
+    // nowInTimeZone 返回的 Date 是「本地 getter 读出来正好是角色墙上时间」的形式，
+    // 它的绝对时间戳已经被挪过一次——再交给 formatDate 就会多减一个时差。
+    const realNow = Date.now();
+    const wallClock = nowInTimeZone(tz, new Date(realNow));
     const days = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-    return `${ChatPrompts.formatDate(now.getTime(), tz)} ${days[now.getDay()]}`;
+    return `${ChatPrompts.formatDate(realNow, tz)} ${days[wallClock.getDay()]}`;
 };
 
 /** 线下时间感知开关：默认开启，显式关掉后见面 prompt 不再注入时间。 */

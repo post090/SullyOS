@@ -19,7 +19,7 @@ import { buildTaskSupervisionContext, buildTaskCommandGuide } from './taskContex
 import { getCharNameById } from './charNameRegistry';
 import { renderMemosForPrompt, renderMemoInstructionsOnly, MEMO_MAX_COUNT } from './memos';
 import { getLocalDateKey } from './localDate';
-import { getLocalDailySchedule } from './dailySchedule';
+import { getDailyScheduleForChar } from './dailySchedule';
 
 // 语音格式指导按当前 TTS 服务商三选一：用 MiniMax 才注入 MiniMax 那套（含 <#秒#> 停顿标记），
 // 用鱼声注入鱼声版（方括号 cue [laughing]/[whispering]…），用 ElevenLabs 注入 v3 版（[laugh]/[whisper]…）。
@@ -243,9 +243,10 @@ export const ChatPrompts = {
         // ── 并发发起所有独立的异步取数（网络 + IndexedDB），下面按原顺序拼接 ──
         // 原来是 7 段串行 await，总耗时 = 各段之和；现在取 max。
         const config = realtimeConfig || defaultRealtimeConfig;
-        const today = getLocalDateKey();
-        // 自定义时区：开启后「当前时间」按角色所在时区折算，并附时差提示（异国恋等场景）
+        // 自定义时区：日历日、当前日程与实时上下文全部按角色所在地折算。
         const charTz = resolveCharTimeZone(char);
+        const charNow = nowInTimeZone(charTz);
+        const today = getLocalDateKey(charNow);
 
         // 1. 实时世界信息（天气/新闻/时间）
         //    角色级「地区与热点」覆盖（char.regionConfig）：城市触发双城市天气；
@@ -258,7 +259,7 @@ export const ChatPrompts = {
                 }
                 // 基础当前时间 + 时差提示已由 ContextBuilder.buildCoreContext 统一注入（受 timeAwarenessEnabled
                 // 控制，按角色自定义时区折算）；这里只在关闭天气/新闻时补一条"今日特殊节日"，不再重复注入时间/时差，避免双份。
-                const specialDates = RealtimeContextManager.checkSpecialDates();
+                const specialDates = RealtimeContextManager.checkSpecialDates(charTz);
                 if (specialDates.length > 0 && char.timeAwarenessEnabled !== false) {
                     return `\n### 【今日特殊】\n${specialDates.join('、')}\n`;
                 }
@@ -273,7 +274,7 @@ export const ChatPrompts = {
         //    总开关关闭时跳过查询与注入，确保不额外调用任何 LLM 依赖链
         const scheduleFeatureOn = isScheduleFeatureOn(char);
         const schedulePromise: Promise<DailySchedule | null> = scheduleFeatureOn
-            ? getLocalDailySchedule(char.id).catch(e => {
+            ? getDailyScheduleForChar(char).catch(e => {
                 console.error('Failed to load daily schedule:', e);
                 return null;
             })
@@ -397,7 +398,7 @@ ${groupLogStr}\n`;
         // 2a. 日程注入（当前时段 + 意识流独白，每轮都可能变）
         if (schedule) {
             try {
-                const scheduleContext = ContextBuilder.buildScheduleInjection(schedule, evolvedNarrative);
+                const scheduleContext = ContextBuilder.buildScheduleInjection(schedule, evolvedNarrative, charNow);
                 if (scheduleContext) volatileState += `\n${scheduleContext}\n`;
             } catch (e) {
                 console.error('Failed to inject schedule context:', e);
@@ -420,7 +421,7 @@ ${groupLogStr}\n`;
                     const cfgForLyric = musicCfg?.workerUrl ? musicCfg : loadMusicCfgStandalone();
                     if (cfgForLyric?.workerUrl) {
                         try {
-                            const slot = getCurrentSlot(schedule);
+                            const slot = getCurrentSlot(schedule, charNow);
                             const seed = `${char.id}-${today}-${slot?.startTime || '00:00'}-${cur.songId}`;
                             const snippet = await getCharLyricSnippet(cfgForLyric, cur.songId, seed, 6);
                             if (snippet.length > 0) charListening.lyricSnippet = snippet;

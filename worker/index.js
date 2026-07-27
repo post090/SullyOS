@@ -15,7 +15,7 @@ function corsHeaders(origin) {
   return {
     "Access-Control-Allow-Origin": origin || "*",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization, Depth, X-Brave-API-Key, X-Notion-API-Key, X-Feishu-Token, X-Xhs-Cookie, X-Netease-Cookie, X-WebDAV-Method, X-WebDAV-Depth, X-WebDAV-Range, X-GitHub-Method, X-GitHub-Api-Version, Mcp-Session-Id, Accept, Range",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, Depth, X-Brave-API-Key, X-Notion-API-Key, X-Feishu-Token, X-Xhs-Cookie, X-Rnote-API-Key, X-Xhs-Experiment-Ack, X-Netease-Cookie, X-WebDAV-Method, X-WebDAV-Depth, X-WebDAV-Range, X-GitHub-Method, X-GitHub-Api-Version, Mcp-Session-Id, Accept, Range",
     "Access-Control-Expose-Headers": "Mcp-Session-Id",
     "Access-Control-Max-Age": "86400",
   };
@@ -956,15 +956,38 @@ const XHSLite = (() => {
   const ENV_TABLE = [115, 248, 83, 102, 103, 201, 181, 131, 99, 94, 4, 68, 250, 132, 21];
   const ENV_CHECKS_DEFAULT = [0, 1, 18, 1, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0];
   const HASH_IV = [1831565813, 461845907, 2246822507, 3266489909];
-  const X3_PREFIX = 'mns0301_', XYS_PREFIX = 'XYS_', B1_SECRET_KEY = 'xhswebmplfbt';
-  const SIGNATURE_DATA_TEMPLATE = { x0: '4.2.6', x1: 'xhs-pc-web', x2: 'Windows', x3: '', x4: '' };
+  const X3_PREFIX = 'mns0301_', XYS_PREFIX = 'XYS_', XYW_PREFIX = 'XYW_', B1_SECRET_KEY = 'xhswebmplfbt';
+  const XYW_AES_KEY = '7cc4adla5ay0701v';
+  const XYW_AES_IV = '4uzjr7mbsibcaldp';
+  const XYW_ENV_FLAGS = '0|0|0|1|0|0|1|0|0|0|1|0|0|0|0|1|0|0|1';
+  const SIGNATURE_DATA_TEMPLATE = { x0: '4.3.5', x1: 'xhs-pc-web', x2: 'Windows', x3: '', x4: 'object' };
   const SIGNATURE_XSCOMMON_TEMPLATE = {
-    s0: 5, s1: '', x0: '1', x1: '4.2.6', x2: 'Windows', x3: 'xhs-pc-web', x4: '4.86.0',
+    s0: 5, s1: '', x0: '1', x1: '4.3.5', x2: 'Windows', x3: 'xhs-pc-web', x4: '4.86.0',
     x5: '', x6: '', x7: '', x8: '', x9: -596800761, x10: 0, x11: 'normal',
   };
   const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 Edg/138.0.0.0';
   const IMG_FORMATS = ['jpg', 'webp', 'avif'];
   const EDITH = 'https://edith.xiaohongshu.com', CREATOR = 'https://creator.xiaohongshu.com', WWW = 'https://www.xiaohongshu.com';
+  const SPIDER_V3 = Object.freeze({
+    schemaVersion: 1,
+    signVersion: '4.3.7',
+    webBuild: '6.32.2',
+    appId: 'xhs-pc-web',
+    platform: 'Windows',
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
+    secChUa: '"Not;A=Brand";v="8", "Chromium";v="150", "Google Chrome";v="150"',
+    envConst: 1352,
+    envFpTail: Object.freeze(hexToBytes('f9416767c9b581635e0744fa8415')),
+  });
+  const SPIDER_V3_STRATEGIES = new Set([
+    'no-client-hints',
+    'browser-hints',
+    'legacy-transport',
+  ]);
+  const SPIDER_V3_DSL_URL = 'https://as.xiaohongshu.com/api/sec/v1/ds?appId=xhs-pc-web';
+  const SPIDER_V3_DSL_TTL_MS = 5 * 60 * 1000;
+  const SPIDER_V3_DSLLT_REFRESH_MS = 15 * 60 * 1000;
+  let spiderV3DslCache = { value: '', expiresAt: 0 };
 
   const RNG = {
     randint(a, b) { return a + Math.floor(Math.random() * (b - a + 1)); },
@@ -1120,13 +1143,6 @@ const XHSLite = (() => {
     });
     return `${uri}?${parts.join('&')}`;
   }
-  function extractApiPath(s) {
-    const brace = s.indexOf('{'), q = s.indexOf('?');
-    if (brace !== -1 && q !== -1) return s.slice(0, Math.min(brace, q));
-    if (brace !== -1) return s.slice(0, brace);
-    if (q !== -1) return s.slice(0, q);
-    return s;
-  }
   function extractUri(uri) {
     uri = uri.trim();
     if (uri.startsWith('http')) return new URL(uri).pathname;
@@ -1134,7 +1150,7 @@ const XHSLite = (() => {
     return q === -1 ? uri : uri.slice(0, q);
   }
 
-  function buildPayloadArray(dValue, a1Value, appId, stringParam, timestampSec) {
+  function buildPayloadArray(dValue, mValue, a1Value, appId, stringParam, timestampSec) {
     const seed = RNG.randint(0, 0xffffffff), seedByte = seed & 0xff;
     const payload = [...VERSION_BYTES];
     payload.push(...intToLeBytes(seed, 4));
@@ -1156,7 +1172,7 @@ const XHSLite = (() => {
     const part11 = [1, seedByte ^ ENV_TABLE[0]];
     for (let i = 1; i < 15; i++) part11.push(ENV_TABLE[i] ^ ENV_CHECKS_DEFAULT[i]);
     payload.push(...part11);
-    const md5PathBytes = hexToBytes(md5Hex(extractApiPath(stringParam)));
+    const md5PathBytes = hexToBytes(mValue);
     const hashed = customHashV2([...tsBytes, ...md5PathBytes]);
     payload.push(...A3_PREFIX, ...hashed.map((b) => b ^ seedByte));
     return payload;
@@ -1173,9 +1189,429 @@ const XHSLite = (() => {
     if (timestampSec === null) timestampSec = Date.now() / 1000;
     const contentString = buildContentString(method, uri, payload);
     const dValue = md5Hex(contentString);
-    const xorResult = xorTransform(buildPayloadArray(dValue, a1Value, appId, contentString, timestampSec));
+    const mValue = method.toUpperCase() === 'GET' ? dValue : md5Hex(uri);
+    const xorResult = xorTransform(buildPayloadArray(dValue, mValue, a1Value, appId, contentString, timestampSec));
     const x3sig = encodeX3(xorResult.slice(0, PAYLOAD_LENGTH));
     return XYS_PREFIX + encodeCustomStr(jsonCompact({ ...SIGNATURE_DATA_TEMPLATE, x3: X3_PREFIX + x3sig }));
+  }
+
+  function randomUint32() {
+    const out = new Uint32Array(1);
+    crypto.getRandomValues(out);
+    return out[0] >>> 0;
+  }
+
+  async function sha256Prefix(value) {
+    const digest = await crypto.subtle.digest('SHA-256', utf8(String(value)));
+    return Array.from(new Uint8Array(digest).slice(0, 8), (byte) => byte.toString(16).padStart(2, '0')).join('');
+  }
+
+  function finiteInteger(value, fallback, min, max) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.min(max, Math.max(min, Math.trunc(parsed)));
+  }
+
+  async function normalizeSpiderV3State(cookieDict, suppliedState, nowMs = Date.now()) {
+    const a1Tag = await sha256Prefix(cookieDict.a1);
+    const supplied = suppliedState && typeof suppliedState === 'object' ? suppliedState : {};
+    const suppliedLoadts = finiteInteger(supplied.loadts, 0, 1, Number.MAX_SAFE_INTEGER);
+    const reusable = supplied.version === SPIDER_V3.schemaVersion
+      && supplied.a1Tag === a1Tag
+      && suppliedLoadts > 0;
+    const cookieLoadts = /^\d{13}$/.test(cookieDict.loadts || '') ? Number(cookieDict.loadts) : 0;
+    const loadts = reusable
+      ? suppliedLoadts
+      : (cookieLoadts || (nowMs - RNG.randint(50, 200)));
+    const b1Seed = reusable
+      ? finiteInteger(supplied.b1Seed, randomUint32(), 0, 0xffffffff)
+      : randomUint32();
+    return {
+      version: SPIDER_V3.schemaVersion,
+      a1Tag,
+      loadts,
+      dsllt: reusable
+        ? finiteInteger(supplied.dsllt, loadts, 1, Number.MAX_SAFE_INTEGER)
+        : loadts,
+      mnsSeq: reusable ? finiteInteger(supplied.mnsSeq, 0, 0, 0x7fffffff) : 0,
+      signCount: reusable ? finiteInteger(supplied.signCount, 0, 0, 0x7fffffff) : 0,
+      b1Seed,
+      timeOrigin: reusable && Number.isFinite(Number(supplied.timeOrigin))
+        ? Number(supplied.timeOrigin)
+        : loadts - (700 + (b1Seed % 1600)),
+      webBuild: String(cookieDict.webBuild || supplied.webBuild || SPIDER_V3.webBuild),
+      reset: !reusable,
+    };
+  }
+
+  function spiderV3Telemetry(state) {
+    const seed = state.b1Seed >>> 0;
+    const mouseCount = 45 + (seed % 11);
+    const clickCount = 1 + ((seed >>> 5) % 3);
+    const focusCount = 3 + ((seed >>> 9) % 4);
+    const blurCount = Math.max(1, focusCount - 1);
+    return `{mt:{to:${state.timeOrigin}},m:{me:${mouseCount},mm:${mouseCount},md:${clickCount},mu:${clickCount},c:${clickCount}},k:{},p:{ulr:1,ps:1,f:${focusCount},b:${blurCount},vc:0,rs:1,sc:0},st:{h:0,f:1,kr:0},ft:{ae:3.3656015629507223,ak:6.231183732330187,cdr:0.4096814442007536,bf:{ar:0.6210873146622735,fr:7.158084478545331},fi:${2151.1 + (seed % 200) / 10}}}`;
+  }
+
+  function generateSpiderV3B1(state, nowMs) {
+    const seed = state.b1Seed >>> 0;
+    const mini = {
+      x33: '0',
+      x34: '0',
+      x35: '0',
+      x36: String(2 + (seed % 3)),
+      x37: '0|0|0|0|0|0|0|0|0|1|0|0|1|0|0|0|0|1|1|0|0|0|0|0',
+      x38: '0|0|1|0|1|0|0|0|0|0|1|0|1|0|1|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0',
+      x39: String(21 + ((seed >>> 4) % 3)),
+      x42: '3.5.4',
+      x43: 'Canvas not supported',
+      x44: String(nowMs),
+      x45: '__SEC_CAV__1-1-1-1-1|',
+      x46: 'false',
+      x48: '',
+      x49: '{list:[],type:}',
+      x50: '131,88,103',
+      x51: '',
+      x52: '',
+      x82: '1|_BHjFmfUMEtxhI|_AUuXfEG27Xa3x|__xhsPendingNotePoint25300ReportMap|__xhsReportedNotePoint25300RecordMap|setImDebugMode|anti_hp_sign_config|__rap_app_id__|__rap_report__|__rap_last_sign_cost__|__rap_last_transform_cost__|__rap_hijack_installed__|__ed1a7dddf7c818e4bd',
+      x84: spiderV3Telemetry(state),
+    };
+    const cipher = rc4(utf8(B1_SECRET_KEY), utf8(jsonCompact(mini)));
+    let binary = '';
+    for (const byte of cipher) binary += String.fromCharCode(byte);
+    return encodeCustom(utf8(binary));
+  }
+
+  function buildSpiderV3Payload(api, a1Value, context) {
+    const a1Bytes = Array.from(utf8(a1Value));
+    if (a1Bytes.length !== A1_LENGTH) {
+      throw new Error(`Spider v3 requires a ${A1_LENGTH}-byte a1 cookie`);
+    }
+    const appBytes = Array.from(utf8(SPIDER_V3.appId));
+    const version = context.version >>> 0;
+    const versionByte = version & 0xff;
+    const timestampBytes = intToLeBytes(context.now, 8);
+    const md5Full = hexToBytes(md5Hex(api));
+    const md5Api = hexToBytes(md5Hex(api));
+    const dsSignature = customHashV2([...timestampBytes, ...md5Api]);
+    const payload = [
+      ...VERSION_BYTES,
+      ...intToLeBytes(version, 4),
+      ...timestampBytes,
+      ...intToLeBytes(context.loadts, 8),
+      ...intToLeBytes(context.seq, 4),
+      ...intToLeBytes(SPIDER_V3.envConst, 4),
+      ...intToLeBytes(utf8(api).length, 4),
+      ...md5Full.slice(0, 8).map((byte) => byte ^ versionByte),
+      a1Bytes.length,
+      ...a1Bytes,
+      appBytes.length,
+      ...appBytes,
+      1,
+      versionByte ^ 115,
+      ...SPIDER_V3.envFpTail,
+      2,
+      97,
+      51,
+      16,
+      ...dsSignature.map((byte) => byte ^ versionByte),
+    ];
+    if (payload.length !== PAYLOAD_LENGTH) {
+      throw new Error(`Spider v3 MNS payload length mismatch: ${payload.length}`);
+    }
+    return payload;
+  }
+
+  function signSpiderV3Comment(api, cookieDict, state, dsl, options = {}) {
+    const nextState = { ...state };
+    nextState.mnsSeq += 1;
+    nextState.signCount += 1;
+    const now = finiteInteger(options.now, Date.now(), 1, Number.MAX_SAFE_INTEGER);
+    if (now - nextState.dsllt >= SPIDER_V3_DSLLT_REFRESH_MS) nextState.dsllt = now;
+    const context = {
+      now,
+      loadts: nextState.loadts,
+      seq: nextState.mnsSeq,
+      version: options.version == null ? randomUint32() : Number(options.version) >>> 0,
+    };
+    const x3 = X3_PREFIX + encodeX3(xorTransform(buildSpiderV3Payload(api, cookieDict.a1, context)));
+    const xs = XYS_PREFIX + encodeCustomStr(jsonCompact({
+      x0: SPIDER_V3.signVersion,
+      x1: SPIDER_V3.appId,
+      x2: SPIDER_V3.platform,
+      x3,
+      x4: '',
+    }));
+    const xt = String(now);
+    const b1 = generateSpiderV3B1(nextState, now);
+    const xsCommon = encodeCustomStr(jsonCompact({
+      s0: 5,
+      s1: '',
+      x0: '1',
+      x1: SPIDER_V3.signVersion,
+      x2: SPIDER_V3.platform,
+      x3: SPIDER_V3.appId,
+      x4: nextState.webBuild,
+      x5: cookieDict.a1,
+      x6: '',
+      x7: '',
+      x8: b1,
+      x9: crc32JsInt(b1),
+      x10: nextState.signCount,
+      x11: 'normal',
+      x12: `${nextState.dsllt};${dsl}`,
+    }));
+    delete nextState.reset;
+    return {
+      state: nextState,
+      headers: {
+        'x-s': xs,
+        'x-t': xt,
+        'x-s-common': xsCommon,
+        'x-b3-traceid': b3TraceId(),
+        'x-xray-traceid': xrayTraceId(now),
+      },
+      debug: { x3Prefix: x3.slice(0, 12), x3Length: x3.length, b1Length: b1.length },
+    };
+  }
+
+  function bytesToBase64(bytes) {
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    }
+    return btoa(binary);
+  }
+
+  function bytesToHex(bytes) {
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  }
+
+  async function signXyw(method, uri, a1Value, { appId = 'xhs-pc-web', payload = null, timestampSec = null } = {}) {
+    uri = extractUri(uri);
+    if (timestampSec === null) timestampSec = Date.now() / 1000;
+    const contentString = buildContentString(method, uri, payload);
+    const timestampMs = String(Math.floor(timestampSec * 1000));
+    const x1 = md5Hex(`url=${contentString}`);
+    const message = utf8(`x1=${x1};x2=${XYW_ENV_FLAGS};x3=${a1Value};x4=${timestampMs};`);
+    const plaintext = utf8(bytesToBase64(message));
+    const key = await crypto.subtle.importKey('raw', utf8(XYW_AES_KEY), 'AES-CBC', false, ['encrypt']);
+    const encrypted = new Uint8Array(await crypto.subtle.encrypt(
+      { name: 'AES-CBC', iv: utf8(XYW_AES_IV) },
+      key,
+      plaintext,
+    ));
+    const signData = {
+      signSvn: '56',
+      signType: 'x2',
+      appId,
+      signVersion: '1',
+      payload: bytesToHex(encrypted),
+    };
+    return XYW_PREFIX + bytesToBase64(utf8(jsonCompact(signData)));
+  }
+
+  // x-rap-param: ported from xhshow 4.3.5. Feed/search endpoints started
+  // requiring this browser-risk-control envelope in the 2026 server rollout.
+  const XRAP_ROUND_KEYS = [
+    [0x6B714931, 0x44546377, 0x4B583930, 0x5A744179],
+    [0x89314C98, 0xCD652FEF, 0x863D16DF, 0xDC4957A6],
+    [0xC205330C, 0x0F601CE3, 0x895D0A3C, 0x55145D9A],
+    [0xD205006E, 0xDD651C8D, 0x543816B1, 0x012C4B2B],
+    [0x770C2B6F, 0xAA6937E2, 0xFE512153, 0xFF7D6A78],
+    [0x7866FBF4, 0xD20FCC16, 0x2C5EED45, 0xD323873D],
+    [0x90E9C67E, 0x42E60A68, 0x6EB8E72D, 0xBD9B6010],
+    [0xE9C52BEE, 0xAB232186, 0xC59BC6AB, 0x7800A6BB],
+    [0x13BA9A3E, 0xB899BBB8, 0x7D027D13, 0x0502DBA8],
+    [0x50613270, 0xE8F889C8, 0x95FAF4DB, 0x90F82F73],
+  ];
+  const XRAP_LAST_KEY = [0xF396B44F, 0x1B6E3D87, 0x8E94C95C, 0x1E6CE62F];
+  const XRAP_SBOX = Uint8Array.from(hexToBytes(
+    '7a0158e0504e02791d4b53da6b48d452ed7712211415ec1018e5b9f10c08fc7d' +
+    'f9cdb5c8e637268756bab82badf068f78b8dd35e364d2e923182f229703d2dd7' +
+    'b640b243448078d20d494a09636c073a9ed506c6e162f4342459a9572a003e17' +
+    '2c0a1a42fa93bedcf5b36a13e803c797bb737686e3467247d0054c387c1f81ab' +
+    '7551ebf33274118f84899c71227e9dcf3f9169653c6d96a2989933399acac39f' +
+    'a0bce4a3a4547fa7a8046f5dacb727afb02841aeb46e0b1bdf8e30b1fe906160' +
+    'c0cb5c0eef1683ea20e9c955c44585cc1eaa678a7b35d619d8d9c2db94dd1cde' +
+    'a6fff8bf5b5a0fe7c1bdd166c525ee8ce25f88a13ba5f6ce952f6423fbfd4f9b'
+  ));
+  const XRAP_TRACE = Uint8Array.from(hexToBytes(
+    '0002000200004700000000000001ffd9ffa8005c23fff1ffff001501ff90fff9000022fff2ffff' +
+    '001501ffb800770061a5ffe3ffff002a01fffcffe70000f0ffe4ffff002a01ffd30000003e01' +
+    'ffd40000003e01ffc8ffff005301ffbdfffa006901ffbefffb006901ffb1fff4007d01ffa6ff' +
+    'ee009301ffa8ffef009301ff9effe900a801ff96ffe600be01ff97ffe600be01ff93ffe500d3' +
+    '01ff92ffe500ea01ff92ffe4010501ff92ffe3011b01ff92ffe402d101ff93ffe502f201ff94' +
+    'ffe6040501'
+  ));
+  const XRAP_ENV = Uint8Array.from(hexToBytes(
+    '000000010000000000000000fffeffff00000000000000390001ffff00bc00000000006e0002' +
+    '0001013400000000012f00000002011a00000000016100000000019f000000000247000000000279' +
+    '0000000002b1'
+  ));
+  const xrapConcat = (...parts) => {
+    const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
+    let offset = 0;
+    for (const part of parts) { out.set(part, offset); offset += part.length; }
+    return out;
+  };
+  const xrapU16 = (value) => Uint8Array.of((value >>> 8) & 0xff, value & 0xff);
+  const xrapU32 = (value) => Uint8Array.of((value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff);
+  const xrapU64 = (value) => {
+    let n = BigInt(value);
+    const out = new Uint8Array(8);
+    for (let i = 7; i >= 0; i--) { out[i] = Number(n & 0xffn); n >>= 8n; }
+    return out;
+  };
+  const xrapFieldByte = (tag, value = 0) => xrapConcat(xrapU16(tag), Uint8Array.of(value));
+  const xrapFieldU32 = (tag, value) => xrapConcat(xrapU16(tag), xrapU32(value));
+  const xrapFieldU64 = (tag, value) => xrapConcat(xrapU16(tag), xrapU64(value));
+  const xrapFieldBlob = (tag, value) => xrapConcat(xrapU16(tag), xrapU32(value.length), value);
+  function xrapXxh32(data, seed = 0) {
+    const p1 = 0x9E3779B1, p2 = 0x85EBCA77, p3 = 0xC2B2AE3D, p4 = 0x27D4EB2F, p5 = 0x165667B1;
+    const round = (acc, word) => Math.imul(rotl(u32(acc + Math.imul(word, p2)), 13), p1) >>> 0;
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    let pos = 0, digest;
+    if (data.length >= 16) {
+      let a1 = u32(seed + p1 + p2), a2 = u32(seed + p2), a3 = seed >>> 0, a4 = u32(seed - p1);
+      while (pos <= data.length - 16) {
+        a1 = round(a1, view.getUint32(pos, true)); pos += 4;
+        a2 = round(a2, view.getUint32(pos, true)); pos += 4;
+        a3 = round(a3, view.getUint32(pos, true)); pos += 4;
+        a4 = round(a4, view.getUint32(pos, true)); pos += 4;
+      }
+      digest = u32(rotl(a1, 1) + rotl(a2, 7) + rotl(a3, 12) + rotl(a4, 18));
+    } else {
+      digest = u32(seed + p5);
+    }
+    digest = u32(digest + data.length);
+    while (pos + 4 <= data.length) {
+      digest = Math.imul(rotl(u32(digest + Math.imul(view.getUint32(pos, true), p3)), 17), p4) >>> 0;
+      pos += 4;
+    }
+    while (pos < data.length) {
+      digest = Math.imul(rotl(u32(digest + Math.imul(data[pos], p5)), 11), p1) >>> 0;
+      pos++;
+    }
+    digest ^= digest >>> 15;
+    digest = Math.imul(digest, p2) >>> 0;
+    digest ^= digest >>> 13;
+    digest = Math.imul(digest, p3) >>> 0;
+    digest ^= digest >>> 16;
+    return digest >>> 0;
+  }
+  let xrapLuts;
+  function getXrapLuts() {
+    if (xrapLuts) return xrapLuts;
+    const tables = Array.from({ length: 4 }, () => new Uint32Array(256));
+    const gf2 = (value) => ((value << 1) ^ ((value & 0x80) ? 0x11b : 0)) & 0xff;
+    XRAP_SBOX.forEach((s, i) => {
+      const a = gf2(s), d = a ^ s;
+      tables[0][i] = u32((a << 24) | (s << 16) | (s << 8) | d);
+      tables[1][i] = u32((d << 24) | (a << 16) | (s << 8) | s);
+      tables[2][i] = u32((s << 24) | (d << 16) | (a << 8) | s);
+      tables[3][i] = u32((s << 24) | (s << 16) | (d << 8) | a);
+    });
+    xrapLuts = tables;
+    return tables;
+  }
+  function xrapEncryptBlock(block) {
+    const src = new Uint8Array(16);
+    src.set(block.slice(0, 16));
+    const view = new DataView(src.buffer);
+    let state = [0, 1, 2, 3].map((i) => u32(view.getUint32(i * 4) ^ XRAP_ROUND_KEYS[0][i]));
+    const lut = getXrapLuts();
+    for (let round = 1; round < 10; round++) {
+      const next = [];
+      for (let i = 0; i < 4; i++) {
+        next[i] = u32(
+          lut[0][state[i] >>> 24] ^
+          lut[1][(state[(i + 1) & 3] >>> 16) & 0xff] ^
+          lut[2][(state[(i + 2) & 3] >>> 8) & 0xff] ^
+          lut[3][state[(i + 3) & 3] & 0xff] ^
+          XRAP_ROUND_KEYS[round][i]
+        );
+      }
+      state = next;
+    }
+    const lastKey = xrapConcat(...XRAP_LAST_KEY.map(xrapU32));
+    const out = new Uint8Array(16);
+    for (let row = 0; row < 4; row++) {
+      for (let col = 0; col < 4; col++) {
+        const index = (state[(row + col) & 3] >>> (24 - 8 * col)) & 0xff;
+        out[row * 4 + col] = XRAP_SBOX[index] ^ lastKey[row * 4 + col];
+      }
+    }
+    return out;
+  }
+  function xrapEncryptBlocks(data) {
+    const blocks = [];
+    for (let offset = 0; offset < data.length; offset += 16) blocks.push(xrapEncryptBlock(data.slice(offset, offset + 16)));
+    return xrapConcat(...blocks);
+  }
+  const xrapRandomAscii = (length) => {
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    let value = '';
+    for (let i = 0; i < length; i++) value += chars[RNG.randint(0, chars.length - 1)];
+    return value;
+  };
+  function xrapBuildBody(api, data, options) {
+    const bodyString = typeof data === 'string' ? data : jsonCompact(data);
+    const timestamp = options.timestampMs ?? Date.now();
+    const innerKey = utf8(options.innerKey ?? xrapRandomAscii(16));
+    const mask = options.mask ?? RNG.randint(1, 255);
+    const nonce = options.bodyRand32 ?? RNG.randint(0, 0xffffffff);
+    const fields = [
+      xrapFieldU64(0x03e8, timestamp),
+      xrapFieldU32(0x03e9, nonce),
+      xrapFieldBlob(0x03ea, innerKey),
+      xrapFieldU32(0x03eb, xrapXxh32(utf8(api + bodyString))),
+    ];
+    for (const tag of [...Array.from({ length: 15 }, (_, i) => 1051 + i), 1070, ...Array.from({ length: 4 }, (_, i) => 1066 + i)]) {
+      fields.push(xrapFieldByte(tag));
+    }
+    fields.push(xrapFieldU32(1100, 0));
+    for (let tag = 1071; tag < 1074; tag++) fields.push(xrapFieldByte(tag));
+    fields.push(xrapFieldU32(1075, 0x564), xrapFieldU32(1076, 0x2c));
+    fields.push(xrapFieldU64(1077, Math.max(0, timestamp - 0x434)), xrapFieldBlob(1078, XRAP_TRACE));
+    fields.push(xrapFieldU32(1082, 0), xrapFieldU32(1084, 0), xrapFieldU32(1085, 0), xrapFieldU32(1086, 100));
+    fields.push(xrapFieldU64(1087, Math.max(0, timestamp - 0x2d7)), xrapFieldBlob(1088, XRAP_ENV));
+    fields.push(xrapFieldU32(1090, 0), xrapFieldU32(1097, 0), xrapFieldU32(1092, 0x566), xrapFieldU32(1094, 0x519));
+    fields.push(xrapFieldU64(1095, Math.max(0, timestamp - 0x218c)), xrapFieldU32(1093, 0), xrapFieldByte(1096));
+    fields.push(xrapFieldBlob(1091, Uint8Array.of(0, 0, 0xff, 0xff)));
+    for (let tag = 1151; tag < 1157; tag++) fields.push(xrapFieldByte(tag));
+    const raw = xrapConcat(...fields);
+    for (let i = 16; i < raw.length; i++) raw[i] ^= mask;
+    return raw;
+  }
+  async function xrapGzip(data, mtime) {
+    if (typeof CompressionStream !== 'function') throw new Error('CompressionStream(gzip) is unavailable');
+    const stream = new Blob([data]).stream().pipeThrough(new CompressionStream('gzip'));
+    const output = new Uint8Array(await new Response(stream).arrayBuffer());
+    if (mtime !== undefined && output.length >= 10) {
+      const value = mtime >>> 0;
+      output[4] = value & 0xff; output[5] = (value >>> 8) & 0xff;
+      output[6] = (value >>> 16) & 0xff; output[7] = (value >>> 24) & 0xff;
+    }
+    if (output.length >= 10) output[9] = 0x03;
+    return output;
+  }
+  async function xRapParam(api, data, options = {}) {
+    const raw = xrapBuildBody(api, data, options);
+    const compressed = await xrapGzip(raw, options.gzipMtime);
+    const key = utf8(options.aesKey ?? xrapRandomAscii(16));
+    const salt = utf8(options.randomString ?? xrapRandomAscii(RNG.randint(4, 6)));
+    const xored = Uint8Array.from(compressed, (byte, i) => byte ^ key[i % key.length]);
+    const cipherBody = xrapConcat(xrapEncryptBlocks(xored), xrapU32(compressed.length));
+    const content = xrapConcat(salt, xrapEncryptBlock(key), xrapU32(16), cipherBody);
+    const processingTime = options.bodyEncryptTime ?? RNG.randint(60, 240);
+    const header = xrapConcat(
+      Uint8Array.of(0x07, 0x24, 0x01, salt.length),
+      xrapU32(1), xrapU32(20), xrapU32(cipherBody.length),
+      xrapU32(xrapXxh32(content)), xrapU32(10300), xrapU32(processingTime),
+      new Uint8Array(8),
+    );
+    return bytesToBase64(xrapConcat(header, content));
   }
 
   function generateB1(fp) {
@@ -1237,12 +1673,20 @@ const XHSLite = (() => {
     let part2 = ''; for (let i = 0; i < 16; i++) part2 += HEX_CHARS[RNG.randint(0, 15)];
     return part1 + part2;
   }
-  function signHeaders(method, uri, cookieDict, { params = null, payload = null, timestampSec = null } = {}) {
+  async function signHeaders(method, uri, cookieDict, {
+    params = null,
+    payload = null,
+    timestampSec = null,
+    signFormat = 'xys',
+  } = {}) {
     if (timestampSec === null) timestampSec = Date.now() / 1000;
     const m = method.toUpperCase();
     const requestData = m === 'GET' ? params : payload;
+    const xSignature = signFormat === 'xyw'
+      ? await signXyw(m, uri, cookieDict.a1, { payload: requestData, timestampSec })
+      : signXs(m, uri, cookieDict.a1, { payload: requestData, timestampSec });
     return {
-      'x-s': signXs(m, uri, cookieDict.a1, { payload: requestData, timestampSec }),
+      'x-s': xSignature,
       'x-s-common': signXsCommon(cookieDict),
       'x-t': String(Math.floor(timestampSec * 1000)),
       'x-b3-traceid': b3TraceId(),
@@ -1276,16 +1720,196 @@ const XHSLite = (() => {
       return `${k}=${pyQuote(s, ',')}`;
     }).join('&');
   }
-  async function signedGet(base, uri, params, cookieStr, ck, extraHeaders = {}) {
-    const query = buildSignedQuery(params);
-    const sig = signHeaders('GET', uri, ck, { params: params || {} });
-    const resp = await fetch(base + uri + (query ? '?' + query : ''), { method: 'GET', headers: { ...baseHeaders(cookieStr), ...sig, ...extraHeaders } });
-    return resp.json();
+  async function readJsonResponse(resp) {
+    let data;
+    try {
+      data = await resp.json();
+    } catch {
+      data = { success: false, msg: `HTTP ${resp.status} returned a non-JSON response` };
+    }
+    if (!resp.ok) {
+      return { ...data, success: false, http_status: resp.status };
+    }
+    return data;
   }
-  async function signedPost(base, uri, payload, cookieStr, ck, extraHeaders = {}) {
-    const sig = signHeaders('POST', uri, ck, { payload });
-    const resp = await fetch(base + uri, { method: 'POST', headers: { ...baseHeaders(cookieStr), ...sig, ...extraHeaders }, body: JSON.stringify(payload) });
-    return resp.json();
+  async function fetchSpiderV3Dsl(nowMs = Date.now()) {
+    if (spiderV3DslCache.value && spiderV3DslCache.expiresAt > nowMs) {
+      return spiderV3DslCache.value;
+    }
+    try {
+      const response = await fetch(SPIDER_V3_DSL_URL, {
+        method: 'GET',
+        headers: {
+          accept: '*/*',
+          referer: WWW + '/',
+          'user-agent': SPIDER_V3.userAgent,
+        },
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const source = await response.text();
+      const match = source.match(/function\s+getdss\s*\(\s*\)\s*\{\s*return\s*['"](\d{13})['"]/);
+      if (!match) throw new Error('getdss timestamp was not found');
+      spiderV3DslCache = { value: match[1], expiresAt: nowMs + SPIDER_V3_DSL_TTL_MS };
+      return match[1];
+    } catch (error) {
+      if (spiderV3DslCache.value) return spiderV3DslCache.value;
+      throw new Error(`Spider v3 DSL unavailable: ${error?.message || error}`);
+    }
+  }
+
+  function spiderV3RequestHeaders(cookieStr, strategy, signedHeaders) {
+    const headers = {
+      accept: 'application/json, text/plain, */*',
+      'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+      origin: WWW,
+      referer: WWW + '/',
+      priority: 'u=1, i',
+      'user-agent': SPIDER_V3.userAgent,
+      'sec-fetch-dest': 'empty',
+      'sec-fetch-mode': 'cors',
+      'sec-fetch-site': 'same-site',
+      cookie: cookieStr,
+      ...signedHeaders,
+    };
+    if (strategy === 'browser-hints' || strategy === 'legacy-transport') {
+      headers['sec-ch-ua'] = SPIDER_V3.secChUa;
+      headers['sec-ch-ua-mobile'] = '?0';
+      headers['sec-ch-ua-platform'] = '"Windows"';
+    }
+    if (strategy === 'legacy-transport') headers['x-mns'] = 'unload';
+    return headers;
+  }
+
+  async function experimentalComments(cookieStr, body) {
+    const strategy = String(body.strategy || 'no-client-hints');
+    if (!SPIDER_V3_STRATEGIES.has(strategy)) {
+      return {
+        success: false,
+        error: `Unknown Spider v3 strategy: ${strategy}`,
+        error_code: 'XHS_EXPERIMENT_INVALID_STRATEGY',
+        allowed_strategies: Array.from(SPIDER_V3_STRATEGIES),
+      };
+    }
+    const noteId = String(body.feed_id || body.note_id || '').trim();
+    if (!noteId) {
+      return {
+        success: false,
+        error: 'feed_id is required',
+        error_code: 'XHS_EXPERIMENT_MISSING_FEED_ID',
+      };
+    }
+    const cookieDict = parseCookies(cookieStr);
+    const now = Date.now();
+    const state = await normalizeSpiderV3State(cookieDict, body.session_state, now);
+    const stateWasReset = state.reset;
+    let dsl;
+    try {
+      dsl = await fetchSpiderV3Dsl(now);
+    } catch (error) {
+      const sessionState = { ...state };
+      delete sessionState.reset;
+      return {
+        success: false,
+        error: error?.message || String(error),
+        error_code: 'XHS_EXPERIMENT_DSL_UNAVAILABLE',
+        upstream_requests: { dsl: 1, comments: 0 },
+        retry_performed: false,
+        session_state: sessionState,
+      };
+    }
+    const params = {
+      note_id: noteId,
+      cursor: String(body.cursor || ''),
+      top_comment_id: String(body.top_comment_id || ''),
+      image_formats: 'jpg,webp,avif',
+      xsec_token: String(body.xsec_token || ''),
+    };
+    const uri = '/api/sns/web/v2/comment/page';
+    const api = `${uri}?${buildSignedQuery(params)}`;
+    const signed = signSpiderV3Comment(api, cookieDict, state, dsl);
+    const experiment = {
+      name: 'spider-session-v3',
+      strategy,
+      state_reset: stateWasReset,
+      retry_performed: false,
+      signature: signed.debug,
+    };
+    if (body.dry_run === true) {
+      return {
+        success: true,
+        dry_run: true,
+        experiment,
+        upstream_requests: { dsl: 1, comments: 0 },
+        session_state: signed.state,
+      };
+    }
+    const response = await fetch(EDITH + api, {
+      method: 'GET',
+      headers: spiderV3RequestHeaders(cookieStr, strategy, signed.headers),
+    });
+    let raw;
+    try {
+      raw = await response.json();
+    } catch {
+      raw = { success: false, msg: `HTTP ${response.status} returned a non-JSON response` };
+    }
+    if (response.status === 406) {
+      return {
+        success: false,
+        error: raw?.msg || 'XHS rejected the isolated comment request with HTTP 406',
+        error_code: 'XHS_EXPERIMENT_HTTP_406',
+        http_status: 406,
+        circuit_open: true,
+        retry_performed: false,
+        upstream_requests: { dsl: 1, comments: 1 },
+        experiment,
+        session_state: signed.state,
+      };
+    }
+    if (!response.ok || raw?.success === false) {
+      return {
+        success: false,
+        error: raw?.msg || `XHS comment request failed with HTTP ${response.status}`,
+        error_code: 'XHS_EXPERIMENT_UPSTREAM_REJECTED',
+        http_status: response.status,
+        circuit_open: false,
+        retry_performed: false,
+        upstream_requests: { dsl: 1, comments: 1 },
+        experiment,
+        session_state: signed.state,
+      };
+    }
+    const comments = Array.isArray(raw?.data?.comments) ? raw.data.comments.map(normComment) : [];
+    return {
+      success: true,
+      data: {
+        comments: {
+          list: comments,
+          cursor: raw?.data?.cursor || '',
+          has_more: !!raw?.data?.has_more,
+        },
+        comments_status: 'loaded',
+        comments_provider: 'spider-session-v3',
+      },
+      upstream_requests: { dsl: 1, comments: 1 },
+      experiment,
+      session_state: signed.state,
+    };
+  }
+
+  async function signedGet(base, uri, params, cookieStr, ck, extraHeaders = {}, signFormat = 'xys') {
+    const query = buildSignedQuery(params);
+    const sig = await signHeaders('GET', uri, ck, { params: params || {}, signFormat });
+    const resp = await fetch(base + uri + (query ? '?' + query : ''), { method: 'GET', headers: { ...baseHeaders(cookieStr), ...sig, ...extraHeaders } });
+    return readJsonResponse(resp);
+  }
+  async function signedPost(base, uri, payload, cookieStr, ck, extraHeaders = {}, useXrap = false) {
+    const sig = await signHeaders('POST', uri, ck, { payload });
+    const xrapHeader = useXrap
+      ? { 'x-rap-param': await xRapParam(`//${new URL(base).host}${uri}`, payload) }
+      : {};
+    const resp = await fetch(base + uri, { method: 'POST', headers: { ...baseHeaders(cookieStr), ...sig, ...xrapHeader, ...extraHeaders }, body: JSON.stringify(payload) });
+    return readJsonResponse(resp);
   }
 
   function pickCover(nc) {
@@ -1311,13 +1935,143 @@ const XHSLite = (() => {
     };
   }
   function normComment(c) {
-    const u = c.user_info || c.user || {};
+    const u = c.user_info || c.userInfo || c.user || {};
+    const id = c.id || c.comment_id || c.commentId || '';
+    const replies = Array.isArray(c.sub_comments) ? c.sub_comments
+      : Array.isArray(c.subComments) ? c.subComments
+      : Array.isArray(c.replies) ? c.replies
+      : [];
     return {
-      id: c.id || '', comment_id: c.id || '', commentId: c.id || '', content: c.content || '',
-      nickname: u.nickname || '', author_name: u.nickname || '',
-      user: { nickname: u.nickname || '', user_id: u.user_id || '' },
-      like_count: c.like_count || '0', likes: c.like_count || '0',
-      sub_comments: Array.isArray(c.sub_comments) ? c.sub_comments.map(normComment) : [],
+      id, comment_id: id, commentId: id, content: c.content || c.text || '',
+      nickname: u.nickname || u.name || '', author_name: u.nickname || u.name || '',
+      user: { nickname: u.nickname || u.name || '', user_id: u.user_id || u.userId || '' },
+      like_count: c.like_count ?? c.likeCount ?? c.likes ?? '0',
+      likes: c.like_count ?? c.likeCount ?? c.likes ?? '0',
+      sub_comments: replies.map(normComment),
+    };
+  }
+
+  function findCommentArray(value, depth = 0) {
+    if (depth > 5 || value == null) return null;
+    if (Array.isArray(value)) {
+      if (value.length === 0) return value;
+      const first = value[0];
+      if (first && typeof first === 'object' &&
+          (first.content != null || first.comment_id || first.commentId || first.id)) {
+        return value;
+      }
+      return null;
+    }
+    if (typeof value !== 'object') return null;
+    for (const key of ['comments', 'comment_list', 'commentList', 'items', 'list']) {
+      const found = findCommentArray(value[key], depth + 1);
+      if (found) return found;
+    }
+    for (const key of ['data', 'result', 'response']) {
+      const found = findCommentArray(value[key], depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  async function getRnoteComments(feedId, env, requestApiKey) {
+    const apiKey = requestApiKey || (env && env.RNOTE_API_KEY);
+    if (!apiKey) return null;
+
+    const providerUrl = new URL('https://rnote.dev/api/v2/crawler/note/comments');
+    providerUrl.searchParams.set('note_id', feedId);
+    providerUrl.searchParams.set('index', '0');
+    providerUrl.searchParams.set('pageArea', 'UNFOLDED');
+    providerUrl.searchParams.set('sort_strategy', 'like_count');
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    try {
+      const resp = await fetch(providerUrl.toString(), {
+        method: 'GET',
+        headers: {
+          accept: 'application/json',
+          'X-API-Key': apiKey,
+        },
+        signal: controller.signal,
+      });
+      const body = await readJsonResponse(resp);
+      if (!resp.ok || body?.success === false) {
+        return {
+          success: false,
+          error: {
+            status: resp.status,
+            code: body?.debug_id || 'COMMENT_PROVIDER_REJECTED',
+            message: body?.error || body?.message || `真实评论服务 HTTP ${resp.status}`,
+          },
+        };
+      }
+      const rawComments = findCommentArray(body?.data ?? body) || [];
+      return {
+        success: true,
+        comments: rawComments.map(normComment).filter((comment) => comment.content),
+        provider: 'rnote',
+      };
+    } catch (e) {
+      return {
+        success: false,
+        error: {
+          code: e?.name === 'AbortError' ? 'COMMENT_PROVIDER_TIMEOUT' : 'COMMENT_PROVIDER_FAILED',
+          message: e instanceof Error ? e.message : String(e),
+        },
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async function getManagedComments(feedId, env, requestRnoteApiKey) {
+    const rnoteConfigured = !!(requestRnoteApiKey || env?.RNOTE_API_KEY);
+    if (!rnoteConfigured) {
+      return {
+        success: false,
+        error: {
+          code: 'COMMENT_PROVIDER_NOT_CONFIGURED',
+          message: '真实评论服务尚未配置',
+        },
+      };
+    }
+
+    const cacheKey = new Request(`https://sullyos.invalid/_xhs-comments/${encodeURIComponent(feedId)}`);
+    const cache = globalThis.caches && globalThis.caches.default;
+    if (cache) {
+      const cached = await cache.match(cacheKey);
+      if (cached) {
+        const data = await cached.json();
+        return {
+          success: true,
+          comments: data.comments || [],
+          provider: data.provider || 'managed-cache',
+          cached: true,
+        };
+      }
+    }
+
+    const result = await getRnoteComments(feedId, env, requestRnoteApiKey);
+    if (result?.success) {
+      const comments = result.comments || [];
+      if (cache) {
+        const cacheResponse = new Response(JSON.stringify({
+          comments,
+          provider: result.provider,
+        }), {
+          headers: {
+            'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'public, max-age=300',
+          },
+        });
+        await cache.put(cacheKey, cacheResponse);
+      }
+      return { ...result, comments, cached: false };
+    }
+    return result || {
+      success: false,
+      error: { code: 'COMMENT_PROVIDER_NOT_CONFIGURED', message: '真实评论服务尚未配置' },
     };
   }
 
@@ -1351,20 +2105,45 @@ const XHSLite = (() => {
     const items = (r?.data?.items || []).filter((it) => it.id && (it.note_card || it.model_type === 'note'));
     return { feeds: items.map(normItem), success: !!r?.success, msg: r?.msg, raw_error: r?.success ? undefined : r };
   }
-  async function getFeedDetail(cookieStr, feedId, xsecToken, { xsecSource = 'pc_feed', loadComments = true } = {}) {
+  async function getFeedDetail(cookieStr, feedId, xsecToken, {
+    xsecSource = 'pc_feed',
+    loadComments = true,
+    env,
+    requestRnoteApiKey,
+  } = {}) {
     const ck = parseCookies(cookieStr);
     const payload = { source_note_id: feedId, image_formats: IMG_FORMATS, extra: { need_body_topic: '1' }, xsec_source: xsecSource || 'pc_feed', xsec_token: xsecToken || '' };
     const r = await signedPost(EDITH, '/api/sns/web/v1/feed', payload, cookieStr, ck, { 'xy-direction': '13' });
     const nc = r?.data?.items?.[0]?.note_card || {};
     const note = { note_id: feedId, title: nc.title || '', content: nc.desc || '', desc: nc.desc || '', user: nc.user || {}, interact_info: nc.interact_info || {}, image_list: nc.image_list || [], xsec_token: xsecToken || '' };
-    let comments = [];
-    if (loadComments) {
-      try {
-        const cr = await signedGet(EDITH, '/api/sns/web/v2/comment/page', { note_id: feedId, cursor: '', top_comment_id: '', image_formats: 'jpg,webp,avif', xsec_token: xsecToken || '' }, cookieStr, ck);
-        comments = (cr?.data?.comments || []).map(normComment);
-      } catch (e) { /* best effort */ }
+    const embeddedComments = findCommentArray(nc?.comments) || [];
+    let comments = embeddedComments.map(normComment).filter((comment) => comment.content);
+    let commentsStatus = comments.length ? 'loaded' : 'not_requested';
+    let commentsError;
+    let commentsProvider;
+    if (loadComments && comments.length === 0) {
+      const managed = await getManagedComments(feedId, env, requestRnoteApiKey);
+      if (managed.success) {
+        comments = managed.comments;
+        commentsProvider = managed.provider;
+        commentsStatus = comments.length ? 'loaded' : 'empty';
+      } else {
+        commentsStatus = 'unavailable';
+        commentsError = managed.error;
+      }
     }
-    return { data: { note, comments: { list: comments } }, success: !!r?.success, msg: r?.msg, raw_error: r?.success ? undefined : r };
+    return {
+      data: {
+        note,
+        comments: { list: comments },
+        comments_status: commentsStatus,
+        comments_provider: commentsProvider,
+        comments_error: commentsError,
+      },
+      success: !!r?.success,
+      msg: r?.msg,
+      raw_error: r?.success ? undefined : r,
+    };
   }
   async function userProfile(cookieStr, userId, xsecToken) {
     const ck = parseCookies(cookieStr);
@@ -1499,12 +2278,18 @@ const XHSLite = (() => {
     return { success: true, note_id: noteId, noteId, msg: '发布成功', raw: r };
   }
 
-  async function handle(command, body, cookie) {
+  async function handle(command, body, cookie, env, requestContext = {}) {
     switch (command) {
       case 'check-login': return checkLogin(cookie);
       case 'search': return search(cookie, body.keyword || '', { sort: body.sort_by, page: body.page });
       case 'list-feeds': return listFeeds(cookie, { category: body.category, cursorScore: body.cursor_score, noteIndex: body.note_index });
-      case 'get-feed-detail': return getFeedDetail(cookie, body.feed_id, body.xsec_token, { xsecSource: body.xsec_source, loadComments: body.load_all_comments !== false });
+      case 'get-feed-detail': return getFeedDetail(cookie, body.feed_id, body.xsec_token, {
+        xsecSource: body.xsec_source,
+        loadComments: body.load_all_comments !== false,
+        env,
+        requestRnoteApiKey: requestContext.rnoteApiKey,
+      });
+      case 'xhs-experimental-comments': return experimentalComments(cookie, body);
       case 'post-comment': return postComment(cookie, body.feed_id, body.content, { xsecToken: body.xsec_token });
       case 'reply-comment': return postComment(cookie, body.feed_id, body.content, { targetCommentId: body.comment_id, xsecToken: body.xsec_token });
       case 'like-feed': return likeFeed(cookie, body.feed_id, !!body.unlike);
@@ -1520,7 +2305,25 @@ const XHSLite = (() => {
     }
   }
 
-  return { handle, __test: { RNG, signXs, signXsCommon, generateB1, _internals: { md5Hex, encodeCustomStr, crc32JsInt } } };
+  return {
+    handle,
+    __test: {
+      RNG,
+      signXs,
+      signXyw,
+      signXsCommon,
+      generateB1,
+      xRapParam,
+      spiderV3: {
+        normalizeState: normalizeSpiderV3State,
+        signComment: signSpiderV3Comment,
+        generateB1: generateSpiderV3B1,
+        parseCookies,
+        resetDslCache() { spiderV3DslCache = { value: '', expiresAt: 0 }; },
+      },
+      _internals: { md5Hex, encodeCustomStr, crc32JsInt, xrapEncryptBlock, xrapXxh32 },
+    },
+  };
 })();
 
 // 供 Node 验证用（Worker 运行时忽略多余的具名导出）。见 worker/xhs-lite/test/verify.mjs
@@ -1547,13 +2350,29 @@ export default {
       }
       let body = {};
       if (request.method === 'POST') { try { body = await request.json(); } catch (e) { /* allow empty */ } }
+      if (
+        command === 'xhs-experimental-comments'
+        && (
+          request.headers.get('x-xhs-experiment-ack') !== 'spider-v3-isolated-cookie'
+          || body.acknowledge_risk !== true
+        )
+      ) {
+        return jsonResponse({
+          error: 'Spider v3 is an isolated experiment and requires explicit risk acknowledgement.',
+          hint: 'Use a disposable test cookie; the normal Lite path never calls this endpoint.',
+        }, { status: 403, origin });
+      }
       const cookie = request.headers.get('x-xhs-cookie') || body.cookie || (env && env.XHS_COOKIE) || '';
       if (!cookie) return jsonResponse({ error: '未配置 cookie。请在 SullyOS 设置里粘贴小红书 cookie。' }, { status: 401, origin });
       if (!cookie.includes('a1=')) return jsonResponse({ error: 'cookie 缺少 a1 字段，请复制完整的小红书 cookie。' }, { status: 400, origin });
       try {
-        const result = await XHSLite.handle(command, body, cookie);
+        const result = await XHSLite.handle(command, body, cookie, env, {
+          rnoteApiKey: request.headers.get('x-rnote-api-key') || '',
+        });
         if (result === null) return jsonResponse({ error: `Unknown command: ${command}` }, { status: 404, origin });
-        return jsonResponse(result, { origin });
+        const response = jsonResponse(result, { origin });
+        if (command === 'xhs-experimental-comments') response.headers.set('Cache-Control', 'no-store');
+        return response;
       } catch (e) {
         return jsonResponse({ error: e.message || String(e) }, { status: 500, origin });
       }

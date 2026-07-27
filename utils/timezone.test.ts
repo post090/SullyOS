@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { interactionGapNote, tzAwarenessNote, resolveCharTimeZone } from './timezone';
+import { interactionGapNote, tzAwarenessNote, resolveCharTimeZone, tzShortLabel } from './timezone';
 import type { CharacterProfile } from '../types';
 
 const NOW = 1_700_000_000_000; // 固定 now，避免依赖系统时钟
@@ -56,5 +56,26 @@ describe('resolveCharTimeZone', () => {
     });
     it('开启但无值 → undefined', () => {
         expect(resolveCharTimeZone({ customTimezoneEnabled: true } as CharacterProfile)).toBeUndefined();
+    });
+});
+
+describe('tzShortLabel', () => {
+    it('取清单标签里的第一个地名，去掉并列项和 UTC 偏移', () => {
+        expect(tzShortLabel('America/New_York')).toBe('纽约');
+        expect(tzShortLabel('Asia/Shanghai')).toBe('北京');
+        expect(tzShortLabel('Asia/Tokyo')).toBe('东京');
+    });
+    it('单地名的条目原样取到', () => {
+        expect(tzShortLabel('Europe/London')).toBe('伦敦');
+        expect(tzShortLabel('Australia/Sydney')).toBe('悉尼');
+    });
+    it('不在清单里的时区退回 IANA id 末段', () => {
+        expect(tzShortLabel('America/Argentina/Ushuaia')).toBe('Ushuaia');
+        expect(tzShortLabel('Africa/Porto-Novo')).toBe('Porto-Novo');
+    });
+    it('结果够短，放得进卡片角标', () => {
+        for (const id of ['America/New_York', 'Asia/Kolkata', 'Pacific/Auckland', 'Europe/Paris']) {
+            expect(tzShortLabel(id).length).toBeLessThanOrEqual(6);
+        }
     });
 });

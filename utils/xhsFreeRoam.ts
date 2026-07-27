@@ -12,7 +12,14 @@
 
 import { CharacterProfile, UserProfile, XhsActivityRecord, XhsFreeRoamSession, APIConfig, RealtimeConfig } from '../types';
 import { ContextBuilder } from './context';
-import { XhsMcpClient, McpToolResult, extractNotesFromMcpData, normalizeNote } from './xhsMcpClient';
+import { nowInTimeZone, resolveCharTimeZone } from './timezone';
+import {
+    XhsMcpClient,
+    McpToolResult,
+    extractNotesFromMcpData,
+    normalizeNote,
+    normalizeXhsLiteDetail,
+} from './xhsMcpClient';
 import { DB } from './db';
 
 // ==================== Types ====================
@@ -101,7 +108,10 @@ const buildFreeRoamSystemPrompt = (
 ): string => {
     // 加载完整上下文（含详细记忆和心情标签），让角色在自由活动时保持情感连贯
     const coreContext = ContextBuilder.buildCoreContext(char, user, true);
-    const now = new Date();
+    // 自由活动是角色自己在刷手机，「现在几点」得跟 ta 那边的钟——
+    // coreContext 顶部注入的当前时间已按角色时区折算，这里再用设备时间就会自相矛盾。
+    const charTz = resolveCharTimeZone(char);
+    const now = nowInTimeZone(charTz);
     const timeStr = `${now.getFullYear()}-${(now.getMonth()+1).toString().padStart(2,'0')}-${now.getDate().toString().padStart(2,'0')} ${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
     const hour = now.getHours();
     const timeOfDay = hour < 6 ? '深夜' : hour < 9 ? '清晨' : hour < 12 ? '上午' : hour < 14 ? '中午' : hour < 18 ? '下午' : hour < 22 ? '晚上' : '深夜';
@@ -109,7 +119,8 @@ const buildFreeRoamSystemPrompt = (
     let pastStr = '暂无活动记录。';
     if (pastActivities.length > 0) {
         pastStr = pastActivities.slice(-5).map(a => {
-            const d = new Date(a.timestamp);
+            // 历史活动也报角色当地的钟点，跟上面的「现在」同一把尺子
+            const d = nowInTimeZone(charTz, new Date(a.timestamp));
             const ts = `${d.getMonth()+1}/${d.getDate()} ${d.getHours()}:${d.getMinutes().toString().padStart(2,'0')}`;
             const actionLabel = { post: '发帖', browse: '刷首页', search: '搜索', comment: '评论', save_topic: '收藏话题', idle: '休息' }[a.actionType];
             return `[${ts}] ${actionLabel}: ${a.content.title || a.content.keyword || a.content.body || '无'} (${a.result})`;
@@ -200,7 +211,12 @@ ${notesList}
 如果你对某篇帖子特别感兴趣，想看它的完整正文和评论区，可以填 wantToViewDetail。`;
 };
 
-const buildDetailReactionPrompt = (noteTitle: string, noteContent: string, comments: any[]): string => {
+const buildDetailReactionPrompt = (
+    noteTitle: string,
+    noteContent: string,
+    comments: any[],
+    commentsUnavailable = false,
+): string => {
     const commentsList = comments.slice(0, 15).map((c: any, i: number) => {
         const commentId = c.commentId || c.comment_id || c.id || '';
         const author = c.authorName || c.author_name || c.nickname || c.user?.nickname || '匿名';
@@ -213,7 +229,11 @@ const buildDetailReactionPrompt = (noteTitle: string, noteContent: string, comme
 
 正文: ${noteContent.slice(0, 500)}${noteContent.length > 500 ? '...' : ''}
 
-${comments.length > 0 ? `评论区:\n${commentsList}` : '这条帖子还没有评论。'}
+${comments.length > 0
+        ? `真实评论区:\n${commentsList}`
+        : commentsUnavailable
+            ? '真实评论区本次读取失败。不能据此判断帖子没有评论；不要编造、模拟或回复评论。'
+            : '这条帖子还没有评论。'}
 
 你怎么看这条帖子和评论区？
 
@@ -308,6 +328,7 @@ const handleViewDetail = async (
     const data = detailResult.data;
     let noteContent = '';
     let comments: any[] = [];
+    let commentsUnavailable = false;
     if (typeof data === 'string') {
         noteContent = data.slice(0, 1000);
     } else if (data) {
@@ -321,11 +342,20 @@ const handleViewDetail = async (
             || data.comment_list || data.commentList
             || noteObj?.comments?.list || noteObj?.comments || [];
         if (!Array.isArray(comments)) comments = [];
+        const normalized = normalizeXhsLiteDetail(data);
+        comments = normalized.comments || [];
+        commentsUnavailable = normalized.commentReadStatus === 'unavailable';
     }
 
     // Let character react to detail + comments
-    callbacks.onStatus(`${char.name}在看评论区...`);
-    const reactionRaw = await callLlm(apiConfig, systemPrompt, buildDetailReactionPrompt(noteTitle, noteContent, comments));
+    callbacks.onStatus(commentsUnavailable
+        ? `${char.name}看完了正文，评论区暂时读取失败`
+        : `${char.name}在看评论区...`);
+    const reactionRaw = await callLlm(
+        apiConfig,
+        systemPrompt,
+        buildDetailReactionPrompt(noteTitle, noteContent, comments, commentsUnavailable),
+    );
     const reaction = parseJson<LlmDetailReaction>(reactionRaw);
 
     if (reaction?.thinking) {
@@ -342,9 +372,13 @@ const handleViewDetail = async (
             keyword: `查看详情: ${noteTitle}`,
             notesViewed: [normalizeNote(contextNote || { noteId, title: noteTitle })],
         },
-        thinking: reaction?.thinking || `看了「${noteTitle}」的详情和评论区`,
+        thinking: reaction?.thinking || (commentsUnavailable
+            ? `看了「${noteTitle}」的正文，但评论区读取失败`
+            : `看了「${noteTitle}」的详情和评论区`),
         result: 'success',
-        resultMessage: `查看了「${noteTitle}」的详情，${comments.length} 条评论`,
+        resultMessage: commentsUnavailable
+            ? `查看了「${noteTitle}」的详情；真实评论读取失败`
+            : `查看了「${noteTitle}」的详情，${comments.length} 条评论`,
     };
     session.activities.push(detailRecord);
     callbacks.onActivity(detailRecord);

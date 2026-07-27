@@ -220,3 +220,56 @@ describe('renderAndPersist 双语分支表情包顺序', () => {
         expect(msgs.map(m => m.type)).toEqual(['text', 'emoji']);
     }, 20000);
 });
+
+describe('renderAndPersist XHS mimicked-card fallback', () => {
+    it('restores the five-line history format as xhs_card and preserves surrounding text', async () => {
+        const charId = `c-xhs-mimic-${Date.now()}`;
+        const ctx = makeCtx(charId, []);
+        const title = '\u5ba0\u7269\u6c34\u6bcd\u53ef\u4ee5\u6478\u5417\uff1f';
+        const author = '\u6eba\u6c34\u6d77\u8707\u76ae';
+        ctx.instantRender = true;
+        ctx.lastXhsNotesRef = {
+            current: [{
+                noteId: 'note-jellyfish',
+                title,
+                desc: '\u7f13\u5b58\u91cc\u7684\u5b8c\u6574\u7b80\u4ecb',
+                likes: 2156,
+                collects: 488,
+                commentCount: 55,
+                shareCount: 175,
+                author,
+                authorId: 'author-1',
+                xsecToken: 'token-1',
+                coverUrl: 'https://example.test/jellyfish.jpg',
+            }],
+        };
+        const raw = [
+            '\u8fd9\u4e2a\u8fd8\u633a\u6709\u610f\u601d',
+            '[\u4f60\u5206\u4eab\u4e86\u5c0f\u7ea2\u4e66\u7b14\u8bb0]',
+            `\u6807\u9898: ${title}`,
+            `\u4f5c\u8005: ${author}`,
+            '\u4e92\u52a8: 2156\u8d5e 488\u6536\u85cf 55\u8bc4\u8bba 175\u5206\u4eab',
+            '\u7b80\u4ecb: \u4eba\u5de5\u7e41\u6b96\u7684\u5ba0\u7269\u6c34\u6bcd\u5927\u90e8\u5206\u65e0\u6bd2',
+            '\u4f60\u770b\u8fd9\u53ea\u662f\u4e0d\u662f\u5f88\u79bb\u8c31',
+        ].join('\n');
+
+        await applyAssistantPostProcessing(raw, ctx);
+
+        const msgs = (await DB.getRecentMessagesByCharId(charId, 50)).filter(m => m.role === 'assistant');
+        const cards = msgs.filter(m => m.type === 'xhs_card');
+        const text = msgs.filter(m => m.type === 'text').map(m => m.content).join('\n');
+        expect(cards).toHaveLength(1);
+        expect(cards[0].metadata?.xhsNote).toMatchObject({
+            noteId: 'note-jellyfish',
+            title,
+            author,
+            xsecToken: 'token-1',
+            coverUrl: 'https://example.test/jellyfish.jpg',
+        });
+        expect(text).toContain('\u8fd9\u4e2a\u8fd8\u633a\u6709\u610f\u601d');
+        expect(text).toContain('\u4f60\u770b\u8fd9\u53ea\u662f\u4e0d\u662f\u5f88\u79bb\u8c31');
+        expect(text).not.toContain('\u4f60\u5206\u4eab\u4e86\u5c0f\u7ea2\u4e66\u7b14\u8bb0');
+        expect(text).not.toContain('\u6807\u9898:');
+        expect(text).not.toContain('\u4e92\u52a8:');
+    }, 20000);
+});

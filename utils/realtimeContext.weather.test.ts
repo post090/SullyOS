@@ -13,6 +13,8 @@ function jsonResponse(body: any, ok = true, status = 200) {
     return {
         ok,
         status,
+        // safeResponseJson 会读 content-type 判断响应体是不是 JSON，缺了会直接抛
+        headers: new Headers({ 'content-type': 'application/json' }),
         text: async () => JSON.stringify(body),
     } as any;
 }

@@ -475,7 +475,7 @@ export async function runXhsMyProfile(
 // ─── XHS_DETAIL ─────────────────────────────────────────────────────────────
 
 export type XhsDetailResult =
-    | { ok: true; noteId: string; detailText: string; failed: boolean }
+    | { ok: true; noteId: string; detailText: string; failed: boolean; commentsUnavailable: boolean }
     | { ok: false; reason: 'not_enabled'; noteId: string };
 
 /** Throws on network/transport error. */
@@ -578,6 +578,7 @@ export async function runXhsDetail(
 
         const detailData = result.success ? result.data : null;
         let detailText: string;
+        let commentsUnavailable = false;
         if (detailData) {
             if (typeof detailData === 'string') {
                 if (detailData.includes('失败') || detailData.includes('not found')) {
@@ -606,20 +607,32 @@ export async function runXhsDetail(
                 noteSection += `\n\n正文:\n${noteDesc}`;
 
                 const commentArr = normalizeXhsComments(detailData);
+                const commentsStatus = innerData?.comments_status
+                    || (detailData as any).comments_status
+                    || innerData?.comment_read_status
+                    || (detailData as any).comment_read_status;
+                commentsUnavailable = commentsStatus === 'unavailable'
+                    || !!innerData?.comments_error
+                    || !!(detailData as any).comments_error;
 
                 let commentsSection = '';
                 if (commentArr.length > 0) {
-                    const formatComment = (c: (typeof commentArr)[number], indent = '') => {
-                        let line = `${indent}${c.author}: ${c.content} (${c.likes}赞) [commentId=${c.commentId}]`;
-                        if (c.subComments.length > 0) {
-                            line += '\n' + c.subComments.slice(0, 10)
-                                .map(sub => formatComment(sub, indent + '  ↳ '))
-                                .join('\n');
+                    const formatComment = (c: any, indent = '') => {
+                        const name = c.author || '匿名';
+                        const content = c.content || '';
+                        const likes = c.likes || 0;
+                        const cid = c.commentId || '';
+                        let line = `${indent}${name}: ${content} (${likes}赞) [commentId=${cid}]`;
+                        const subs = c.subComments || [];
+                        if (Array.isArray(subs) && subs.length > 0) {
+                            line += '\n' + subs.slice(0, 10).map((s: any) => formatComment(s, indent + '  ↳ ')).join('\n');
                         }
                         return line;
                     };
                     commentsSection = `\n\n💬 评论区 (${commentArr.length}条):\n` +
                         commentArr.slice(0, 30).map((c: any) => formatComment(c)).join('\n');
+                } else if (commentsUnavailable) {
+                    commentsSection = '\n\n💬 评论区: （读取失败；不能据此判断为没有评论，也不要编造评论内容）';
                 } else {
                     commentsSection = '\n\n💬 评论区: （暂无评论）';
                 }
@@ -631,7 +644,7 @@ export async function runXhsDetail(
         }
 
     const failed = detailText.startsWith('[加载失败');
-    return { ok: true, noteId: args.noteId, detailText, failed };
+    return { ok: true, noteId: args.noteId, detailText, failed, commentsUnavailable };
 }
 
 // ─── 共用日期解析 (READ_DIARY / FS_READ_DIARY 共用) ─────────────────────────

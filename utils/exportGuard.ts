@@ -33,15 +33,21 @@ export interface ExportSafety {
 
 const SECRET_KEY_NAME = /(api[_-]?key|secret|token|authorization|auth|bearer|password|passwd|pwd|access[_-]?key|private[_-]?key|anon[_-]?key|credential|apikey)/i;
 
-const SECRET_VALUE_PATTERNS: { re: RegExp; label: string }[] = [
+const STRONG_SECRET_VALUE_PATTERNS: { re: RegExp; label: string }[] = [
   { re: /\bsk-[A-Za-z0-9_\-]{12,}/, label: 'OpenAI 风格密钥 sk-…' },
   { re: /\bBearer\s+[A-Za-z0-9._\-]{12,}/i, label: 'Bearer 令牌' },
   { re: /\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{6,}/, label: 'JWT' },
+];
+
+const OPAQUE_SECRET_VALUE_PATTERNS: { re: RegExp; label: string }[] = [
   { re: /\b[A-Za-z0-9]{32,}\b/, label: '疑似长密钥 / 哈希（32+ 位）' },
 ];
 
 /** 这些字段名即便值很长也别误报（正文 / 描述 / 图片 dataURL 等） */
-const VALUE_WHITELIST_KEYS = /^(id|voiceId|fishReferenceId|systemPrompt|description|worldview|content|summary|memoryText|impression|avatar|src|prompt|notes|bio|title|label|text|css|chromeCustomCss|lyrics)$/i;
+const VALUE_WHITELIST_KEYS = /^(id|voiceId|fishReferenceId|systemPrompt|description|worldview|content|summary|memoryText|impression|avatar|src|prompt|notes|bio|title|label|text|lyrics)$/i;
+
+/** CSS 常含 base64 图片/字体和内容哈希，不能用通用的“32+ 位字符串”规则判断。 */
+const CSS_VALUE_KEY = /css$/i;
 
 function mask(v: unknown): string {
   const s = typeof v === 'string' ? v : String(v);
@@ -49,11 +55,19 @@ function mask(v: unknown): string {
   return `${s.slice(0, 4)}••••••${s.slice(-3)} (${s.length}字)`;
 }
 
-function looksLikeSecretValue(v: string): string | null {
+function stripCssDataUrls(v: string): string {
+  // data URL 的 base64 主体经常超过 32 位；先剥掉资源本体，再保留其余 CSS 做强特征扫描。
+  return v.replace(/data:[^)"'\s]+/gi, '');
+}
+
+function looksLikeSecretValue(v: string, opts: { allowOpaque?: boolean } = {}): string | null {
   if (v.length < 12) return null;
   if (v.startsWith('data:')) return null;
   if (/^https?:\/\//.test(v) && !/[?&](key|token|secret)=/i.test(v)) return null;
-  for (const p of SECRET_VALUE_PATTERNS) if (p.re.test(v)) return p.label;
+  for (const p of STRONG_SECRET_VALUE_PATTERNS) if (p.re.test(v)) return p.label;
+  if (opts.allowOpaque !== false) {
+    for (const p of OPAQUE_SECRET_VALUE_PATTERNS) if (p.re.test(v)) return p.label;
+  }
   return null;
 }
 
@@ -68,7 +82,9 @@ export function scanPlaintextSecrets(obj: unknown, path = '', hits: SecretHit[] 
     if (isSecretName && v != null && v !== '' && typeof v !== 'object') {
       hits.push({ path: p, masked: mask(v), reason: `字段名疑似凭据（${k}）` });
     } else if (typeof v === 'string' && !VALUE_WHITELIST_KEYS.test(k)) {
-      const lbl = looksLikeSecretValue(v);
+      const isCssValue = CSS_VALUE_KEY.test(k);
+      const valueToScan = isCssValue ? stripCssDataUrls(v) : v;
+      const lbl = looksLikeSecretValue(valueToScan, { allowOpaque: !isCssValue });
       if (lbl) hits.push({ path: p, masked: mask(v), reason: `字段值疑似${lbl}` });
     }
     if (v && typeof v === 'object') scanPlaintextSecrets(v, p, hits, seen);

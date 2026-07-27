@@ -2376,6 +2376,9 @@ export interface CharacterProfile {
     end: string;   // HH:MM
   };
 
+  /** 日程卡主题色相（0-360，上游 ScheduleCard/ScheduleHomeWidget 以 hsl(themeColor,…) 渲染；未设回退 260 紫） */
+  themeColor?: number;
+
   // 主动消息配置
   proactiveConfig?: {
     enabled: boolean;
@@ -3618,6 +3621,7 @@ export interface XhsMcpConfig {
     backendMode?: 'local' | 'lite'; // 显式记录模式，避免把电脑 Bridge 的 /api 地址误判成 Lite。
     cookie?: string;    // Lite 模式：登录后的小红书完整 cookie（含 a1 / web_session）。仅 lite Worker 用。
     bridgeToken?: string; // 电脑 Skills Bridge 的访问令牌。仅存本机，请求时通过 Authorization 头发送。
+    rnoteApiKey?: string; // Lite 模式可选：用户自己的 Rnote Key，仅用于读取真实评论。
     loggedInUserId?: string;   // 登录用户的 user_id，连接测试成功后自动获取
 
     loggedInNickname?: string; // 登录用户的昵称

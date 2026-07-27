@@ -1,6 +1,8 @@
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { DailySchedule, ScheduleSlot, ScheduleRevision, CharacterProfile } from '../../types';
+import { getCurrentScheduleSlotIndex, getScheduleWallClock } from '../../utils/scheduleTime';
+import { resolveCharTimeZone, tzShortLabel } from '../../utils/timezone';
 
 interface ScheduleCardProps {
     schedule: DailySchedule | null;
@@ -15,17 +17,6 @@ interface ScheduleCardProps {
     isGenerating?: boolean;
 }
 
-const getCurrentSlotIndex = (slots: ScheduleSlot[]): number => {
-    const now = new Date();
-    const currentMinutes = now.getHours() * 60 + now.getMinutes();
-
-    for (let i = slots.length - 1; i >= 0; i--) {
-        const [h, m] = slots[i].startTime.split(':').map(Number);
-        if (currentMinutes >= h * 60 + m) return i;
-    }
-    return -1;
-};
-
 // ⑦ 修订来源角标：事件驱动日程修订（utils/scheduleRevision.ts）的来源 icon
 export const REVISION_SOURCE_ICON: Record<ScheduleRevision['source'], string> = {
     chat: '💬', group: '👥', call: '📞', date: '🌸', world: '🏠',
@@ -38,11 +29,26 @@ const REVISION_SOURCE_LABEL: Record<ScheduleRevision['source'], string> = {
 export const revisionsForSlot = (revisions: ScheduleRevision[] | undefined, startTime: string) =>
     (revisions || []).filter(r => r.changes.some(c => c.after?.startTime === startTime && (c.type === 'modify' || c.type === 'add')));
 
-const formatDate = (): string => {
-    const now = new Date();
+const formatDate = (now: Date): string => {
     const days = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
     const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
     return `${months[now.getMonth()]} ${now.getDate()} · ${days[now.getDay()]}`;
+};
+
+const formatClock = (now: Date): string =>
+    `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+
+/**
+ * 每分钟走一次的「此刻」。卡片可能一直开着，不刷新的话顶部的钟会停，
+ * NOW 标记也不会随着时间推进挪到下一个时段。
+ */
+const useTickingNow = (): Date => {
+    const [now, setNow] = useState(() => new Date());
+    useEffect(() => {
+        const id = window.setInterval(() => setNow(new Date()), 30_000);
+        return () => window.clearInterval(id);
+    }, []);
+    return now;
 };
 
 const ScheduleCard: React.FC<ScheduleCardProps> = ({
@@ -98,7 +104,15 @@ const ScheduleCard: React.FC<ScheduleCardProps> = ({
         }
     };
 
-    const currentIdx = schedule ? getCurrentSlotIndex(schedule.slots) : -1;
+    const tickingNow = useTickingNow();
+    const wallClock = getScheduleWallClock(character, tickingNow);
+    const currentIdx = schedule ? getCurrentScheduleSlotIndex(schedule.slots, character, tickingNow) : -1;
+    // 角色设了自己的时区时，上面那个钟走的是 ta 那边的时间——标出地名，
+    // 免得用户拿它当自己的手机时间读。
+    const charTzName = (() => {
+        const tz = resolveCharTimeZone(character);
+        return tz ? tzShortLabel(tz) : '';
+    })();
     const charAvatar = character?.avatar;
     const charName = character?.name || '角色';
     const coverImage = schedule?.coverImage;
@@ -165,11 +179,26 @@ const ScheduleCard: React.FC<ScheduleCardProps> = ({
                         <div className="h-px flex-1 opacity-20" style={{ background: contentColor }}></div>
                     </div>
                     <h2 className="text-2xl font-black tracking-tight" style={{ color: accentHsl }}>Schedule</h2>
+                    {/* 时段行写的是「这件事几点开始」，这里补一个真正的当前时间，
+                        否则只能拿 NOW 那行的数字当钟读 */}
+                    <div className="flex items-baseline gap-1.5 mt-0.5">
+                        <span className="text-lg font-black font-mono leading-none tabular-nums" style={{ color: accentHsl }}>
+                            {formatClock(wallClock)}
+                        </span>
+                        <span className="text-[10px] font-bold opacity-40">
+                            {charTzName ? `${charName}那边` : '现在'}
+                        </span>
+                    </div>
                 </div>
                 <div className="flex flex-col items-end gap-1">
                     <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-white/20" style={{ background: accentBg }}>
-                        {formatDate()}
+                        {formatDate(wallClock)}
                     </span>
+                    {charTzName && (
+                        <span className="text-[9px] font-bold opacity-40 tracking-wide">
+                            {charTzName}
+                        </span>
+                    )}
                     {!compact && onReroll && (
                         <button
                             onClick={onReroll}

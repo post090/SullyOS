@@ -1663,6 +1663,13 @@ export const DB = {
       transaction.objectStore(STORE_DAILY_SCHEDULE).put(schedule);
   },
 
+  deleteDailySchedule: async (charId: string, date: string): Promise<void> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_DAILY_SCHEDULE)) return;
+      const transaction = db.transaction(STORE_DAILY_SCHEDULE, 'readwrite');
+      transaction.objectStore(STORE_DAILY_SCHEDULE).delete(`${charId}_${date}`);
+  },
+
   // ─── 热点快照 (分时段，全角色共享) ───
   getHotNewsSnapshot: async (id: string): Promise<HotNewsSnapshot | null> => {
       const db = await openDB();

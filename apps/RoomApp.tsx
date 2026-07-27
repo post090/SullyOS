@@ -22,6 +22,7 @@ import { characterLaunch } from '../utils/characterLaunch';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
 import { getVirtualDayKey } from '../utils/localDate';
 import { resolveCharTimeZone, nowInTimeZone, tzLabel } from '../utils/timezone';
+import { getDailyScheduleForChar } from '../utils/dailySchedule';
 
 const TWEMOJI_BASE = 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72';
 const twemojiUrl = (codepoint: string) => `${TWEMOJI_BASE}/${codepoint}.png`;
@@ -554,10 +555,8 @@ const RoomApp: React.FC = () => {
             
             const existingTodo = await DB.getRoomTodo(c.id, today);
             const existingNotes = await DB.getRoomNotes(c.id);
-            // 日程按**本机**日历日取：日程是全局共用数据（聊天/桌面/日程 App 都按本机日期写读），
-            // 房间若按角色时区去取会落到一个没人写过的 key，日程直接空掉。
-            // 「日程也跟角色时区」是另一条线（要连生成端一起改），这轮不动。
-            const existingSchedule = await DB.getDailySchedule(c.id, getVirtualDay());
+            // 日程与房间里的“今天”统一跟随角色时区；旧手机日期 key 会由读取层安全迁移。
+            const existingSchedule = await getDailyScheduleForChar(c);
             setTodaysTodo(existingTodo);
             setNotebookEntries(existingNotes.sort((a, b) => b.timestamp - a.timestamp));
             setRoomSchedule(existingSchedule);
@@ -569,7 +568,7 @@ const RoomApp: React.FC = () => {
             // 这里只把聊天期间可能已生成的 todo / 随笔 / 日程读出来填上。
             const existingTodo = await DB.getRoomTodo(c.id, today);
             const existingNotes = await DB.getRoomNotes(c.id);
-            const existingSchedule = await DB.getDailySchedule(c.id, getVirtualDay()); // 同上：日程按本机日历日
+            const existingSchedule = await getDailyScheduleForChar(c);
             setTodaysTodo(existingTodo);
             setNotebookEntries(existingNotes.sort((a, b) => b.timestamp - a.timestamp));
             setRoomSchedule(existingSchedule);
@@ -711,7 +710,7 @@ const RoomApp: React.FC = () => {
             
             let existingTodo = await DB.getRoomTodo(c.id, todayStr);
             const existingNotes = await DB.getRoomNotes(c.id);
-            const existingSchedule = await DB.getDailySchedule(c.id, getVirtualDay()); // 同上：日程按本机日历日
+            const existingSchedule = await getDailyScheduleForChar(c);
             setNotebookEntries(existingNotes.sort((a, b) => b.timestamp - a.timestamp));
             setRoomSchedule(existingSchedule);
             

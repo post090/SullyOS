@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { CharacterProfile, DailySchedule, ScheduleSlot } from '../../types';
 import ScheduleCard, { REVISION_SOURCE_ICON, revisionsForSlot } from './ScheduleCard';
+import { getCurrentScheduleSlotIndex, getScheduleWallClock } from '../../utils/scheduleTime';
 
 // ⑦ 修订微角标：时段若被事件修订过，在活动名旁标注 ↷+来源icon（点开日程详情可看 diff）
 const RevBadge: React.FC<{ schedule: DailySchedule | null; slot: ScheduleSlot | null }> = ({ schedule, slot }) => {
@@ -13,16 +14,6 @@ const RevBadge: React.FC<{ schedule: DailySchedule | null; slot: ScheduleSlot | 
             ↷{REVISION_SOURCE_ICON[src]}
         </span>
     );
-};
-
-const getCurrentSlotIndex = (slots: ScheduleSlot[]): number => {
-    const now = new Date();
-    const currentMinutes = now.getHours() * 60 + now.getMinutes();
-    for (let i = slots.length - 1; i >= 0; i--) {
-        const [h, m] = slots[i].startTime.split(':').map(Number);
-        if (currentMinutes >= h * 60 + m) return i;
-    }
-    return -1;
 };
 
 interface ScheduleSquareWidgetProps {
@@ -38,7 +29,7 @@ export const ScheduleSquareWidget: React.FC<ScheduleSquareWidgetProps> = ({
     contentColor = '#ffffff',
     onOpen,
 }) => {
-    const currentIdx = schedule ? getCurrentSlotIndex(schedule.slots) : -1;
+    const currentIdx = schedule ? getCurrentScheduleSlotIndex(schedule.slots, character) : -1;
     const currentSlot = currentIdx >= 0 ? schedule!.slots[currentIdx] : null;
     const nextSlot = schedule && currentIdx < schedule.slots.length - 1
         ? schedule.slots[currentIdx + 1]
@@ -48,7 +39,7 @@ export const ScheduleSquareWidget: React.FC<ScheduleSquareWidgetProps> = ({
     const accentSoft = `hsla(${character?.themeColor ?? 260}, 70%, 55%, 0.32)`;
     const cardBg = `hsl(${character?.themeColor ?? 260}, 38%, 12%)`;
 
-    const now = new Date();
+    const now = getScheduleWallClock(character);
     const timeLabel = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
 
     return (
@@ -162,7 +153,7 @@ export const ScheduleHomeWidget: React.FC<ScheduleHomeWidgetProps> = ({
     acnh = false,
     paper = false,
 }) => {
-    const currentIdx = schedule ? getCurrentSlotIndex(schedule.slots) : -1;
+    const currentIdx = schedule ? getCurrentScheduleSlotIndex(schedule.slots, character) : -1;
     const currentSlot = currentIdx >= 0 ? schedule!.slots[currentIdx] : null;
     const nextSlot = schedule && currentIdx < schedule.slots.length - 1
         ? schedule.slots[currentIdx + 1]
@@ -171,7 +162,7 @@ export const ScheduleHomeWidget: React.FC<ScheduleHomeWidgetProps> = ({
     const accentHsl = paper ? '#788369' : `hsl(${character?.themeColor ?? 260}, 70%, 65%)`;
     const accentSoft = paper ? 'rgba(120,131,105,0.14)' : `hsla(${character?.themeColor ?? 260}, 70%, 55%, 0.28)`;
 
-    const now = new Date();
+    const now = getScheduleWallClock(character);
     const timeLabel = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
 
     const timelineSlots = schedule?.slots ?? [];

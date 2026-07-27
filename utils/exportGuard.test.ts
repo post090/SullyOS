@@ -44,6 +44,32 @@ describe('scanPlaintextSecrets', () => {
     expect(hits.some(h => h.path === 'opaqueValue')).toBe(true);
   });
 
+  it('不把 customCss 内嵌的 base64 图片或字体误报成密钥', () => {
+    const hits = scanPlaintextSecrets({
+      chatThemes: [{
+        customCss: `
+          .sully-bubble-ai {
+            background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwC");
+          }
+          @font-face {
+            font-family: "demo";
+            src: url(data:font/woff2;base64,d09GMgABAAAAAAG0AAoAAAAAA2AAAAAAAAAAAAAAAAAAAAAAAAAAAAA);
+          }
+        `,
+      }],
+    });
+    expect(hits).toEqual([]);
+  });
+
+  it('CSS 字段仍会检出 sk/Bearer/JWT 等强密钥特征', () => {
+    const hits = scanPlaintextSecrets({
+      customCss: '.x::after { content: "sk-AAAA1111BBBB2222CCCC"; }',
+      chromeCustomCss: '/* Authorization: Bearer abcdefghijklmnop */',
+    });
+    expect(hits.some(h => h.path === 'customCss')).toBe(true);
+    expect(hits.some(h => h.path === 'chromeCustomCss')).toBe(true);
+  });
+
   it('干净对象返回空', () => {
     expect(scanPlaintextSecrets({ name: 'x', worldview: 'w' })).toEqual([]);
   });

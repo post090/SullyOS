@@ -11,8 +11,9 @@ import { ScheduleHomeWidget, ScheduleFullscreenViewer } from '../components/sche
 import NowPlayingSquareWidget from '../components/os/NowPlayingSquareWidget';
 import MobileGameHome from '../components/os/MobileGameHome';
 import TamagotchiHome from '../components/os/TamagotchiHome';
-import { getLocalDailySchedule } from '../utils/dailySchedule';
+import { getDailyScheduleForChar } from '../utils/dailySchedule';
 import { useLocalDateKey } from '../hooks/useLocalDateKey';
+import { resolveCharTimeZone } from '../utils/timezone';
 
 // --- Isolated Components to prevent full re-renders ---
 
@@ -707,11 +708,12 @@ const Launcher: React.FC = () => {
       if (scheduleCharId) return characters.find(c => c.id === scheduleCharId) || characters[0];
       return characters.find(c => c.id === activeCharacterId) || characters[0];
   }, [characters, scheduleCharId, activeCharacterId]);
+  const scheduleDateKey = useLocalDateKey(resolveCharTimeZone(scheduleChar));
 
   useEffect(() => {
       if (!scheduleChar || !isDataLoaded) return;
-      getLocalDailySchedule(scheduleChar.id).then(s => setScheduleData(s)).catch(() => {});
-  }, [scheduleChar, isDataLoaded, localDateKey]);
+      getDailyScheduleForChar(scheduleChar).then(s => setScheduleData(s)).catch(() => {});
+  }, [scheduleChar, isDataLoaded, scheduleDateKey]);
 
   // ⑦ 日程被事件修订后（聊天/群聊/通话/见面/家园）桌面小组件即时刷新角标
   useEffect(() => {
@@ -719,7 +721,7 @@ const Launcher: React.FC = () => {
       const onRevised = (e: Event) => {
           const detail = (e as CustomEvent).detail as { charId?: string } | undefined;
           if (detail?.charId && detail.charId !== scheduleChar.id) return;
-          getLocalDailySchedule(scheduleChar.id).then(s => setScheduleData(s)).catch(() => {});
+          getDailyScheduleForChar(scheduleChar).then(s => setScheduleData(s)).catch(() => {});
       };
       window.addEventListener('schedule-revised', onRevised);
       return () => window.removeEventListener('schedule-revised', onRevised);

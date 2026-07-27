@@ -23,7 +23,7 @@ import { DB } from '../db';
 import { buildChatRequestPayload } from '../chatRequestPayload';
 import { safeFetchJson } from '../safeApi';
 import { processNewMessages } from '../memoryPalace/pipeline';
-import { getLocalDailySchedule } from '../dailySchedule';
+import { getDailyScheduleForChar } from '../dailySchedule';
 import {
     worldTimeLabel, buildWorldSystemAddendum, buildWorldCharTurn, buildNpcTurn,
     parseCharBeat, parseNpcScene, realObserveTarget, formatRealClock, migrateWorldDaySegs,
@@ -246,10 +246,10 @@ export function buildWorldCardMeta(world: WorldProfile, beat: WorldCharBeat, rou
  * 软参考：世界里的突发事件可以合理打断日程，但不许"没看见"就硬撞。
  * sim（虚拟时间）番外与真实日程无关，跳过。
  */
-async function buildFullDayScheduleBlock(world: WorldProfile, charId: string): Promise<string> {
+async function buildFullDayScheduleBlock(world: WorldProfile, char: CharacterProfile): Promise<string> {
     if ((world.timeMode ?? 'real') === 'sim') return '';
     try {
-        const s = await getLocalDailySchedule(charId);
+        const s = await getDailyScheduleForChar(char);
         if (!s?.slots?.length) return '';
         const lines = s.slots
             .map(x => `- ${x.startTime} ${x.activity}${x.location ? `（${x.location}）` : ''}`)
@@ -350,16 +350,17 @@ export async function runWorldEpisode(deps: WorldEpisodeDeps): Promise<WorldEpis
 
                 const contextLimit = char.contextLimit || 500;
                 const historyMsgs = await DB.getRecentMessagesByCharId(char.id, contextLimit);
+                // 家园内角色的当前时间与日程日期都必须对齐同一把世界钟。
+                const worldChar = alignCharToWorldClock(world, char);
                 const payload = await buildChatRequestPayload({
-                    // 时区对齐世界钟：否则「当前时间」会跟世界的早/中/晚/凌晨打架
-                    char: alignCharToWorldClock(world, char), userProfile, groups, emojis: [], categories: [],
+                    char: worldChar, userProfile, groups, emojis: [], categories: [],
                     historyMsgs, contextLimit, realtimeConfig, recallQueryHint,
                     // 家园可配独立 API（可能不支持视觉，image_url 会 400）→ 历史图片压平成文本占位
                     stripImages: true,
                 });
                 const systemPrompt = payload.systemPrompt
                     + buildWorldSystemAddendum(world, char, userProfile?.name || '')
-                    + await buildFullDayScheduleBlock(world, char.id);
+                    + await buildFullDayScheduleBlock(world, worldChar);
                 const directive = (world.directives || []).find(d => d.charId === char.id);
                 // sim 模式：喂回这名角色自己的单视角总结 + 本卷氛围（绝不喂全知 synopsis）
                 const priorChapter = (world.timeMode === 'sim' && latestChapter)
@@ -617,16 +618,16 @@ export async function rerollWorldCharBeat(
             : undefined;
         const contextLimit = char.contextLimit || 500;
         const historyMsgs = await DB.getRecentMessagesByCharId(char.id, contextLimit);
+        const worldChar = alignCharToWorldClock(world, char);
         const payload = await buildChatRequestPayload({
-            // 同上：时区对齐世界钟
-            char: alignCharToWorldClock(world, char), userProfile, groups, emojis: [], categories: [],
+            char: worldChar, userProfile, groups, emojis: [], categories: [],
             historyMsgs, contextLimit, realtimeConfig, recallQueryHint,
             // 同上：独立 API 可能不支持视觉 → 历史图片压平成文本占位
             stripImages: true,
         });
         const systemPrompt = payload.systemPrompt
             + buildWorldSystemAddendum(world, char, userProfile?.name || '')
-            + await buildFullDayScheduleBlock(world, char.id);
+            + await buildFullDayScheduleBlock(world, worldChar);
         const latestChapter = (world.chapters || [])[(world.chapters?.length || 0) - 1];
         const priorChapter = (world.timeMode === 'sim' && latestChapter)
             ? { atmosphere: latestChapter.atmosphere, charPerspective: latestChapter.perspectives.find(p => p.charId === char.id)?.text }

@@ -1,0 +1,74 @@
+# PR 改了哪些文件 → 自动贴哪些 scope 标签
+#
+# 规则说明：
+#   - any-glob-to-any-file：改动里只要有一个文件命中，就贴这个标签
+#   - all-globs-to-all-files：改动里所有文件都命中，才贴这个标签
+#   - 只加不删（没开 sync-labels），手动贴的标签不会被冲掉
+#
+# 新增标签前先确认仓库里已经有同名 label，否则会被自动创建成灰色无描述的。
+
+'scope: amsg':
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'worker/amsg/**'
+          - 'utils/amsg*'
+          - 'utils/activeMsg*'
+          - 'components/chat/ActiveMsg*'
+          - 'components/settings/ActiveMsg*'
+
+'scope: instant-push':
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'worker/instant-push/**'
+          - 'worker/proactive-push/**'
+          - 'utils/instant*'
+          - 'utils/proactive*'
+
+'scope: pushSubscription':
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'utils/pushSubscribeShared.ts'
+          - 'utils/pushVapid.ts'
+
+'scope: sw':
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'worker/sw-keep-alive.ts'
+          - 'public/sw-keep-alive.js'
+          - 'public/*.bundle.js'
+          - 'utils/swVersion.ts'
+          - 'utils/*WorkerVersion.ts'
+
+'scope: indexedDb':
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'utils/db.ts'
+          - 'utils/db.*.ts'
+
+'scope: xhs':
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'apps/Xhs*.tsx'
+          - 'worker/xhs-lite/**'
+
+'scope: mcd':
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'components/mcd/**'
+          - 'utils/mcd*'
+
+'scope: vrWorld':
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'apps/VRWorldApp.tsx'
+
+'scope: diary':
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'apps/JournalApp.tsx'
+
+# 整个 PR 只动了文档才算文档 PR，顺手改一句 README 不会被贴上
+documentation:
+  - changed-files:
+      - all-globs-to-all-files:
+          - '**/*.md'

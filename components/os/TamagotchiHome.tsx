@@ -16,8 +16,10 @@ import { processImageToBlob } from '../../utils/file';
 import { FURNITURE_ICONS } from '../../utils/furnitureIcons';
 import { isDevDebugAvailable, subscribeDevDebugAvailability } from '../../utils/devDebug';
 import { SCHEMES, hsl, schemePreview, type TgStyle } from './gotchiScheme';
-import { getLocalDailySchedule } from '../../utils/dailySchedule';
+import { getDailyScheduleForChar } from '../../utils/dailySchedule';
 import { useLocalDateKey } from '../../hooks/useLocalDateKey';
+import { resolveCharTimeZone } from '../../utils/timezone';
+import { getCurrentScheduleSlotIndex, getScheduleWallClock } from '../../utils/scheduleTime';
 
 // ===== 电子宠物主题（tamagotchi skin）=====
 // 桌面不再是「放图标的手机」，而是一台华丽丽的二次元养成机：屏幕主体是角色
@@ -838,26 +840,14 @@ const DockBtn: React.FC<{ glyph: React.ReactNode; cn: string; en: string; badge?
     </button>
 );
 
-/** 与 context.ts buildScheduleInjection 同款分钟数比较：从后往前找第一个已开始的 slot。 */
-const findCurrentSlot = (schedule: DailySchedule | null): { cur: ScheduleSlot | null; next: ScheduleSlot | null } => {
-    if (!schedule?.slots?.length) return { cur: null, next: null };
-    const now = new Date();
-    const m = now.getHours() * 60 + now.getMinutes();
-    for (let i = schedule.slots.length - 1; i >= 0; i--) {
-        const [h, mi] = schedule.slots[i].startTime.split(':').map(Number);
-        if (m >= h * 60 + mi) return { cur: schedule.slots[i], next: schedule.slots[i + 1] || null };
-    }
-    return { cur: null, next: schedule.slots[0] };
-};
-
 // ─── 主组件 ───────────────────────────────────────────────────
 const TamagotchiHome: React.FC = () => {
     const { openApp, characters, activeCharacterId, setActiveCharacterId, virtualTime, unreadMessages, isDataLoaded, lastMsgTimestamp, addToast, userProfile, apiConfig } = useOS();
-    const localDateKey = useLocalDateKey();
     const char: CharacterProfile | null = useMemo(
         () => characters.find(c => c.id === activeCharacterId) || characters[0] || null,
         [characters, activeCharacterId]
     );
+    const charDateKey = useLocalDateKey(resolveCharTimeZone(char));
 
     const [stat, setStat] = useState<{ msgCount: number; pokeLines: string[]; recent: { id: number; mine: boolean; text: string }[] }>({ msgCount: 0, pokeLines: [], recent: [] });
     const [drawerOpen, setDrawerOpen] = useState(false);
@@ -992,16 +982,16 @@ const TamagotchiHome: React.FC = () => {
     // 今日日程：换角色 / 有新消息（聊天会触发生成）时刷一次
     useEffect(() => {
         if (!char) { setSchedule(null); return; }
-        getLocalDailySchedule(char.id).then(s => setSchedule(s || null)).catch(() => setSchedule(null));
-    }, [char?.id, lastMsgTimestamp, localDateKey]);
+        getDailyScheduleForChar(char).then(s => setSchedule(s || null)).catch(() => setSchedule(null));
+    }, [char?.id, char?.customTimezoneEnabled, char?.customTimezone, lastMsgTimestamp, charDateKey]);
 
     // 一句心声：innerState（情绪评估落的）→ 日程意识流 → 占位
     useEffect(() => {
         if (!char) { setHeartLine('新的一天。'); return; }
         const inner = getLastInnerState(char.id);
-        const flow = schedule?.flowNarrative?.[getFlowNarrativeKey(new Date().getHours())] || '';
+        const flow = schedule?.flowNarrative?.[getFlowNarrativeKey(getScheduleWallClock(char).getHours())] || '';
         setHeartLine(inner || flow || '新的一天。');
-    }, [char?.id, lastMsgTimestamp, schedule]);
+    }, [char?.id, char?.customTimezoneEnabled, char?.customTimezone, lastMsgTimestamp, schedule]);
 
     // 桌面小屋只做本地展示交互：走过去 + 念一句 + 观察旁白。
     // 只有真正进入 RoomApp 后发生的家具互动才写入私聊上下文。
@@ -1053,13 +1043,20 @@ const TamagotchiHome: React.FC = () => {
         }
     }, [wallImg, floorImg, actorImg, extracting, style, applyStyle, addToast]);
 
-    const night = isNightHour(virtualTime.hours);
+    // 「角色睡没睡」是 ta 那边的作息，按角色时区判；下面 hh/mm 是给用户看的钟，仍走设备时间。
+    // 同文件的心声（getScheduleWallClock）和墙上木牌（getCurrentScheduleSlotIndex）本就按角色时区算，
+    // 这里若用设备钟，会出现小人头顶飘 Zzz、木牌上却写着「11:00 工作」。
+    const night = isNightHour(getScheduleWallClock(char).getHours());
     const hh = virtualTime.hours.toString().padStart(2, '0');
     const mm = virtualTime.minutes.toString().padStart(2, '0');
     const { level, exp, expMax } = deriveStats(stat.msgCount);
 
     // 世界化挂件的展示串（纯字符串/原始值 props → memo 组件只在内容真变时 reconcile）
-    const { cur: curSlot, next: nextSlot } = findCurrentSlot(schedule);
+    const currentSlotIndex = schedule ? getCurrentScheduleSlotIndex(schedule.slots, char) : -1;
+    const curSlot = schedule && currentSlotIndex >= 0 ? schedule.slots[currentSlotIndex] : null;
+    const nextSlot = schedule
+        ? schedule.slots[currentSlotIndex >= 0 ? currentSlotIndex + 1 : 0] || null
+        : null;
     // 小人脚下的状态小签：ta 此刻在干嘛
     // 状态小签只放活动名（不带 schedule 自带的 emoji，保持桌面清爽）
     const actorActivity = curSlot ? curSlot.activity : '';

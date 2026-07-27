@@ -1,0 +1,60 @@
+name: PR 自动打标签
+
+# 用 pull_request_target 是为了让来自 fork 的 PR 也拿得到写标签的权限。
+# 这里的两个 action 都只读 PR 的文件清单、不检出也不执行 PR 里的代码，所以是安全的。
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label-by-files:
+    name: 按改动文件贴 scope 标签
+    runs-on: ubuntu-latest
+    steps:
+      - name: 按 .github/labeler.yml 的映射贴标签
+        # https://github.com/actions/labeler
+        uses: actions/labeler@v5
+        with:
+          configuration-path: .github/labeler.yml
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+  label-by-size:
+    name: 按改动规模贴大小标签
+    # 排在 scope 标签之后，避免两个 job 同时写标签互相覆盖
+    needs: [label-by-files]
+    runs-on: ubuntu-latest
+    if: always()
+
+    # 打标签走的是 issues API，要额外给 issues 写权限
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+
+    steps:
+      - name: 统计增删行数并贴标签
+        # https://github.com/CodelyTV/pr-size-labeler
+        uses: codelytv/pr-size-labeler@4ec67706cd878fbc1c8db0a5dcd28b6bb412e85a # v1.10.3
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          xs_label: '🟢 ■□□□□'
+          xs_max_size: '50'
+          s_label: '🟢 ■■□□□'
+          s_max_size: '500'
+          m_label: '🟡 ■■■□□'
+          m_max_size: '1000'
+          l_label: '🟠 ■■■■□'
+          l_max_size: '2500'
+          xl_label: '🔴 ■■■■■'
+          # 超大 PR 只贴标签，不拦合并
+          fail_if_xl: 'false'
+          message_if_xl: ''
+          # 构建产物和锁文件不算进改动规模，不然一次 pnpm install 就直接顶到 XL
+          files_to_ignore: |
+            "pnpm-lock.yaml"
+            "public/*.bundle.js"
+            "dist/*"
