@@ -381,7 +381,27 @@ ${groupLogStr}\n`;
                 return '';
             });
 
-        const [realtimeText, schedule, groupContextText, notionDiaryText, feishuDiaryText, notionNotesText, lifeRecordText] =
+        // 8. 资产系统直觉摘要（钱包 + 智能家居）——没生成过档案时两者皆 null，整段跳过。
+        //    注入的是模糊档位描述（"手头几千块""洗衣液快没了"），不给精确数字：
+        //    角色对自己的钱和家里只有日常直觉，跟真人一样。
+        const assetIntuitionPromise: Promise<string> = (async () => {
+            try {
+                const [wallet, home] = await Promise.all([
+                    DB.getWalletProfile(char.id),
+                    DB.getHomeProfile(char.id),
+                ]);
+                const lines: string[] = [];
+                if (wallet?.intuition) lines.push(`- 钱的直觉：${wallet.intuition}。`);
+                if (home?.intuition) lines.push(`- 家里的直觉：${home.intuition}。`);
+                if (lines.length === 0) return '';
+                return `\n### 💰【你的经济与生活直觉】\n（这是你对自己经济状况和家里情况的日常感觉——你只有大概概念，记不清精确数字，聊天时就按这个感觉来，别报出精确金额。转账收钱/花钱后这份感觉会自己更新。）\n${lines.join('\n')}\n`;
+            } catch (e) {
+                console.error('Failed to inject asset intuition:', e);
+                return '';
+            }
+        })();
+
+        const [realtimeText, schedule, groupContextText, notionDiaryText, feishuDiaryText, notionNotesText, lifeRecordText, assetIntuitionText] =
             await Promise.all([
                 timed('realtime', realtimePromise),
                 timed('schedule', schedulePromise),
@@ -390,6 +410,7 @@ ${groupLogStr}\n`;
                 timed('feishuDiary', feishuDiaryPromise),
                 timed('notionNotes', notionNotesPromise),
                 timed('lifeRecord', lifeRecordPromise),
+                timed('assetIntuition', assetIntuitionPromise),
             ]);
 
         // ── 拼接：易变的进 volatileState，稳定的进 baseSystemPrompt ──
@@ -478,6 +499,8 @@ ${groupLogStr}\n`;
         baseSystemPrompt += feishuDiaryText;
         baseSystemPrompt += notionNotesText;
         baseSystemPrompt += lifeRecordText;
+        // 资产直觉随转账/生活流水实时变 → 进易变段，跟情绪/日程一个待遇
+        volatileState += assetIntuitionText;
 
         // 备忘录管理能力（仅单聊场景注入；其他场景只读，由 buildCoreContext 注入列表本身）
         // 空备忘录也注入——让 AI 知道这个能力存在、什么时候想用就用

@@ -37,6 +37,8 @@ import {
   Wrench,
   HouseLine,
   NotePencil,
+  Wallet,
+  Lightbulb,
 } from '@phosphor-icons/react';
 
 // SVG 图标库 - Phosphor Icons
@@ -78,6 +80,8 @@ export const Icons: Record<string, React.FC<{ className?: string }>> = {
   CharCreatorDev: ({ className }) => <Wrench className={className} weight="regular" />,
   WorldHome: ({ className }) => <HouseLine className={className} weight="regular" />,
   Memo: ({ className }) => <NotePencil className={className} weight="regular" />,
+  Wallet: ({ className }) => <Wallet className={className} weight="regular" />,
+  SmartHome: ({ className }) => <Lightbulb className={className} weight="regular" />,
 };
 
 export const INSTALLED_APPS: AppConfig[] = [
@@ -106,6 +110,8 @@ export const INSTALLED_APPS: AppConfig[] = [
   { id: AppID.Worldbook, name: '世界书', icon: 'Worldbook', color: 'indigo' },
   { id: AppID.HotNews, name: '热点', icon: 'HotNews', color: 'red' },
   { id: AppID.Memo, name: '备忘录', icon: 'Memo', color: 'amber' },
+    { id: AppID.Wallet, name: '钱包', icon: 'Wallet', color: 'violet' },
+    { id: AppID.SmartHome, name: '智能家居', icon: 'SmartHome', color: 'teal' },
   { id: AppID.FAQ, name: '使用帮助', icon: 'FAQ', color: 'indigo' },
   { id: AppID.Gallery, name: '相册', icon: 'Gallery', color: 'orange' },
   { id: AppID.XhsFreeRoam, name: '自由活动', icon: 'XhsFreeRoam', color: 'rose' },

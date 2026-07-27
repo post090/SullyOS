@@ -1272,36 +1272,40 @@ const Launcher: React.FC = () => {
       />
 
       {/* 最近聊天面板：最新消息组件的二级菜单，挑一个最近聊过的角色直接进 ta 的聊天窗。
-          默认皮肤与 ScheduleFullscreenViewer 同一套视觉语言（全屏暗色毛玻璃 + 小字母标签 +
-          玻璃圆钮 + 点空白关闭）；动森皮肤保留奶油卡底部抽屉。 */}
+          默认皮肤：半屏底部抽屉 + 暗色毛玻璃（视觉语言与 ScheduleFullscreenViewer 同源：
+          小字母标签 + 玻璃圆钮 + 玻璃行卡），点抽屉外空白关闭；动森皮肤保留奶油卡底部抽屉。 */}
       {chatPickerOpen && !acnh && (
-          <div
-              className="absolute inset-0 z-50 flex flex-col animate-fade-in"
-              style={{
-                  background: 'rgba(6, 8, 16, 0.72)',
-                  backdropFilter: 'blur(22px) saturate(1.2)',
-                  WebkitBackdropFilter: 'blur(22px) saturate(1.2)',
-              }}
-              onClick={() => setChatPickerOpen(false)}
-          >
-              {/* Header —— 与日程全屏查看器同构 */}
-              <div className="flex items-center justify-between px-5 pt-[calc(env(safe-area-inset-top)+1rem)] pb-3 shrink-0" onClick={(e) => e.stopPropagation()}>
-                  <div>
-                      <div className="text-[10px] font-bold tracking-[0.25em] uppercase text-white/50">Recent Chats</div>
-                      <div className="text-lg font-black tracking-tight" style={{ color: 'hsl(260, 70%, 72%)' }}>最近聊天</div>
+          <div className="absolute inset-0 z-50 flex flex-col justify-end animate-fade-in">
+              <div className="absolute inset-0 bg-black/35" onClick={() => setChatPickerOpen(false)} />
+              <div
+                  className="relative flex flex-col max-h-[68%] rounded-t-[2rem] animate-slide-up overflow-hidden"
+                  style={{
+                      background: 'rgba(10, 12, 22, 0.82)',
+                      backdropFilter: 'blur(22px) saturate(1.2)',
+                      WebkitBackdropFilter: 'blur(22px) saturate(1.2)',
+                      borderTop: '1px solid rgba(255,255,255,0.14)',
+                  }}
+              >
+                  {/* 抽屉把手 */}
+                  <div className="w-10 h-1 rounded-full bg-white/20 mx-auto mt-3 shrink-0" />
+                  {/* Header —— 小字母标签 + 粗黑标题 + 玻璃圆钮 */}
+                  <div className="flex items-center justify-between px-5 pt-3 pb-3 shrink-0">
+                      <div>
+                          <div className="text-[10px] font-bold tracking-[0.25em] uppercase text-white/50">Recent Chats</div>
+                          <div className="text-lg font-black tracking-tight" style={{ color: 'hsl(260, 70%, 72%)' }}>最近聊天</div>
+                      </div>
+                      <button
+                          onClick={() => setChatPickerOpen(false)}
+                          className="w-9 h-9 rounded-full flex items-center justify-center transition-transform active:scale-90 text-white"
+                          style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.18)' }}
+                          aria-label="Close"
+                      >
+                          <svg viewBox="0 0 24 24" fill="none" strokeWidth={2.2} stroke="currentColor" className="w-4 h-4">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M6 6l12 12M18 6L6 18" />
+                          </svg>
+                      </button>
                   </div>
-                  <button
-                      onClick={() => setChatPickerOpen(false)}
-                      className="w-9 h-9 rounded-full flex items-center justify-center transition-transform active:scale-90 text-white"
-                      style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.18)' }}
-                      aria-label="Close"
-                  >
-                      <svg viewBox="0 0 24 24" fill="none" strokeWidth={2.2} stroke="currentColor" className="w-4 h-4">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 6l12 12M18 6L6 18" />
-                      </svg>
-                  </button>
-              </div>
-              <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar px-4 pb-[calc(var(--safe-bottom,0px)+1.5rem)] space-y-1.5" onClick={(e) => e.stopPropagation()}>
+                  <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar px-4 pb-[calc(var(--safe-bottom,0px)+1.25rem)] space-y-1.5">
                   {(recentChats.length ? recentChats : (characters || []).map(c => ({ char: c, lastText: '', lastTs: 0 }))).map(({ char: c, lastText, lastTs }) => (
                       <button
                           key={c.id}
@@ -1332,6 +1336,7 @@ const Launcher: React.FC = () => {
                       </button>
                   ))}
                   <div className="text-[10px] text-center text-white/40 mt-4 tracking-widest">TAP OUTSIDE TO CLOSE · 点空白处关闭</div>
+                  </div>
               </div>
           </div>
       )}

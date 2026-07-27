@@ -11,6 +11,7 @@ import {
     VRWorldNovel, VRNovelAnnotation, CustomCreatorPart, VRMusicRoomState, VRGuestbookState, VRScript, VRStagedPlay, VRLetter,
     WorldProfile, WorldEpisode,
     TaskV2,
+    CharWalletProfile, WalletTransaction, CharHomeProfile,
 } from '../types';
 import { exportPostOfficeLocal, importPostOfficeLocal } from './vrWorld/postOffice';
 import { exportSignalLocal, importSignalLocal } from './vrWorld/signal';
@@ -24,7 +25,8 @@ const DB_NAME = 'AetherOS_Data';
 // v67：两条并行线各自用掉了 v65/v66（A线: blob_assets + 生活记录；B线: room_plates 门牌 + digest_reports 消化日志），
 // 合并后统一推到 67——建表全部走幂等的 if(!contains)，任一侧的 v66 老库升级时都会补齐缺的那组表。
 // v68：character_groups 角色分组（神经链接"文件夹"，见 types.ts CharacterGroup）。
-const DB_VERSION = 68;
+// v69：资产系统三张表（char_wallets / wallet_transactions / char_homes，见 types.ts CharWalletProfile）。
+const DB_VERSION = 69;
 
 const STORE_CHARACTERS = 'characters';
 const STORE_CHAR_GROUPS = 'character_groups'; // 角色分组定义（角色通过 groupId 指向；与群聊 groups 无关）
@@ -40,6 +42,9 @@ const STORE_USER = 'user_profile';
 const STORE_DIARIES = 'diaries';
 const STORE_TASKS = 'tasks';
 const STORE_TASKS_V2 = 'tasks_v2'; // 时光契约新任务模型（重复 / 一次性 / 连胜 / 奖惩 / 提醒）
+const STORE_CHAR_WALLETS = 'char_wallets'; // v69: 资产系统·钱包档案（keyPath=charId；'__user__' 为用户零钱档案）
+const STORE_WALLET_TX = 'wallet_transactions'; // v69: 资产系统·钱包流水（用户+角色共用，index charId）
+const STORE_CHAR_HOMES = 'char_homes'; // v69: 资产系统·智能家居档案（keyPath=charId）
 const STORE_ANNIVERSARIES = 'anniversaries';
 const STORE_ROOM_TODOS = 'room_todos'; 
 const STORE_ROOM_NOTES = 'room_notes'; 
@@ -264,6 +269,14 @@ export const openDB = (): Promise<IDBDatabase> => {
       createStore(STORE_TASKS, { keyPath: 'id' });
       createStore(STORE_TASKS_V2, { keyPath: 'id' });
       createStore(STORE_ANNIVERSARIES, { keyPath: 'id' });
+
+      // v69: 资产系统（钱包 / 智能家居）
+      createStore(STORE_CHAR_WALLETS, { keyPath: 'charId' });
+      createStore(STORE_CHAR_HOMES, { keyPath: 'charId' });
+      if (!db.objectStoreNames.contains(STORE_WALLET_TX)) {
+          const wtxStore = db.createObjectStore(STORE_WALLET_TX, { keyPath: 'id' });
+          wtxStore.createIndex('charId', 'charId', { unique: false });
+      }
 
       if (!db.objectStoreNames.contains(STORE_ROOM_TODOS)) {
           db.createObjectStore(STORE_ROOM_TODOS, { keyPath: 'id' });
@@ -1506,6 +1519,83 @@ export const DB = {
       transaction.objectStore(STORE_TASKS_V2).delete(id);
   },
 
+  // --- 资产系统（钱包 / 智能家居）---
+  getWalletProfile: async (charId: string): Promise<CharWalletProfile | null> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_CHAR_WALLETS)) return null;
+      return new Promise((resolve, reject) => {
+          const req = db.transaction(STORE_CHAR_WALLETS, 'readonly').objectStore(STORE_CHAR_WALLETS).get(charId);
+          req.onsuccess = () => resolve(req.result || null);
+          req.onerror = () => reject(req.error);
+      });
+  },
+
+  getAllWalletProfiles: async (): Promise<CharWalletProfile[]> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_CHAR_WALLETS)) return [];
+      return new Promise((resolve, reject) => {
+          const req = db.transaction(STORE_CHAR_WALLETS, 'readonly').objectStore(STORE_CHAR_WALLETS).getAll();
+          req.onsuccess = () => resolve(req.result || []);
+          req.onerror = () => reject(req.error);
+      });
+  },
+
+  saveWalletProfile: async (profile: CharWalletProfile): Promise<void> => {
+      const db = await openDB();
+      db.transaction(STORE_CHAR_WALLETS, 'readwrite').objectStore(STORE_CHAR_WALLETS).put(profile);
+  },
+
+  deleteWalletProfile: async (charId: string): Promise<void> => {
+      const db = await openDB();
+      db.transaction(STORE_CHAR_WALLETS, 'readwrite').objectStore(STORE_CHAR_WALLETS).delete(charId);
+  },
+
+  /** 按 charId 取流水（含用户侧 '__user__'），时间倒序 */
+  getWalletTransactions: async (charId: string): Promise<WalletTransaction[]> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_WALLET_TX)) return [];
+      return new Promise((resolve, reject) => {
+          const store = db.transaction(STORE_WALLET_TX, 'readonly').objectStore(STORE_WALLET_TX);
+          const req = store.index('charId').getAll(charId);
+          req.onsuccess = () => resolve((req.result || []).sort((a: WalletTransaction, b: WalletTransaction) => b.timestamp - a.timestamp));
+          req.onerror = () => reject(req.error);
+      });
+  },
+
+  saveWalletTransaction: async (tx: WalletTransaction): Promise<void> => {
+      const db = await openDB();
+      db.transaction(STORE_WALLET_TX, 'readwrite').objectStore(STORE_WALLET_TX).put(tx);
+  },
+
+  /** 重Roll 时清空该角色历史流水（用户侧不清） */
+  deleteWalletTransactionsByChar: async (charId: string): Promise<void> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_WALLET_TX)) return;
+      const store = db.transaction(STORE_WALLET_TX, 'readwrite').objectStore(STORE_WALLET_TX);
+      const req = store.index('charId').getAllKeys(charId);
+      req.onsuccess = () => { for (const key of (req.result || [])) store.delete(key); };
+  },
+
+  getHomeProfile: async (charId: string): Promise<CharHomeProfile | null> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_CHAR_HOMES)) return null;
+      return new Promise((resolve, reject) => {
+          const req = db.transaction(STORE_CHAR_HOMES, 'readonly').objectStore(STORE_CHAR_HOMES).get(charId);
+          req.onsuccess = () => resolve(req.result || null);
+          req.onerror = () => reject(req.error);
+      });
+  },
+
+  saveHomeProfile: async (profile: CharHomeProfile): Promise<void> => {
+      const db = await openDB();
+      db.transaction(STORE_CHAR_HOMES, 'readwrite').objectStore(STORE_CHAR_HOMES).put(profile);
+  },
+
+  deleteHomeProfile: async (charId: string): Promise<void> => {
+      const db = await openDB();
+      db.transaction(STORE_CHAR_HOMES, 'readwrite').objectStore(STORE_CHAR_HOMES).delete(charId);
+  },
+
   /**
    * 老任务（STORE_TASKS）→ 新任务（STORE_TASKS_V2）一次性迁移。
    * 规则：
@@ -2691,7 +2781,7 @@ export const DB = {
           });
       };
 
-      const [characters, characterGroups, messages, themes, emojis, emojiCategories, assets, galleryImages, userProfiles, diaries, tasks, anniversaries, roomTodos, roomNotes, groups, journalStickers, socialPosts, courses, games, worldbooks, novels, bankTx, bankData, xhsActivities, xhsStockImages, songs, quizzes, guidebookSessions, scheduledMessages, lifeSimStates, handbooks, trackers, trackerEntries, hotNewsSnapshots, vrNovels, vrAnnotations, customCreatorParts, vrMusic, vrGuestbook, vrScripts, vrStagedPlays, vrPresets, vrLetters, vrSettings, worlds, worldEpisodes, lifeRecords, medPlans, lifeRecordSettings] = await Promise.all([
+      const [characters, characterGroups, messages, themes, emojis, emojiCategories, assets, galleryImages, userProfiles, diaries, tasks, anniversaries, roomTodos, roomNotes, groups, journalStickers, socialPosts, courses, games, worldbooks, novels, bankTx, bankData, xhsActivities, xhsStockImages, songs, quizzes, guidebookSessions, scheduledMessages, lifeSimStates, handbooks, trackers, trackerEntries, hotNewsSnapshots, vrNovels, vrAnnotations, customCreatorParts, vrMusic, vrGuestbook, vrScripts, vrStagedPlays, vrPresets, vrLetters, vrSettings, worlds, worldEpisodes, lifeRecords, medPlans, lifeRecordSettings, charWallets, walletTx, charHomes] = await Promise.all([
           getAllFromStore(STORE_CHARACTERS),
           getAllFromStore(STORE_CHAR_GROUPS),
           getAllFromStore(STORE_MESSAGES),
@@ -2741,6 +2831,9 @@ export const DB = {
           getAllFromStore(STORE_LIFE_RECORDS),
           getAllFromStore(STORE_MED_PLANS),
           getAllFromStore(STORE_LIFE_SETTINGS),
+          getAllFromStore(STORE_CHAR_WALLETS),
+          getAllFromStore(STORE_WALLET_TX),
+          getAllFromStore(STORE_CHAR_HOMES),
       ]);
 
       const userProfile = userProfiles.length > 0 ? {
@@ -2757,6 +2850,9 @@ export const DB = {
           bankState: mainState ? { ...mainState, id: undefined } : undefined,
           bankDollhouse: dollhouseRecord?.data || undefined,
           bankTransactions: bankTx,
+          charWallets,
+          walletTransactions: walletTx,
+          charHomes,
           xhsActivities,
           xhsStockImages,
           songs,
@@ -2813,6 +2909,7 @@ export const DB = {
           STORE_CHARACTERS, STORE_CHAR_GROUPS, STORE_MESSAGES, STORE_THEMES, STORE_EMOJIS, STORE_EMOJI_CATEGORIES,
           STORE_ASSETS, STORE_GALLERY, STORE_USER, STORE_DIARIES,
           STORE_TASKS, STORE_TASKS_V2, STORE_ANNIVERSARIES, STORE_ROOM_TODOS, STORE_ROOM_NOTES,
+          STORE_CHAR_WALLETS, STORE_WALLET_TX, STORE_CHAR_HOMES,
           STORE_GROUPS, STORE_JOURNAL_STICKERS, STORE_SOCIAL_POSTS, STORE_COURSES, STORE_GAMES, STORE_WORLDBOOKS, STORE_NOVELS, STORE_SONGS,
           STORE_BANK_TX, STORE_BANK_DATA,
           STORE_XHS_ACTIVITIES, STORE_XHS_STOCK,
@@ -2895,6 +2992,9 @@ export const DB = {
           data.scheduledMessages !== undefined,
           data.lifeSimState !== undefined,
           data.bankTransactions !== undefined,
+          data.charWallets !== undefined,
+          data.walletTransactions !== undefined,
+          data.charHomes !== undefined,
           data.xhsActivities !== undefined,
           data.xhsStockImages !== undefined,
           data.memoryNodes !== undefined,
@@ -3278,6 +3378,18 @@ export const DB = {
           await clearAndAdd(STORE_BANK_TX, data.bankTransactions, '银行流水', false);
           data.bankTransactions = undefined as any;
       }, data.bankTransactions?.length || 0);
+      await runSection('钱包档案', data.charWallets !== undefined, async () => {
+          await clearAndAdd(STORE_CHAR_WALLETS, data.charWallets, '钱包档案', false);
+          data.charWallets = undefined as any;
+      }, data.charWallets?.length || 0);
+      await runSection('钱包流水', data.walletTransactions !== undefined, async () => {
+          await clearAndAdd(STORE_WALLET_TX, data.walletTransactions, '钱包流水', false);
+          data.walletTransactions = undefined as any;
+      }, data.walletTransactions?.length || 0);
+      await runSection('智能家居档案', data.charHomes !== undefined, async () => {
+          await clearAndAdd(STORE_CHAR_HOMES, data.charHomes, '智能家居档案', false);
+          data.charHomes = undefined as any;
+      }, data.charHomes?.length || 0);
       await runSection('小红书活动', data.xhsActivities !== undefined, async () => {
           await clearAndAdd(STORE_XHS_ACTIVITIES, data.xhsActivities, '小红书活动', false);
           data.xhsActivities = undefined as any;

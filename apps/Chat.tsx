@@ -22,6 +22,7 @@ import { isVideoShareUrl, parseVideoShareUrl } from '../utils/videoParser';
 import { isDevDebugAvailable } from '../utils/devDebug';
 import { resolveLifeRecordCard } from '../utils/lifeRecords';
 import { createTask } from '../utils/taskSettlement';
+import { settleTransfer } from '../utils/walletOps';
 import { syncTaskReminders } from '../utils/taskReminderScheduler';
 import type { TaskProposalMeta } from '../utils/chatParser';
 import { isMcdConfigured } from '../utils/mcdMcpClient';
@@ -1305,6 +1306,10 @@ const Chat: React.FC = () => {
             content: action === 'accepted' ? '[已收款]' : '[已退回]',
             metadata: { receipt: action, amount: msg.metadata?.amount, ref: msg.id },
         });
+        // 资产系统联动：用户收下角色的转账 → 钱真的出角色零钱、进用户零钱（退回不动钱）。
+        if (action === 'accepted') {
+            await settleTransfer({ direction: 'char_to_user', charId: char.id, charName: char.name, amount: msg.metadata?.amount });
+        }
         await reloadMessages(visibleCountRef.current);
     }, [char, reloadMessages]);
 

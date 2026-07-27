@@ -13,6 +13,7 @@ import {
 } from './taskSettlement';
 import { syncTaskReminders } from './taskReminderScheduler';
 import { wallClockToTimestamp } from './timezone';
+import { settleTransfer } from './walletOps';
 
 export interface MusicActionSnapshot {
     songId: number;
@@ -163,6 +164,11 @@ export const ChatParser = {
                 content: action === 'accepted' ? '[已收款]' : '[已退回]',
                 metadata: { receipt: action, amount, ref: refId },
             });
+            // 资产系统联动：角色收下用户的转账 → 钱真的进角色零钱、出用户零钱。
+            // 退回不动钱（钱压根没离开过用户手）。
+            if (action === 'accepted') {
+                await settleTransfer({ direction: 'user_to_char', charId, charName, amount });
+            }
         };
         if (content.includes('[[ACTION:TRANSFER_ACCEPT]]')) {
             await resolveUserTransfer('accepted');

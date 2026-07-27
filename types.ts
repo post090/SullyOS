@@ -39,6 +39,8 @@ export enum AppID {
   VRWorld = 'vrworld', // 彼方 — 角色自主登入的虚拟世界（定时驱动，房间里看小说/听歌/留言，产出活动卡注入聊天+记忆）
   CharCreatorDev = 'char_creator_dev', // 捏脸系统开发模式 — 仅开发模式可见，向捏人器指定类目追加自定义部件
   WorldHome = 'world_home', // 家园 — 同世界观多角色共同生活的大世界（观测驱动演绎，每角色独立 LLM 调用 + NPC 世界引擎）
+  Wallet = 'wallet', // 钱包 — 角色资产系统（账户/房车/贷款/小物件/流水）+ 用户零钱；转账真扣钱
+  SmartHome = 'smart_home', // 智能家居 — 角色住所统计面板（房间/物品/库存档位/保质期钩子），世界观内解释为"她家装了统计 App 且共享了权限"
 }
 
 export interface SystemLog {
@@ -2084,6 +2086,123 @@ export interface BankFullState {
 }
 // ---------------------------------
 
+// --- 资产系统（钱包 / 智能家居）TYPES ---
+// 三层感知设计：数据层（完整明细，给用户 UI 翻）→ 直觉摘要（intuition，注入角色 prompt
+// 的模糊档位描述）→ 按需查账（P2 的 CHECK_ASSETS 工具）。角色平时只有直觉概念，不全知。
+// 与 BankApp（用户记账储蓄罐）完全独立：钱包是"谁名下有什么"，BankApp 是"用户记了什么账"。
+
+export type WalletAccountType = 'cash' | 'savings' | 'credit' | 'investment';
+
+export interface WalletAccount {
+    id: string;
+    type: WalletAccountType;
+    name: string;              // "零钱" / "工资卡" / "花呗"
+    balance: number;           // credit = 已用额度（正数记欠款）；investment = 当前市值
+    creditLimit?: number;      // credit 专用：总额度
+    note?: string;             // 一句话背景（"工资卡，房租从这扣"）
+}
+
+/** 房产/车辆持有方式：自有 / 租赁 / 还贷中 */
+export type WalletHoldingMode = 'owned' | 'renting' | 'mortgaged';
+
+export interface WalletProperty {
+    id: string;
+    kind: 'home' | 'car' | 'other';
+    name: string;              // "老小区一居室" / "二手飞度"
+    mode: WalletHoldingMode;
+    estimatedValue?: number;   // owned / mortgaged：估值
+    note?: string;
+    rentMonthly?: number;      // renting：月租
+    rentDueDay?: number;       // renting：每月几号交租
+    leaseEndDate?: string;     // renting：租约到期 YYYY-MM-DD
+    deposit?: number;          // renting：押金
+    loanMonthly?: number;      // mortgaged：月供
+    loanRemainingMonths?: number; // mortgaged：剩余期数
+}
+
+export interface WalletLoan {
+    id: string;
+    name: string;              // "助学贷款" / "买相机分期"
+    principal: number;         // 剩余本金
+    monthly: number;           // 月还款额
+    remainingMonths?: number;
+    dueDay?: number;           // 每月几号扣款
+    note?: string;             // 借钱原因（生成时的剧情钩子）
+}
+
+export interface WalletValuable {
+    id: string;
+    name: string;              // 名下小物件："Switch" / "外婆留的镯子"
+    estimatedValue?: number;
+    note?: string;
+}
+
+/** 钱包流水 —— 用户零钱与角色账户共用一张表；charId = WALLET_USER_ID('__user__') 表示用户侧 */
+export interface WalletTransaction {
+    id: string;
+    charId: string;
+    amount: number;            // 正=收入，负=支出
+    category: string;          // transfer / salary / rent / food ...
+    note: string;
+    timestamp: number;
+    dateStr: string;           // YYYY-MM-DD
+}
+
+export interface CharWalletProfile {
+    charId: string;            // keyPath；'__user__' 为用户档案（P1 用户只有零钱账户）
+    generatedAt: number;
+    rerollCount?: number;
+    monthlyIncome?: number;    // 月收入（0/缺省 = 无固定收入）
+    incomeNote?: string;       // 收入来源（工资 / 生活费 / 稿费）
+    accounts: WalletAccount[];
+    properties: WalletProperty[];
+    loans: WalletLoan[];
+    valuables: WalletValuable[];
+    /** 用户可浏览范围：full=全部明细 / summary=只看摘要 */
+    visibility: 'full' | 'summary';
+    /** 直觉摘要（注入角色 prompt 的模糊描述；数据变动时由 walletOps 重算，不走 LLM） */
+    intuition?: string;
+}
+
+// 智能家居：住所明细。物品记"档位"不记"个数"；保质期只挂在少数钩子物品上。
+export type HomeSupplyLevel = 'plenty' | 'ok' | 'low' | 'out';
+
+export interface HomeSupply {
+    id: string;
+    name: string;              // "冰箱食材" / "洗衣液" / "纸巾"
+    icon?: string;             // emoji
+    level: HomeSupplyLevel;
+    note?: string;             // "还剩两天的菜"
+}
+
+export interface HomeItem {
+    id: string;
+    name: string;
+    icon?: string;             // emoji
+    note?: string;
+    expiryDate?: string;       // 保质期钩子（生成时只挑 2~3 件）YYYY-MM-DD
+}
+
+export interface HomeRoom {
+    id: string;
+    name: string;              // 客厅 / 卧室 / 厨房
+    icon?: string;             // emoji
+    note?: string;             // 一句话氛围（"堆满快递箱的角落"）
+    items: HomeItem[];
+}
+
+export interface CharHomeProfile {
+    charId: string;            // keyPath
+    generatedAt: number;
+    rerollCount?: number;
+    homeName?: string;         // "老小区六楼一居室"
+    homeNote?: string;
+    rooms: HomeRoom[];
+    supplies: HomeSupply[];
+    intuition?: string;        // 直觉摘要（注入角色 prompt）
+}
+// ---------------------------------
+
 // --- CHAR MUSIC PROFILE (网易云风格 · 角色的音乐人格) ---
 
 /** 角色本地歌单里的轻量歌曲快照 — 字段与 MusicContext 的 Song 对齐（无运行时 url） */
@@ -3406,6 +3525,11 @@ export interface FullBackupData {
     bankState?: BankFullState;
     bankDollhouse?: DollhouseState;
     bankTransactions?: BankTransaction[];
+
+    // 资产系统（钱包 / 智能家居）
+    charWallets?: CharWalletProfile[];
+    walletTransactions?: WalletTransaction[];
+    charHomes?: CharHomeProfile[];
 
     socialAppData?: {
         charHandles?: Record<string, SubAccount[]>;
