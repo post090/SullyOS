@@ -2357,7 +2357,9 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           // Determine which API to use
           const pCfg = char.proactiveConfig;
           const useSecondary = pCfg?.useSecondaryApi && pCfg.secondaryApi?.baseUrl;
-          const api = useSecondary ? pCfg!.secondaryApi! : currentApiConfig;
+          // 副 API > 角色独立主 API（加号菜单「API 配置」）> 全局 apiConfig
+          const charMainApi = char.chatApiOverride?.baseUrl ? char.chatApiOverride : null;
+          const api = useSecondary ? pCfg!.secondaryApi! : (charMainApi || currentApiConfig);
           if (!api.baseUrl) {
               drainQueuedProactive();
               return;
@@ -2465,7 +2467,9 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               if (!payload.flags.promptBuildSkipped && !isEmotionEvalSkipped() && isScheduleFeatureOn(char) && char.emotionConfig?.enabled) {
                   const emotionApi = (char.emotionConfig.api?.baseUrl)
                       ? char.emotionConfig.api
-                      : { baseUrl: apiConfigRef.current.baseUrl, apiKey: apiConfigRef.current.apiKey, model: apiConfigRef.current.model };
+                      : (char.chatApiOverride?.baseUrl
+                          ? char.chatApiOverride
+                          : { baseUrl: apiConfigRef.current.baseUrl, apiKey: apiConfigRef.current.apiKey, model: apiConfigRef.current.model });
                   if (emotionApi.baseUrl && currentUserProfile) {
                       evaluateEmotionBackground(char, currentUserProfile, systemPrompt, apiMessages, emotionApi)
                           .then((innerState) => {

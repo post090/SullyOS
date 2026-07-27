@@ -49,7 +49,7 @@ const stripRoleNamePrefix = (t: string): string => t.replace(/^[\w一-龥]+:\s*/
  */
 const stripBusinessTagsForBubble = (t: string): string =>
   t
-    .replace(/\[\[(?:ACTION|RECALL|SEARCH|DIARY|READ_DIARY|FS_DIARY|FS_READ_DIARY|DIARY_START|DIARY_END|FS_DIARY_START|FS_DIARY_END|MUSIC_ACTION)[:\s][\s\S]*?\]\]/g, '')
+    .replace(/\[\[(?:ACTION|RECALL|SEARCH|READ_NEWS|DIARY|READ_DIARY|FS_DIARY|FS_READ_DIARY|DIARY_START|DIARY_END|FS_DIARY_START|FS_DIARY_END|MUSIC_ACTION)[:\s][\s\S]*?\]\]/g, '')
     .replace(/\[schedule_message[^\]]*\]/g, '');
 
 /**

@@ -15,6 +15,145 @@ import LuckinCheckoutCard from './LuckinCheckoutCard';
 import TaskProposalCard from './TaskProposalCard';
 import type { TaskProposalMeta } from '../../utils/chatParser';
 
+/**
+ * news_card 气泡 — 报纸小卡。两种形态：
+ *  - 普通分享（NEWS_CARD）：点卡片直接开原文链接；
+ *  - 全文阅读（READ_NEWS，metadata.fullread）：TA 自己点开看的那篇，metadata.contentText
+ *    存了抓到的正文，点卡片弹内置阅读器（用户读的和喂给 AI 的是同一份），底部再给原文链接。
+ * 阅读器需要开合 state，而 MessageItem 主体的 news_card 分支在条件 return 里放不了 hooks，
+ * 所以独立成组件。
+ */
+const NewsCardBubble: React.FC<{ m: Message; charName?: string }> = ({ m, charName }) => {
+    const [readerOpen, setReaderOpen] = useState(false);
+    const md: any = m.metadata || {};
+    const title: string = md.title || '热点';
+    const source: string = md.source || '热点';
+    const url: string | undefined = md.url;
+    const desc: string | undefined = (md.desc && md.desc !== title) ? md.desc : undefined;
+    const image: string | undefined = md.image;
+    const fullread = !!md.fullread;
+    const contentText: string = typeof md.contentText === 'string' ? md.contentText : '';
+    // Jina/markdown 正文里的图片标记对纯文本阅读器是噪音，展示时剥掉
+    const readerText = contentText.replace(/!\[[^\]]*\]\([^)]*\)/g, '').trim();
+    const dateStr = new Date(m.timestamp).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' });
+    const openCard = () => {
+        if (fullread && readerText) { setReaderOpen(true); return; }
+        if (url) window.open(url, '_blank', 'noopener,noreferrer');
+    };
+    return (
+        <>
+            <div
+                className="w-60 cursor-pointer active:scale-[0.98] transition-transform"
+                onClick={openCard}
+                style={{ fontFamily: `'Noto Serif','Songti SC','Georgia',serif` }}
+            >
+                <div
+                    className="rounded-lg overflow-hidden border border-stone-400/70 shadow-[0_3px_12px_rgba(60,50,30,0.18)]"
+                    style={{ background: 'linear-gradient(170deg,#faf6ec 0%,#f3ecdb 100%)' }}
+                >
+                    {/* 报头 */}
+                    <div className="px-3 pt-2 pb-1.5 border-b-2 border-double border-stone-500/60">
+                        <div className="flex items-center justify-between text-stone-500">
+                            <span className="text-[8.5px] tracking-[0.3em] uppercase font-bold">SullyOS Daily</span>
+                            <span className="text-[8.5px] tracking-wide">{dateStr} · 号外</span>
+                        </div>
+                    </div>
+                    {/* 配图（RSS / 抓到的封面才有） */}
+                    {image && (
+                        <div className="mx-3 mt-2.5 rounded-sm overflow-hidden border border-stone-400/50">
+                            <NetImg src={image} loading="lazy" decoding="async" className="w-full h-24 object-cover" />
+                        </div>
+                    )}
+                    {/* 栏目标签 */}
+                    <div className="px-3 pt-2.5">
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-white bg-red-700 px-1.5 py-[1px] tracking-wide shadow-sm">
+                            <span className="text-[8px]">▌</span>{source}
+                        </span>
+                        {fullread && (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-stone-100 bg-stone-600 px-1.5 py-[1px] tracking-wide shadow-sm ml-1">
+                                全文
+                            </span>
+                        )}
+                    </div>
+                    {/* 标题 */}
+                    <div className="px-3 pt-1.5 pb-2">
+                        <p
+                            className="text-[15px] leading-[1.35] font-black text-stone-900"
+                            style={{ display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
+                        >
+                            {title}
+                        </p>
+                        {desc && (
+                            <p
+                                className="text-[11px] leading-snug text-stone-600 mt-1"
+                                style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
+                            >
+                                {desc}
+                            </p>
+                        )}
+                    </div>
+                    {/* 页脚 */}
+                    <div className="px-3 py-1.5 flex items-center justify-between border-t border-stone-400/50">
+                        <span className="text-[9px] text-stone-500 italic">
+                            {fullread ? `${charName || 'Ta'} 自己点开看的` : `${charName || 'Ta'} 转给你看`}
+                        </span>
+                        {fullread && readerText
+                            ? <span className="text-[10px] text-red-700 font-bold tracking-wide">读全文 ›</span>
+                            : url
+                                ? <span className="text-[10px] text-red-700 font-bold tracking-wide">查看原文 ›</span>
+                                : <span className="text-[9px] text-stone-400">热点速读</span>}
+                    </div>
+                </div>
+            </div>
+
+            {/* 内置全文阅读器 — 与喂给 AI 的正文同一份 */}
+            {readerOpen && (
+                <div className="fixed inset-0 z-[130] flex items-center justify-center p-4 animate-fade-in">
+                    <div className="absolute inset-0 bg-black/55" onClick={() => setReaderOpen(false)} />
+                    <div
+                        className="relative w-full max-w-md max-h-[85vh] rounded-xl overflow-hidden flex flex-col border border-stone-400/70 shadow-2xl"
+                        style={{ background: 'linear-gradient(170deg,#faf6ec 0%,#f3ecdb 100%)', fontFamily: `'Noto Serif','Songti SC','Georgia',serif` }}
+                    >
+                        <div className="px-4 pt-3 pb-2 border-b-2 border-double border-stone-500/60 flex items-center justify-between flex-shrink-0">
+                            <span className="text-[9px] tracking-[0.3em] uppercase font-bold text-stone-500">SullyOS Daily · 全文</span>
+                            <button
+                                onClick={() => setReaderOpen(false)}
+                                className="w-7 h-7 rounded-full bg-stone-200/80 text-stone-600 flex items-center justify-center text-sm font-bold active:scale-90 transition-transform"
+                            >
+                                ✕
+                            </button>
+                        </div>
+                        <div className="overflow-y-auto px-5 py-4">
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-white bg-red-700 px-1.5 py-[1px] tracking-wide shadow-sm mb-2">
+                                <span className="text-[8px]">▌</span>{source}
+                            </span>
+                            <h2 className="text-lg leading-snug font-black text-stone-900 mb-1">{md.pageTitle || title}</h2>
+                            <p className="text-[10px] text-stone-500 italic mb-3">{charName || 'Ta'} 自己点开看的这篇{md.isVideo ? '（视频页：只有简介与数据，没有画面）' : ''}</p>
+                            {image && (
+                                <div className="rounded-sm overflow-hidden border border-stone-400/50 mb-3">
+                                    <NetImg src={image} loading="lazy" decoding="async" className="w-full object-cover" />
+                                </div>
+                            )}
+                            <p className="text-[13px] leading-relaxed text-stone-800 whitespace-pre-wrap break-words">{readerText}</p>
+                            {url && (
+                                <a
+                                    href={url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-block mt-4 text-[12px] text-red-700 font-bold tracking-wide"
+                                >
+                                    去原网页看 ›
+                                </a>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+        </>
+    );
+};
+
+
 // 思考链卡片支持的 12 种风格预设 — 同时被 MessageItem 与 ThinkingChainSettingsModal 复用
 export type ThinkingChainStyleId = 'echo' | 'whisper' | 'minimal' | 'ink' | 'neon' | 'terminal' | 'stellar' | 'tama' | 'pixel' | 'muji' | 'ins' | 'custom';
 export interface ThinkingChainStyleSpec {
@@ -3035,63 +3174,8 @@ const MessageItem = React.memo(({
     }
 
     if (m.type === 'news_card') {
-        const md: any = m.metadata || {};
-        const title: string = md.title || '热点';
-        const source: string = md.source || '热点';
-        const url: string | undefined = md.url;
-        const desc: string | undefined = (md.desc && md.desc !== title) ? md.desc : undefined;
-        const dateStr = new Date(m.timestamp).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' });
-        const card = (
-            <div
-                className="w-60 cursor-pointer active:scale-[0.98] transition-transform"
-                onClick={() => { if (url) window.open(url, '_blank', 'noopener,noreferrer'); }}
-                style={{ fontFamily: `'Noto Serif','Songti SC','Georgia',serif` }}
-            >
-                <div
-                    className="rounded-lg overflow-hidden border border-stone-400/70 shadow-[0_3px_12px_rgba(60,50,30,0.18)]"
-                    style={{ background: 'linear-gradient(170deg,#faf6ec 0%,#f3ecdb 100%)' }}
-                >
-                    {/* 报头 */}
-                    <div className="px-3 pt-2 pb-1.5 border-b-2 border-double border-stone-500/60">
-                        <div className="flex items-center justify-between text-stone-500">
-                            <span className="text-[8.5px] tracking-[0.3em] uppercase font-bold">SullyOS Daily</span>
-                            <span className="text-[8.5px] tracking-wide">{dateStr} · 号外</span>
-                        </div>
-                    </div>
-                    {/* 栏目标签 */}
-                    <div className="px-3 pt-2.5">
-                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-white bg-red-700 px-1.5 py-[1px] tracking-wide shadow-sm">
-                            <span className="text-[8px]">▌</span>{source}
-                        </span>
-                    </div>
-                    {/* 标题 */}
-                    <div className="px-3 pt-1.5 pb-2">
-                        <p
-                            className="text-[15px] leading-[1.35] font-black text-stone-900"
-                            style={{ display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
-                        >
-                            {title}
-                        </p>
-                        {desc && (
-                            <p
-                                className="text-[11px] leading-snug text-stone-600 mt-1"
-                                style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
-                            >
-                                {desc}
-                            </p>
-                        )}
-                    </div>
-                    {/* 页脚 */}
-                    <div className="px-3 py-1.5 flex items-center justify-between border-t border-stone-400/50">
-                        <span className="text-[9px] text-stone-500 italic">{charName || 'Ta'} 转给你看</span>
-                        {url
-                            ? <span className="text-[10px] text-red-700 font-bold tracking-wide">查看原文 ›</span>
-                            : <span className="text-[9px] text-stone-400">热点速读</span>}
-                    </div>
-                </div>
-            </div>
-        );
-        return commonLayout(card);
+        // 报纸小卡 + （fullread 时）内置全文阅读器，见顶部 NewsCardBubble
+        return commonLayout(<NewsCardBubble m={m} charName={charName} />);
     }
 
     if (m.type === 'html_card') {
@@ -3506,7 +3590,7 @@ const MessageItem = React.memo(({
         .replace(/\[[^\[\]\n「」]{0,24}引用了[^\[\]\n「」]{0,24}「[^」\n]*?」[^\[\]\n]{0,24}\]\s*/g, '')  // imitated history render [xx引用了xx说的「…」，并回复了 ↓]
         .replace(/\[回复\s*[""\u201C][^""\u201D]*?[""\u201D](?:\.{0,3})\]\s*[：:]?\s*/g, '')  // [回复 "content"]: format
         // Residual action/system tags that may have leaked through
-        .replace(/\[\[(?:ACTION|RECALL|SEARCH|DIARY|READ_DIARY|FS_DIARY|FS_READ_DIARY|SEND_EMOJI|DIARY_START|DIARY_END|FS_DIARY_START|FS_DIARY_END)[:\s][\s\S]*?\]\]/g, '')
+        .replace(/\[\[(?:ACTION|RECALL|SEARCH|READ_NEWS|DIARY|READ_DIARY|FS_DIARY|FS_READ_DIARY|SEND_EMOJI|DIARY_START|DIARY_END|FS_DIARY_START|FS_DIARY_END)[:\s][\s\S]*?\]\]/g, '')
         .replace(/\[schedule_message[^\]]*\]/g, '')
         .replace(/<[语語]音[^>]*>[\s\S]*?<\/\s*[语語]音\s*>/g, '')  // strip <语音 ...>...</语音> voice tags (tolerate emotion attr / spaced close)
         .replace(/<[语語]音[^>]*>[\s\S]*$/g, '')             // 未闭合开标签 (历史坏数据): 标签到末尾都是语音内容, 不当正文显示

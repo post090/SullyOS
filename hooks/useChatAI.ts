@@ -711,7 +711,9 @@ export const useChatAI = ({
         // 早退路径也要熄「发送准备中」灯: caller (Chat.tsx) 是先 setInstantSendingActive(true)
         // 再调 triggerAI 的, 这里 return 掉而不通知的话指示灯会永远亮着。
         if (isTyping || !char) { onInstantPosted?.(); return; }
-        const effectiveApi = overrideApiConfig || apiConfig;
+        // 角色级主 API 覆盖（加号菜单「API 配置」）：显式 override > 角色独立主 API > 全局 apiConfig。
+        const charApiOverride = char.chatApiOverride?.baseUrl ? char.chatApiOverride : null;
+        const effectiveApi = overrideApiConfig || charApiOverride || apiConfig;
         if (!effectiveApi.baseUrl) { alert("请先在设置中配置 API URL"); onInstantPosted?.(); return; }
 
         // 重 roll（回溯重生）时不带入上一轮的情绪余波：清掉 buff 注入（buffInjection/activeBuffs）和
@@ -866,7 +868,7 @@ export const useChatAI = ({
             const emotionApi = emotionEvalEnabled
                 ? ((char.emotionConfig!.api?.baseUrl)
                     ? { ...char.emotionConfig!.api!, stream: (char.emotionConfig!.api as any).stream ?? evalStream }
-                    : { baseUrl: apiConfig.baseUrl, apiKey: apiConfig.apiKey, model: apiConfig.model, stream: evalStream })
+                    : { baseUrl: effectiveApi.baseUrl, apiKey: effectiveApi.apiKey, model: effectiveApi.model, stream: evalStream })
                 : null;
             // 本地路径的情绪评估：主 fetch 发出后立即发射（见下方调用点）。
             // 历史备注：曾为串行中转做过 1.5s 错峰（评估抢跑会把主回复压后一个评估时长），

@@ -24,6 +24,9 @@ import {
     normalizeXhsLiteDetail,
 } from './xhsMcpClient';
 import { getLocalDateKey } from './localDate';
+import { DB } from './db';
+import { extractWebpageContent, ExtractedWebpage } from './webpageExtractor';
+import { isVideoShareUrl, parseVideoShareUrl } from './videoParser';
 
 // ─── 共用类型 ────────────────────────────────────────────────────────────────
 
@@ -124,6 +127,72 @@ export async function runSearch(
         `${i + 1}. ${r.title}\n   ${r.description}`
     ).join('\n\n');
     return { ok: true, query: args.query, resultsText, rawResultCount: searchResult.results.length };
+}
+
+// ─── READ_NEWS（热点全文阅读）────────────────────────────────────────────────
+
+export type ReadNewsResult =
+    | {
+        ok: true;
+        /** 角色写的标题（可能是缩写） */ title: string;
+        /** 快照里匹配到的完整标题 */ matchedTitle: string;
+        url: string;
+        source?: string;
+        pageTitle: string;
+        /** 抓到的正文纯文本（已截断） */ contentText: string;
+        excerpt: string;
+        image?: string;
+        /** 视频页降级：只有简介/数据，没有画面 */ isVideo: boolean;
+    }
+    | { ok: false; reason: 'no_snapshot' | 'not_found' | 'no_url' | 'fetch_failed'; title: string; message?: string };
+
+/** 二轮注入的正文上限：全文阅读要比 SEARCH 摘要慷慨，但也别把 8000 字长文全塞进去 */
+const READ_NEWS_MAX_CHARS = 6000;
+
+/**
+ * 角色指定某条热点看全文：按标题回最近一次热点快照拿 URL（URL 从不进 prompt，
+ * 防模型抄错/编造链接），再走 webpageExtractor 三层降级链抓正文。
+ * 视频平台链接降级走 parseVideoShareUrl（简介+互动数据），解析失败再退网页抓取。
+ * 网络错误不外抛——统一折叠成 { ok:false, reason:'fetch_failed' } 让调用方如实告知。
+ */
+export async function runReadNews(
+    args: { title: string },
+    _ctx: AgenticToolCtx,
+): Promise<ReadNewsResult> {
+    const title = (args.title || '').trim();
+    const snap = await DB.getLatestHotNewsSnapshot().catch(() => null);
+    if (!snap?.items?.length) return { ok: false, reason: 'no_snapshot', title };
+    const hit = snap.items.find(it => it.title === title)
+        || snap.items.find(it => !!title && (it.title.includes(title) || title.includes(it.title)));
+    if (!hit) return { ok: false, reason: 'not_found', title };
+    if (!hit.url) return { ok: false, reason: 'no_url', title: hit.title, message: '该热点没有原文链接' };
+
+    try {
+        const isVideo = isVideoShareUrl(hit.url);
+        let page: ExtractedWebpage | null = null;
+        if (isVideo) {
+            page = await parseVideoShareUrl(hit.url).catch(() => null);
+        }
+        if (!page) {
+            page = await extractWebpageContent(hit.url);
+        }
+        const contentText = (page.content || '').slice(0, READ_NEWS_MAX_CHARS).trim();
+        if (!contentText) return { ok: false, reason: 'fetch_failed', title: hit.title, message: '抓到的正文为空' };
+        return {
+            ok: true,
+            title,
+            matchedTitle: hit.title,
+            url: hit.url,
+            source: hit.source,
+            pageTitle: page.title,
+            contentText,
+            excerpt: page.excerpt || hit.desc || '',
+            image: page.image || hit.image,
+            isVideo: isVideo || !!page.video,
+        };
+    } catch (e: any) {
+        return { ok: false, reason: 'fetch_failed', title: hit.title, message: e?.message ? String(e.message) : '抓取失败' };
+    }
 }
 
 // ─── READ_DIARY (Notion) ────────────────────────────────────────────────────

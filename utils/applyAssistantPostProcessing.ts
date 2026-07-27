@@ -40,6 +40,7 @@ import {
     resolveXhsConfig,
     runRecall,
     runSearch,
+    runReadNews,
     runReadDiary,
     runFsReadDiary,
     runReadNote,
@@ -706,6 +707,7 @@ export async function applyAssistantPostProcessing(
         const willRegenerate =
             /\[\[RECALL:\s*\d{4}[-/年]\d{1,2}\]\]/.test(aiContent)
             || /\[\[SEARCH:\s*.+?\]\]/.test(aiContent)
+            || /\[\[READ_NEWS:\s*.+?\]\]/.test(aiContent)
             || /\[\[READ_DIARY:\s*.+?\]\]/.test(aiContent)
             || /\[\[FS_READ_DIARY:\s*.+?\]\]/.test(aiContent)
             || /\[\[READ_NOTE:\s*.+?\]\]/.test(aiContent)
@@ -801,6 +803,90 @@ export async function applyAssistantPostProcessing(
     setSearchStatus('');
 
     aiContent = aiContent.replace(/\[\[SEARCH:.*?\]\]/g, '').trim();
+
+    // 5.55 Handle Read News (热点全文阅读) — [[READ_NEWS: 标题]]，每轮只认第一条（多写的剥掉）
+    const readNewsMatch = aiContent.match(/\[\[READ_NEWS:\s*(.+?)\]\]/);
+    if (!skipSecondPassLLM && readNewsMatch) {
+        const newsTitle = readNewsMatch[1].trim();
+        console.log('📰 [ReadNews] 角色想看热点全文:', newsTitle);
+        setSearchStatus(`正在点开热点原文: ${newsTitle}...`);
+        const newsLeadIn = aiContent.replace(/\[\[READ_NEWS:.*?\]\]/g, '').trim() || '我去点开看看原文...';
+        try {
+            const rn = await runReadNews({ title: newsTitle }, agenticCtx);
+            if (rn.ok) {
+                // 落卡片: 注明是 TA 自己点开看的; contentText 存 metadata, 用户点卡片也能读同一份全文
+                await DB.saveMessage({
+                    charId: char.id,
+                    role: 'assistant',
+                    type: 'news_card',
+                    content: `[${char.name} 点开了热点「${rn.matchedTitle}」的全文]`,
+                    metadata: {
+                        source: rn.source, title: rn.matchedTitle, url: rn.url, desc: rn.excerpt,
+                        image: rn.image, fullread: true, pageTitle: rn.pageTitle,
+                        contentText: rn.contentText, isVideo: rn.isVideo,
+                    },
+                });
+                addToast(`${char.name} 点开了「${rn.matchedTitle}」的全文`, 'info');
+                // 配图喂 AI: 角色级开关 (加号菜单「API 配置」), 默认关 — 防不识图模型收到 image 段报错
+                const feedImage = !!(char as any).hotNewsImagesToAI && !!rn.image;
+                const sysText = `[系统: 你点开了热点「${rn.matchedTitle}」的原文${rn.isVideo ? '(这是个视频页, 只能看到简介/互动数据, 看不到画面)' : ''}${feedImage ? ', 配图也一并给你看' : ''}, 以下是内容]
+
+${rn.contentText}
+
+[系统: 你已经读完了。现在请你:
+1. 先正常回应用户刚才说的话
+2. 像刚放下手机那样自然聊聊你看完的感想, 比如"我刚点进去看了..."
+3. 用多条消息回复, 别堆成一大段
+4. 严禁再输出[[READ_NEWS:...]]标记]`;
+                const userContent: any = feedImage
+                    ? [{ type: 'text', text: sysText }, { type: 'image_url', image_url: { url: rn.image } }]
+                    : sysText;
+                const newsMessages = [
+                    ...fullMessages,
+                    { role: 'assistant', content: newsLeadIn },
+                    { role: 'user', content: userContent },
+                ];
+                data = await safeFetchJson(`${baseUrl}/chat/completions`, {
+                    method: 'POST', headers,
+                    body: JSON.stringify({ model: effectiveApi.model, messages: newsMessages, temperature: 0.8, max_tokens: 8000, stream: false })
+                }, 2, 0, { ...apiLogMeta, purpose: '热点全文' });
+                updateTokenUsage(data, historyMsgCount, 'read-news');
+                aiContent = normalizeAiContent(data.choices?.[0]?.message?.content || '');
+                addToast(`📰 读完了: ${rn.matchedTitle}`, 'success');
+            } else {
+                // 抓不到 → 如实告知 (用户拍板: 失败就如实显示), 严禁装作读过
+                const failWhy = (rn.reason === 'not_found' || rn.reason === 'no_snapshot')
+                    ? '在最近的热点列表里没找到这条'
+                    : rn.reason === 'no_url'
+                        ? '这条热点没有可打开的原文链接'
+                        : `原文页面没打开 (${rn.message || '抓取失败'})`;
+                console.log('📰 [ReadNews] 全文抓取失败:', rn.reason, rn.message);
+                addToast(`热点全文没抓到: ${newsTitle}`, 'error');
+                const failMessages = [
+                    ...fullMessages,
+                    { role: 'assistant', content: newsLeadIn },
+                    { role: 'user', content: `[系统: 你想点开热点「${newsTitle}」的全文, 但${failWhy}。请你: 1.先回应用户刚才的话 2.自然地如实提一句没点开/加载失败 3.严禁编造你读过的内容, 严禁再输出[[READ_NEWS:...]]标记]` },
+                ];
+                try {
+                    data = await safeFetchJson(`${baseUrl}/chat/completions`, {
+                        method: 'POST', headers,
+                        body: JSON.stringify({ model: effectiveApi.model, messages: failMessages, temperature: 0.8, max_tokens: 8000, stream: false })
+                    }, 2, 0, { ...apiLogMeta, purpose: '热点全文' });
+                    updateTokenUsage(data, historyMsgCount, 'read-news-fail');
+                    aiContent = normalizeAiContent(data.choices?.[0]?.message?.content || '');
+                } catch (failErr) {
+                    console.error('ReadNews fail-notice call failed:', failErr);
+                    aiContent = aiContent.replace(/\[\[READ_NEWS:.*?\]\]/g, '').trim();
+                }
+            }
+        } catch (e) {
+            console.error('ReadNews execution failed:', e);
+            aiContent = aiContent.replace(/\[\[READ_NEWS:.*?\]\]/g, '').trim();
+        }
+        setSearchStatus('');
+    }
+
+    aiContent = aiContent.replace(/\[\[READ_NEWS:.*?\]\]/g, '').trim();
 
     // 5.6 Handle Diary Writing (写日记到 Notion)
     const diaryStartMatch = aiContent.match(/\[\[DIARY_START:\s*(.+?)\]\]\n?([\s\S]*?)\[\[DIARY_END\]\]/);

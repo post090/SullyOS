@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { ShareNetwork, Trash, Plus, Smiley, PaperPlaneTilt, Money, BookOpenText, GearSix, Image, Lock, ArrowsClockwise, ChatCircleDots, CalendarBlank, ForkKnife, Coffee, Code, Brain, PencilSimple, BellSimpleRinging, Sparkle, CaretDown, FadersHorizontal } from '@phosphor-icons/react';
+import { ShareNetwork, Trash, Plus, Smiley, PaperPlaneTilt, Money, BookOpenText, GearSix, Image, Lock, ArrowsClockwise, ChatCircleDots, CalendarBlank, ForkKnife, Coffee, Code, Brain, PencilSimple, BellSimpleRinging, Sparkle, CaretDown, FadersHorizontal, Plugs, MagnifyingGlass } from '@phosphor-icons/react';
 import { CharacterProfile, ChatTheme, EmojiCategory, Emoji } from '../../types';
 import { PRESET_THEMES } from './ChatConstants';
 import { AcnhActionTile } from '../os/acnhIcons';
@@ -833,6 +833,28 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                                   <BellSimpleRinging className="w-6 h-6" weight="bold" />
                               </div>
                               <span className="text-xs font-bold">提示音</span>
+                            </button>
+
+                            {/* API 配置：该角色独立主 API + 副 API 聚合（CharApiHubModal） */}
+                            <button
+                              onClick={() => onPanelAction('api-hub')}
+                              className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${acnh ? 'text-[#725d42]' : isDiscordStyle ? 'text-slate-200' : 'text-slate-600'}`}
+                            >
+                              <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border ${acnh ? 'bg-white/70 border-[#e6dab4] text-[#6a9edb]' : isDiscordStyle ? 'bg-slate-800 text-blue-300 border-blue-400/20' : 'bg-blue-50 text-blue-500 border-blue-100'}`}>
+                                  <Plugs className="w-6 h-6" weight="bold" />
+                              </div>
+                              <span className="text-xs font-bold">API 配置</span>
+                            </button>
+
+                            {/* 搜索记录：搜当前角色聊天记录并跳转楼层（ChatSearchModal） */}
+                            <button
+                              onClick={() => onPanelAction('chat-search')}
+                              className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${acnh ? 'text-[#725d42]' : isDiscordStyle ? 'text-slate-200' : 'text-slate-600'}`}
+                            >
+                              <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border ${acnh ? 'bg-white/70 border-[#e6dab4] text-[#5fae6e]' : isDiscordStyle ? 'bg-slate-800 text-emerald-300 border-emerald-400/20' : 'bg-emerald-50 text-emerald-500 border-emerald-100'}`}>
+                                  <MagnifyingGlass className="w-6 h-6" weight="bold" />
+                              </div>
+                              <span className="text-xs font-bold">搜索记录</span>
                             </button>
                           </div>
 

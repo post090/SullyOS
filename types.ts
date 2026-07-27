@@ -2379,6 +2379,21 @@ export interface CharacterProfile {
   /** 日程卡主题色相（0-360，上游 ScheduleCard/ScheduleHomeWidget 以 hsl(themeColor,…) 渲染；未设回退 260 紫） */
   themeColor?: number;
 
+  /**
+   * 角色独立聊天主 API（覆盖全局 apiConfig；不设/无 baseUrl = 跟随全局默认）。
+   * 入口：聊天加号菜单「API 配置」（CharApiHubModal）。分享角色卡时剥离（含 apiKey）。
+   */
+  chatApiOverride?: {
+    baseUrl: string;
+    apiKey: string;
+    model: string;
+  };
+  /**
+   * READ_NEWS 热点全文阅读时，是否把网页配图一并喂给 AI（多模态 image_url）。
+   * 默认关——防止不识图的模型收到 image 段直接报错。开关在「API 配置」面板里。
+   */
+  hotNewsImagesToAI?: boolean;
+
   // 主动消息配置
   proactiveConfig?: {
     enabled: boolean;

@@ -43,6 +43,8 @@ import ChatModals from '../components/chat/ChatModals';
 import Modal from '../components/os/Modal';
 import ProactiveSettingsModal from '../components/chat/ProactiveSettingsModal';
 import ThinkingChainSettingsModal from '../components/chat/ThinkingChainSettingsModal';
+import CharApiHubModal from '../components/chat/CharApiHubModal';
+import ChatSearchModal from '../components/chat/ChatSearchModal';
 import { useChatAI } from '../hooks/useChatAI';
 import { cleanTextForTts, parseVoiceOutput } from '../utils/minimaxTts';
 import { collectVoiceBatchSubtitle, isPoisonedVoiceSubtitle } from '../utils/voiceSubtitle';
@@ -167,6 +169,9 @@ const Chat: React.FC = () => {
     const [archiveProgress, setArchiveProgress] = useState('');
     const [showProactiveModal, setShowProactiveModal] = useState(false);
     const [showThinkingChainModal, setShowThinkingChainModal] = useState(false);
+    // 加号菜单第二页：角色级 API 配置聚合 / 聊天记录搜索
+    const [showApiHubModal, setShowApiHubModal] = useState(false);
+    const [showChatSearch, setShowChatSearch] = useState(false);
 
     // Archive Prompts State
     const [archivePrompts, setArchivePrompts] = useState<{id: string, name: string, content: string}[]>(DEFAULT_ARCHIVE_PROMPTS);
@@ -1477,6 +1482,18 @@ const Chat: React.FC = () => {
                 // 「展示思考」按钮 → 打开思考链设置 modal（开关 / 卡片风格 / 配色 / 追加提示词）
                 if (!char) break;
                 setShowThinkingChainModal(true);
+                break;
+            }
+            case 'api-hub': {
+                if (!char) break;
+                setShowPanel('none');
+                setShowApiHubModal(true);
+                break;
+            }
+            case 'chat-search': {
+                if (!char) break;
+                setShowPanel('none');
+                setShowChatSearch(true);
                 break;
             }
         }
@@ -3621,6 +3638,35 @@ const Chat: React.FC = () => {
                         stopProactiveChat();
                         updateCharacter(char.id, { proactiveConfig: { ...char.proactiveConfig!, enabled: false } });
                         addToast('已停止主动消息', 'info');
+                    }}
+                />
+            )}
+
+            {/* 角色级 API 配置聚合 — 加号菜单「API 配置」 */}
+            {char && (
+                <CharApiHubModal
+                    isOpen={showApiHubModal}
+                    onClose={() => setShowApiHubModal(false)}
+                    char={char}
+                    apiConfig={apiConfig}
+                    onSave={(patch) => {
+                        updateCharacter(char.id, patch);
+                        addToast('API 配置已保存', 'success');
+                    }}
+                />
+            )}
+
+            {/* 聊天记录搜索 — 加号菜单「搜索记录」，点结果复用旧消息跳转机制 */}
+            {char && (
+                <ChatSearchModal
+                    isOpen={showChatSearch}
+                    onClose={() => setShowChatSearch(false)}
+                    charId={char.id}
+                    charName={char.name}
+                    userName={userProfile?.name || '我'}
+                    onJump={(id) => {
+                        setShowChatSearch(false);
+                        void handleJumpToMessageInChat(id);
                     }}
                 />
             )}
