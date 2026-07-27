@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import Modal from '../os/Modal';
+import ApiConnectionPicker, { ApiTriple } from '../os/ApiConnectionPicker';
 import { CharacterProfile } from '../../types';
 
 interface ProactiveSettingsModalProps {
@@ -51,9 +52,8 @@ const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
     const [enabled, setEnabled] = useState(saved?.enabled ?? false);
     const [interval, setInterval_] = useState(saved?.intervalMinutes ?? 60);
     const [useSecondaryApi, setUseSecondaryApi] = useState(saved?.useSecondaryApi ?? false);
-    const [secUrl, setSecUrl] = useState(saved?.secondaryApi?.baseUrl ?? '');
-    const [secKey, setSecKey] = useState(saved?.secondaryApi?.apiKey ?? '');
-    const [secModel, setSecModel] = useState(saved?.secondaryApi?.model ?? '');
+    // 副 API 连接（站点+模型选择器，见 ApiConnectionPicker；旧手填值原样带入）
+    const [secApi, setSecApi] = useState<ApiTriple | null>(saved?.secondaryApi ?? null);
     const [showApiSection, setShowApiSection] = useState(saved?.useSecondaryApi ?? false);
     // 睡眠窗口已迁至神经链接 → 角色设定页「睡眠时间」，这里不再编辑（见下方指路提示）
     // 主动联系倾向 0-100，默认 50
@@ -71,9 +71,7 @@ const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
             setEnabled(s?.enabled ?? false);
             setInterval_(s?.intervalMinutes ?? 60);
             setUseSecondaryApi(s?.useSecondaryApi ?? false);
-            setSecUrl(s?.secondaryApi?.baseUrl ?? '');
-            setSecKey(s?.secondaryApi?.apiKey ?? '');
-            setSecModel(s?.secondaryApi?.model ?? '');
+            setSecApi(s?.secondaryApi ?? null);
             setShowApiSection(s?.useSecondaryApi ?? false);
             setProactiveness(s?.proactiveness ?? 50);
             setMaxAttempts(s?.maxAttempts ?? 3);
@@ -86,12 +84,8 @@ const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
         onSave({
             enabled,
             intervalMinutes: interval,
-            useSecondaryApi: useSecondaryApi && !!secUrl,
-            secondaryApi: useSecondaryApi && secUrl ? {
-                baseUrl: secUrl,
-                apiKey: secKey,
-                model: secModel,
-            } : undefined,
+            useSecondaryApi: useSecondaryApi && !!secApi?.baseUrl,
+            secondaryApi: useSecondaryApi && secApi?.baseUrl ? secApi : undefined,
             // 睡眠字段原样回传：这两个旧字段是神经链接新字段的 fallback 数据源，
             // 整体替换 proactiveConfig 时不带上会把旧用户的睡眠设置顺手抹掉
             sleepStart: char.proactiveConfig?.sleepStart,
@@ -318,37 +312,8 @@ const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
                             </p>
 
                             {showApiSection && (
-                                <div className="space-y-3 bg-slate-50 rounded-2xl p-3">
-                                    <div>
-                                        <label className="text-xs text-slate-500 font-medium block mb-1">API URL</label>
-                                        <input
-                                            type="text"
-                                            value={secUrl}
-                                            onChange={e => setSecUrl(e.target.value)}
-                                            placeholder="https://api.example.com/v1"
-                                            className="w-full px-3 py-2 bg-white rounded-xl text-sm border border-slate-200 focus:border-violet-300 focus:outline-none transition-colors"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="text-xs text-slate-500 font-medium block mb-1">API Key</label>
-                                        <input
-                                            type="password"
-                                            value={secKey}
-                                            onChange={e => setSecKey(e.target.value)}
-                                            placeholder="sk-..."
-                                            className="w-full px-3 py-2 bg-white rounded-xl text-sm border border-slate-200 focus:border-violet-300 focus:outline-none transition-colors"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="text-xs text-slate-500 font-medium block mb-1">Model</label>
-                                        <input
-                                            type="text"
-                                            value={secModel}
-                                            onChange={e => setSecModel(e.target.value)}
-                                            placeholder="gpt-4o-mini"
-                                            className="w-full px-3 py-2 bg-white rounded-xl text-sm border border-slate-200 focus:border-violet-300 focus:outline-none transition-colors"
-                                        />
-                                    </div>
+                                <div className="bg-slate-50 rounded-2xl p-3">
+                                    <ApiConnectionPicker value={secApi} onChange={setSecApi} />
                                 </div>
                             )}
                         </div>

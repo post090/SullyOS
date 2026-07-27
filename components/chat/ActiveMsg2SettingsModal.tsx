@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import Modal from '../os/Modal';
+import ApiConnectionPicker, { ApiTriple } from '../os/ApiConnectionPicker';
 import { APIConfig, CharacterProfile, GroupProfile, RealtimeConfig, UserProfile } from '../../types';
 import { ActiveMsgClient, getDefaultActiveMsgFirstSendTime } from '../../utils/activeMsgClient';
 
@@ -47,9 +48,8 @@ const ActiveMsg2SettingsModal: React.FC<ActiveMsg2SettingsModalProps> = ({
   const [promptHint, setPromptHint] = useState(saved?.promptHint ?? '');
   const [maxTokens, setMaxTokens] = useState(String(saved?.maxTokens ?? ''));
   const [useSecondaryApi, setUseSecondaryApi] = useState(saved?.useSecondaryApi ?? false);
-  const [secUrl, setSecUrl] = useState(saved?.secondaryApi?.baseUrl ?? '');
-  const [secKey, setSecKey] = useState(saved?.secondaryApi?.apiKey ?? '');
-  const [secModel, setSecModel] = useState(saved?.secondaryApi?.model ?? '');
+  // 副 API 连接（站点+模型选择器；旧手填值原样带入）
+  const [secApi, setSecApi] = useState<ApiTriple | null>(saved?.secondaryApi ?? null);
   const [globalReady, setGlobalReady] = useState(false);
   const [pushSummary, setPushSummary] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -66,9 +66,7 @@ const ActiveMsg2SettingsModal: React.FC<ActiveMsg2SettingsModalProps> = ({
     setPromptHint(next?.promptHint ?? '');
     setMaxTokens(next?.maxTokens ? String(next.maxTokens) : '');
     setUseSecondaryApi(next?.useSecondaryApi ?? false);
-    setSecUrl(next?.secondaryApi?.baseUrl ?? '');
-    setSecKey(next?.secondaryApi?.apiKey ?? '');
-    setSecModel(next?.secondaryApi?.model ?? '');
+    setSecApi(next?.secondaryApi ?? null);
 
     void (async () => {
       const globalConfig = await ActiveMsgClient.getGlobalConfig();
@@ -90,11 +88,11 @@ const ActiveMsg2SettingsModal: React.FC<ActiveMsg2SettingsModalProps> = ({
     maxTokens: maxTokens.trim() ? Number(maxTokens) : undefined,
     taskUuid: saved?.taskUuid,
     remoteStatus: saved?.remoteStatus || 'idle',
-    useSecondaryApi: useSecondaryApi && !!secUrl,
-    secondaryApi: useSecondaryApi && secUrl ? {
-      baseUrl: secUrl.trim(),
-      apiKey: secKey.trim(),
-      model: secModel.trim(),
+    useSecondaryApi: useSecondaryApi && !!secApi?.baseUrl,
+    secondaryApi: useSecondaryApi && secApi?.baseUrl ? {
+      baseUrl: secApi.baseUrl.trim(),
+      apiKey: secApi.apiKey.trim(),
+      model: secApi.model.trim(),
     } : undefined,
     lastSyncedAt: saved?.lastSyncedAt,
     lastError: saved?.lastError,
@@ -297,10 +295,8 @@ const ActiveMsg2SettingsModal: React.FC<ActiveMsg2SettingsModalProps> = ({
               </div>
 
               {useSecondaryApi ? (
-                <div className="space-y-3 bg-slate-50 rounded-2xl p-3">
-                  <input value={secUrl} onChange={(event) => setSecUrl(event.target.value)} placeholder="API URL" className="w-full px-3 py-2 bg-white rounded-xl text-sm border border-slate-200" />
-                  <input type="password" value={secKey} onChange={(event) => setSecKey(event.target.value)} placeholder="API Key" className="w-full px-3 py-2 bg-white rounded-xl text-sm border border-slate-200" />
-                  <input value={secModel} onChange={(event) => setSecModel(event.target.value)} placeholder="Model" className="w-full px-3 py-2 bg-white rounded-xl text-sm border border-slate-200" />
+                <div className="bg-slate-50 rounded-2xl p-3">
+                  <ApiConnectionPicker value={secApi} onChange={setSecApi} />
                 </div>
               ) : null}
             </div>

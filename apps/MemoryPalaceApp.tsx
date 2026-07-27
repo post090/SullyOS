@@ -19,6 +19,7 @@ import { confirmExportSafety } from '../utils/exportGuard';
 import type { Message } from '../types';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
 import GlassSelect from '../components/os/GlassSelect';
+import ApiConnectionPicker from '../components/os/ApiConnectionPicker';
 import {
     CONTEXT_RANGE_POLICY_VERSION,
     DEFAULT_MANUAL_CONTEXT_LIMIT,
@@ -2701,49 +2702,16 @@ export default function MemoryPalaceApp() {
                         看不懂怎么选？直接挑一个<b>每百万 token 几毛钱</b>的模型即可，后台任务不需要推理能力。
                     </div>
 
-                    {/* API 预设快速填充 */}
-                    {apiPresets.length > 0 && (
-                        <div style={{ marginBottom: 10 }}>
-                            <label className={labelClass}>从预设导入</label>
-                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                                {apiPresets.map(p => (
-                                    <button key={p.id} onClick={() => {
-                                        setLightUrl(p.config.baseUrl);
-                                        setLightKey(p.config.apiKey);
-                                        setLightModel(p.config.model);
-                                    }} style={{
-                                        padding: '4px 10px', borderRadius: 8, fontSize: 11, fontWeight: 600,
-                                        border: '1px solid #bbf7d0', background: 'white', color: '#166534',
-                                        cursor: 'pointer',
-                                    }}>
-                                        {p.name}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                        <div>
-                            <label className={labelClass}>BASE URL</label>
-                            <input type="text" value={lightUrl} onChange={e => setLightUrl(e.target.value)}
-                                placeholder="https://..." className={inputClass} />
-                        </div>
-                        <div>
-                            <label className={labelClass}>API KEY</label>
-                            <input type="password" value={lightKey} onChange={e => setLightKey(e.target.value)}
-                                placeholder="sk-..." className={inputClass} />
-                        </div>
-                        <div>
-                            <label className={labelClass}>MODEL</label>
-                            <input type="text" value={lightModel} onChange={e => setLightModel(e.target.value)}
-                                placeholder="一个便宜的对话模型名" className={inputClass} />
-                            <div style={{ fontSize: 10, color: '#9ca3af', marginTop: 4, paddingLeft: 4 }}>
-                                填任意一家便宜的<b>对话模型</b>即可（按主 API 一样的填法），自己挑就好。
-                                注意：这里要的是跑后台文字任务的<b>对话</b>模型，<b>不是</b> embedding 向量模型——别填到下面 Embedding 区才该用的那类。
-                            </div>
-                        </div>
-                    </div>
+                    {/* API 连接：站点+模型选择器（写回 lightUrl/lightKey/lightModel，保存/测试逻辑不变） */}
+                    <ApiConnectionPicker
+                        value={lightUrl ? { baseUrl: lightUrl, apiKey: lightKey, model: lightModel } : null}
+                        onChange={cfg => {
+                            setLightUrl(cfg?.baseUrl || '');
+                            setLightKey(cfg?.apiKey || '');
+                            setLightModel(cfg?.model || '');
+                        }}
+                        hint="要的是便宜的对话模型（不是 embedding）。站点管理在 系统设置 → API 配置。"
+                    />
 
                     <button onClick={handleSaveLightApi}
                         disabled={!lightUrl.trim() || !lightKey.trim() || !lightModel.trim()}

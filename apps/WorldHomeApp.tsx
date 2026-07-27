@@ -13,6 +13,7 @@
  * 本组件只负责触发与观察——用户点完"观测"就算切去和别人私聊，演绎照样完成。
  */
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import ApiConnectionPicker from '../components/os/ApiConnectionPicker';
 import { useOS } from '../context/OSContext';
 import {
     ArrowLeft, Plus, GearSix, Trash, House, UsersThree,
@@ -75,8 +76,6 @@ const WorldApiSettings: React.FC<{
     onClose: () => void;
 }> = ({ apiConfig, apiPresets, current, onChoose, onClose }) => {
     const host = (u?: string) => { try { return u ? new URL(u).host : '—'; } catch { return u || '—'; } };
-    const follow = !current?.baseUrl;
-    const sameAs = (c: APIConfig) => !follow && current!.baseUrl === c.baseUrl && current!.model === c.model && current!.apiKey === c.apiKey;
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onClick={onClose}>
             <div className="w-full max-w-md bg-[#f7f3ea] rounded-3xl p-4 max-h-[80%] overflow-y-auto no-scrollbar shadow-2xl" onClick={e => e.stopPropagation()}>
@@ -84,29 +83,14 @@ const WorldApiSettings: React.FC<{
                     <h3 className="text-[15px] font-black text-stone-800 font-serif">家园 · API</h3>
                     <button onClick={onClose} className="p-1.5 rounded-full hover:bg-black/5"><X size={16} weight="bold" className="text-stone-500" /></button>
                 </div>
-                <p className="text-[11px] text-stone-400 leading-relaxed mb-3">家园演绎比较费 API，可在这里单独指定一份（<b className="text-stone-500">所有世界共用</b>）；不设则跟随全局聊天默认。</p>
-                <button onClick={() => onChoose(null)} className={`w-full flex items-center gap-2 rounded-xl p-3 mb-1.5 text-left border transition-all ${follow ? 'bg-stone-900 border-stone-900 text-white shadow' : 'bg-white border-stone-200 text-stone-700'}`}>
-                    <div className="flex-1 min-w-0">
-                        <div className="text-[12.5px] font-bold">跟随全局默认</div>
-                        <div className={`text-[10px] truncate ${follow ? 'text-white/60' : 'text-stone-400'}`}>{apiConfig?.model || '未配置'} · {host(apiConfig?.baseUrl)}</div>
-                    </div>
-                    {follow && <span className="text-[10px] font-bold shrink-0">✓ 使用中</span>}
-                </button>
-                {apiPresets.length === 0 ? (
-                    <p className="text-[10.5px] text-stone-400 px-1 py-1.5">「设置」里还没有保存的 API 预设——去设置里存几个模型，这里就能直接选。</p>
-                ) : apiPresets.map(p => {
-                    const on = sameAs(p.config);
-                    return (
-                        <button key={p.id} onClick={() => onChoose({ baseUrl: p.config.baseUrl, apiKey: p.config.apiKey, model: p.config.model })}
-                            className={`w-full flex items-center gap-2 rounded-xl p-3 mb-1.5 text-left border transition-all ${on ? 'bg-stone-900 border-stone-900 text-white shadow' : 'bg-white border-stone-200 text-stone-700'}`}>
-                            <div className="flex-1 min-w-0">
-                                <div className="text-[12.5px] font-bold truncate">{p.name}</div>
-                                <div className={`text-[10px] truncate ${on ? 'text-white/60' : 'text-stone-400'}`}>{p.config.model} · {host(p.config.baseUrl)}</div>
-                            </div>
-                            {on && <span className="text-[10px] font-bold shrink-0">✓ 使用中</span>}
-                        </button>
-                    );
-                })}
+                <p className="text-[11px] text-stone-400 leading-relaxed mb-3">家园演绎比较费 API，可在这里单独指定一份（<b className="text-stone-500">所有世界共用</b>）；不设则跟随全局聊天默认。站点管理在 系统设置 → API 配置。</p>
+                <ApiConnectionPicker
+                    value={current}
+                    onChange={onChoose}
+                    followLabel="跟随全局默认"
+                    followSub={`${apiConfig?.model || '未配置'} · ${host(apiConfig?.baseUrl)}`}
+                    hint={null}
+                />
             </div>
         </div>
     );

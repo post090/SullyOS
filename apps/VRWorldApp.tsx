@@ -16,6 +16,7 @@ import { VR_ROOMS, getRoom, VR_DEFAULT_INTERVAL_MIN, SIGNAL_EPIGRAPH, signalActF
 import { buildNovelAsync, groupAnnotationsBySeg, getBookmark } from '../utils/vrWorld/novel';
 import { decodeBytes } from '../utils/vrWorld/decodeText';
 import { getSleepWindow } from '../utils/sleepSchedule';
+import ApiConnectionPicker from '../components/os/ApiConnectionPicker';
 import { stripLeakedAttrs } from '../utils/vrWorld/prompts';
 import { PostOffice, MAX_LETTER_CHARS, exportIdentity, importIdentity, getAdminToken, setAdminToken, type RemoteReply, type RemoteLetterStat, type RemoteAdminLetter } from '../utils/vrWorld/postOffice';
 import { Signal, getMyAuthorship, setSignalWhisper, hasSignalNoticeAck, ackSignalNotice, type SignalState } from '../utils/vrWorld/signal';
@@ -3403,7 +3404,6 @@ const VRApiSettings: React.FC<{ apiPresets: ApiPreset[]; chatApi: APIConfig; add
     const [log, setLog] = useState<VRApiCall[]>([]);
     const [testing, setTesting] = useState(false);
     const [testResult, setTestResult] = useState<string | null>(null);
-    const [presetsOpen, setPresetsOpen] = useState(false);   // 折叠「保存的预设」长列表
 
     useEffect(() => {
         void getVRApi().then(setVr);
@@ -3415,7 +3415,6 @@ const VRApiSettings: React.FC<{ apiPresets: ApiPreset[]; chatApi: APIConfig; add
 
     const follow = !vrApi?.baseUrl;
     const effective = follow ? chatApi : vrApi!;
-    const sameAs = (c: APIConfig) => !follow && vrApi!.baseUrl === c.baseUrl && vrApi!.model === c.model && vrApi!.apiKey === c.apiKey;
     const host = (u?: string) => { try { return u ? new URL(u).host : '—'; } catch { return u || '—'; } };
 
     const choose = (cfg: APIConfig | null) => {
@@ -3458,50 +3457,16 @@ const VRApiSettings: React.FC<{ apiPresets: ApiPreset[]; chatApi: APIConfig; add
                 {testResult && <div className={`mt-2 text-[10.5px] px-2.5 py-1.5 rounded-lg leading-snug ${testResult.startsWith('连接成功') ? 'text-emerald-300' : 'text-rose-300'}`} style={{ background: 'rgba(0,0,0,.25)' }}>{testResult}</div>}
             </div>
 
-            {/* 选择 API */}
+            {/* 选择 API：站点+模型选择器（站点管理在 系统设置 → API 配置） */}
             <div>
                 <div className="text-[10px] tracking-[0.2em] text-indigo-200/55 mb-1.5 px-0.5" style={{ fontFamily: `'Noto Serif SC',serif` }}>选择彼方 API</div>
-                <button onClick={() => choose(null)}
-                    className="w-full flex items-center gap-2 rounded-xl p-3 mb-1.5 text-left active:scale-[0.99] transition-transform"
-                    style={{ background: follow ? 'rgba(120,180,255,.12)' : 'rgba(255,255,255,.04)', border: `1px solid ${follow ? 'rgba(140,180,255,.4)' : 'rgba(255,255,255,.07)'}` }}>
-                    <div className="flex-1 min-w-0">
-                        <div className="text-[12px] text-white/90 font-semibold">跟随聊天默认</div>
-                        <div className="text-[10px] text-white/40 truncate">{chatApi?.model || '未配置'} · {host(chatApi?.baseUrl)}</div>
-                    </div>
-                    {follow && <span className="text-[10px] text-sky-300 font-bold shrink-0">✓ 使用中</span>}
-                </button>
-                {apiPresets.length === 0 ? (
-                    <p className="text-[10.5px] text-white/35 px-1 py-1.5">「设置」里还没有保存的 API 预设。去设置里保存几个模型，这里就能选。</p>
-                ) : (() => {
-                    const activePreset = apiPresets.find(p => sameAs(p.config));
-                    const shown = presetsOpen ? apiPresets : (activePreset ? [activePreset] : []);
-                    return (
-                        <>
-                            <button onClick={() => setPresetsOpen(o => !o)}
-                                className="w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 mb-1.5 text-left active:bg-white/5"
-                                style={{ border: '1px solid rgba(255,255,255,.07)' }}>
-                                <span className="text-[10.5px] text-white/55">保存的预设</span>
-                                <span className="text-[9.5px] text-white/35 rounded-full px-1.5 leading-tight" style={{ background: 'rgba(255,255,255,.08)' }}>{apiPresets.length}</span>
-                                {!presetsOpen && activePreset && <span className="text-[9.5px] text-sky-300/70 truncate">当前 · {activePreset.name}</span>}
-                                <span className="ml-auto text-[10px] text-white/40">{presetsOpen ? '收起' : '展开'}</span>
-                            </button>
-                            {shown.map(p => {
-                                const on = sameAs(p.config);
-                                return (
-                                    <button key={p.id} onClick={() => choose(p.config)}
-                                        className="w-full flex items-center gap-2 rounded-xl p-3 mb-1.5 text-left active:scale-[0.99] transition-transform"
-                                        style={{ background: on ? 'rgba(120,180,255,.12)' : 'rgba(255,255,255,.04)', border: `1px solid ${on ? 'rgba(140,180,255,.4)' : 'rgba(255,255,255,.07)'}` }}>
-                                        <div className="flex-1 min-w-0">
-                                            <div className="text-[12px] text-white/90 font-semibold truncate">{p.name}</div>
-                                            <div className="text-[10px] text-white/40 truncate">{p.config.model} · {host(p.config.baseUrl)}</div>
-                                        </div>
-                                        {on && <span className="text-[10px] text-sky-300 font-bold shrink-0">✓ 使用中</span>}
-                                    </button>
-                                );
-                            })}
-                        </>
-                    );
-                })()}
+                <ApiConnectionPicker
+                    value={follow ? null : { baseUrl: vrApi!.baseUrl, apiKey: vrApi!.apiKey, model: vrApi!.model }}
+                    onChange={cfg => choose(cfg)}
+                    followLabel="跟随聊天默认"
+                    followSub={`${chatApi?.model || '未配置'} · ${host(chatApi?.baseUrl)}`}
+                    hint="站点与模型在 系统设置 → API 配置 里统一管理。"
+                />
             </div>
 
             {/* 调用记录 */}
