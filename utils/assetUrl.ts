@@ -62,6 +62,29 @@ export function mirrorsForUrl(url: string): string[] {
     return p ? assetMirrors(p) : [url];
 }
 
+// ─── 外链图片（用户自己的图床：catbox 等）镜像兜底 ────────────────────
+// 背景：表情包等用户素材常挂在境外图床（尤其 catbox.moe，在大陆直连基本必死），
+// 手机没代理就整排裂图。这里给任意 http(s) 外链生成一串公共图片代理镜像：
+// 原链优先（能直连就不绕路），裂了再依次走 wsrv.nl / images.weserv.nl（同一服务的
+// 两个域名，被墙情况常不同步）/ i0.wp.com（Automattic Photon，独立网络）。
+// data:/blob:/相对路径等非外链原样单条返回（行为等同普通 <img>）。
+export function externalImageMirrors(url: string): string[] {
+    if (!/^https?:\/\//i.test(url)) return [url];
+    const mirrors = [url];
+    // wsrv/weserv：&n=-1 保留 GIF 动图全部帧（静图无副作用）
+    const encoded = encodeURIComponent(url);
+    mirrors.push(`https://wsrv.nl/?url=${encoded}&n=-1`);
+    mirrors.push(`https://images.weserv.nl/?url=${encoded}&n=-1`);
+    // Photon 只吃“host/路径”形态且不支持源 url 自带 query
+    try {
+        const u = new URL(url);
+        if (!u.search) {
+            mirrors.push(`https://i0.wp.com/${u.host}${u.pathname}${u.protocol === 'https:' ? '?ssl=1' : ''}`);
+        }
+    } catch { /* 解析失败就不加 photon */ }
+    return mirrors;
+}
+
 // ─── 运行时探测（浏览器）────────────────────────────────────────────────────
 // 探测结果缓存（key=主源 url）：整个会话每个素材只探一次，命中直接复用。
 const probed = new Map<string, string>();

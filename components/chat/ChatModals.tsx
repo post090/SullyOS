@@ -1,6 +1,7 @@
 
 import React, { useRef, useState } from 'react';
 import Modal from '../os/Modal';
+import NetImg from '../os/NetImg';
 import { CharacterProfile, Message, EmojiCategory, DailySchedule, ScheduleSlot, ApiPreset, APIConfig } from '../../types';
 import ScheduleCard from '../schedule/ScheduleCard';
 import EmotionSettingsPanel from './EmotionSettingsPanel';
@@ -873,7 +874,7 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                     {Array.isArray(selectedEmoji) ? (
                         <div className="flex flex-wrap justify-center gap-2 max-h-48 overflow-y-auto no-scrollbar w-full px-2">
                             {selectedEmoji.map((e: any, idx: number) => (
-                                <img key={idx} src={e.url} className="w-16 h-16 object-contain rounded-xl border border-slate-200" />
+                                <NetImg key={idx} src={e.url} className="w-16 h-16 object-contain rounded-xl border border-slate-200" />
                             ))}
                         </div>
                     ) : (

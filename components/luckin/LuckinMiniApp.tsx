@@ -18,6 +18,7 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import NetImg from '../os/NetImg';
 import { callLuckinTool, isLuckinConfigured, listLuckinTools } from '../../utils/luckinMcpClient';
 import { autoFixProposalCodesByName } from '../../utils/luckinToolBridge';
 import { luckinItemEmoji } from '../../utils/luckinEmoji';
@@ -853,7 +854,7 @@ const InAppChat: React.FC<{
                                             onAddAll={(items: LuckinProposalItem[]) => onAddAllFromProposal?.(items)}
                                         />
                                     ) : m.type === 'emoji' ? (
-                                        <img
+                                        <NetImg
                                             src={m.content}
                                             alt="表情"
                                             className="w-20 h-20 sm:w-24 sm:h-24 object-contain rounded-lg bg-white/40 p-1"
