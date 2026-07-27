@@ -84,7 +84,7 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
 }) => {
     const chatImageInputRef = useRef<HTMLInputElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
-    const [actionsPage, setActionsPage] = useState<0 | 1>(0);
+    const [actionsPage, setActionsPage] = useState<0 | 1 | 2>(0);
     // 气泡样式面板：搜索 + 两步确认删除（防止 hover 小 × 误删）
     const [bubbleSearch, setBubbleSearch] = useState('');
     // 会话面板的主要用途仍是切换聊天；气泡选择作为次级工具默认收起。
@@ -208,8 +208,8 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
         actionsSwipeStart.current = null;
         const SWIPE_THRESHOLD = 40;
         if (Math.abs(dx) > SWIPE_THRESHOLD && Math.abs(dx) > Math.abs(dy)) {
-            if (dx < 0 && actionsPage === 0) setActionsPage(1);
-            else if (dx > 0 && actionsPage === 1) setActionsPage(0);
+            if (dx < 0) setActionsPage(p => (Math.min(2, p + 1) as 0 | 1 | 2));
+            else setActionsPage(p => (Math.max(0, p - 1) as 0 | 1 | 2));
         }
     };
 
@@ -649,34 +649,41 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                             onClickCapture={handleActionsClickCapture}
                         >
                           <div className={`p-6 grid grid-cols-4 gap-8 ${actionsPage === 0 ? '' : 'hidden'}`}>
-                            {/* 见面：直接跳到该角色的见面模式（等同于进见面 App 并点击该角色） */}
-                            <button onClick={() => onPanelAction('meetup')} className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${acnh ? 'text-[#725d42]' : isDiscordStyle ? 'text-slate-200' : 'text-slate-600'}`}>
-                                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border ${isDiscordStyle ? 'bg-slate-800 text-violet-300 border-violet-400/20' : 'bg-violet-50 text-violet-500 border-violet-100'}`}>
-                                    <Sparkle className="w-6 h-6" weight="fill" />
-                                </div>
-                                <span className="text-xs font-bold">见面</span>
+                            {/* API 配置：该角色独立主 API + 副 API 聚合（CharApiHubModal）——新功能置顶 */}
+                            <button
+                              onClick={() => onPanelAction('api-hub')}
+                              className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${acnh ? 'text-[#725d42]' : isDiscordStyle ? 'text-slate-200' : 'text-slate-600'}`}
+                            >
+                              <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border ${acnh ? 'bg-white/70 border-[#e6dab4] text-[#6a9edb]' : isDiscordStyle ? 'bg-slate-800 text-blue-300 border-blue-400/20' : 'bg-blue-50 text-blue-500 border-blue-100'}`}>
+                                  <Plugs className="w-6 h-6" weight="bold" />
+                              </div>
+                              <span className="text-xs font-bold">API 配置</span>
                             </button>
 
-                            <button onClick={() => onPanelAction('transfer')} className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${acnh ? 'text-[#725d42]' : isDiscordStyle ? 'text-slate-200' : 'text-slate-600'}`}>
-                                {acnh ? <AcnhActionTile kind="transfer" /> : (
-                                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border ${isDiscordStyle ? 'bg-slate-800 text-orange-300 border-orange-400/20' : 'bg-orange-50 text-orange-400 border-orange-100'}`}>
-                                    <Money className="w-6 h-6" weight="bold" />
+                            {/* 搜索记录：搜当前角色聊天记录并跳转楼层（ChatSearchModal）——新功能置顶 */}
+                            <button
+                              onClick={() => onPanelAction('chat-search')}
+                              className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${acnh ? 'text-[#725d42]' : isDiscordStyle ? 'text-slate-200' : 'text-slate-600'}`}
+                            >
+                              <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border ${acnh ? 'bg-white/70 border-[#e6dab4] text-[#5fae6e]' : isDiscordStyle ? 'bg-slate-800 text-emerald-300 border-emerald-400/20' : 'bg-emerald-50 text-emerald-500 border-emerald-100'}`}>
+                                  <MagnifyingGlass className="w-6 h-6" weight="bold" />
+                              </div>
+                              <span className="text-xs font-bold">搜索记录</span>
+                            </button>
+
+                            {/* Regenerate Button */}
+                            <button onClick={onReroll} disabled={!canReroll} className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${canReroll ? (isDiscordStyle ? 'text-slate-200' : 'text-slate-600') : 'text-slate-300 opacity-50'}`}>
+                                {acnh ? <AcnhActionTile kind="regenerate" /> : (
+                                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border ${canReroll ? (isDiscordStyle ? 'bg-slate-800 text-emerald-300 border-emerald-400/20' : 'bg-emerald-50 text-emerald-400 border-emerald-100') : (isDiscordStyle ? 'bg-slate-800 text-slate-600 border-white/10' : 'bg-slate-50 text-slate-300 border-slate-100')}`}>
+                                    <ArrowsClockwise className="w-6 h-6" weight="bold" />
                                 </div>)}
-                                <span className="text-xs font-bold">转账</span>
+                                <span className="text-xs font-bold">重新生成</span>
                             </button>
                             
                             <button onClick={() => onPanelAction('poke')} className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${acnh ? 'text-[#725d42]' : isDiscordStyle ? 'text-slate-200' : 'text-slate-600'}`}>
                                 {acnh ? <AcnhActionTile kind="poke" /> : (
                                 <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border ${isDiscordStyle ? 'bg-slate-800 border-sky-400/20' : 'bg-sky-50 border-sky-100'}`}><img src="https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f449.png" alt="poke" className="w-6 h-6" /></div>)}
                                 <span className="text-xs font-bold">戳一戳</span>
-                            </button>
-                            
-                            <button onClick={() => onPanelAction('archive')} className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${acnh ? 'text-[#725d42]' : isDiscordStyle ? 'text-slate-200' : 'text-slate-600'}`}>
-                                {acnh ? <AcnhActionTile kind="archive" /> : (
-                                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border ${isDiscordStyle ? 'bg-slate-800 text-indigo-300 border-indigo-400/20' : 'bg-indigo-50 text-indigo-400 border-indigo-100'}`}>
-                                    <BookOpenText className="w-6 h-6" weight="bold" />
-                                </div>)}
-                                <span className="text-xs font-bold">{isSummarizing ? '归档中...' : '记忆归档'}</span>
                             </button>
                             
                             <button onClick={() => onPanelAction('settings')} className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${acnh ? 'text-[#725d42]' : isDiscordStyle ? 'text-slate-200' : 'text-slate-600'}`}>
@@ -695,13 +702,12 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                             </button>
                             <input type="file" ref={chatImageInputRef} className="hidden" accept="image/*" onChange={(e) => handleImageChange(e, 'chat')} />
 
-                            {/* Regenerate Button */}
-                            <button onClick={onReroll} disabled={!canReroll} className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${canReroll ? (isDiscordStyle ? 'text-slate-200' : 'text-slate-600') : 'text-slate-300 opacity-50'}`}>
-                                {acnh ? <AcnhActionTile kind="regenerate" /> : (
-                                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border ${canReroll ? (isDiscordStyle ? 'bg-slate-800 text-emerald-300 border-emerald-400/20' : 'bg-emerald-50 text-emerald-400 border-emerald-100') : (isDiscordStyle ? 'bg-slate-800 text-slate-600 border-white/10' : 'bg-slate-50 text-slate-300 border-slate-100')}`}>
-                                    <ArrowsClockwise className="w-6 h-6" weight="bold" />
+                            <button onClick={() => onPanelAction('transfer')} className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${acnh ? 'text-[#725d42]' : isDiscordStyle ? 'text-slate-200' : 'text-slate-600'}`}>
+                                {acnh ? <AcnhActionTile kind="transfer" /> : (
+                                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border ${isDiscordStyle ? 'bg-slate-800 text-orange-300 border-orange-400/20' : 'bg-orange-50 text-orange-400 border-orange-100'}`}>
+                                    <Money className="w-6 h-6" weight="bold" />
                                 </div>)}
-                                <span className="text-xs font-bold">重新生成</span>
+                                <span className="text-xs font-bold">转账</span>
                             </button>
 
                             {/* 情绪按钮已并入日程 — 情绪/意识流与日程强制同步，配置面板在日程 Modal 下方 */}
@@ -717,8 +723,24 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
 
                           </div>
 
-                          {/* Page 1: 外部服务 */}
+                          {/* Page 1: 进阶功能（第一页自然溢出 + 原第二页） */}
                           <div className={`p-6 grid grid-cols-4 gap-8 ${actionsPage === 1 ? '' : 'hidden'}`}>
+                            {/* 见面：直接跳到该角色的见面模式（等同于进见面 App 并点击该角色） */}
+                            <button onClick={() => onPanelAction('meetup')} className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${acnh ? 'text-[#725d42]' : isDiscordStyle ? 'text-slate-200' : 'text-slate-600'}`}>
+                                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border ${isDiscordStyle ? 'bg-slate-800 text-violet-300 border-violet-400/20' : 'bg-violet-50 text-violet-500 border-violet-100'}`}>
+                                    <Sparkle className="w-6 h-6" weight="fill" />
+                                </div>
+                                <span className="text-xs font-bold">见面</span>
+                            </button>
+
+                            <button onClick={() => onPanelAction('archive')} className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${acnh ? 'text-[#725d42]' : isDiscordStyle ? 'text-slate-200' : 'text-slate-600'}`}>
+                                {acnh ? <AcnhActionTile kind="archive" /> : (
+                                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border ${isDiscordStyle ? 'bg-slate-800 text-indigo-300 border-indigo-400/20' : 'bg-indigo-50 text-indigo-400 border-indigo-100'}`}>
+                                    <BookOpenText className="w-6 h-6" weight="bold" />
+                                </div>)}
+                                <span className="text-xs font-bold">{isSummarizing ? '归档中...' : '记忆归档'}</span>
+                            </button>
+
                             {/* Proactive Message Button（从第一页移到第二页） */}
                             <button onClick={() => onPanelAction('proactive')} className={`flex flex-col items-center gap-2 active:scale-95 transition-transform relative ${acnh ? 'text-[#725d42]' : isDiscordStyle ? 'text-slate-200' : 'text-slate-600'}`}>
                                 {acnh ? <AcnhActionTile kind="proactive" /> : (
@@ -727,44 +749,6 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                                 </div>)}
                                 <span className="text-xs font-bold">主动消息</span>
                                 {isProactiveActive && <span className={`absolute top-0 right-1 w-2.5 h-2.5 rounded-full border-2 ${isDiscordStyle ? 'bg-violet-400 border-slate-900' : 'bg-violet-500 border-white'}`} />}
-                            </button>
-
-                            <button
-                              onClick={() => {
-                                if (!mcdConfigured) { onPanelAction('mcd-not-configured'); return; }
-                                onPanelAction(mcdActivated ? 'mcd-end' : 'mcd-request');
-                              }}
-                              className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${acnh ? 'text-[#725d42]' : isDiscordStyle ? 'text-slate-200' : 'text-slate-600'} ${!mcdConfigured ? 'opacity-50' : ''}`}
-                            >
-                              {acnh ? <div className="relative"><AcnhActionTile kind="mcd" />{mcdActivated && <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-[#fc736d] border-2 border-white" />}</div> : (
-                              <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border relative ${
-                                  mcdActivated
-                                    ? (isDiscordStyle ? 'bg-yellow-500/20 text-yellow-300 border-yellow-400/40' : 'bg-yellow-100 text-yellow-700 border-yellow-300')
-                                    : (isDiscordStyle ? 'bg-slate-800 text-yellow-300 border-yellow-400/20' : 'bg-yellow-50 text-yellow-600 border-yellow-100')
-                              }`}>
-                                  <ForkKnife className="w-6 h-6" weight="bold" />
-                                  {mcdActivated && <span className={`absolute -top-1 -right-1 w-3 h-3 rounded-full border-2 ${isDiscordStyle ? 'bg-yellow-300 border-slate-900' : 'bg-yellow-500 border-white'}`} />}
-                              </div>)}
-                              <span className="text-xs font-bold">{mcdActivated ? '结束麦请求' : '麦当劳'}</span>
-                            </button>
-
-                            {/* 瑞幸 MCP (与麦当劳同构) */}
-                            <button
-                              onClick={() => {
-                                if (!luckinConfigured) { onPanelAction('luckin-not-configured'); return; }
-                                onPanelAction(luckinActivated ? 'luckin-end' : 'luckin-request');
-                              }}
-                              className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${acnh ? 'text-[#725d42]' : isDiscordStyle ? 'text-slate-200' : 'text-slate-600'} ${!luckinConfigured ? 'opacity-50' : ''}`}
-                            >
-                              <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border relative ${
-                                  luckinActivated
-                                    ? (isDiscordStyle ? 'bg-[#0B1F3A]/30 text-[#C6A15B] border-[#C6A15B]/40' : 'bg-[#0B1F3A] text-[#C6A15B] border-[#0B1F3A]')
-                                    : (isDiscordStyle ? 'bg-slate-800 text-[#C6A15B] border-[#C6A15B]/20' : 'bg-[#0B1F3A]/5 text-[#0B1F3A] border-[#0B1F3A]/15')
-                              }`}>
-                                  <Coffee className="w-6 h-6" weight="bold" />
-                                  {luckinActivated && <span className={`absolute -top-1 -right-1 w-3 h-3 rounded-full border-2 ${isDiscordStyle ? 'bg-[#C6A15B] border-slate-900' : 'bg-[#C6A15B] border-white'}`} />}
-                              </div>
-                              <span className="text-xs font-bold">{luckinActivated ? '结束瑞一杯' : '瑞一杯'}</span>
                             </button>
 
                             {/* HTML 模块模式：tap = 切换开关 (注入提示词); 长按打开自定义提示词设置 */}
@@ -834,27 +818,46 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                               </div>
                               <span className="text-xs font-bold">提示音</span>
                             </button>
+                          </div>
 
-                            {/* API 配置：该角色独立主 API + 副 API 聚合（CharApiHubModal） */}
+                          {/* Page 2: 外部服务（麦当劳 / 瑞幸 MCP） */}
+                          <div className={`p-6 grid grid-cols-4 gap-8 ${actionsPage === 2 ? '' : 'hidden'}`}>
                             <button
-                              onClick={() => onPanelAction('api-hub')}
-                              className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${acnh ? 'text-[#725d42]' : isDiscordStyle ? 'text-slate-200' : 'text-slate-600'}`}
+                              onClick={() => {
+                                if (!mcdConfigured) { onPanelAction('mcd-not-configured'); return; }
+                                onPanelAction(mcdActivated ? 'mcd-end' : 'mcd-request');
+                              }}
+                              className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${acnh ? 'text-[#725d42]' : isDiscordStyle ? 'text-slate-200' : 'text-slate-600'} ${!mcdConfigured ? 'opacity-50' : ''}`}
                             >
-                              <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border ${acnh ? 'bg-white/70 border-[#e6dab4] text-[#6a9edb]' : isDiscordStyle ? 'bg-slate-800 text-blue-300 border-blue-400/20' : 'bg-blue-50 text-blue-500 border-blue-100'}`}>
-                                  <Plugs className="w-6 h-6" weight="bold" />
-                              </div>
-                              <span className="text-xs font-bold">API 配置</span>
+                              {acnh ? <div className="relative"><AcnhActionTile kind="mcd" />{mcdActivated && <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-[#fc736d] border-2 border-white" />}</div> : (
+                              <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border relative ${
+                                  mcdActivated
+                                    ? (isDiscordStyle ? 'bg-yellow-500/20 text-yellow-300 border-yellow-400/40' : 'bg-yellow-100 text-yellow-700 border-yellow-300')
+                                    : (isDiscordStyle ? 'bg-slate-800 text-yellow-300 border-yellow-400/20' : 'bg-yellow-50 text-yellow-600 border-yellow-100')
+                              }`}>
+                                  <ForkKnife className="w-6 h-6" weight="bold" />
+                                  {mcdActivated && <span className={`absolute -top-1 -right-1 w-3 h-3 rounded-full border-2 ${isDiscordStyle ? 'bg-yellow-300 border-slate-900' : 'bg-yellow-500 border-white'}`} />}
+                              </div>)}
+                              <span className="text-xs font-bold">{mcdActivated ? '结束麦请求' : '麦当劳'}</span>
                             </button>
 
-                            {/* 搜索记录：搜当前角色聊天记录并跳转楼层（ChatSearchModal） */}
+                            {/* 瑞幸 MCP (与麦当劳同构) */}
                             <button
-                              onClick={() => onPanelAction('chat-search')}
-                              className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${acnh ? 'text-[#725d42]' : isDiscordStyle ? 'text-slate-200' : 'text-slate-600'}`}
+                              onClick={() => {
+                                if (!luckinConfigured) { onPanelAction('luckin-not-configured'); return; }
+                                onPanelAction(luckinActivated ? 'luckin-end' : 'luckin-request');
+                              }}
+                              className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${acnh ? 'text-[#725d42]' : isDiscordStyle ? 'text-slate-200' : 'text-slate-600'} ${!luckinConfigured ? 'opacity-50' : ''}`}
                             >
-                              <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border ${acnh ? 'bg-white/70 border-[#e6dab4] text-[#5fae6e]' : isDiscordStyle ? 'bg-slate-800 text-emerald-300 border-emerald-400/20' : 'bg-emerald-50 text-emerald-500 border-emerald-100'}`}>
-                                  <MagnifyingGlass className="w-6 h-6" weight="bold" />
+                              <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border relative ${
+                                  luckinActivated
+                                    ? (isDiscordStyle ? 'bg-[#0B1F3A]/30 text-[#C6A15B] border-[#C6A15B]/40' : 'bg-[#0B1F3A] text-[#C6A15B] border-[#0B1F3A]')
+                                    : (isDiscordStyle ? 'bg-slate-800 text-[#C6A15B] border-[#C6A15B]/20' : 'bg-[#0B1F3A]/5 text-[#0B1F3A] border-[#0B1F3A]/15')
+                              }`}>
+                                  <Coffee className="w-6 h-6" weight="bold" />
+                                  {luckinActivated && <span className={`absolute -top-1 -right-1 w-3 h-3 rounded-full border-2 ${isDiscordStyle ? 'bg-[#C6A15B] border-slate-900' : 'bg-[#C6A15B] border-white'}`} />}
                               </div>
-                              <span className="text-xs font-bold">搜索记录</span>
+                              <span className="text-xs font-bold">{luckinActivated ? '结束瑞一杯' : '瑞一杯'}</span>
                             </button>
                           </div>
 
@@ -871,6 +874,12 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                               aria-label="第 2 页"
                               onClick={() => setActionsPage(1)}
                               className={`w-2 h-2 rounded-full transition-all ${actionsPage === 1 ? (isDiscordStyle ? 'bg-slate-200 w-5' : 'bg-slate-500 w-5') : (isDiscordStyle ? 'bg-slate-600' : 'bg-slate-300')}`}
+                            />
+                            <button
+                              type="button"
+                              aria-label="第 3 页"
+                              onClick={() => setActionsPage(2)}
+                              className={`w-2 h-2 rounded-full transition-all ${actionsPage === 2 ? (isDiscordStyle ? 'bg-slate-200 w-5' : 'bg-slate-500 w-5') : (isDiscordStyle ? 'bg-slate-600' : 'bg-slate-300')}`}
                             />
                           </div>
                         </div>

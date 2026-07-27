@@ -1,9 +1,15 @@
 /**
  * 玻璃拟态下拉选择器 — 替代原生 <select>（安卓原生弹窗太出戏）。
- * 按钮 + 就地弹出的圆角磨砂卡片列表，选中项主题色高亮。
- * Settings 的站点/模型下拉和 API 悬浮球面板共用。
+ * 按钮 + 弹出的圆角磨砂卡片列表，选中项主题色高亮。
+ * Settings 的站点/模型下拉、API 悬浮球面板、角色「API 配置」聚合面板共用。
+ *
+ * 弹出层用 portal 挂到 body（fixed 定位、按钮测距锚定）：
+ * 老版本就地 absolute 弹出，在 Modal（overflow-hidden + 内容区 60vh 滚动）里
+ * 会被弹窗框剪裁得看不完整。portal 版不受任何祖先 overflow/transform 裁剪，
+ * 并且会算可用空间：下方不够就向上翻，高度跟着视口自适应（选项多也能滚完）。
  */
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 
 export interface GlassSelectOption {
     value: string;
@@ -20,18 +26,67 @@ interface GlassSelectProps {
     compact?: boolean;  // 悬浮球面板用的小号样式
 }
 
+/** 弹层与按钮的间距 / 距视口边缘的安全距离 / 高度上限 */
+const GAP = 6;
+const EDGE = 12;
+const MAX_MENU_H = 320;
+
+interface MenuPos {
+    left: number;
+    width: number;
+    top?: number;      // 向下展开时用
+    bottom?: number;   // 向上翻时用（距视口底部）
+    maxHeight: number;
+}
+
 const GlassSelect: React.FC<GlassSelectProps> = ({ value, options, onChange, placeholder = '请选择…', disabled, compact }) => {
     const [open, setOpen] = useState(false);
+    const [pos, setPos] = useState<MenuPos | null>(null);
     const rootRef = useRef<HTMLDivElement>(null);
+    const menuRef = useRef<HTMLDivElement>(null);
 
-    // 点组件外面 → 收起
+    // 打开时按钮测距 → 决定朝向和高度（选项很多时吃满可用空间再内部滚动）
+    useLayoutEffect(() => {
+        if (!open) { setPos(null); return; }
+        const btn = rootRef.current;
+        if (!btn) return;
+        const r = btn.getBoundingClientRect();
+        const vh = window.innerHeight;
+        const spaceBelow = vh - r.bottom - GAP - EDGE;
+        const spaceAbove = r.top - GAP - EDGE;
+        // 下方放得下（或下方比上方大）就向下，否则向上翻
+        const downward = spaceBelow >= Math.min(MAX_MENU_H, 200) || spaceBelow >= spaceAbove;
+        const avail = Math.max(120, downward ? spaceBelow : spaceAbove);
+        setPos({
+            left: r.left,
+            width: r.width,
+            ...(downward ? { top: r.bottom + GAP } : { bottom: vh - r.top + GAP }),
+            maxHeight: Math.min(MAX_MENU_H, avail),
+        });
+    }, [open]);
+
+    // 点弹层和按钮以外的地方 → 收起；页面滚动/尺寸变化 → 收起（锚点会漂移，重开最稳）
     useEffect(() => {
         if (!open) return;
         const onDown = (e: PointerEvent) => {
-            if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+            const t = e.target as Node;
+            if (rootRef.current?.contains(t)) return;
+            if (menuRef.current?.contains(t)) return;
+            setOpen(false);
+        };
+        const onScroll = (e: Event) => {
+            // 弹层内部列表自己滚不算——只有外层页面滚动才收起
+            if (menuRef.current && e.target instanceof Node && menuRef.current.contains(e.target)) return;
+            setOpen(false);
         };
         document.addEventListener('pointerdown', onDown, true);
-        return () => document.removeEventListener('pointerdown', onDown, true);
+        window.addEventListener('scroll', onScroll, true);
+        window.addEventListener('resize', onScroll);
+        return () => {
+            document.removeEventListener('pointerdown', onDown, true);
+            window.removeEventListener('scroll', onScroll, true);
+            window.removeEventListener('resize', onScroll);
+        };
     }, [open]);
 
     const selected = options.find(o => o.value === value);
@@ -57,9 +112,13 @@ const GlassSelect: React.FC<GlassSelectProps> = ({ value, options, onChange, pla
                 </svg>
             </button>
 
-            {open && (
-                <div className="absolute left-0 right-0 top-full mt-1.5 z-50 rounded-2xl bg-white/95 backdrop-blur-xl shadow-xl border border-slate-200/60 py-1.5 overflow-hidden animate-[fadeIn_120ms_ease-out]">
-                    <div className="max-h-52 overflow-y-auto no-scrollbar">
+            {open && pos && createPortal(
+                <div
+                    ref={menuRef}
+                    className="fixed z-[300] rounded-2xl bg-white/95 backdrop-blur-xl shadow-xl border border-slate-200/60 py-1.5 overflow-hidden animate-[fadeIn_120ms_ease-out]"
+                    style={{ left: pos.left, width: pos.width, top: pos.top, bottom: pos.bottom }}
+                >
+                    <div className="overflow-y-auto no-scrollbar overscroll-contain" style={{ maxHeight: pos.maxHeight }}>
                         {options.length === 0 && (
                             <p className="text-[11px] text-slate-400 text-center py-4">暂无可选项</p>
                         )}
@@ -83,7 +142,8 @@ const GlassSelect: React.FC<GlassSelectProps> = ({ value, options, onChange, pla
                             );
                         })}
                     </div>
-                </div>
+                </div>,
+                document.body,
             )}
         </div>
     );

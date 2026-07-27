@@ -6,12 +6,12 @@
  *  - anniversaries: Anniversary[]（保留，跟任务 tab 平级）
  *  - 启动时 migrateLegacyTasksToV2（老 Task → TaskV2）；跨日自动结算由 Launcher 启动钩子统一跑
  *
- * 主题：保留 cyber / soft / minimal 三套，但按全局水准优化（不简陋）。
+ * 主题：保留 cyber / soft / minimal 三套配色骨架，视觉统一改为「扁平现代 + 毛玻璃」：
+ *  - 砍掉 minimal 的 neumorphism 凸凹阴影（用户反馈不喜欢立体感），改扁平白玻璃
+ *  - cyber = 深底 + 白透明度阶梯玻璃卡 + inset 顶边高光；soft = 奶油磨砂玻璃
+ *  - 背景三层：底色 + 纹理（grid/dots）+ 顶部 radial 辉光（扁平玻璃的"光源"）
  *  - 去掉 twemoji 装饰图标（用户反馈"丑丑的"），全部用 Phosphor / SVG
  *  - 信息密度增加：进度条 + 连胜 + 奖惩 + 状态行
- *  - minimal 主题修了 tab 选中态反转 bug（选中应该是凸阴影，原版是凹的）
- *  - soft 主题圆点背景透明度从 30% → 20%（不抢戏）
- *  - cyber 主题网格透明度从 20% → 8%
  *
  * 监督角色台词：调 taskSettlement.markTaskDone（用户打卡），
  * 不在 UI 里直接拼 prompt / 调 LLM —— prompt 走 taskPrompts.ts，LLM 调用走 taskSettlement.ts。
@@ -48,16 +48,16 @@ const twemojiUrl = (codepoint: string) => `${TWEMOJI_BASE}/${codepoint}.png`;
 
 type ThemeMode = 'cyber' | 'soft' | 'minimal';
 
-// --- 三套主题配置（优化版）---
-// 优化点：
-//  - 卡片样式更克制（不堆叠廉价边框）
-//  - 按钮统一圆角逻辑（不再 skew）
-//  - 加 progress / status / streak 配色字段，让任务卡能展示信息层级
-//  - tab 选中态在 minimal 主题下用凸阴影（修了原版反过来的 bug）
+// --- 三套主题配置（扁平玻璃版）---
+// 设计原则（用户钦定）：扁平现代 + 毛玻璃，不要立体 neumorphism。
+//  - 高级感来源：白透明度阶梯（cyber 0.05→0.08）、半透明描边、backdrop-blur、顶部 radial 辉光
+//  - glow 字段 = 背景顶部辉光层，给毛玻璃卡制造"可折射的光源"
+//  - 注意：Modal 弹窗底是纯白，cyber 主题在弹窗内用深色 chip 保证对比（不能用白透明度）
 const THEMES: Record<ThemeMode, {
     id: ThemeMode;
     bg: string;
     bgPattern?: { kind: 'grid' | 'dots'; opacity: number };
+    glow: string;
     text: string;
     textSub: string;
     textMuted: string;
@@ -87,77 +87,80 @@ const THEMES: Record<ThemeMode, {
     cyber: {
         id: 'cyber',
         bg: 'bg-[#0f172a]',
-        bgPattern: { kind: 'grid', opacity: 0.08 },
+        bgPattern: { kind: 'grid', opacity: 0.06 },
+        glow: 'radial-gradient(120% 70% at 50% 0%, rgba(34,211,238,0.14), rgba(129,140,248,0.07) 45%, transparent 72%)',
         text: 'text-slate-100',
         textSub: 'text-slate-400',
         textMuted: 'text-slate-600',
         accent: 'text-cyan-400',
-        accentBg: 'bg-cyan-500/10 border-cyan-500/30',
-        border: 'border-slate-800',
-        card: 'bg-slate-900/60 backdrop-blur-md border border-slate-700/40 rounded-2xl',
-        cardActive: 'bg-slate-900/80 border-cyan-500/40 ring-1 ring-cyan-500/20',
-        buttonPrimary: 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 rounded-xl font-bold tracking-wide',
-        buttonGhost: 'bg-slate-800/60 hover:bg-slate-700/60 text-slate-300 rounded-xl border border-slate-700/50',
-        buttonDanger: 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-xl border border-rose-500/30',
+        accentBg: 'bg-cyan-400/10 border-cyan-400/25',
+        border: 'border-white/[0.08]',
+        card: 'bg-white/[0.05] backdrop-blur-xl border border-white/[0.09] rounded-2xl shadow-[inset_0_1px_0_rgba(255,255,255,0.07)]',
+        cardActive: 'bg-white/[0.08] border-cyan-400/40 ring-1 ring-cyan-400/20',
+        buttonPrimary: 'bg-cyan-500/90 hover:bg-cyan-400 text-slate-950 rounded-xl font-bold tracking-wide shadow-[0_4px_16px_rgba(34,211,238,0.22)]',
+        buttonGhost: 'bg-slate-800/70 hover:bg-slate-700/70 text-slate-300 rounded-xl border border-white/[0.07]',
+        buttonDanger: 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-xl border border-rose-500/25',
         font: 'font-mono',
         iconDone: 'text-emerald-400',
         iconMissed: 'text-rose-400',
         iconSkipped: 'text-slate-500',
-        progressTrack: 'bg-slate-800',
+        progressTrack: 'bg-white/[0.07]',
         progressFill: 'bg-gradient-to-r from-cyan-500 to-cyan-400',
         streakColor: 'text-amber-400',
         coinColor: 'text-amber-300',
-        tabContainer: 'bg-black/40 border border-slate-700/50 rounded-lg',
-        tabActive: 'text-cyan-400 bg-cyan-900/40 shadow-sm',
+        tabContainer: 'bg-white/[0.05] backdrop-blur-md border border-white/[0.08] rounded-xl',
+        tabActive: 'text-cyan-300 bg-cyan-400/15 rounded-lg shadow-[inset_0_1px_0_rgba(255,255,255,0.1)]',
         tabInactive: 'text-slate-500',
         label: 'QUEST LOG',
         eventLabel: 'EVENTS',
-        headerBorder: 'border-slate-800',
+        headerBorder: 'border-white/[0.06]',
     },
     soft: {
         id: 'soft',
         bg: 'bg-[#fff5f8]',
-        bgPattern: { kind: 'dots', opacity: 0.20 },
+        bgPattern: { kind: 'dots', opacity: 0.18 },
+        glow: 'radial-gradient(120% 70% at 50% 0%, rgba(244,114,182,0.16), rgba(251,207,232,0.10) 45%, transparent 72%)',
         text: 'text-slate-700',
         textSub: 'text-slate-500',
         textMuted: 'text-slate-400',
         accent: 'text-pink-500',
-        accentBg: 'bg-pink-100/60 border-pink-200',
-        border: 'border-pink-100',
-        card: 'bg-white/80 backdrop-blur-xl rounded-[1.5rem] shadow-sm border border-white',
-        cardActive: 'bg-white/95 border-pink-200 ring-2 ring-pink-100',
-        buttonPrimary: 'bg-pink-400 hover:bg-pink-500 text-white rounded-2xl shadow-md shadow-pink-200/50 font-bold',
-        buttonGhost: 'bg-white/60 hover:bg-white text-slate-600 rounded-2xl border border-pink-100',
-        buttonDanger: 'bg-rose-50 hover:bg-rose-100 text-rose-500 rounded-2xl border border-rose-100',
+        accentBg: 'bg-pink-100/50 border-pink-200/70',
+        border: 'border-pink-100/80',
+        card: 'bg-white/60 backdrop-blur-xl rounded-[1.5rem] border border-white/70 shadow-[0_8px_24px_rgba(244,114,182,0.08)]',
+        cardActive: 'bg-white/85 border-pink-200/80 ring-2 ring-pink-200/50',
+        buttonPrimary: 'bg-pink-400 hover:bg-pink-500 text-white rounded-2xl font-bold shadow-[0_6px_18px_rgba(244,114,182,0.32)]',
+        buttonGhost: 'bg-white/60 hover:bg-white/90 text-slate-600 rounded-2xl border border-pink-100/80',
+        buttonDanger: 'bg-rose-50/80 hover:bg-rose-100 text-rose-500 rounded-2xl border border-rose-100/80',
         font: 'font-sans',
         iconDone: 'text-emerald-500',
         iconMissed: 'text-rose-500',
         iconSkipped: 'text-slate-400',
-        progressTrack: 'bg-pink-100/60',
+        progressTrack: 'bg-pink-200/40',
         progressFill: 'bg-gradient-to-r from-pink-400 to-rose-400',
         streakColor: 'text-amber-500',
         coinColor: 'text-amber-600',
-        tabContainer: 'bg-white/50 rounded-full p-1',
+        tabContainer: 'bg-white/45 backdrop-blur-md border border-white/60 rounded-full',
         tabActive: 'text-pink-600 bg-white shadow-sm rounded-full',
         tabInactive: 'text-slate-400',
         label: '任务日志',
         eventLabel: '纪念日',
-        headerBorder: 'border-pink-100',
+        headerBorder: 'border-pink-100/70',
     },
     minimal: {
         id: 'minimal',
-        bg: 'bg-[#eef2f6]',
+        bg: 'bg-[#f1f4f9]',
+        glow: 'radial-gradient(120% 70% at 50% 0%, rgba(255,255,255,0.85), rgba(199,210,254,0.22) 45%, transparent 72%)',
         text: 'text-slate-700',
         textSub: 'text-slate-500',
         textMuted: 'text-slate-400',
         accent: 'text-indigo-500',
-        accentBg: 'bg-[#eef2f6] shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff] border-indigo-200/50',
-        border: 'border-transparent',
-        card: 'bg-[#eef2f6] rounded-2xl shadow-[6px_6px_12px_#d1d9e6,-6px_-6px_12px_#ffffff]',
-        cardActive: 'bg-[#eef2f6] rounded-2xl shadow-[inset_3px_3px_8px_#d1d9e6,inset_-3px_-3px_8px_#ffffff] ring-2 ring-indigo-200/50',
-        buttonPrimary: 'bg-[#eef2f6] text-indigo-600 font-bold rounded-xl shadow-[4px_4px_10px_#d1d9e6,-4px_-4px_10px_#ffffff] active:shadow-[inset_3px_3px_8px_#d1d9e6,inset_-3px_-3px_8px_#ffffff]',
-        buttonGhost: 'bg-[#eef2f6] text-slate-500 font-medium rounded-xl shadow-[3px_3px_8px_#d1d9e6,-3px_-3px_8px_#ffffff] active:shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff]',
-        buttonDanger: 'bg-[#eef2f6] text-rose-500 font-medium rounded-xl shadow-[3px_3px_8px_#d1d9e6,-3px_-3px_8px_#ffffff] active:shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff]',
+        accentBg: 'bg-indigo-50/80 border-indigo-200/60',
+        border: 'border-slate-200/70',
+        card: 'bg-white/70 backdrop-blur-xl rounded-2xl border border-white/80 shadow-[0_1px_3px_rgba(15,23,42,0.05)]',
+        cardActive: 'bg-white/90 rounded-2xl border border-indigo-200/70 ring-2 ring-indigo-200/50',
+        buttonPrimary: 'bg-indigo-500 hover:bg-indigo-600 text-white font-bold rounded-xl shadow-[0_4px_14px_rgba(99,102,241,0.25)]',
+        buttonGhost: 'bg-white/70 hover:bg-white text-slate-500 font-medium rounded-xl border border-slate-200/70',
+        buttonDanger: 'bg-rose-50/80 hover:bg-rose-100 text-rose-500 font-medium rounded-xl border border-rose-200/60',
         font: 'font-sans',
         iconDone: 'text-emerald-500',
         iconMissed: 'text-rose-400',
@@ -166,9 +169,8 @@ const THEMES: Record<ThemeMode, {
         progressFill: 'bg-gradient-to-r from-indigo-400 to-indigo-500',
         streakColor: 'text-amber-500',
         coinColor: 'text-amber-600',
-        tabContainer: 'bg-[#eef2f6] rounded-xl shadow-[inset_3px_3px_8px_#d1d9e6,inset_-3px_-3px_8px_#ffffff] p-1',
-        // 修复点：minimal 主题选中应该是凸阴影（原版反过来了，选中反而凹了）
-        tabActive: 'text-indigo-600 bg-[#eef2f6] shadow-[3px_3px_8px_#d1d9e6,-3px_-3px_8px_#ffffff] rounded-lg',
+        tabContainer: 'bg-slate-200/40 backdrop-blur-md border border-white/60 rounded-xl',
+        tabActive: 'text-indigo-600 bg-white shadow-sm rounded-lg',
         tabInactive: 'text-slate-400',
         label: 'Focus',
         eventLabel: 'Memories',
@@ -496,30 +498,33 @@ const ScheduleApp: React.FC = () => {
     // --- 渲染 ---
     return (
         <div className={`h-full w-full flex flex-col ${theme.font} ${theme.bg} ${theme.text} relative overflow-hidden transition-colors duration-500`}>
-            {/* 主题背景纹理 */}
+            {/* 主题背景：纹理 + 顶部辉光（扁平玻璃的"光源"，让毛玻璃卡有内容可折射） */}
             {theme.bgPattern?.kind === 'grid' && (
                 <div className="absolute inset-0 pointer-events-none" style={{ opacity: theme.bgPattern.opacity, backgroundImage: 'linear-gradient(rgba(56,189,248,1) 1px, transparent 1px), linear-gradient(90deg, rgba(56,189,248,1) 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
             )}
             {theme.bgPattern?.kind === 'dots' && (
                 <div className="absolute inset-0 pointer-events-none" style={{ opacity: theme.bgPattern.opacity, backgroundImage: 'radial-gradient(#fbcfe8 2px, transparent 2px)', backgroundSize: '20px 20px' }} />
             )}
+            <div className="absolute inset-x-0 top-0 h-[45%] pointer-events-none transition-opacity duration-500" style={{ background: theme.glow }} />
 
-            {/* Header */}
-            <div className={`border-b ${theme.headerBorder} backdrop-blur-sm sticky top-0 z-20 shrink-0 relative transition-colors duration-300`} style={{ paddingTop: 'var(--safe-top)' }}>
-                <div className="pt-12 pb-4 px-6 flex items-center justify-between h-24 box-border">
-                    <button onClick={closeApp} className={`p-2 -ml-2 rounded-full active:scale-90 transition-transform ${currentThemeMode === 'minimal' ? 'shadow-[4px_4px_8px_#d1d9e6,-4px_-4px_8px_#ffffff]' : 'hover:bg-black/5'}`} aria-label="返回">
+            {/* Header —— 对齐全站规范（参考彼方）：
+                - 安全区用 --chrome-top（安全区 + SullyOS 状态栏），不再 safe-top + pt-12 双重让位
+                - 标题紧跟返回箭头左对齐（gap 布局），动作按钮 ml-auto 靠右，不再 justify-between 把标题吊在正中 */}
+            <div className={`border-b ${theme.headerBorder} backdrop-blur-sm sticky top-0 z-20 shrink-0 relative transition-colors duration-300`} style={{ paddingTop: 'var(--chrome-top)' }}>
+                <div className="pt-1 pb-3 px-5 flex items-center gap-2.5">
+                    <button onClick={closeApp} className={`p-2 -ml-2 rounded-full active:scale-90 transition-transform ${currentThemeMode === 'cyber' ? 'hover:bg-white/10' : 'hover:bg-black/5'}`} aria-label="返回">
                         <ArrowLeft size={22} className={theme.accent} weight="bold" />
                     </button>
                     <div className="flex items-center gap-2">
                         <TimerIcon size={18} className={theme.accent} weight="fill" />
                         <span className={`text-sm font-bold tracking-wide ${currentThemeMode === 'cyber' ? 'uppercase' : ''}`}>时光契约</span>
                     </div>
-                    <div className="flex gap-2">
-                        <button onClick={toggleTheme} className={`px-2.5 h-8 flex items-center gap-1.5 rounded-full active:scale-90 transition-all ${currentThemeMode === 'minimal' ? 'shadow-[4px_4px_8px_#d1d9e6,-4px_-4px_8px_#ffffff] active:shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff]' : currentThemeMode === 'soft' ? 'bg-white/70 hover:bg-white shadow-sm border border-pink-100/60' : 'bg-white/5 hover:bg-white/10 border border-white/10'}`} aria-label="切换主题">
+                    <div className="ml-auto flex gap-2">
+                        <button onClick={toggleTheme} className={`px-2.5 h-8 flex items-center gap-1.5 rounded-full active:scale-90 transition-all ${currentThemeMode === 'minimal' ? 'bg-white/70 hover:bg-white border border-slate-200/70 shadow-sm' : currentThemeMode === 'soft' ? 'bg-white/70 hover:bg-white shadow-sm border border-pink-100/60' : 'bg-white/5 hover:bg-white/10 border border-white/10'}`} aria-label="切换主题">
                             <span className={`w-1.5 h-1.5 rounded-full ${theme.accent.replace('text-', 'bg-')}`} />
                             <span className={`text-[10px] font-bold uppercase tracking-widest ${theme.textSub}`}>{currentThemeMode}</span>
                         </button>
-                        <button onClick={() => activeTab === 'quest' ? (resetForm(), setEditTask(null), setShowTaskModal(true)) : setShowAnniModal(true)} className={`p-2 rounded-full active:scale-90 transition-transform ${currentThemeMode === 'minimal' ? 'shadow-[4px_4px_8px_#d1d9e6,-4px_-4px_8px_#ffffff]' : 'hover:bg-black/5'}`} aria-label="新建">
+                        <button onClick={() => activeTab === 'quest' ? (resetForm(), setEditTask(null), setShowTaskModal(true)) : setShowAnniModal(true)} className={`p-2 rounded-full active:scale-90 transition-transform ${currentThemeMode === 'cyber' ? 'hover:bg-white/10' : 'hover:bg-black/5'}`} aria-label="新建">
                             <Plus size={22} className={theme.accent} weight="bold" />
                         </button>
                     </div>
@@ -637,9 +642,9 @@ const ScheduleApp: React.FC = () => {
                     <div className="space-y-4">
                         {upcomingAnni && (
                             <div className={`w-full rounded-2xl p-5 relative overflow-hidden transition-all ${
-                                currentThemeMode === 'minimal' ? 'bg-[#eef2f6] shadow-[inset_5px_5px_10px_#d1d9e6,inset_-5px_-5px_10px_#ffffff]'
+                                currentThemeMode === 'minimal' ? 'bg-white/70 backdrop-blur-xl border border-white/80 shadow-[0_8px_24px_rgba(99,102,241,0.10)]'
                                 : currentThemeMode === 'soft' ? 'bg-gradient-to-r from-pink-300 to-purple-300 text-white shadow-lg shadow-pink-200'
-                                : 'bg-gradient-to-r from-slate-900 to-slate-800 border border-purple-500/30'
+                                : 'bg-white/[0.05] backdrop-blur-xl border border-white/[0.09] shadow-[inset_0_1px_0_rgba(255,255,255,0.07)]'
                             }`}>
                                 <div className="relative z-10">
                                     <div className="flex justify-between items-start mb-2">
@@ -647,7 +652,7 @@ const ScheduleApp: React.FC = () => {
                                         <div className="text-3xl font-bold tracking-tighter">{getDaysUntil(upcomingAnni.date)} <span className="text-xs opacity-60 font-normal">天后</span></div>
                                     </div>
                                     <div className="text-xl font-bold mb-4">{upcomingAnni.title}</div>
-                                    <div className={`flex items-start gap-3 p-3 rounded-xl ${currentThemeMode === 'minimal' ? 'bg-[#eef2f6] shadow-[5px_5px_10px_#d1d9e6,-5px_-5px_10px_#ffffff]' : 'bg-white/20 backdrop-blur-md'}`}>
+                                    <div className={`flex items-start gap-3 p-3 rounded-xl ${currentThemeMode === 'minimal' ? 'bg-slate-100/80 border border-slate-200/60' : 'bg-white/20 backdrop-blur-md'}`}>
                                         <img src={characters.find(c => c.id === upcomingAnni.charId)?.avatar} className="w-8 h-8 rounded-full object-cover" alt="" />
                                         <div className={`text-xs font-medium leading-relaxed italic ${currentThemeMode === 'minimal' ? 'text-slate-600' : 'text-white/90'}`}>
                                             "{upcomingAnni.aiThought || "加载中..."}"
@@ -701,17 +706,17 @@ const ScheduleApp: React.FC = () => {
                     {/* 标题 */}
                     <div>
                         <label className={`text-[10px] font-bold uppercase tracking-widest ${theme.textSub} block mb-2`}>契约标题</label>
-                        <input value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} placeholder="例如：每天背 30 个单词" className={`w-full px-4 py-3 text-sm focus:outline-none ${currentThemeMode === 'minimal' ? 'bg-[#eef2f6] text-slate-700 rounded-xl shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff]' : currentThemeMode === 'soft' ? 'bg-pink-50 text-slate-700 border border-pink-100 rounded-xl' : 'bg-slate-800 text-white rounded-xl border-none'}`} />
+                        <input value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} placeholder="例如：每天背 30 个单词" className={`w-full px-4 py-3 text-sm focus:outline-none ${currentThemeMode === 'minimal' ? 'bg-slate-100/80 text-slate-700 rounded-xl border border-slate-200/60' : currentThemeMode === 'soft' ? 'bg-pink-50 text-slate-700 border border-pink-100 rounded-xl' : 'bg-slate-800 text-white rounded-xl border-none'}`} />
                     </div>
 
                     {/* 类型 */}
                     <div>
                         <label className={`text-[10px] font-bold uppercase tracking-widest ${theme.textSub} block mb-2`}>类型</label>
                         <div className="flex gap-2">
-                            <button onClick={() => setForm({ ...form, type: 'recurring' })} className={`flex-1 py-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${form.type === 'recurring' ? (currentThemeMode === 'minimal' ? 'shadow-[inset_3px_3px_8px_#d1d9e6,inset_-3px_-3px_8px_#ffffff] text-indigo-600' : currentThemeMode === 'soft' ? 'bg-pink-400 text-white shadow-md' : 'bg-cyan-500 text-slate-950') : theme.buttonGhost}`}>
+                            <button onClick={() => setForm({ ...form, type: 'recurring' })} className={`flex-1 py-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${form.type === 'recurring' ? (currentThemeMode === 'minimal' ? 'bg-indigo-500 text-white shadow-sm' : currentThemeMode === 'soft' ? 'bg-pink-400 text-white shadow-md' : 'bg-cyan-500 text-slate-950') : theme.buttonGhost}`}>
                                 <TimerIcon size={14} weight="fill" /> 重复契约
                             </button>
-                            <button onClick={() => setForm({ ...form, type: 'oneshot' })} className={`flex-1 py-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${form.type === 'oneshot' ? (currentThemeMode === 'minimal' ? 'shadow-[inset_3px_3px_8px_#d1d9e6,inset_-3px_-3px_8px_#ffffff] text-indigo-600' : currentThemeMode === 'soft' ? 'bg-pink-400 text-white shadow-md' : 'bg-cyan-500 text-slate-950') : theme.buttonGhost}`}>
+                            <button onClick={() => setForm({ ...form, type: 'oneshot' })} className={`flex-1 py-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${form.type === 'oneshot' ? (currentThemeMode === 'minimal' ? 'bg-indigo-500 text-white shadow-sm' : currentThemeMode === 'soft' ? 'bg-pink-400 text-white shadow-md' : 'bg-cyan-500 text-slate-950') : theme.buttonGhost}`}>
                                 <TargetIcon /> 一次性
                             </button>
                         </div>
@@ -724,7 +729,7 @@ const ScheduleApp: React.FC = () => {
                                 <label className={`text-[10px] font-bold uppercase tracking-widest ${theme.textSub} block mb-2`}>频率</label>
                                 <div className="flex gap-2">
                                     {(['daily', 'weekly', 'monthly'] as const).map(f => (
-                                        <button key={f} onClick={() => setForm({ ...form, frequency: f })} className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${form.frequency === f ? (currentThemeMode === 'minimal' ? 'shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff] text-indigo-600' : currentThemeMode === 'soft' ? 'bg-pink-100 text-pink-600' : 'bg-cyan-900/40 text-cyan-400') : theme.textSub}`}>
+                                        <button key={f} onClick={() => setForm({ ...form, frequency: f })} className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${form.frequency === f ? (currentThemeMode === 'minimal' ? 'bg-indigo-100/80 text-indigo-600' : currentThemeMode === 'soft' ? 'bg-pink-100 text-pink-600' : 'bg-cyan-900/40 text-cyan-400') : theme.textSub}`}>
                                             {f === 'daily' ? '每天' : f === 'weekly' ? '每周' : '每月'}
                                         </button>
                                     ))}
@@ -742,7 +747,7 @@ const ScheduleApp: React.FC = () => {
                                         {[['一', 1], ['二', 2], ['三', 3], ['四', 4], ['五', 5], ['六', 6], ['日', 0]].map(([label, dow]) => {
                                             const active = form.customDays.includes(dow as number);
                                             return (
-                                                <button key={dow} onClick={() => setForm({ ...form, customDays: active ? form.customDays.filter(d => d !== dow) : [...form.customDays, dow as number].sort() })} className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${active ? (currentThemeMode === 'minimal' ? 'shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff] text-indigo-600' : currentThemeMode === 'soft' ? 'bg-pink-400 text-white' : 'bg-cyan-500 text-slate-950') : theme.buttonGhost}`}>
+                                                <button key={dow} onClick={() => setForm({ ...form, customDays: active ? form.customDays.filter(d => d !== dow) : [...form.customDays, dow as number].sort() })} className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${active ? (currentThemeMode === 'minimal' ? 'bg-indigo-500 text-white' : currentThemeMode === 'soft' ? 'bg-pink-400 text-white' : 'bg-cyan-500 text-slate-950') : theme.buttonGhost}`}>
                                                     {label}
                                                 </button>
                                             );
@@ -758,7 +763,7 @@ const ScheduleApp: React.FC = () => {
                                         {Array.from({ length: 31 }, (_, i) => i + 1).map(d => {
                                             const active = form.monthlyDay === d;
                                             return (
-                                                <button key={d} onClick={() => setForm({ ...form, monthlyDay: d })} className={`aspect-square rounded-lg text-xs font-bold transition-all ${active ? (currentThemeMode === 'minimal' ? 'shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff] text-indigo-600' : currentThemeMode === 'soft' ? 'bg-pink-400 text-white' : 'bg-cyan-500 text-slate-950') : theme.buttonGhost}`}>
+                                                <button key={d} onClick={() => setForm({ ...form, monthlyDay: d })} className={`aspect-square rounded-lg text-xs font-bold transition-all ${active ? (currentThemeMode === 'minimal' ? 'bg-indigo-500 text-white' : currentThemeMode === 'soft' ? 'bg-pink-400 text-white' : 'bg-cyan-500 text-slate-950') : theme.buttonGhost}`}>
                                                     {d}
                                                 </button>
                                             );
@@ -773,7 +778,7 @@ const ScheduleApp: React.FC = () => {
                     {form.type === 'oneshot' && (
                         <div>
                             <label className={`text-[10px] font-bold uppercase tracking-widest ${theme.textSub} block mb-2`}>截止时间</label>
-                            <input type="datetime-local" value={form.deadline} onChange={e => setForm({ ...form, deadline: e.target.value })} className={`w-full px-4 py-3 text-sm focus:outline-none ${currentThemeMode === 'minimal' ? 'bg-[#eef2f6] text-slate-700 rounded-xl shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff]' : currentThemeMode === 'soft' ? 'bg-pink-50 text-slate-700 border border-pink-100 rounded-xl' : 'bg-slate-800 text-white rounded-xl border-none'}`} />
+                            <input type="datetime-local" value={form.deadline} onChange={e => setForm({ ...form, deadline: e.target.value })} className={`w-full px-4 py-3 text-sm focus:outline-none ${currentThemeMode === 'minimal' ? 'bg-slate-100/80 text-slate-700 rounded-xl border border-slate-200/60' : currentThemeMode === 'soft' ? 'bg-pink-50 text-slate-700 border border-pink-100 rounded-xl' : 'bg-slate-800 text-white rounded-xl border-none'}`} />
                         </div>
                     )}
 
@@ -783,7 +788,7 @@ const ScheduleApp: React.FC = () => {
                         <CharacterGroupFilterBar characters={characters} groups={characterGroups} value={supervisorGroupId} onChange={setSupervisorGroupId} className="mb-2" />
                         <div className="flex gap-3 overflow-x-auto no-scrollbar pb-2">
                             {filterCharactersByGroup(characters, characterGroups, supervisorGroupId).map(c => (
-                                <button key={c.id} onClick={() => setForm({ ...form, supervisorId: c.id })} className={`flex flex-col items-center gap-2 p-2 rounded-lg border transition-all min-w-[60px] ${(form.supervisorId || activeCharacterId) === c.id ? (currentThemeMode === 'minimal' ? 'shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff] border-indigo-200' : currentThemeMode === 'cyber' ? 'border-cyan-500 bg-cyan-50' : 'border-current') : (currentThemeMode === 'cyber' ? 'border-slate-200 bg-white' : 'border-transparent opacity-50')}`}>
+                                <button key={c.id} onClick={() => setForm({ ...form, supervisorId: c.id })} className={`flex flex-col items-center gap-2 p-2 rounded-lg border transition-all min-w-[60px] ${(form.supervisorId || activeCharacterId) === c.id ? (currentThemeMode === 'minimal' ? 'bg-indigo-50/70 border-indigo-300' : currentThemeMode === 'cyber' ? 'border-cyan-500 bg-cyan-50' : 'border-current') : (currentThemeMode === 'cyber' ? 'border-slate-200 bg-white' : 'border-transparent opacity-50')}`}>
                                     <img src={c.avatar} className="w-10 h-10 rounded-md object-cover" alt="" />
                                     <span className={`text-[10px] font-bold whitespace-nowrap ${currentThemeMode === 'cyber' ? 'text-slate-700' : theme.text}`}>{c.name}</span>
                                 </button>
@@ -792,7 +797,7 @@ const ScheduleApp: React.FC = () => {
                     </div>
 
                     {/* 提醒 */}
-                    <div className={`p-3 rounded-xl ${currentThemeMode === 'minimal' ? 'shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff]' : currentThemeMode === 'soft' ? 'bg-pink-50/60' : 'bg-slate-800/60'}`}>
+                    <div className={`p-3 rounded-xl ${currentThemeMode === 'minimal' ? 'bg-slate-100/70' : currentThemeMode === 'soft' ? 'bg-pink-50/60' : 'bg-slate-800/60'}`}>
                         <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2">
                                 <Bell size={16} className={theme.accent} weight="fill" />
@@ -805,7 +810,7 @@ const ScheduleApp: React.FC = () => {
                         {form.reminderEnabled && (
                             <div className="mt-3 flex items-center gap-2">
                                 <Clock size={14} className={theme.textSub} />
-                                <input type="time" value={form.reminderTime} onChange={e => setForm({ ...form, reminderTime: e.target.value })} className={`px-3 py-1.5 text-sm rounded-lg focus:outline-none ${currentThemeMode === 'minimal' ? 'bg-[#eef2f6] shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff]' : currentThemeMode === 'soft' ? 'bg-white border border-pink-100' : 'bg-slate-900 border border-slate-700'}`} />
+                                <input type="time" value={form.reminderTime} onChange={e => setForm({ ...form, reminderTime: e.target.value })} className={`px-3 py-1.5 text-sm rounded-lg focus:outline-none ${currentThemeMode === 'minimal' ? 'bg-slate-100/80 border border-slate-200/60' : currentThemeMode === 'soft' ? 'bg-white border border-pink-100' : 'bg-slate-900 border border-slate-700'}`} />
                                 <span className={`text-[10px] ${theme.textSub}`}>到点监督角色会主动找你</span>
                             </div>
                         )}
@@ -815,7 +820,7 @@ const ScheduleApp: React.FC = () => {
                     <div className="grid grid-cols-2 gap-3">
                         <div>
                             <label className={`text-[10px] font-bold uppercase tracking-widest ${theme.textSub} block mb-2`}>完成奖励</label>
-                            <div className={`flex items-center gap-2 px-3 py-2.5 rounded-xl ${currentThemeMode === 'minimal' ? 'bg-[#eef2f6] shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff]' : currentThemeMode === 'soft' ? 'bg-pink-50 border border-pink-100' : 'bg-slate-800'}`}>
+                            <div className={`flex items-center gap-2 px-3 py-2.5 rounded-xl ${currentThemeMode === 'minimal' ? 'bg-slate-100/80 border border-slate-200/60' : currentThemeMode === 'soft' ? 'bg-pink-50 border border-pink-100' : 'bg-slate-800'}`}>
                                 <Coins size={16} className={theme.coinColor} weight="fill" />
                                 <span className={theme.textSub}>+</span>
                                 <input type="number" min="0" value={form.rewardCoins} onChange={e => setForm({ ...form, rewardCoins: parseInt(e.target.value) || 0 })} className={`flex-1 bg-transparent text-sm focus:outline-none ${theme.text} w-full`} />
@@ -823,7 +828,7 @@ const ScheduleApp: React.FC = () => {
                         </div>
                         <div>
                             <label className={`text-[10px] font-bold uppercase tracking-widest ${theme.textSub} block mb-2`}>漏做惩罚</label>
-                            <div className={`flex items-center gap-2 px-3 py-2.5 rounded-xl ${currentThemeMode === 'minimal' ? 'bg-[#eef2f6] shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff]' : currentThemeMode === 'soft' ? 'bg-pink-50 border border-pink-100' : 'bg-slate-800'}`}>
+                            <div className={`flex items-center gap-2 px-3 py-2.5 rounded-xl ${currentThemeMode === 'minimal' ? 'bg-slate-100/80 border border-slate-200/60' : currentThemeMode === 'soft' ? 'bg-pink-50 border border-pink-100' : 'bg-slate-800'}`}>
                                 <Coins size={16} className={theme.iconMissed} weight="fill" />
                                 <span className={theme.textSub}>-</span>
                                 <input type="number" min="0" value={form.penaltyCoins} onChange={e => setForm({ ...form, penaltyCoins: parseInt(e.target.value) || 0 })} className={`flex-1 bg-transparent text-sm focus:outline-none ${theme.text} w-full`} />
@@ -862,14 +867,14 @@ const ScheduleApp: React.FC = () => {
                 footer={<button onClick={handleAddAnni} className={`w-full py-3 transition-all ${theme.buttonPrimary}`}>保存</button>}
             >
                 <div className="space-y-4">
-                    <input value={newAnniTitle} onChange={e => setNewAnniTitle(e.target.value)} placeholder="事件名称 (例如: 第一次见面)" className={`w-full px-4 py-3 text-sm focus:outline-none ${currentThemeMode === 'minimal' ? 'bg-[#eef2f6] text-slate-700 rounded-xl shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff]' : currentThemeMode === 'soft' ? 'bg-pink-50 text-slate-700 border border-pink-100 rounded-xl' : 'bg-slate-800 text-white rounded-xl border-none'}`} />
-                    <input type="date" value={newAnniDate} onChange={e => setNewAnniDate(e.target.value)} className={`w-full px-4 py-3 text-sm focus:outline-none ${currentThemeMode === 'minimal' ? 'bg-[#eef2f6] text-slate-700 rounded-xl shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff]' : currentThemeMode === 'soft' ? 'bg-pink-50 text-slate-700 border border-pink-100 rounded-xl' : 'bg-slate-800 text-white rounded-xl border-none'}`} />
+                    <input value={newAnniTitle} onChange={e => setNewAnniTitle(e.target.value)} placeholder="事件名称 (例如: 第一次见面)" className={`w-full px-4 py-3 text-sm focus:outline-none ${currentThemeMode === 'minimal' ? 'bg-slate-100/80 text-slate-700 rounded-xl border border-slate-200/60' : currentThemeMode === 'soft' ? 'bg-pink-50 text-slate-700 border border-pink-100 rounded-xl' : 'bg-slate-800 text-white rounded-xl border-none'}`} />
+                    <input type="date" value={newAnniDate} onChange={e => setNewAnniDate(e.target.value)} className={`w-full px-4 py-3 text-sm focus:outline-none ${currentThemeMode === 'minimal' ? 'bg-slate-100/80 text-slate-700 rounded-xl border border-slate-200/60' : currentThemeMode === 'soft' ? 'bg-pink-50 text-slate-700 border border-pink-100 rounded-xl' : 'bg-slate-800 text-white rounded-xl border-none'}`} />
                     <div>
                         <label className={`text-[10px] font-bold uppercase tracking-widest ${theme.textSub} block mb-2`}>关联对象</label>
                         <CharacterGroupFilterBar characters={characters} groups={characterGroups} value={anniCharGroupId} onChange={setAnniCharGroupId} className="mb-2" />
                         <div className="flex gap-3 overflow-x-auto no-scrollbar pb-2">
                             {filterCharactersByGroup(characters, characterGroups, anniCharGroupId).map(c => (
-                                <button key={c.id} onClick={() => setNewAnniChar(c.id)} className={`flex flex-col items-center gap-2 p-2 rounded-lg border transition-all min-w-[60px] ${(newAnniChar || activeCharacterId) === c.id ? (currentThemeMode === 'minimal' ? 'shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff] border-indigo-200' : currentThemeMode === 'cyber' ? 'border-cyan-500 bg-cyan-50' : 'border-current') : (currentThemeMode === 'cyber' ? 'border-slate-200 bg-white' : 'border-transparent opacity-50')}`}>
+                                <button key={c.id} onClick={() => setNewAnniChar(c.id)} className={`flex flex-col items-center gap-2 p-2 rounded-lg border transition-all min-w-[60px] ${(newAnniChar || activeCharacterId) === c.id ? (currentThemeMode === 'minimal' ? 'bg-indigo-50/70 border-indigo-300' : currentThemeMode === 'cyber' ? 'border-cyan-500 bg-cyan-50' : 'border-current') : (currentThemeMode === 'cyber' ? 'border-slate-200 bg-white' : 'border-transparent opacity-50')}`}>
                                     <img src={c.avatar} className="w-10 h-10 rounded-md object-cover" alt="" />
                                     <span className={`text-[10px] font-bold whitespace-nowrap ${currentThemeMode === 'cyber' ? 'text-slate-700' : theme.text}`}>{c.name}</span>
                                 </button>
@@ -953,12 +958,12 @@ const TaskCard: React.FC<{
     const statusText = isDoneToday ? '今日已完成' : isSkippedToday ? '今日请假' : (task.type === 'recurring' ? '今日未打卡' : '未开始');
 
     return (
-        <div className={`${theme.card} p-4 transition-all ${themeMode === 'cyber' ? 'hover:bg-slate-900/80 hover:border-slate-600/60' : themeMode === 'soft' ? 'hover:shadow-md hover:shadow-pink-100/60' : ''}`}>
+        <div className={`${theme.card} p-4 transition-all ${themeMode === 'cyber' ? 'hover:bg-white/[0.07] hover:border-white/[0.14]' : themeMode === 'soft' ? 'hover:shadow-md hover:shadow-pink-100/60' : 'hover:bg-white/90'}`}>
             <div className="flex items-start gap-3">
                 {/* 头像：监督人有图就带主题化描边；没监督人给主题化占位而不是灰方块 */}
                 <div className="relative shrink-0">
                     {supervisor ? (
-                        <img src={supervisor.avatar} className={`w-12 h-12 rounded-xl object-cover ${themeMode === 'cyber' ? 'ring-1 ring-slate-600/60' : themeMode === 'soft' ? 'ring-2 ring-white shadow-sm' : 'shadow-[3px_3px_8px_#d1d9e6,-3px_-3px_8px_#ffffff]'}`} alt="" />
+                        <img src={supervisor.avatar} className={`w-12 h-12 rounded-xl object-cover ${themeMode === 'cyber' ? 'ring-1 ring-slate-600/60' : themeMode === 'soft' ? 'ring-2 ring-white shadow-sm' : 'ring-2 ring-white/90 shadow-sm'}`} alt="" />
                     ) : (
                         <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${themeMode === 'cyber' ? 'bg-gradient-to-br from-slate-700 to-slate-800 text-cyan-400/70' : themeMode === 'soft' ? 'bg-gradient-to-br from-pink-100 to-rose-100 text-pink-400' : 'bg-gradient-to-br from-slate-200 to-slate-300 text-indigo-400'}`}>
                             <TimerIcon size={20} weight="fill" />
@@ -1143,7 +1148,7 @@ const TaskDetail: React.FC<{
             </div>
 
             {/* 频率 + 截止时间 + 提醒时间（行内可编辑） */}
-            <div className={`space-y-3 p-3 rounded-xl ${themeMode === 'minimal' ? 'shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff]' : themeMode === 'soft' ? 'bg-pink-50/60' : 'bg-slate-800/60'}`}>
+            <div className={`space-y-3 p-3 rounded-xl ${themeMode === 'minimal' ? 'bg-slate-100/70' : themeMode === 'soft' ? 'bg-pink-50/60' : 'bg-slate-800/60'}`}>
                 {/* 频率 */}
                 {task.type === 'recurring' && (
                     <div className="flex items-center justify-between">
@@ -1163,7 +1168,7 @@ const TaskDetail: React.FC<{
                                 </button>
                             ) : (
                                 <div className="flex items-center gap-2">
-                                    <input type="datetime-local" value={draftDeadline} onChange={e => setDraftDeadline(e.target.value)} className={`px-2 py-1 text-xs rounded-lg focus:outline-none ${themeMode === 'minimal' ? 'bg-[#eef2f6] shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff]' : themeMode === 'soft' ? 'bg-white border border-pink-100' : 'bg-slate-900 border border-slate-700'}`} />
+                                    <input type="datetime-local" value={draftDeadline} onChange={e => setDraftDeadline(e.target.value)} className={`px-2 py-1 text-xs rounded-lg focus:outline-none ${themeMode === 'minimal' ? 'bg-slate-100/80 border border-slate-200/60' : themeMode === 'soft' ? 'bg-white border border-pink-100' : 'bg-slate-900 border border-slate-700'}`} />
                                     <button onClick={() => { onUpdate({ deadline: draftDeadline || undefined }); setEditingDeadline(false); }} className={`px-2 py-1 text-[10px] font-bold rounded-md ${theme.buttonPrimary}`}>保存</button>
                                     <button onClick={() => setEditingDeadline(false)} className={`px-2 py-1 text-[10px] font-bold rounded-md ${theme.buttonGhost}`}>取消</button>
                                 </div>
@@ -1191,7 +1196,7 @@ const TaskDetail: React.FC<{
                             </div>
                             {draftReminderEnabled && (
                                 <div className="flex items-center gap-2">
-                                    <input type="time" value={draftReminderTime} onChange={e => setDraftReminderTime(e.target.value)} className={`px-2 py-1 text-xs rounded-lg focus:outline-none ${themeMode === 'minimal' ? 'bg-[#eef2f6] shadow-[inset_2px_2px_5px_#d1d9e6,inset_-2px_-2px_5px_#ffffff]' : themeMode === 'soft' ? 'bg-white border border-pink-100' : 'bg-slate-900 border border-slate-700'}`} />
+                                    <input type="time" value={draftReminderTime} onChange={e => setDraftReminderTime(e.target.value)} className={`px-2 py-1 text-xs rounded-lg focus:outline-none ${themeMode === 'minimal' ? 'bg-slate-100/80 border border-slate-200/60' : themeMode === 'soft' ? 'bg-white border border-pink-100' : 'bg-slate-900 border border-slate-700'}`} />
                                     <button onClick={() => { onUpdate({ reminderEnabled: draftReminderEnabled, reminderTime: draftReminderEnabled ? draftReminderTime : undefined }); setEditingReminder(false); }} className={`px-2 py-1 text-[10px] font-bold rounded-md ${theme.buttonPrimary}`}>保存</button>
                                     <button onClick={() => setEditingReminder(false)} className={`px-2 py-1 text-[10px] font-bold rounded-md ${theme.buttonGhost}`}>取消</button>
                                 </div>
@@ -1209,7 +1214,7 @@ const TaskDetail: React.FC<{
 
             {/* 连胜 */}
             {task.type === 'recurring' && (
-                <div className={`flex items-center justify-around p-4 rounded-xl ${themeMode === 'minimal' ? 'shadow-[inset_3px_3px_8px_#d1d9e6,inset_-3px_-3px_8px_#ffffff]' : themeMode === 'soft' ? 'bg-pink-50/60' : 'bg-slate-800/60'}`}>
+                <div className={`flex items-center justify-around p-4 rounded-xl ${themeMode === 'minimal' ? 'bg-slate-100/70' : themeMode === 'soft' ? 'bg-pink-50/60' : 'bg-slate-800/60'}`}>
                     <div className="text-center">
                         <div className={`flex items-center gap-1 justify-center ${theme.streakColor}`}>
                             <Fire size={18} weight="fill" />

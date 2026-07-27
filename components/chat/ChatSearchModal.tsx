@@ -165,7 +165,7 @@ const ChatSearchModal: React.FC<ChatSearchModalProps> = ({ isOpen, onClose, char
                                 </div>
                                 <p className="text-xs text-slate-600 leading-relaxed break-all">
                                     {snip.before}
-                                    {snip.hit && <mark className="bg-amber-200 text-slate-800 rounded px-0.5">{snip.hit}</mark>}
+                                    {snip.hit && <mark className="bg-violet-500/20 text-violet-700 font-bold rounded px-0.5">{snip.hit}</mark>}
                                     {snip.after}
                                 </p>
                             </button>

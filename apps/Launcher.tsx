@@ -1271,41 +1271,104 @@ const Launcher: React.FC = () => {
           contentColor={contentColor}
       />
 
-      {/* 最近聊天面板：最新消息组件的二级菜单，挑一个最近聊过的角色直接进 ta 的聊天窗（动森皮肤换奶油卡风） */}
-      {chatPickerOpen && (
+      {/* 最近聊天面板：最新消息组件的二级菜单，挑一个最近聊过的角色直接进 ta 的聊天窗。
+          默认皮肤与 ScheduleFullscreenViewer 同一套视觉语言（全屏暗色毛玻璃 + 小字母标签 +
+          玻璃圆钮 + 点空白关闭）；动森皮肤保留奶油卡底部抽屉。 */}
+      {chatPickerOpen && !acnh && (
+          <div
+              className="absolute inset-0 z-50 flex flex-col animate-fade-in"
+              style={{
+                  background: 'rgba(6, 8, 16, 0.72)',
+                  backdropFilter: 'blur(22px) saturate(1.2)',
+                  WebkitBackdropFilter: 'blur(22px) saturate(1.2)',
+              }}
+              onClick={() => setChatPickerOpen(false)}
+          >
+              {/* Header —— 与日程全屏查看器同构 */}
+              <div className="flex items-center justify-between px-5 pt-[calc(env(safe-area-inset-top)+1rem)] pb-3 shrink-0" onClick={(e) => e.stopPropagation()}>
+                  <div>
+                      <div className="text-[10px] font-bold tracking-[0.25em] uppercase text-white/50">Recent Chats</div>
+                      <div className="text-lg font-black tracking-tight" style={{ color: 'hsl(260, 70%, 72%)' }}>最近聊天</div>
+                  </div>
+                  <button
+                      onClick={() => setChatPickerOpen(false)}
+                      className="w-9 h-9 rounded-full flex items-center justify-center transition-transform active:scale-90 text-white"
+                      style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.18)' }}
+                      aria-label="Close"
+                  >
+                      <svg viewBox="0 0 24 24" fill="none" strokeWidth={2.2} stroke="currentColor" className="w-4 h-4">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 6l12 12M18 6L6 18" />
+                      </svg>
+                  </button>
+              </div>
+              <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar px-4 pb-[calc(var(--safe-bottom,0px)+1.5rem)] space-y-1.5" onClick={(e) => e.stopPropagation()}>
+                  {(recentChats.length ? recentChats : (characters || []).map(c => ({ char: c, lastText: '', lastTs: 0 }))).map(({ char: c, lastText, lastTs }) => (
+                      <button
+                          key={c.id}
+                          onClick={() => { setChatPickerOpen(false); setActiveCharacterId(c.id); openApp(AppID.Chat); }}
+                          className="w-full flex items-center gap-3 p-2.5 rounded-2xl active:scale-[0.99] transition-all text-left"
+                          style={{ background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.09)' }}
+                      >
+                          <div className="relative w-12 h-12 shrink-0 overflow-hidden rounded-2xl" style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.15)' }}>
+                              <img src={c.avatar} className="w-full h-full object-cover" alt="" loading="lazy" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                  <span className="text-sm font-bold truncate text-white/95">{c.name}</span>
+                                  {c.id === activeCharacterId && (
+                                      <span className="px-1.5 py-px rounded-full text-[8px] font-bold shrink-0" style={{ background: 'hsla(260, 70%, 65%, 0.28)', color: 'hsl(260, 80%, 82%)' }}>当前</span>
+                                  )}
+                              </div>
+                              <p className="text-[11px] truncate mt-0.5 text-white/45">{lastText || '还没聊过天，去打个招呼？'}</p>
+                          </div>
+                          <div className="flex flex-col items-end gap-1 shrink-0">
+                              <span className="text-[10px] tabular-nums text-white/35">{formatChatTime(lastTs)}</span>
+                              {(unreadMessages[c.id] || 0) > 0 && (
+                                  <span className="min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center text-[9px] font-bold text-white bg-red-500">
+                                      {unreadMessages[c.id] > 99 ? '99+' : unreadMessages[c.id]}
+                                  </span>
+                              )}
+                          </div>
+                      </button>
+                  ))}
+                  <div className="text-[10px] text-center text-white/40 mt-4 tracking-widest">TAP OUTSIDE TO CLOSE · 点空白处关闭</div>
+              </div>
+          </div>
+      )}
+      {chatPickerOpen && acnh && (
           <div className="absolute inset-0 z-50 flex flex-col justify-end animate-fade-in">
               <div className="absolute inset-0 bg-black/35" onClick={() => setChatPickerOpen(false)} />
-              <div className={`relative rounded-t-[2rem] shadow-2xl max-h-[70%] flex flex-col animate-slide-up ${acnh ? '' : 'bg-white'}`}
-                  style={{ paddingBottom: 'calc(var(--safe-bottom, 0px) + 0.75rem)', ...(acnh ? { background: 'rgb(247,243,223)', borderTop: '2px solid #e8e2d6' } : {}) }}>
-                  <div className={`w-10 h-1 rounded-full mx-auto mt-3 shrink-0 ${acnh ? 'bg-[#e0d6c0]' : 'bg-slate-200'}`} />
+              <div className="relative rounded-t-[2rem] shadow-2xl max-h-[70%] flex flex-col animate-slide-up"
+                  style={{ paddingBottom: 'calc(var(--safe-bottom, 0px) + 0.75rem)', background: 'rgb(247,243,223)', borderTop: '2px solid #e8e2d6' }}>
+                  <div className="w-10 h-1 rounded-full mx-auto mt-3 shrink-0 bg-[#e0d6c0]" />
                   <div className="px-6 pt-3 pb-2 flex items-center justify-between shrink-0">
-                      <h3 className={`text-base font-bold ${acnh ? 'text-[#725d42]' : 'text-slate-700'}`}>最近聊天{acnh && ' 🍃'}</h3>
-                      <span className={`text-[9px] font-bold tracking-[0.22em] uppercase ${acnh ? 'text-[#c4b394]' : 'text-slate-300'}`}>Recent Chats</span>
+                      <h3 className="text-base font-bold text-[#725d42]">最近聊天 🍃</h3>
+                      <span className="text-[9px] font-bold tracking-[0.22em] uppercase text-[#c4b394]">Recent Chats</span>
                   </div>
                   <div className="flex-1 overflow-y-auto no-scrollbar px-3 pb-2 space-y-0.5">
                       {(recentChats.length ? recentChats : (characters || []).map(c => ({ char: c, lastText: '', lastTs: 0 }))).map(({ char: c, lastText, lastTs }) => (
                           <button
                               key={c.id}
                               onClick={() => { setChatPickerOpen(false); setActiveCharacterId(c.id); openApp(AppID.Chat); }}
-                              className={`w-full flex items-center gap-3 p-2.5 rounded-2xl active:scale-[0.99] transition-all text-left ${acnh ? 'hover:bg-[#efe7d4] active:bg-[#e8dfc9]' : 'hover:bg-slate-50 active:bg-slate-100'}`}
+                              className="w-full flex items-center gap-3 p-2.5 rounded-2xl active:scale-[0.99] transition-all text-left hover:bg-[#efe7d4] active:bg-[#e8dfc9]"
                           >
-                              <div className={`relative w-12 h-12 shrink-0 overflow-hidden ${acnh ? 'rounded-[26%] bg-[#e8e2d6]' : 'rounded-2xl bg-slate-100'}`}
-                                  style={acnh ? { border: '2px solid #ffffff', boxShadow: '0 2px 6px -1px rgba(61,52,40,0.22)' } : undefined}>
+                              <div className="relative w-12 h-12 shrink-0 overflow-hidden rounded-[26%] bg-[#e8e2d6]"
+                                  style={{ border: '2px solid #ffffff', boxShadow: '0 2px 6px -1px rgba(61,52,40,0.22)' }}>
                                   <img src={c.avatar} className="w-full h-full object-cover" alt="" loading="lazy" />
                               </div>
                               <div className="flex-1 min-w-0">
                                   <div className="flex items-center gap-2">
-                                      <span className={`text-sm font-bold truncate ${acnh ? 'text-[#725d42]' : 'text-slate-700'}`}>{c.name}</span>
+                                      <span className="text-sm font-bold truncate text-[#725d42]">{c.name}</span>
                                       {c.id === activeCharacterId && (
-                                          <span className={`px-1.5 py-px rounded-full text-[8px] font-bold shrink-0 ${acnh ? 'bg-[#7cba4c] text-white' : 'bg-primary/10 text-primary'}`}>当前</span>
+                                          <span className="px-1.5 py-px rounded-full text-[8px] font-bold shrink-0 bg-[#7cba4c] text-white">当前</span>
                                       )}
                                   </div>
-                                  <p className={`text-[11px] truncate mt-0.5 ${acnh ? 'text-[#9f8b68]' : 'text-slate-400'}`}>{lastText || '还没聊过天，去打个招呼？'}</p>
+                                  <p className="text-[11px] truncate mt-0.5 text-[#9f8b68]">{lastText || '还没聊过天，去打个招呼？'}</p>
                               </div>
                               <div className="flex flex-col items-end gap-1 shrink-0">
-                                  <span className={`text-[10px] tabular-nums ${acnh ? 'text-[#b9a988]' : 'text-slate-300'}`}>{formatChatTime(lastTs)}</span>
+                                  <span className="text-[10px] tabular-nums text-[#b9a988]">{formatChatTime(lastTs)}</span>
                                   {(unreadMessages[c.id] || 0) > 0 && (
-                                      <span className={`min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center text-[9px] font-bold text-white ${acnh ? 'bg-[#fc736d]' : 'bg-red-500'}`}>
+                                      <span className="min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center text-[9px] font-bold text-white bg-[#fc736d]">
                                           {unreadMessages[c.id] > 99 ? '99+' : unreadMessages[c.id]}
                                       </span>
                                   )}
