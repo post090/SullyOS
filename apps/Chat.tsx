@@ -915,7 +915,8 @@ const Chat: React.FC = () => {
         const onRevised = (e: Event) => {
             const detail = (e as CustomEvent).detail as { charId?: string } | undefined;
             if (detail?.charId && detail.charId !== char.id) return;
-            getLocalDailySchedule(char.id).then(s => { if (s) setScheduleData(s); }).catch(() => {});
+            // 走 getDailyScheduleForChar（内部解析角色自定义时区），与本文件其他日程读取一致
+            getDailyScheduleForChar(char).then(s => { if (s) setScheduleData(s); }).catch(() => {});
         };
         window.addEventListener('schedule-revised', onRevised);
         return () => window.removeEventListener('schedule-revised', onRevised);
