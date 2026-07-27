@@ -143,6 +143,23 @@ const ACNH_ICON_MAP: Partial<Record<AppID, React.ReactNode>> = {
     <rect x="54" y="34" width="20" height="4" rx="2" fill={BROWN} /><rect x="54" y="43" width="20" height="4" rx="2" fill={BROWN} />
     <rect x="27" y="56" width="46" height="4" rx="2" fill={BROWN} /><rect x="27" y="64" width="36" height="4" rx="2" fill="#B7A98C" />
   </>),
+  // 钱包：奶油钱包 + 搭扣 + 铃钱金币（动森的钱就该是铃钱）
+  [AppID.Wallet]: draw([18, 26, 82, 78], <>
+    <rect x="18" y="30" width="64" height="48" rx="10" fill={CREAM} />
+    <path d="M18 42 H82" stroke={BROWN} strokeWidth="4" />
+    <rect x="58" y="50" width="24" height="16" rx="8" fill="#F7CD67" stroke={BROWN} strokeWidth="3.5" />
+    <circle cx="70" cy="58" r="3.2" fill={BROWN} />
+    <circle cx="34" cy="60" r="8" fill="#F7CD67" stroke={BROWN} strokeWidth="3" />
+    <path d="M31 60 H37 M34 57 V63" stroke={BROWN} strokeWidth="2.5" strokeLinecap="round" />
+  </>),
+  // 智能家居：小房子 + 发光小灯泡
+  [AppID.SmartHome]: draw([16, 16, 84, 82], <>
+    <path d="M50 16 L84 44 H76 V78 C76 80 74 82 72 82 H28 C26 82 24 80 24 78 V44 H16 Z" fill={CREAM} />
+    <path d="M50 24 L74 44 H26 Z" fill="#82D5BB" stroke={BROWN} strokeWidth="3.5" strokeLinejoin="round" />
+    <circle cx="50" cy="60" r="10" fill="#F7CD67" stroke={BROWN} strokeWidth="3.5" />
+    <rect x="46" y="70" width="8" height="6" rx="2" fill={BROWN} />
+    <path d="M36 52 L32 48 M64 52 L68 48 M50 46 V41" stroke="#F7CD67" strokeWidth="3.5" strokeLinecap="round" />
+  </>),
 };
 
 export const getAcnhIcon = (appId: string): React.ReactNode =>

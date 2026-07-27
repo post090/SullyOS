@@ -195,6 +195,54 @@ export async function runReadNews(
     }
 }
 
+// ─── CHECK_WEATHER（精确天气查询，配合天气模糊感知）─────────────────────────
+
+export type CheckWeatherResult =
+    | {
+        ok: true;
+        /** 用户所在城市的精确天气（配置了 weatherCity 才有） */
+        userWeather?: { city: string; description: string; temp: number; feelsLike: number; humidity: number };
+        /** 角色所在城市的精确天气（regionConfig.city 与用户不同城时才有第二份） */
+        charWeather?: { city: string; description: string; temp: number; feelsLike: number; humidity: number };
+    }
+    | { ok: false; reason: 'not_enabled' | 'fetch_failed'; message?: string };
+
+/**
+ * 角色主动查天气：一次查齐用户 + 角色两地的精确数值（用户原话"一次可以用户和角色的都查到"）。
+ * 复用 RealtimeContextManager.fetchWeather 的按城市分桶缓存——模糊注入和精确查询共享同一份数据，
+ * 不会出现"直觉说凉快、一查却在下雹子"的精分现场。
+ */
+export async function runCheckWeather(
+    _args: Record<string, never>,
+    ctx: AgenticToolCtx,
+): Promise<CheckWeatherResult> {
+    const { char, realtimeConfig } = ctx;
+    if (!realtimeConfig?.weatherEnabled) {
+        return { ok: false, reason: 'not_enabled' };
+    }
+    try {
+        const userCityRaw = realtimeConfig.weatherCity;
+        const charCityRaw = (char.regionConfig?.city || '').trim();
+        const sameCity = !charCityRaw || charCityRaw.toLowerCase() === (userCityRaw || '').toLowerCase();
+        const [userW, charW] = await Promise.all([
+            RealtimeContextManager.fetchWeather(realtimeConfig),
+            sameCity ? Promise.resolve(null) : RealtimeContextManager.fetchWeather(realtimeConfig, charCityRaw),
+        ]);
+        if (!userW && !charW) {
+            return { ok: false, reason: 'fetch_failed', message: '两地天气都没取到' };
+        }
+        const pick = (w: { city: string; description: string; temp: number; feelsLike: number; humidity: number }) =>
+            ({ city: w.city, description: w.description, temp: w.temp, feelsLike: w.feelsLike, humidity: w.humidity });
+        return {
+            ok: true,
+            userWeather: userW ? pick(userW) : undefined,
+            charWeather: charW ? pick(charW) : undefined,
+        };
+    } catch (e: any) {
+        return { ok: false, reason: 'fetch_failed', message: e?.message ? String(e.message) : '查询失败' };
+    }
+}
+
 // ─── READ_DIARY (Notion) ────────────────────────────────────────────────────
 
 export type ReadDiaryResult =

@@ -36,6 +36,13 @@ export interface CharRegionOverride {
     subscribedPlatforms?: string[];      // 平台 key 白名单（hot_news），空数组=该角色不订阅任何平台
     subscribedRssUrls?: string[];        // RSS URL 白名单（内置 + 自定义），空数组=该角色不订阅任何 RSS
     sourceRatios?: Record<string, number>; // key = 平台 key 或 RSS URL，value = 权重（默认 1）
+    // 天气模糊感知：开启后角色只拿到档位化描述（"二十度上下"），精确数值要 [[CHECK_WEATHER]] 查
+    weatherFuzzy?: {
+        enabled?: boolean;       // 总开关：角色自己所在城市的天气模糊化
+        fuzzUserSide?: boolean;  // 用户所在城市的天气也模糊（默认 false）
+        fuzzTemp?: boolean;      // 温度模糊（默认 true）
+        fuzzHumidity?: boolean;  // 湿度模糊（默认 true）
+    };
 }
 
 export interface SearchResult {
@@ -302,6 +309,46 @@ const filterByCharRegion = (items: NewsItem[], region: CharRegionOverride | unde
         }
         return true;
     });
+};
+
+/**
+ * 天气模糊感知：把精确数值折成日常直觉档位。
+ * 设计哲学与资产系统 fuzzyMoney 同源——角色不该像气象台一样报数，
+ * 只有"挺冷的/二十度上下/闷闷的"这种体感概念；精确数值走 [[CHECK_WEATHER]] 查询。
+ */
+export const fuzzTemperature = (temp: number): string => {
+    if (temp <= -10) return '冷得离谱，零下十几度往下';
+    if (temp <= 0) return '零下，很冷';
+    if (temp <= 8) return '挺冷的，个位数的温度';
+    if (temp <= 15) return '十来度，有点凉';
+    if (temp <= 22) return '二十度上下，挺舒服';
+    if (temp <= 28) return '二十好几度，偏暖';
+    if (temp <= 33) return '三十度左右，热';
+    return '三十好几度，非常热';
+};
+
+export const fuzzHumidity = (humidity: number): string => {
+    if (humidity >= 85) return '空气很潮';
+    if (humidity >= 65) return '有点闷';
+    if (humidity <= 30) return '很干燥';
+    return '';  // 中间档不值一提，日常感知里根本注意不到
+};
+
+/**
+ * 按模糊开关渲染一行天气描述。fuzzy=false 时输出精确格式（与原措辞一致）。
+ */
+export const renderWeatherLine = (
+    w: WeatherData,
+    opts: { fuzzy: boolean; fuzzTemp: boolean; fuzzHumidity: boolean },
+): string => {
+    if (!opts.fuzzy) {
+        return `${w.description}，气温 ${w.temp}°C（体感 ${w.feelsLike}°C），湿度 ${w.humidity}%`;
+    }
+    const parts: string[] = [w.description];
+    parts.push(opts.fuzzTemp ? fuzzTemperature(w.temp) : `气温 ${w.temp}°C（体感 ${w.feelsLike}°C）`);
+    const hum = opts.fuzzHumidity ? fuzzHumidity(w.humidity) : `湿度 ${w.humidity}%`;
+    if (hum) parts.push(hum);
+    return parts.join('，');
 };
 
 export const RealtimeContextManager = {
@@ -914,28 +961,42 @@ export const RealtimeContextManager = {
                 charWeather = await RealtimeContextManager.fetchWeather(config, charCityRaw);
             }
             if (userWeather || charWeather) {
+                // 模糊感知配置：enabled = 角色自己那份模糊；fuzzUserSide = 用户那份也模糊。
+                // fuzzTemp / fuzzHumidity 默认 true（!== false），可单独关掉某个维度。
+                const wf = charRegion?.weatherFuzzy;
+                const fuzzyOn = !!wf?.enabled;
+                const fuzzDims = { fuzzTemp: wf?.fuzzTemp !== false, fuzzHumidity: wf?.fuzzHumidity !== false };
+                const charOpts = { fuzzy: fuzzyOn, ...fuzzDims };
+                const userOpts = { fuzzy: fuzzyOn && !!wf?.fuzzUserSide, ...fuzzDims };
                 parts.push('');
                 if (sameCity) {
-                    // 单城市：保持原措辞
+                    // 单城市：保持原措辞。这份天气就是角色身边的天气（用户同城/角色未设城市），
+                    // 总开关开了就整份模糊——角色对自己周遭只有体感概念。
                     const w = userWeather!;
+                    const oneOpts = { fuzzy: fuzzyOn, ...fuzzDims };
                     parts.push(`🌤️ 【${w.city}实时天气】`);
-                    parts.push(`现在外面: ${w.description}，气温 ${w.temp}°C（体感 ${w.feelsLike}°C），湿度 ${w.humidity}%`);
-                    parts.push(`你的建议: ${RealtimeContextManager.generateWeatherAdvice(w)}`);
+                    parts.push(`现在外面: ${renderWeatherLine(w, oneOpts)}`);
+                    if (!oneOpts.fuzzy) {
+                        parts.push(`你的建议: ${RealtimeContextManager.generateWeatherAdvice(w)}`);
+                    }
                 } else {
                     // 双城市：你和对方分别在哪
                     parts.push(`🌤️ 【实时天气】`);
                     if (userWeather) {
-                        parts.push(`对方所在 ${userWeather.city}: ${userWeather.description}，气温 ${userWeather.temp}°C（体感 ${userWeather.feelsLike}°C），湿度 ${userWeather.humidity}%`);
+                        parts.push(`对方所在 ${userWeather.city}: ${renderWeatherLine(userWeather, userOpts)}`);
                     }
                     if (charWeather) {
-                        parts.push(`你所在 ${charWeather.city}: ${charWeather.description}，气温 ${charWeather.temp}°C（体感 ${charWeather.feelsLike}°C），湿度 ${charWeather.humidity}%`);
+                        parts.push(`你所在 ${charWeather.city}: ${renderWeatherLine(charWeather, charOpts)}`);
                     } else if (charCityRaw) {
                         // 取不到角色城市天气时也告诉一声，免得模型懵
                         parts.push(`你所在 ${charCityRaw}: 天气暂未取到，可以靠常识感受。`);
                     }
-                    if (userWeather) {
+                    if (userWeather && !userOpts.fuzzy) {
                         parts.push(`关心对方的小提示: ${RealtimeContextManager.generateWeatherAdvice(userWeather)}`);
                     }
+                }
+                if (fuzzyOn) {
+                    parts.push(`（以上天气是你抬头看天、出门体感得来的大概印象——你不是气象台，记不住精确数字，聊天时就按这个感觉说。若你真的需要精确数值（比如对方问具体温度、或你要决定穿什么），可单独输出一行：[[CHECK_WEATHER]]，系统会替你打开天气 App 查到你和对方两地的精确数据。别为了用而用，日常感觉够用就别查。）`);
                 }
             }
         }

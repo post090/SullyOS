@@ -2456,6 +2456,15 @@ export interface CharacterProfile {
     // 各订阅源的占比权重。key = hot_news 平台 key（如 'weibo'）或 RSS URL；
     // value = 权重数（默认 1，越大越常出现在抽样里）。不在此 map 的源默认权重 1。
     sourceRatios?: Record<string, number>;
+    // ─── 天气模糊感知 ───
+    // 开启后角色对天气只有档位化的大概概念（"二十度上下，挺舒服"），不再看到精确数值；
+    // 想知道精确数值需主动输出 [[CHECK_WEATHER]] 查询（一次查齐用户+角色两地）。
+    weatherFuzzy?: {
+      enabled?: boolean;       // 总开关：开启 = 角色自己所在城市的天气模糊化
+      fuzzUserSide?: boolean;  // 用户所在城市的天气也模糊（默认 false：对方的天气保持精确）
+      fuzzTemp?: boolean;      // 温度模糊（默认 true）
+      fuzzHumidity?: boolean;  // 湿度模糊（默认 true）
+    };
   };
 
   // 线下时间感知（约会 / 见面 App）：开启（默认）时向见面 system prompt 注入「当前真实时间」。

@@ -1715,6 +1715,59 @@ ${isInitialGeneration ? `
                                    </p>
                                </div>
 
+                               {/* 1.5 天气模糊感知 —— 角色对天气只有体感概念，精确数值要主动查 */}
+                               <div className="border-t border-slate-100 pt-3">
+                                   <div className="flex items-center justify-between gap-3">
+                                       <div className="min-w-0">
+                                           <p className="text-xs font-bold text-slate-700">天气模糊感知</p>
+                                           <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">
+                                               开启后角色不再像气象台一样知道精确数值，只有「二十度上下、有点闷」这种日常体感；真需要精确数据时 TA 会自己掏手机查天气 App（一次查齐你和 TA 两地）。
+                                           </p>
+                                       </div>
+                                       <button
+                                           onClick={() => {
+                                               const base = formData.regionConfig || {};
+                                               const wf = base.weatherFuzzy || {};
+                                               handleChange('regionConfig', { ...base, weatherFuzzy: { ...wf, enabled: !wf.enabled } });
+                                           }}
+                                           className={`w-12 h-7 rounded-full transition-colors relative shrink-0 ${formData.regionConfig?.weatherFuzzy?.enabled ? 'bg-emerald-500' : 'bg-slate-200'}`}
+                                       >
+                                           <div className={`absolute top-0.5 w-6 h-6 bg-white rounded-full shadow-md transition-transform ${formData.regionConfig?.weatherFuzzy?.enabled ? 'translate-x-5' : 'translate-x-0.5'}`}></div>
+                                       </button>
+                                   </div>
+                                   {formData.regionConfig?.weatherFuzzy?.enabled && (
+                                       <div className="mt-3 pl-3 border-l-2 border-emerald-100 space-y-2.5">
+                                           {([
+                                               { key: 'fuzzUserSide', label: '你那边的天气也模糊', desc: '默认关：角色对你所在城市保持精确感知（方便关心你）。开了就两边都只剩大概印象。', invert: false },
+                                               { key: 'fuzzTemp', label: '温度模糊', desc: '「二十度上下」代替「23°C（体感 24°C）」。', invert: true },
+                                               { key: 'fuzzHumidity', label: '湿度模糊', desc: '「有点闷 / 很干燥」代替「湿度 68%」，不值一提的湿度直接省略。', invert: true },
+                                           ] as { key: 'fuzzUserSide' | 'fuzzTemp' | 'fuzzHumidity'; label: string; desc: string; invert: boolean }[]).map(opt => {
+                                               const wf = formData.regionConfig?.weatherFuzzy || {};
+                                               // invert=true 的选项默认开（!== false），fuzzUserSide 默认关（=== true 才开）
+                                               const on = opt.invert ? wf[opt.key] !== false : wf[opt.key] === true;
+                                               return (
+                                                   <div key={opt.key} className="flex items-center justify-between gap-3">
+                                                       <div className="min-w-0">
+                                                           <p className="text-[11px] font-bold text-slate-600">{opt.label}</p>
+                                                           <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">{opt.desc}</p>
+                                                       </div>
+                                                       <button
+                                                           onClick={() => {
+                                                               const base = formData.regionConfig || {};
+                                                               const prev = base.weatherFuzzy || {};
+                                                               handleChange('regionConfig', { ...base, weatherFuzzy: { ...prev, [opt.key]: !on } });
+                                                           }}
+                                                           className={`w-10 h-6 rounded-full transition-colors relative shrink-0 ${on ? 'bg-emerald-400' : 'bg-slate-200'}`}
+                                                       >
+                                                           <div className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow-md transition-transform ${on ? 'translate-x-4' : 'translate-x-0.5'}`}></div>
+                                                       </button>
+                                                   </div>
+                                               );
+                                           })}
+                                       </div>
+                                   )}
+                               </div>
+
                                {/* 2. 热点订阅池 —— 拖拽分档（浏览/关注/偏爱/必看），平时折叠 */}
                                <div className="border-t border-slate-100 pt-3">
                                    {(() => {

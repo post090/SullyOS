@@ -1781,7 +1781,7 @@ const Settings: React.FC = () => {
                                     step="1"
                                     value={Math.max(0, AUTO_BACKUP_STEPS.indexOf(cloudBackupConfig.autoBackupIntervalHours || 24))}
                                     onChange={e => updateCloudBackupConfig({ autoBackupIntervalHours: AUTO_BACKUP_STEPS[parseInt(e.target.value, 10)] })}
-                                    className="w-full accent-primary"
+                                    className="w-full h-2 bg-primary/10 rounded-full appearance-none accent-primary"
                                 />
                                 <div className="flex justify-between text-[8px] text-slate-300 px-0.5">
                                     {AUTO_BACKUP_STEPS.map(h => <span key={h}>{autoBackupLabel(h).replace(' ', '')}</span>)}
@@ -2156,7 +2156,7 @@ const Settings: React.FC = () => {
                                     step="0.05"
                                     value={localTemperature}
                                     onChange={(e) => setLocalTemperature(parseFloat(e.target.value))}
-                                    className="w-full accent-slate-400 mt-1"
+                                    className="w-full h-2 bg-slate-100 rounded-full appearance-none accent-slate-400 mt-1"
                                 />
                                 <p className="text-[9px] text-slate-300 mt-0.5">默认 0.85；只作用于聊天和约会的主回复</p>
                             </div>
@@ -2286,7 +2286,7 @@ const Settings: React.FC = () => {
                         </div>
                         <input type="range" min="36" max="64" step="2" value={fbConfig.size}
                             onChange={e => updateFb({ size: parseInt(e.target.value, 10) })}
-                            className="w-full accent-primary" />
+                            className="w-full h-2 bg-primary/10 rounded-full appearance-none accent-primary" />
                     </div>
                     <div>
                         <div className="flex items-center justify-between mb-1">
@@ -2295,7 +2295,7 @@ const Settings: React.FC = () => {
                         </div>
                         <input type="range" min="0.3" max="1" step="0.05" value={fbConfig.opacity}
                             onChange={e => updateFb({ opacity: parseFloat(e.target.value) })}
-                            className="w-full accent-primary" />
+                            className="w-full h-2 bg-primary/10 rounded-full appearance-none accent-primary" />
                     </div>
                     <div className="flex items-center justify-between">
                         <div>

@@ -371,6 +371,25 @@ export const ActiveMsgStore = {
     });
   },
 
+  /**
+   * 列出 reasoning_buffer 里所有残留会话的 (sessionId, charId)。
+   * 用于启动/回前台时的孤儿回填兜底：reasoning push 到达时页面被杀,
+   * SW 的 'active-msg-reasoning' postMessage 进空气, buffer 里的思维链没人认领。
+   * 只读不删——真正认领仍走 claimReasoning（含 chunks 排序拼接语义）。
+   */
+  async listReasoningSessions(): Promise<Array<{ sessionId: string; charId: string; receivedAt: number }>> {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_REASONING_BUFFER, 'readonly');
+      const request = tx.objectStore(STORE_REASONING_BUFFER).getAll();
+      request.onsuccess = () => {
+        const rows = (request.result || []) as InstantPushReasoningBufferEntry[];
+        resolve(rows.map(r => ({ sessionId: r.sessionId, charId: r.charId, receivedAt: r.receivedAt ?? 0 })));
+      };
+      request.onerror = () => reject(request.error);
+    });
+  },
+
   async claimReasoning(sessionId: string): Promise<InstantPushReasoningBufferEntry | null> {
     const db = await openDB();
     return new Promise<InstantPushReasoningBufferEntry | null>((resolve, reject) => {

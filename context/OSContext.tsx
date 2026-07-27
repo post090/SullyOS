@@ -1074,16 +1074,31 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   // 聊天「见面」按钮 → 见面：记录目标角色，DateApp 挂载后消费一次并自动进入见面
   const [dateAutoStartCharId, setDateAutoStartCharId] = useState<string | null>(null);
 
+  // 同一条主动消息可能同时经 'proactive-message-sent' 与 'active-msg-received'
+  // 两条事件链路到达这里，各发一次就是用户看到的「重复两条通知」。
+  // 双保险：短窗口去重（10s 内同 key 直接跳过）+ 确定性 id（窗口失守时同 id 覆盖不叠加）。
+  const recentProactiveNotifKeys = useRef<Map<string, number>>(new Map());
   const sendProactiveNativeNotification = useCallback(async (charId: string, charName: string, body: string) => {
       if (!Capacitor.isNativePlatform()) return;
       try {
+          const key = `${charId}|${body}`;
+          const now = Date.now();
+          const lastSent = recentProactiveNotifKeys.current.get(key);
+          if (lastSent && now - lastSent < 10000) return;
+          recentProactiveNotifKeys.current.set(key, now);
+          for (const [k, t] of recentProactiveNotifKeys.current) {
+              if (now - t > 60000) recentProactiveNotifKeys.current.delete(k);
+          }
           const permStatus = await LocalNotifications.checkPermissions();
           if (permStatus.display !== 'granted') return;
+          // 确定性 id：charId+内容折成 31-bit 正整数（参照 taskReminderScheduler.deterministicNotifId）
+          let h = 0;
+          for (let i = 0; i < key.length; i++) h = ((h << 5) - h + key.charCodeAt(i)) | 0;
           await LocalNotifications.schedule({
               notifications: [{
                   title: charName,
                   body,
-                  id: Math.floor(Math.random() * 1000000),
+                  id: Math.abs(h) & 0x3FFFFFFF,
                   schedule: { at: new Date(Date.now() + 250) },
                   smallIcon: 'ic_stat_icon_config_sample',
                   extra: { charId, source: 'proactive-chat' }

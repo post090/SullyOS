@@ -41,6 +41,7 @@ import {
     runRecall,
     runSearch,
     runReadNews,
+    runCheckWeather,
     runReadDiary,
     runFsReadDiary,
     runReadNote,
@@ -708,6 +709,7 @@ export async function applyAssistantPostProcessing(
             /\[\[RECALL:\s*\d{4}[-/年]\d{1,2}\]\]/.test(aiContent)
             || /\[\[SEARCH:\s*.+?\]\]/.test(aiContent)
             || /\[\[READ_NEWS:\s*.+?\]\]/.test(aiContent)
+            || /\[\[CHECK_WEATHER\]\]/.test(aiContent)
             || /\[\[READ_DIARY:\s*.+?\]\]/.test(aiContent)
             || /\[\[FS_READ_DIARY:\s*.+?\]\]/.test(aiContent)
             || /\[\[READ_NOTE:\s*.+?\]\]/.test(aiContent)
@@ -887,6 +889,66 @@ ${rn.contentText}
     }
 
     aiContent = aiContent.replace(/\[\[READ_NEWS:.*?\]\]/g, '').trim();
+
+    // 5.56 Handle Check Weather (精确天气查询) — [[CHECK_WEATHER]]，配合天气模糊感知。
+    // 角色平时只有档位化直觉；输出这个 tag = 掏出手机打开天气 App，一次查齐用户+角色两地精确数值。
+    const checkWeatherMatch = aiContent.match(/\[\[CHECK_WEATHER\]\]/);
+    if (!skipSecondPassLLM && checkWeatherMatch) {
+        console.log('🌤️ [CheckWeather] 角色主动查天气');
+        setSearchStatus('正在打开天气App查询...');
+        const weatherLeadIn = aiContent.replace(/\[\[CHECK_WEATHER\]\]/g, '').trim() || '我看眼天气...';
+        try {
+            const cw = await runCheckWeather({}, agenticCtx);
+            if (cw.ok) {
+                const fmt = (w: { city: string; description: string; temp: number; feelsLike: number; humidity: number }) =>
+                    `${w.city}: ${w.description}，气温 ${w.temp}°C（体感 ${w.feelsLike}°C），湿度 ${w.humidity}%`;
+                const lines: string[] = [];
+                if (cw.charWeather) lines.push(`你所在 ${fmt(cw.charWeather)}`);
+                if (cw.userWeather) lines.push(`${cw.charWeather ? '对方所在 ' : ''}${fmt(cw.userWeather)}`);
+                const sysText = `[系统: 你打开了天气App，查到了精确数据]
+${lines.join(String.fromCharCode(10))}
+[系统: 现在请你: 1.先正常回应对方刚才说的话 2.像刚看完手机那样自然地把天气聊进去（"我刚看了眼天气..."），需要报数字就报 3.严禁再输出[[CHECK_WEATHER]]标记]`;
+                const weatherMessages = [
+                    ...fullMessages,
+                    { role: 'assistant', content: weatherLeadIn },
+                    { role: 'user', content: sysText },
+                ];
+                data = await safeFetchJson(`${baseUrl}/chat/completions`, {
+                    method: 'POST', headers,
+                    body: JSON.stringify({ model: effectiveApi.model, messages: weatherMessages, temperature: 0.8, max_tokens: 8000, stream: false })
+                }, 2, 0, { ...apiLogMeta, purpose: '查询天气' });
+                updateTokenUsage(data, historyMsgCount, 'check-weather');
+                aiContent = normalizeAiContent(data.choices?.[0]?.message?.content || '');
+                addToast(`🌤️ ${char.name} 查了下天气`, 'info');
+            } else {
+                // 查不到 → 如实告知，严禁编数值（与 READ_NEWS 失败路径同哲学）
+                const failWhy = cw.reason === 'not_enabled' ? '天气功能没开启' : (cw.message || '天气数据没取到');
+                console.log('🌤️ [CheckWeather] 查询失败:', cw.reason, cw.message);
+                const failMessages = [
+                    ...fullMessages,
+                    { role: 'assistant', content: weatherLeadIn },
+                    { role: 'user', content: `[系统: 你想查天气，但${failWhy}。请你: 1.先回应对方刚才的话 2.自然地如实提一句没查到 3.严禁编造精确数值，严禁再输出[[CHECK_WEATHER]]标记]` },
+                ];
+                try {
+                    data = await safeFetchJson(`${baseUrl}/chat/completions`, {
+                        method: 'POST', headers,
+                        body: JSON.stringify({ model: effectiveApi.model, messages: failMessages, temperature: 0.8, max_tokens: 8000, stream: false })
+                    }, 2, 0, { ...apiLogMeta, purpose: '查询天气' });
+                    updateTokenUsage(data, historyMsgCount, 'check-weather-fail');
+                    aiContent = normalizeAiContent(data.choices?.[0]?.message?.content || '');
+                } catch (failErr) {
+                    console.error('CheckWeather fail-notice call failed:', failErr);
+                    aiContent = aiContent.replace(/\[\[CHECK_WEATHER\]\]/g, '').trim();
+                }
+            }
+        } catch (e) {
+            console.error('CheckWeather execution failed:', e);
+            aiContent = aiContent.replace(/\[\[CHECK_WEATHER\]\]/g, '').trim();
+        }
+        setSearchStatus('');
+    }
+
+    aiContent = aiContent.replace(/\[\[CHECK_WEATHER\]\]/g, '').trim();
 
     // 5.6 Handle Diary Writing (写日记到 Notion)
     const diaryStartMatch = aiContent.match(/\[\[DIARY_START:\s*(.+?)\]\]\n?([\s\S]*?)\[\[DIARY_END\]\]/);

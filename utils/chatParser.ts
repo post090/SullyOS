@@ -340,7 +340,11 @@ export const ChatParser = {
                 try {
                     const hasPerm = await LocalNotifications.checkPermissions();
                     if (hasPerm.display === 'granted') {
-                        await LocalNotifications.schedule({ notifications: [{ title: charName, body: msgContent, id: Math.floor(Math.random() * 100000), schedule: { at: new Date(dueTime) }, smallIcon: 'ic_stat_icon_config_sample' }] });
+                        // 确定性 id：同一条定时消息重复解析时不会叠出多条通知（参照 taskReminderScheduler）
+                        const notifKey = `${charId}|${msgContent}|${dueTime}`;
+                        let nh = 0;
+                        for (let i = 0; i < notifKey.length; i++) nh = ((nh << 5) - nh + notifKey.charCodeAt(i)) | 0;
+                        await LocalNotifications.schedule({ notifications: [{ title: charName, body: msgContent, id: Math.abs(nh) & 0x3FFFFFFF, schedule: { at: new Date(dueTime) }, smallIcon: 'ic_stat_icon_config_sample' }] });
                     }
                 } catch (e) { console.log("Notification schedule skipped (web mode)"); }
                 addToast(`${charName} 似乎打算一会儿找你...`, 'info');

@@ -643,7 +643,11 @@ const backfillReasoningSafely = async (sessionId?: string, charId?: string): Pro
       .sort((a, b) => ((a as any).id ?? 0) - ((b as any).id ?? 0));
     if (sessionMsgs.length === 0) return; // content 还没落库, 留给正常 claim 路径
     const first = sessionMsgs[0] as any;
-    if (first.metadata?.thinkingChain) return; // 正常 claim 已挂上, 不重复
+    if (first.metadata?.thinkingChain) {
+      // 正常 claim 已挂上 —— 清掉 buffer 残留, 否则孤儿清扫每次启动都会重扫这条死条目
+      await ActiveMsgStore.clearReasoning(sessionId).catch(() => {});
+      return;
+    }
     if (typeof first.id !== 'number') return;
 
     const buffered = await ActiveMsgStore.claimReasoning(sessionId);
@@ -654,6 +658,26 @@ const backfillReasoningSafely = async (sessionId?: string, charId?: string): Pro
     window.dispatchEvent(new CustomEvent('active-msg-progress', { detail: { charId } }));
   } catch (e) {
     console.warn('[ActiveMsg] backfill reasoning failed', sessionId, e);
+  }
+};
+
+/**
+ * 孤儿思维链清扫: backfillReasoningSafely 依赖 SW 的 'active-msg-reasoning' postMessage 触发,
+ * 但 reasoning push 到达时页面被杀/冻结的话那条 postMessage 进空气 —— buffer 里的思维链
+ * 永远没人认领, 首条回复也就永远没有 thinkingChain (用户看到的"主动消息不带思维链").
+ * 这里在启动 / 回前台时全量扫一遍 buffer 残留会话逐个补回填.
+ * 太新的条目 (5s 内) 跳过 —— 可能 content push 正在路上, 留给正常 claim 路径, 避免抢跑.
+ */
+const sweepOrphanReasoningSafely = async (): Promise<void> => {
+  try {
+    const sessions = await ActiveMsgStore.listReasoningSessions();
+    const now = Date.now();
+    for (const s of sessions) {
+      if (now - s.receivedAt < 5000) continue;
+      await backfillReasoningSafely(s.sessionId, s.charId);
+    }
+  } catch (e) {
+    console.warn('[ActiveMsg] sweep orphan reasoning failed', e);
   }
 };
 
@@ -748,6 +772,7 @@ export const ActiveMsgRuntime = {
         // 先 await flush 落库 round-1 旁白, 再跑 runner 触发 round-2, 避免 "B+A".
         void (async () => {
           await flushInboxToChat();
+          await sweepOrphanReasoningSafely();
           void drainPendingDiaries(loadRealtimeConfigFromLocalStorage(), (charId) => {
             window.dispatchEvent(new CustomEvent('active-msg-progress', { detail: { charId } }));
           });
@@ -759,6 +784,7 @@ export const ActiveMsgRuntime = {
     // 启动兜底: 先 flush 落库 (含上次被杀进程时卡在 inbox 的 round-1 旁白), 再跑 runner
     // 触发 round-2, 保证冷启动恢复时旁白也排在 round-2 回复之前.
     await flushInboxToChat();
+    await sweepOrphanReasoningSafely();
     await runPendingToolCallsSafely();
     void drainPendingDiaries(loadRealtimeConfigFromLocalStorage(), (charId) => {
       window.dispatchEvent(new CustomEvent('active-msg-progress', { detail: { charId } }));

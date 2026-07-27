@@ -543,9 +543,15 @@ const Launcher: React.FC = () => {
     );
   }, [devDebugVisible]);
 
-  const normalizeOrder = useCallback((saved: string[] | undefined, available: string[]) => {
+    const normalizeOrder = useCallback((saved: string[] | undefined, available: string[]) => {
       const valid = new Set(available);
-      return [...(saved || []).filter((id, index, all) => valid.has(id) && all.indexOf(id) === index), ...available.filter(id => !(saved || []).includes(id))];
+      const savedKept = (saved || []).filter((id, index, all) => valid.has(id) && all.indexOf(id) === index);
+      const missing = available.filter(id => !(saved || []).includes(id));
+      // 钱包/智能家居钦定进首页：老用户已存过排序时插到最前，避免新 App 沉底到最后一页找不到
+      const frontIds = new Set<string>([AppID.Wallet, AppID.SmartHome]);
+      const front = missing.filter(id => frontIds.has(id));
+      const rest = missing.filter(id => !frontIds.has(id));
+      return [...front, ...savedKept, ...rest];
   }, []);
 
   const availableGridIds = useMemo(() => availableGridApps.map(app => app.id), [availableGridApps]);
