@@ -25,6 +25,25 @@ export function makeChatGenerationJobId(): string {
   return `chatgen-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+// ── 在场名单：本页面会话仍在管的任务 ────────────────────────────
+// 根因：切回 App 时 visibilitychange 的恢复扫描和被冻结后解冻的正常流水线会
+// 同时处理同一个 native_completed 任务 → 同一条回复入库两次。
+// 名单只活在内存里：页面真被杀（WebView 重建）名单自然清空，恢复机制才接手；
+// 页面只是冻结过，流水线醒来自己会送达，恢复机制不许抢活。
+const liveInPageChatJobs = new Set<string>();
+
+export function registerLiveInPageChatJob(id: string): void {
+  liveInPageChatJobs.add(id);
+}
+
+export function unregisterLiveInPageChatJob(id?: string): void {
+  if (id) liveInPageChatJobs.delete(id);
+}
+
+export function isLiveInPageChatJob(id: string): boolean {
+  return liveInPageChatJobs.has(id);
+}
+
 export function loadChatGenerationJobs(): ChatGenerationJob[] {
   try {
     const raw = localStorage.getItem(JOBS_KEY);
@@ -73,6 +92,8 @@ export function createChatGenerationJob(input: {
     requestHash: input.requestHash,
   };
   upsertChatGenerationJob(job);
+  // 本页面亲手创建的任务 = 本页面流水线负责送达，恢复扫描不许抢
+  registerLiveInPageChatJob(job.id);
   return job;
 }
 
@@ -92,6 +113,7 @@ export function markChatJobNativeCompleted(id: string): void {
 
 export async function markChatJobConsumed(id?: string): Promise<void> {
   if (!id) return;
+  unregisterLiveInPageChatJob(id);
   const job = patchChatGenerationJob(id, { status: 'consumed' });
   if (job?.nativeJobId) {
     try { await clearNativeJob(job.nativeJobId); } catch { /* ignore */ }
@@ -100,6 +122,7 @@ export async function markChatJobConsumed(id?: string): Promise<void> {
 
 export function markChatJobFailed(id: string | undefined, error: string): void {
   if (!id) return;
+  unregisterLiveInPageChatJob(id);
   const job = patchChatGenerationJob(id, { status: 'failed', error });
   if (job?.nativeJobId) {
     void clearNativeJob(job.nativeJobId).catch(() => {});

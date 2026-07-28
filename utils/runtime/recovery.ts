@@ -7,6 +7,7 @@ import { sanitizeForNotification } from '../sanitize';
 import { clearNativeJob, getNativeJob } from './nativeRuntime';
 import {
   getRecoverableChatJobs,
+  isLiveInPageChatJob,
   loadChatGenerationJobs,
   patchChatGenerationJob,
   refreshChatJobFromNative,
@@ -24,6 +25,12 @@ export async function recoverNativeChatJobs(): Promise<{ recovered: number; fail
   let running = 0;
 
   for (const original of jobs) {
+    // 在场名单：本页面流水线还活着并管着这个任务（页面只是冻结过没死），
+    // 它醒来自己会送达——恢复机制抢着入库就是"恢复两次"的根因，跳过。
+    if (isLiveInPageChatJob(original.id)) {
+      running += 1;
+      continue;
+    }
     const job = await refreshChatJobFromNative(original);
     if (job.status === 'native_completed') {
       const ok = await recoverCompletedJob(job);
