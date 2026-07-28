@@ -74,6 +74,7 @@ import { DB } from '../db';
 import { isMessageSemanticallyRelevant, formatMessageForPrompt } from '../messageFormat';
 import { sanitizeQuerySourceMessages } from './querySanitizer';
 import { getLocalDateKey } from '../localDate';
+import { extractExternalMemoryText } from './externalMemory';
 
 // ─── 轻量 LLM 配置类型 ───────────────────────────────
 
@@ -149,7 +150,7 @@ async function loadMemoriesByDateRanges(
  *
  * 返回 null：memories 为空（没有新记忆，不需要归档动作）。
  */
-function buildAutoArchiveFragments(
+export function buildAutoArchiveFragments(
     memories: { id: string; content: string; createdAt: number }[],
     hideBeforeMessageId: number,
 ): NonNullable<PipelineResult['autoArchive']> | null {
@@ -1662,6 +1663,144 @@ export interface RangeProcessResult {
      * - 其它字符串    异常信息
      */
     error?: 'lock' | 'empty' | 'no_memories' | string;
+}
+
+/** 外部文本搬家到记忆宫殿的结果。 */
+export interface ExternalMemoryImportResult {
+    stored: number;
+    skipped: number;
+    extracted: number;
+    /** 与本次真正写入向量库的节点完全同源，供 caller 回写神经链接里的传统记忆档案。 */
+    archiveFragments: NonNullable<PipelineResult['autoArchive']>['fragments'];
+    /** 记忆宫殿内部的节点关联边；不要和“神经链接 App”混为一谈。 */
+    links: number;
+    batches: import('./externalMemory').ExternalMemoryBatchResult[];
+    error?: 'lock' | 'empty' | 'no_memories' | string;
+}
+
+/**
+ * 把其它应用/设备导出的原始记忆文字直接迁入当前角色的记忆宫殿。
+ *
+ * 与聊天缓冲区不同，这条路径不碰消息水位线：
+ * 外部文本 → 保真清洗/整理时间 → 分配房间 → embedding 入库 → 宫殿内部建链/巩固
+ *          → 同源 MemoryFragment 回写神经链接角色档案（不推进聊天水位线）。
+ */
+export async function importExternalMemoryText(
+    rawText: string,
+    charId: string,
+    charName: string,
+    embeddingConfig: EmbeddingConfig,
+    llmConfig: LightLLMConfig,
+    userName: string = '',
+    onProgress?: (stage: string) => void,
+): Promise<ExternalMemoryImportResult> {
+    if (processingLocks.has(charId)) {
+        return { stored: 0, skipped: 0, extracted: 0, archiveFragments: [], links: 0, batches: [], error: 'lock' };
+    }
+    processingLocks.add(charId);
+
+    try {
+        if (!rawText.trim()) {
+            return { stored: 0, skipped: 0, extracted: 0, archiveFragments: [], links: 0, batches: [], error: 'empty' };
+        }
+
+        const existingBefore = await MemoryNodeDB.getByCharId(charId);
+        const extraction = await extractExternalMemoryText(
+            rawText,
+            charId,
+            charName,
+            userName,
+            llmConfig,
+            onProgress,
+        );
+        const failedBatch = extraction.batches.find(batch => !batch.ok);
+        if (failedBatch) {
+            return {
+                stored: 0,
+                skipped: 0,
+                extracted: 0,
+                archiveFragments: [],
+                links: 0,
+                batches: extraction.batches,
+                error: `第 ${failedBatch.index}/${failedBatch.total} 批未能无损清洗：${failedBatch.error || '完整性校验失败'}。本次没有写入任何记忆`,
+            };
+        }
+        if (extraction.memories.length === 0) {
+            return {
+                stored: 0,
+                skipped: 0,
+                extracted: 0,
+                archiveFragments: [],
+                links: 0,
+                batches: extraction.batches,
+                error: 'no_memories',
+            };
+        }
+
+        try {
+            const consistency = await checkModelConsistency(charId, embeddingConfig.model);
+            if (consistency === 'mismatch') {
+                onProgress?.('检测到向量模型已更换，正在重建已有向量…');
+                await rebuildAllVectors(charId, embeddingConfig, getRemoteVectorConfig());
+            }
+        } catch (error: any) {
+            console.warn(`🏰 [ExternalImport] 模型一致性检查失败（继续导入）: ${error?.message || error}`);
+        }
+
+        onProgress?.(`正在生成 ${extraction.memories.length} 条向量记忆…`);
+        const vectorResult = await vectorizeAndStore(
+            extraction.memories,
+            embeddingConfig,
+            getRemoteVectorConfig(),
+            { skipDedup: false },
+        );
+
+        // 只拿本次真正写入的节点建链；被向量去重跳过的候选不能留下悬空边。
+        const storedIdSet = new Set(extraction.memories.map(memory => memory.id));
+        const allAfter = await MemoryNodeDB.getByCharId(charId);
+        const justStored = allAfter.filter(node => storedIdSet.has(node.id));
+
+        // 神经链接桥接只依赖真正写入的同批节点；先生成，避免可选关联步骤失败时丢掉双写。
+        const archiveFragments = buildAutoArchiveFragments(justStored, 0)?.fragments || [];
+        onProgress?.(`正在建立 ${justStored.length} 条记忆的宫殿内部关联…`);
+        let links: Awaited<ReturnType<typeof buildLinks>> = [];
+        try {
+            links = await buildLinks(justStored, existingBefore, llmConfig);
+        } catch (error: any) {
+            console.warn(`🏰 [ExternalImport] 建立关联失败，记忆与神经链接双写仍继续: ${error?.message || error}`);
+        }
+        try {
+            await runConsolidation(charId, getRemoteVectorConfig());
+        } catch (error: any) {
+            console.warn(`🏰 [ExternalImport] 巩固失败，已写入记忆不受影响: ${error?.message || error}`);
+        }
+        // 与全自动总结水位线共用同一个桥接器：同一批 MemoryNode 按日期组成
+        // mood='palace' 的 MemoryFragment，交给 UI 合并进当前角色的神经链接档案。
+        // 外部导入没有聊天 Message ID，因此这里只双写记忆，不推进/伪造聊天水位线。
+        onProgress?.(`搬家完成：新增 ${vectorResult.stored} 条向量记忆`);
+
+        return {
+            stored: vectorResult.stored,
+            skipped: vectorResult.skipped,
+            extracted: extraction.memories.length,
+            archiveFragments,
+            links: links.length,
+            batches: extraction.batches,
+        };
+    } catch (error: any) {
+        console.error(`❌ [ExternalImport] ${charName} 外部记忆导入失败:`, error);
+        return {
+            stored: 0,
+            skipped: 0,
+            extracted: 0,
+            archiveFragments: [],
+            links: 0,
+            batches: [],
+            error: error?.message || String(error),
+        };
+    } finally {
+        processingLocks.delete(charId);
+    }
 }
 
 /**

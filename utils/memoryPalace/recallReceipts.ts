@@ -44,6 +44,26 @@ function readAll(charId: string): RecallReceipt[] {
     }
 }
 
+/**
+ * 读取某个时间点之后最近一次真实注入回执。
+ *
+ * “记忆链接”用它锁定当前回复实际经过的那一批记忆。若当前轮没有回执，
+ * 必须返回 null，而不是退回更早的一轮，避免用户误改无关记忆。
+ */
+export function getLatestRecallReceipt(
+    charId: string,
+    sinceTs: number = 0,
+): RecallReceipt | null {
+    const list = readAll(charId);
+    for (let i = list.length - 1; i >= 0; i--) {
+        const receipt = list[i];
+        if (receipt.ts >= sinceTs) {
+            return { ts: receipt.ts, ids: [...receipt.ids] };
+        }
+    }
+    return null;
+}
+
 function writeAll(charId: string, receipts: RecallReceipt[]): void {
     try {
         localStorage.setItem(storageKey(charId), JSON.stringify(receipts));

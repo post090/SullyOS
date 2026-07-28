@@ -26,7 +26,8 @@ export type { RerankApiConfig, RerankResult } from './rerank';
 
 // 输入管线
 export { extractMemoriesFromBuffer } from './extraction';
-export { vectorizeAndStore, checkModelConsistency, rebuildAllVectors, embedMissingVectors } from './vectorStore';
+export { vectorizeAndStore, updateStoredMemoryNode, checkModelConsistency, rebuildAllVectors, embedMissingVectors } from './vectorStore';
+export type { UpdateStoredMemoryNodeResult } from './vectorStore';
 
 // 认知过程
 export { runConsolidation, calculateEffectiveImportance, shouldPromote } from './consolidation';
@@ -39,6 +40,7 @@ export { hybridSearch } from './hybridSearch';
 export { spreadActivation } from './activation';
 export { applyPriming, checkRumination } from './priming';
 export { expandAndFormat } from './formatter';
+export { formatMemoryDateWithDistance } from './memoryDate';
 
 // 集成
 export type { LightLLMConfig, PipelineResult, DiaryIngestResult } from './pipeline';

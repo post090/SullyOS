@@ -95,6 +95,32 @@
   - accessCount ≥ 3 → 频繁回忆晋升
 - 客厅超200条 → 按有效重要性（importance × 衰减^小时）淘汰最低者到**阁楼**
 
+#### 外部记忆搬家（最多 5 万字）
+
+给从其它应用、设备或记忆系统迁入的用户提供两条入口，共用
+`externalMemory.ts` 的保真清洗规则：
+
+- **神经链接 → 角色记忆 → 导入/清洗**：写入传统 `MemoryFragment`；
+- **记忆宫殿 → 设置 → 从其它地方搬入原始记忆**：清洗后直接分房间，
+  调用 Embedding API 写入向量节点，并建立时间/情绪/人物/因果/隐喻关联；
+  同时复用全自动总结水位线的 `buildAutoArchiveFragments` +
+  `mergePalaceFragmentsIntoMemories` 桥接逻辑，把同一批内容按日期写入当前
+  角色的神经链接传统记忆档案。
+
+外部文本没有聊天 `Message ID`，因此双写记忆但不推进
+`mp_lastMsgId_*` / `hideBeforeMessageId`，也不会隐藏任何聊天记录。
+
+单次输入上限 50,000 字，字数由前端按 Unicode 字符在本地统计。上限内按约
+10,000 字的自然段边界自动分批调用副 API；超过上限时不发起任何 API 请求，
+而是按总字数建议需要拆成几批，并提示优先在日期或完整事件段落之间切开。
+提示词的首要约束是“只整理时间和结构，不压缩内容”：不得摘要、合并、
+去重或省略人物、地点、数字、对话、动作、因果、顺序与情绪细节；长事件
+宁可连续拆成多条，也不能用一句结论替代原文。格式与保真是并列硬目标：
+搬家路径只接受完整 JSON 数组与完整字段契约，不使用通用解析器的截断对象
+抢救；输出正文相对原批次明显缩水时也会拒绝。格式/完整性失败会自动重试
+一次，仍失败则整次不入库并保留输入，避免出现“前几批成功、后几批丢失”
+的半份搬家。
+
 ### 三、检索逻辑（Retrieval Pipeline）
 
 **查询源清洗（querySanitizer.ts）**：query 构建前先过 `sanitizeQuerySourceMessages`——图片/表情包/语音消息整条剔除（图片 content 是几万字符的 base64 data URI，进 embedding 批量请求会把 token 总量顶爆，硅基流动直接 400 code 20015），卡片类消息经 `normalizeMessageContent` 翻成可读文本，文本里的 data URI 也一律剥离。入库管线的 `isMessageSemanticallyRelevant` 是同一口径。
@@ -258,3 +284,21 @@ active(新建) → anchor(7天+，心理锚点) → fulfilled / disappointed
 | `anticipation.ts` | 期盼生命周期 |
 | `roomPlates.ts` | 房间门牌（情景→语义固化层，常驻注入） |
 | `migration.ts` | 旧格式迁移 |
+
+## 本轮召回修补（记忆链接）
+
+聊天加号面板的「记忆链接」用于修补刚才回复实际使用过的记忆：
+
+- `recallReceipts.ts` 记录每轮真正注入 prompt 的 memoryId；修补入口只读取当前用户消息之后最近的一张回执，没有回执时不会退回上一轮。
+- 独立记忆可直接原地修改；命中 EventBox 任一节点时，会展开盒摘要、全部活跃子节点和全部归档子节点，归档状态不影响编辑。
+- 修补现场显示独立记忆日期、事件盒日期范围及每个盒内节点日期；盒摘要置顶，其余活跃/归档节点按日期排列，诊断 API 也会收到每个候选节点的日期。当前可靠粒度是“日”，不展示常作为占位值的 12:00，以免伪造精确时分。
+- 保存补丁后用当前 Embedding API 为同一 memoryId 重新生成向量，并同步已启用的远程向量库。
+- 记忆宫殿详情页与「记忆链接」共用 `updateStoredMemoryNode`：正文没变时只保存 metadata、零 API；正文变化时才发起一次单条 Embedding 请求。Embedding 失败不会先写入新正文，避免文本与向量失配。
+- 「？？？」诊断显式使用 `ContextBuilder.buildCoreContext(char, user, false)`；调用前清空旧制记忆、月度总结、向量召回注入、房间门牌与 buff。候选材料只来自本轮回执及其命中事件盒的完整结构，不会再次调用向量召回。
+- 「？？？」保持引路者身份，但诊断回复借用当前角色的语言节奏与措辞；面向人时使用“你”或用户名，提及当前角色时使用角色名字，不把双方称作“用户/角色”。归档节点明确标记“已归档，本轮未注入”。
+- 引路者形象直接复用角色在小屋里的 `sprites.chibi`；没有配置 Chibi 时才显示光点。形象下只标“？？？”，不把引路者写成角色本人。
+- 引路者的进场问候和过场文案按角色 `personalityStyle` 从本地固定文案中稳定选择，不调用 LLM；只有用户主动描述错误并请求排查时才调用主 API。
+- 显影动画可在入口右上角设置中永久跳过，偏好保存在 `os_memory_repair_skip_animation`。
+- 打开入口时先关闭聊天加号面板；退出整个记忆链接时再次清空面板状态，保证落回聊天正文。线索编辑抽屉的关闭只返回本次修补现场，不会丢失诊断结果。
+
+关键实现：`components/chat/MemoryRepairPortal.tsx`、`utils/memoryPalace/memoryRepair.ts`。

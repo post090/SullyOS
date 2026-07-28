@@ -32,6 +32,12 @@ import { toMountedWorldbook } from '../utils/worldbook';
 import { stripSensitiveCardFields } from '../utils/characterCard';
 import { confirmExportSafety } from '../utils/exportGuard';
 import { sortCharacterGroups, GROUP_FILTER_UNGROUPED } from '../components/character/CharacterGroupFilter';
+import {
+    EXTERNAL_MEMORY_MAX_CHARS,
+    extractExternalMemoryText,
+    getExternalMemoryLengthInfo,
+    getExternalMemoryOverLimitMessage,
+} from '../utils/memoryPalace/externalMemory';
 
 // ── 热点订阅池 · 拖拽分档组件 ──────────────────────────────
 // 把原来的 ×1234 循环点击改成 4 档分类拖拽：
@@ -384,6 +390,7 @@ const Character: React.FC = () => {
   const [exportText, setExportText] = useState('');
   const [isProcessingMemory, setIsProcessingMemory] = useState(false);
   const [importStatus, setImportStatus] = useState('');
+  const importLengthInfo = useMemo(() => getExternalMemoryLengthInfo(importText), [importText]);
 
   // Batch Summarize State
   const [batchRange, setBatchRange] = useState({ start: '', end: '' });
@@ -844,36 +851,62 @@ const Character: React.FC = () => {
   const handleImportMemories = async () => { 
       if (!importText.trim() || !apiConfig.apiKey) { addToast('请检查输入内容或 API 设置', 'error'); return; } 
       if (!formData) return;
+      if (importLengthInfo.overLimit) {
+          const message = getExternalMemoryOverLimitMessage(importText);
+          setImportStatus(message);
+          addToast(`内容超过 5 万字，建议分 ${importLengthInfo.suggestedBatches} 批导入`, 'error');
+          return;
+      }
       
       const targetId = formData.id; // LOCK ID
       setIsProcessingMemory(true); 
-      setImportStatus('正在链接神经云端进行清洗...'); 
+      setImportStatus('准备清洗：只整理时间和结构，不压缩内容…');
       
       try { 
-          const prompt = `Task: Convert this text log into a JSON array. Format: [{ "date": "YYYY-MM-DD", "summary": "...", "mood": "..." }] Text: ${importText.substring(0, 8000)}`; 
-          const data = await safeFetchJson(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` }, body: JSON.stringify({ model: apiConfig.model, messages: [{ role: "user", content: prompt }], temperature: 0.1 }) }, 0);
-          let content = extractContent(data);
-          content = content.replace(/```json/g, '').replace(/```/g, '').trim(); 
-          const firstBracket = content.indexOf('['); 
-          const lastBracket = content.lastIndexOf(']'); 
-          if (firstBracket !== -1 && lastBracket !== -1) { content = content.substring(firstBracket, lastBracket + 1); } 
-          let parsed; try { parsed = JSON.parse(content); } catch (e) { throw new Error('解析返回数据失败'); } 
-          let targetArray = Array.isArray(parsed) ? parsed : (parsed.memories || parsed.data); 
-          
-          if (Array.isArray(targetArray)) { 
-              const newMems = targetArray.map((m: any, i: number) => ({ id: `mem-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 8)}`, date: m.date || '未知', summary: m.summary || '无内容', mood: m.mood || '记录' })); 
-              
-              if (editingIdRef.current === targetId) {
-                  handleChange('memories', [...(formData.memories || []), ...newMems]); 
-                  setShowImportModal(false); 
-                  addToast(`成功导入 ${newMems.length} 条记忆`, 'success'); 
-              } else {
-                  // Background update
-                  const currentMems = characters.find(c => c.id === targetId)?.memories || [];
-                  updateCharacter(targetId, { memories: [...currentMems, ...newMems] });
-                  addToast('后台任务完成：导入记忆已保存', 'success');
-              }
-          } else { throw new Error('结构错误'); } 
+          const result = await extractExternalMemoryText(
+              importText,
+              targetId,
+              formData.name,
+              userProfile.name,
+              {
+                  baseUrl: apiConfig.baseUrl,
+                  apiKey: apiConfig.apiKey,
+                  model: apiConfig.model,
+              },
+              stage => setImportStatus(stage),
+          );
+          const failedBatch = result.batches.find(batch => !batch.ok);
+          if (failedBatch) {
+              throw new Error(
+                  `第 ${failedBatch.index}/${failedBatch.total} 批未能无损清洗：${failedBatch.error || '完整性校验失败'}。本次没有写入任何记忆`,
+              );
+          }
+          if (result.memories.length === 0) {
+              throw new Error('没有整理出可导入的记忆');
+          }
+
+          const pad2 = (value: number) => String(value).padStart(2, '0');
+          const newMems: MemoryFragment[] = result.memories.map(memory => {
+              const date = new Date(memory.createdAt);
+              return {
+                  id: `mem-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                  date: `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`,
+                  // content 是保真清洗后的完整事件，不再二次概括成短 summary。
+                  summary: memory.content,
+                  mood: memory.mood || '记录',
+              };
+          });
+          if (editingIdRef.current === targetId) {
+              handleChange('memories', [...(formData.memories || []), ...newMems]);
+              setShowImportModal(false);
+              setImportText('');
+              addToast(`成功导入 ${newMems.length} 条记忆`, 'success');
+          } else {
+              // Background update
+              const currentMems = characters.find(c => c.id === targetId)?.memories || [];
+              updateCharacter(targetId, { memories: [...currentMems, ...newMems] });
+              addToast(`后台任务完成：已保存 ${newMems.length} 条导入记忆`, 'success');
+          }
       } catch (e: any) { setImportStatus(`错误: ${e.message || '未知错误'}`); addToast('记忆清洗失败', 'error'); } finally { setIsProcessingMemory(false); } 
   };
   
@@ -2213,8 +2246,27 @@ ${isInitialGeneration ? `
        )}
 
        {/* Modals ... */}
-       <Modal isOpen={showImportModal} title="记忆导入/清洗" onClose={() => setShowImportModal(false)} footer={<><button onClick={() => setShowImportModal(false)} className="flex-1 py-3 bg-slate-100 text-slate-500 font-bold rounded-2xl">取消</button><button onClick={handleImportMemories} disabled={isProcessingMemory} className="flex-1 py-3 bg-primary text-white font-bold rounded-2xl shadow-lg shadow-primary/30 flex items-center justify-center gap-2">{isProcessingMemory && <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>}{isProcessingMemory ? '处理中...' : '开始执行'}</button></>}>
-           <div className="space-y-3"><div className="text-xs text-slate-400 leading-relaxed bg-slate-50 p-3 rounded-xl border border-slate-100">AI 将自动整理乱序文本为记忆档案。</div>{importStatus && <div className="text-xs text-primary font-medium">{importStatus}</div>}<textarea value={importText} onChange={e => setImportText(e.target.value)} placeholder="在此粘贴文本..." className="w-full h-32 bg-slate-100 border-none rounded-2xl px-4 py-3 text-sm text-slate-700 resize-none focus:ring-2 focus:ring-primary/20 transition-all"/></div>
+       <Modal isOpen={showImportModal} title="记忆导入/清洗" onClose={() => setShowImportModal(false)} footer={<><button onClick={() => setShowImportModal(false)} className="flex-1 py-3 bg-slate-100 text-slate-500 font-bold rounded-2xl">取消</button><button onClick={handleImportMemories} disabled={isProcessingMemory || importLengthInfo.overLimit} className={`flex-1 py-3 text-white font-bold rounded-2xl shadow-lg flex items-center justify-center gap-2 ${importLengthInfo.overLimit ? 'bg-slate-300 cursor-not-allowed shadow-none' : 'bg-primary shadow-primary/30'}`}>{isProcessingMemory && <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>}{isProcessingMemory ? '处理中...' : importLengthInfo.overLimit ? '请先分批' : '开始执行'}</button></>}>
+           <div className="space-y-3">
+               <div className="text-xs text-slate-400 leading-relaxed bg-slate-50 p-3 rounded-xl border border-slate-100">
+                   适合从其它应用“搬家”。最多 5 万字，字数只在本地统计；AI 只整理时间与事件结构，不摘要、不合并、不省略原有细节。5 万字以内会自动分批，无需手动切。
+               </div>
+               {importStatus && <div className="text-xs text-primary font-medium">{importStatus}</div>}
+               <textarea
+                   value={importText}
+                   onChange={e => setImportText(e.target.value)}
+                   placeholder="在此粘贴从别处带来的记忆文本…"
+                   className="w-full h-40 bg-slate-100 border-none rounded-2xl px-4 py-3 text-sm text-slate-700 resize-none focus:ring-2 focus:ring-primary/20 transition-all"
+               />
+               {importLengthInfo.overLimit && (
+                   <div className="text-xs leading-relaxed rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-700">
+                       {getExternalMemoryOverLimitMessage(importText)}
+                   </div>
+               )}
+               <div className={`text-right text-[10px] ${importLengthInfo.overLimit ? 'text-red-500 font-bold' : 'text-slate-400'}`}>
+                   {importLengthInfo.count.toLocaleString()} / {EXTERNAL_MEMORY_MAX_CHARS.toLocaleString()} 字（本地统计）
+               </div>
+           </div>
        </Modal>
 
        <Modal isOpen={showBatchModal} title="批量记忆总结" onClose={() => { setShowBatchModal(false); setShowPromptEditor(false); }} footer={

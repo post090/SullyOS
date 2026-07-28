@@ -90,6 +90,50 @@ export async function vectorizeAndStore(
     return { stored, skipped };
 }
 
+export interface UpdateStoredMemoryNodeResult {
+    node: MemoryNode;
+    /** 只有正文发生变化时才会为 true。 */
+    reembedded: boolean;
+}
+
+/**
+ * 统一的记忆节点编辑保存入口。
+ *
+ * - 正文未变化：只保存 room/tags/importance/mood 等 metadata，不调用 Embedding API。
+ * - 正文发生变化：沿用原 memoryId 重新生成并覆盖向量，避免“新文字 + 旧向量”。
+ */
+export async function updateStoredMemoryNode(
+    nodeId: string,
+    updates: Partial<MemoryNode>,
+    embeddingConfig?: EmbeddingConfig,
+    remoteVectorConfig?: RemoteVectorConfig,
+): Promise<UpdateStoredMemoryNodeResult> {
+    const existing = await MemoryNodeDB.getById(nodeId);
+    if (!existing) throw new Error('这条记忆已经不存在了');
+
+    const updated: MemoryNode = { ...existing, ...updates, id: existing.id, charId: existing.charId };
+    if (!updated.content.trim()) throw new Error('记忆内容不能为空');
+    const contentChanged = updated.content !== existing.content;
+
+    if (!contentChanged) {
+        await MemoryNodeDB.save(updated);
+        return { node: updated, reembedded: false };
+    }
+
+    if (!embeddingConfig?.baseUrl || !embeddingConfig.apiKey || !embeddingConfig.model) {
+        throw new Error('请先配置 Embedding API，修改正文后需要同步更新向量');
+    }
+
+    updated.embedded = false;
+    await vectorizeAndStore(
+        [updated],
+        embeddingConfig,
+        remoteVectorConfig,
+        { skipDedup: true },
+    );
+    return { node: { ...updated, embedded: true }, reembedded: true };
+}
+
 /**
  * 归一化模型名，用于「是否同一个底层模型」的比对。
  *

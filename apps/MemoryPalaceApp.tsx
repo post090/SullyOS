@@ -14,6 +14,7 @@ import {
     bootstrapPlatesFromHistory, markPlateBootstrapDone,
     getBootstrapResume, setBootstrapResume, clearBootstrapResume,
     rebuildAllVectors, embedMissingVectors,
+    updateStoredMemoryNode,
 } from '../utils/memoryPalace';
 import type { Anticipation, MigrationProgress, DigestResult, MemoryLink, EventBox, DigestReport } from '../utils/memoryPalace';
 import { confirmExportSafety } from '../utils/exportGuard';
@@ -31,6 +32,11 @@ import {
     getRangeEndpointLabel,
     getRangeSelectionHint,
 } from '../utils/memoryPalace/rangeSelection';
+import {
+    EXTERNAL_MEMORY_MAX_CHARS,
+    getExternalMemoryLengthInfo,
+    getExternalMemoryOverLimitMessage,
+} from '../utils/memoryPalace/externalMemory';
 
 /** 手动总结面板：每页渲染多少条聊天记录（翻页，避免一次性塞几百条 DOM 卡顿） */
 const RANGE_PAGE_SIZE = 50;
@@ -626,6 +632,15 @@ export default function MemoryPalaceApp() {
     const [importing, setImporting] = useState(false);
     const [importResult, setImportResult] = useState<string | null>(null);
     const importInputRef = React.useRef<HTMLInputElement>(null);
+    // 从其它应用搬来的原始文本：同一次清洗结果双写向量宫殿与神经链接角色档案。
+    const [externalMemoryText, setExternalMemoryText] = useState('');
+    const [externalImporting, setExternalImporting] = useState(false);
+    const [externalImportProgress, setExternalImportProgress] = useState('');
+    const [externalImportResult, setExternalImportResult] = useState<string | null>(null);
+    const externalLengthInfo = useMemo(
+        () => getExternalMemoryLengthInfo(externalMemoryText),
+        [externalMemoryText],
+    );
 
     // 关联记忆状态（记忆详情页展示 EventBox 兄弟 + 兼容展示遗留 causal link）
     const [linkedMemories, setLinkedMemories] = useState<LinkedMemoryUI[]>([]);
@@ -1156,18 +1171,25 @@ export default function MemoryPalaceApp() {
         if (!selectedNode || !char) return;
         setSaving(true);
         try {
-            const updated: MemoryNode = {
-                ...selectedNode,
+            const result = await updateStoredMemoryNode(
+                selectedNode.id,
+                {
                 content: editContent.trim(),
                 importance: editImportance,
                 mood: editMood.trim(),
                 room: editRoom,
                 tags: editTags.split(/[,，]/).map(t => t.trim()).filter(Boolean),
-            };
-            await MemoryNodeDB.save(updated);
-            // 远程同步由 MemoryNodeDB.save 自动处理
+                },
+                memoryPalaceConfig.embedding,
+                remoteVectorConfig,
+            );
+            const updated = result.node;
             setSelectedNode(updated);
             setEditing(false);
+            addToast(
+                result.reembedded ? '记忆已保存，语义向量已同步更新' : '记忆设置已保存',
+                'success',
+            );
             // 如果房间变了，刷新房间列表
             if (selectedRoom) {
                 const nodes = await MemoryNodeDB.getByRoom(char.id, selectedRoom);
@@ -1175,6 +1197,8 @@ export default function MemoryPalaceApp() {
                 setRoomNodes(nodes);
             }
             loadStats();
+        } catch (error: any) {
+            addToast(error?.message || '保存记忆失败', 'error');
         } finally {
             setSaving(false);
         }
@@ -1846,6 +1870,79 @@ export default function MemoryPalaceApp() {
             setImportResult(`[err]导入失败：${err?.message || err}`);
         } finally {
             setImporting(false);
+        }
+    };
+
+    /** 外部原始文本 → 保真清洗 → 向量宫殿 + 神经链接传统档案双写。 */
+    const handleExternalMemoryImport = async () => {
+        if (!char || externalImporting) return;
+        const text = externalMemoryText.trim();
+        if (!text) {
+            setExternalImportResult('[err]请先粘贴要搬家的记忆文本');
+            return;
+        }
+        if (externalLengthInfo.overLimit) {
+            setExternalImportResult(`[err]${getExternalMemoryOverLimitMessage(externalMemoryText)}`);
+            return;
+        }
+        const emb = memoryPalaceConfig.embedding;
+        const llm = memoryPalaceConfig.lightLLM;
+        if (!emb?.baseUrl || !emb?.apiKey || !emb?.model) {
+            setExternalImportResult('[err]请先在记忆宫殿设置中配置 Embedding API');
+            return;
+        }
+        if (!llm?.baseUrl || !llm?.apiKey || !llm?.model) {
+            setExternalImportResult('[err]请先在记忆宫殿设置中配置副 API');
+            return;
+        }
+
+        const target = { id: char.id, name: char.name };
+        setExternalImporting(true);
+        setExternalImportResult(null);
+        setExternalImportProgress('准备搬家：只整理时间和结构，不压缩内容…');
+        try {
+            const {
+                importExternalMemoryText,
+                mergePalaceFragmentsIntoMemories,
+            } = await import('../utils/memoryPalace/pipeline');
+            const result = await importExternalMemoryText(
+                text,
+                target.id,
+                target.name,
+                emb,
+                llm,
+                userProfile?.name || '',
+                stage => setExternalImportProgress(stage),
+            );
+            if (result.error === 'lock') {
+                setExternalImportResult('[err]这个角色已有其它记忆任务正在运行，请稍后再试');
+            } else if (result.error === 'no_memories') {
+                setExternalImportResult('[warn]没有整理出可导入的记忆，请检查原文或副 API 返回');
+            } else if (result.error) {
+                setExternalImportResult(`[err]搬家失败：${result.error}`);
+            } else {
+                // 与全自动总结水位线共用同一个桥接器：把本次真正写入向量库的
+                // 同一批节点按日期合并进角色 memories。外部导入没有消息 ID，
+                // 因此只双写记忆，不推进 hideBeforeMessageId / 聊天水位线。
+                setExternalImportProgress(`正在把同一批记忆同步到【${target.name}】的神经链接档案…`);
+                const latestMemories = characters.find(c => c.id === target.id)?.memories || [];
+                const mergedMemories = mergePalaceFragmentsIntoMemories(
+                    latestMemories,
+                    result.archiveFragments,
+                );
+                updateCharacter(target.id, { memories: mergedMemories });
+                setExternalImportResult(
+                    `[ok]已放入【${target.name}】：${result.stored} 条向量记忆；同一批内容已同步到神经链接档案`
+                    + (result.skipped ? `，${result.skipped} 条重复内容已跳过` : ''),
+                );
+                setExternalMemoryText('');
+                await loadStats();
+            }
+        } catch (error: any) {
+            setExternalImportResult(`[err]搬家失败：${error?.message || error}`);
+        } finally {
+            setExternalImporting(false);
+            setExternalImportProgress('');
         }
     };
 
@@ -4376,11 +4473,123 @@ create table if not exists memory_vectors (
                         )}
                     </button>
 
-                    {/* 导入：把导出的 JSON 合并回当前角色（跨设备迁移 / 恢复） */}
+                    {/* 外部文本搬家：原文清洗后直接向量化、分房间并建链 */}
+                    <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid #dbeafe' }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: '#1e40af', marginBottom: 6 }}>
+                            从其它地方搬入原始记忆
+                        </div>
+                        <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 10, lineHeight: 1.65 }}>
+                            最多 5 万字，字数完全在本地统计。AI 只整理时间与事件结构，<b>不摘要、不合并、不省略细节</b>；
+                            随后直接生成向量、分配宫殿房间，并把<b>同一批内容</b>同步进
+                            <b>【{char?.name || '当前角色'}】的神经链接记忆档案</b>。
+                            5 万字以内会自动按自然段分批，不需要手动切。
+                        </div>
+                        <textarea
+                            value={externalMemoryText}
+                            onChange={event => setExternalMemoryText(event.target.value)}
+                            disabled={externalImporting}
+                            placeholder="粘贴从其它应用、设备或记忆系统带来的原始文字…"
+                            style={{
+                                width: '100%',
+                                minHeight: 150,
+                                resize: 'vertical',
+                                borderRadius: 12,
+                                border: '1px solid #bfdbfe',
+                                background: externalImporting ? '#f8fafc' : 'white',
+                                color: '#334155',
+                                fontSize: 12,
+                                lineHeight: 1.65,
+                                padding: 12,
+                                outline: 'none',
+                            }}
+                        />
+                        <div style={{
+                            fontSize: 10,
+                            color: externalLengthInfo.overLimit ? '#dc2626' : '#94a3b8',
+                            fontWeight: externalLengthInfo.overLimit ? 700 : 400,
+                            textAlign: 'right',
+                            margin: '4px 2px 8px',
+                        }}>
+                            {externalLengthInfo.count.toLocaleString()} / {EXTERNAL_MEMORY_MAX_CHARS.toLocaleString()} 字（本地统计）
+                        </div>
+                        {externalLengthInfo.overLimit && (
+                            <div style={{
+                                fontSize: 11,
+                                lineHeight: 1.65,
+                                color: '#92400e',
+                                background: '#fffbeb',
+                                border: '1px solid #fde68a',
+                                borderRadius: 10,
+                                padding: 10,
+                                marginBottom: 8,
+                            }}>
+                                {getExternalMemoryOverLimitMessage(externalMemoryText)}
+                            </div>
+                        )}
+                        <details style={{
+                            fontSize: 11,
+                            color: '#475569',
+                            background: '#f8fafc',
+                            border: '1px solid #e2e8f0',
+                            borderRadius: 10,
+                            padding: '8px 10px',
+                            marginBottom: 10,
+                        }}>
+                            <summary style={{ cursor: 'pointer', fontWeight: 700, color: '#475569' }}>
+                                导入前常见疑问
+                            </summary>
+                            <div style={{ marginTop: 8, lineHeight: 1.75 }}>
+                                <div><b>会导给谁？</b> 只导入当前选中的【{char?.name || '当前角色'}】，不会串到其他角色。</div>
+                                <div><b>会覆盖旧记忆吗？</b> 不会；只追加新节点，相似内容会在向量阶段去重。</div>
+                                <div><b>会压缩原文吗？</b> 不会；只整理时间、事件边界和第一人称视角，长事件宁可拆多条也不省略。</div>
+                                <div><b>会写到哪里？</b> 同一次清洗结果会双写：一份进记忆宫殿向量库，一份按日期合并进神经链接的角色记忆档案。</div>
+                                <div><b>和全自动水位线有什么不同？</b> 双写方式相同；但外部文本没有聊天消息 ID，所以不会推进水位线，也不会隐藏聊天记录。</div>
+                                <div><b>会调用什么？</b> 先用副 API 清洗和分房间，再用 Embedding API 生成向量；宫殿内部仍会建立记忆关联。</div>
+                                <div><b>超过 5 万字怎么办？</b> 页面会在本地计算并建议批数；超限内容不会上传或调用 API。</div>
+                                <div><b>中途失败怎么办？</b> 清洗阶段任一批格式不完整或疑似删减，整次都不会入库，输入框会保留原文；系统会先自动重试一次。</div>
+                            </div>
+                        </details>
+                        {externalImportProgress && (
+                            <div style={{ fontSize: 11, color: '#2563eb', marginBottom: 8 }}>
+                                {externalImportProgress}
+                            </div>
+                        )}
+                        {externalImportResult && (
+                            <div style={{
+                                fontSize: 12,
+                                marginBottom: 8,
+                                color: externalImportResult.startsWith('[err]')
+                                    ? '#dc2626'
+                                    : externalImportResult.startsWith('[warn]') ? '#d97706' : '#16a34a',
+                            }}>
+                                <StatusMessage msg={externalImportResult} />
+                            </div>
+                        )}
+                        <button
+                            onClick={handleExternalMemoryImport}
+                            disabled={externalImporting || !externalMemoryText.trim() || externalLengthInfo.overLimit}
+                            style={{
+                                width: '100%',
+                                padding: '10px 0',
+                                borderRadius: 12,
+                                border: 'none',
+                                fontWeight: 700,
+                                fontSize: 13,
+                                color: 'white',
+                                background: externalImporting || !externalMemoryText.trim() || externalLengthInfo.overLimit ? '#cbd5e1' : '#4f46e5',
+                                cursor: externalImporting || !externalMemoryText.trim() || externalLengthInfo.overLimit ? 'not-allowed' : 'pointer',
+                            }}
+                        >
+                            {externalImporting
+                                ? '正在清洗并生成向量…'
+                                : externalLengthInfo.overLimit ? '请按建议分批后再导入' : '开始清洗并导入'}
+                        </button>
+                    </div>
+
+                    {/* 结构化导入：把本系统导出的 JSON 合并回当前角色（跨设备迁移 / 恢复） */}
                     <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid #dbeafe' }}>
                         <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 10, lineHeight: 1.6 }}>
-                            把之前导出的 JSON 合并进 <b>{char!.name}</b> 的记忆宫殿（追加，不覆盖现有记忆）。
-                            用于跨设备迁移或恢复。
+                            已经是 SullyOS 记忆宫殿 JSON 的文件无需清洗，可直接合并进 <b>{char!.name}</b>（追加，不覆盖）。
                         </div>
 
                         {importResult && (
@@ -4409,7 +4618,7 @@ create table if not exists memory_vectors (
                             {importing ? '导入中…' : (
                                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                                     <Icon name="document" size={13} />
-                                    <span>从 JSON 导入</span>
+                                    <span>从 SullyOS JSON 导入</span>
                                 </span>
                             )}
                         </button>
