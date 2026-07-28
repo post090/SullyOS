@@ -1,4 +1,5 @@
 
+import { extractLlmContent } from '../utils/llmContent';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useOS } from '../context/OSContext';
 import { SongSheet, SongLine, SongComment, SongMood, SongGenre, SongAudio, MusicProvider, AppID } from '../types';
@@ -367,7 +368,7 @@ const SongwritingApp: React.FC = () => {
                 const data = await safeResponseJson(response);
                 if (data.usage?.total_tokens) setLastTokenUsage(data.usage.total_tokens);
 
-                const rawContent = data.choices[0].message.content.trim();
+                const rawContent = extractLlmContent(data).trim();
                 const parsed = extractJson(rawContent);
 
                 const newComments: SongComment[] = [];
@@ -619,7 +620,7 @@ const SongwritingApp: React.FC = () => {
 
             if (response.ok) {
                 const data = await safeResponseJson(response);
-                setCompletionReview(data.choices[0].message.content.trim());
+                setCompletionReview(extractLlmContent(data).trim());
             } else {
                 setCompletionReview('(评价生成失败，但不影响保存)');
             }

@@ -1,4 +1,5 @@
 
+import { extractLlmContent } from '../utils/llmContent';
 import React, { useState, useEffect, useRef } from 'react';
 import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
@@ -555,11 +556,11 @@ ${previousGuestbook}
 
             if (response.ok) {
                 const data = await safeResponseJson(response);
-                let jsonStr = data.choices[0].message.content.replace(/```json/g, '').replace(/```/g, '').trim();
+                let jsonStr = extractLlmContent(data).replace(/```json/g, '').replace(/```/g, '').trim();
                 const result = JSON.parse(jsonStr);
 
-                const newEntries: BankGuestbookItem[] = result.map((item: any) => ({
-                    id: `gb-${Date.now()}-${Math.random()}`,
+                const newEntries: BankGuestbookItem[] = result.map((item: any, i: number) => ({
+                    id: `gb-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 8)}`,
                     authorName: item.authorName,
                     content: item.content,
                     isChar: item.isChar,

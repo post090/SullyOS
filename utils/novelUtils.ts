@@ -1,4 +1,5 @@
 
+import { extractLlmContent } from './llmContent';
 import { CharacterProfile, NovelBook, NovelSegment, UserProfile } from '../types';
 import { ContextBuilder } from './context';
 import { safeResponseJson } from './safeApi';
@@ -404,7 +405,7 @@ ${char.memories?.slice(-3).map(m => `- ${m.summary}`).join('\n') || '- 无记忆
         
         if (response.ok) {
             const data = await safeResponseJson(response);
-            const rawPersona = data.choices[0].message.content.trim();
+            const rawPersona = extractLlmContent(data).trim();
             
             const formattedPersona = `
 ### ${char.name} 的创作人格档案（AI深度分析）

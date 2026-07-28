@@ -1,4 +1,5 @@
 
+import { extractLlmContent } from '../../utils/llmContent';
 import React, { useState, useEffect, useRef } from 'react';
 import { BankShopState, CharacterProfile, UserProfile, APIConfig, ShopStaff } from '../../types';
 import { SHOP_RECIPES } from './BankGameConstants';
@@ -165,7 +166,7 @@ Language: Chinese.`;
 
             if (res.ok) {
                 const data = await safeResponseJson(res);
-                let jsonStr = data.choices[0].message.content.replace(/```json/g, '').replace(/```/g, '').trim();
+                let jsonStr = extractLlmContent(data).replace(/```json/g, '').replace(/```/g, '').trim();
                 const result = JSON.parse(jsonStr);
                 const comment = result.comment || '来逛逛~';
 

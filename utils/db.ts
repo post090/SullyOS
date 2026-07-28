@@ -765,6 +765,7 @@ export const DB = {
     const transaction = db.transaction(STORE_MESSAGES, 'readwrite');
     const store = transaction.objectStore(STORE_MESSAGES);
     
+    // 与 saveCharacter 同款：等事务真正提交再 resolve，否则 await 后立刻重读会拿旧值，put 失败也无人知。
     return new Promise((resolve, reject) => {
         const req = store.get(id);
         req.onsuccess = () => {
@@ -772,12 +773,14 @@ export const DB = {
             if (data) {
                 data.content = content;
                 store.put(data);
-                resolve();
             } else {
                 reject(new Error('Message not found'));
             }
         };
         req.onerror = () => reject(req.error);
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error || new Error('updateMessage aborted'));
     });
   },
 
@@ -786,6 +789,7 @@ export const DB = {
     const transaction = db.transaction(STORE_MESSAGES, 'readwrite');
     const store = transaction.objectStore(STORE_MESSAGES);
 
+    // 同上：oncomplete 才算数
     return new Promise((resolve, reject) => {
         const req = store.get(id);
         req.onsuccess = () => {
@@ -793,12 +797,14 @@ export const DB = {
             if (data) {
                 (data as any).metadata = updater((data as any).metadata);
                 store.put(data);
-                resolve();
             } else {
                 reject(new Error('Message not found'));
             }
         };
         req.onerror = () => reject(req.error);
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error || new Error('updateMessageMetadata aborted'));
     });
   },
 

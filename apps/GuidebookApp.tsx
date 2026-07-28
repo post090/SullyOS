@@ -28,7 +28,7 @@ import {
 } from '@phosphor-icons/react';
 
 // --- Helper: Generate ID ---
-const genId = () => Math.random().toString(36).slice(2, 10);
+const genId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
 // --- Helper: API Call ---
 async function callAPI(apiConfig: { baseUrl: string; apiKey: string; model: string }, prompt: string): Promise<string> {

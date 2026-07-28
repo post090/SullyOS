@@ -605,7 +605,8 @@ const DateSession: React.FC<DateSessionProps> = ({
         const saveStateToDB = () => {
             try {
                 const state = stateRef.current();
-                DB.saveCharacter({ ...charRef.current, savedDateState: state });
+                // 外层 try 只能接住同步异常；Promise reject 要单独 .catch 否则是 unhandled rejection
+                DB.saveCharacter({ ...charRef.current, savedDateState: state }).catch(() => { /* best-effort */ });
             } catch (e) { /* best-effort */ }
         };
 

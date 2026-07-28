@@ -97,7 +97,21 @@ async function generateSupervisorReaction(
 }
 
 /** 把一条流水写入存钱罐（saveTransaction + 更新 todaySpent + saveBankState）。 */
-async function applyCoinDelta(
+// applyCoinDelta 的 get→改→save 读改写在批量结算（多任务同时打卡）时会并发丢加：
+// 后写覆盖先写，todaySpent 少记。模块级队列把所有金币结算串行化（同 walletOps 方案）。
+let coinDeltaQueue: Promise<void> = Promise.resolve();
+
+function applyCoinDelta(
+    amount: number,
+    note: string,
+    now: Date,
+): Promise<void> {
+    const run = coinDeltaQueue.then(() => doApplyCoinDelta(amount, note, now));
+    coinDeltaQueue = run.catch(() => { /* 失败不阻塞后续结算 */ });
+    return run;
+}
+
+async function doApplyCoinDelta(
     amount: number,
     note: string,
     now: Date,

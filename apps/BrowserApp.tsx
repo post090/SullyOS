@@ -1,4 +1,5 @@
 
+import { extractLlmContent } from '../utils/llmContent';
 import React, { useState, useEffect, useRef } from 'react';
 import { useOS } from '../context/OSContext';
 import { processImage } from '../utils/file';
@@ -315,7 +316,7 @@ Generate realistic results linking to hypothetical URLs.`;
             if (!response.ok) throw new Error('Network Error');
             
             const data = await safeResponseJson(response);
-            const raw = data.choices[0].message.content;
+            const raw = extractLlmContent(data);
             
             // Parse Title and Content
             const parts = raw.split('\n');

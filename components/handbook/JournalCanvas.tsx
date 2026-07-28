@@ -148,7 +148,7 @@ const JournalCanvas: React.FC<Props> = ({
                                 fontWeight: 600,
                             }}
                         >
-                            {parseInt(dayNum(date), 10)}/{date.split('-')[1].replace(/^0/, '')}
+                            {parseInt(dayNum(date), 10)}/{date.split('-')[1]?.replace(/^0/, '') ?? ''}
                         </span>
                         <span
                             style={{
@@ -201,7 +201,7 @@ const JournalCanvas: React.FC<Props> = ({
                             fontStyle: 'italic',
                         }}
                     >
-                        cont. · {parseInt(dayNum(date), 10)}/{date.split('-')[1].replace(/^0/, '')}
+                        cont. · {parseInt(dayNum(date), 10)}/{date.split('-')[1]?.replace(/^0/, '') ?? ''}
                     </span>
                 </div>
             )}

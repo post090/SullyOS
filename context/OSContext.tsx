@@ -1573,9 +1573,11 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
              } catch(e) { console.error('Theme load error', e); }
         }
         
-        if (savedApi) setApiConfig(JSON.parse(savedApi));
-        if (savedModels) setAvailableModels(JSON.parse(savedModels));
-        if (savedPresets) setApiPresets(JSON.parse(savedPresets));
+        // 三个 key 各自独立 try：任何一个坏掉都不能把异常抛回 initData，
+        // 否则后面的 IndexedDB 加载全部跳过 → 角色/消息看起来"凭空消失"。
+        if (savedApi) { try { setApiConfig(JSON.parse(savedApi)); } catch (e) { console.error('os_api_config 解析失败，回退默认', e); } }
+        if (savedModels) { try { setAvailableModels(JSON.parse(savedModels)); } catch (e) { console.error('os_available_models 解析失败，回退默认', e); } }
+        if (savedPresets) { try { setApiPresets(JSON.parse(savedPresets)); } catch (e) { console.error('os_api_presets 解析失败，回退默认', e); } }
 
         // 加载实时配置
         const savedRealtimeConfig = localStorage.getItem('os_realtime_config');
@@ -1958,20 +1960,19 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                           }).catch(() => {});
                           unreadUpdates[char.id] = dueMessages.length;
 
-                          // Web Notification
-                          if (!Capacitor.isNativePlatform() && window.Notification && Notification.permission === 'granted') {
-                              try {
-                                  const notif = new Notification(char.name, {
+                          // Web Notification —— 与主动消息同款走 SW showNotification：
+                          // 页面级 new Notification 在标签后台 / PWA / 移动端会静默失败（见下方 L2030 注释）。
+                          // data.kind 复用 proactive-1.0，SW 的 notificationclick 会照常路由进聊天。
+                          if (!Capacitor.isNativePlatform() && 'serviceWorker' in navigator && window.Notification && Notification.permission === 'granted') {
+                              navigator.serviceWorker.ready.then(reg => {
+                                  reg.showNotification(char.name, {
                                       body: dueMessages[0].content,
-                                      icon: char.avatar,
-                                      silent: false
-                                  });
-                                  notif.onclick = () => {
-                                      window.focus();
-                                      setActiveApp(AppID.Chat);
-                                      setActiveCharacterId(char.id);
-                                  };
-                              } catch (e) { /* notification failed */ }
+                                      icon: char.avatar || './icons/icon-192.png',
+                                      badge: './icons/icon-192.png',
+                                      tag: `scheduled-${char.id}`,
+                                      data: { charId: char.id, kind: 'proactive-1.0' },
+                                  }).catch(() => { /* notification failed */ });
+                              }).catch(() => { /* SW not ready */ });
                           }
                       }
                   }
@@ -3144,18 +3145,20 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   // 各角色自身的 enabled 标志保持不变。
   // 注意：与记忆宫殿副 API（memoryPalaceConfig.lightLLM）完全独立，两者各管各的。
   const syncEmotionApiToAllCharacters = (api: { baseUrl: string; apiKey: string; model: string } | undefined) => {
-    setCharacters(prev => {
-      const updated = prev.map(c => {
-        const prevEmotion = c.emotionConfig;
-        const nextEmotion = {
-          enabled: !!prevEmotion?.enabled,
-          ...(api && api.baseUrl ? { api: { baseUrl: api.baseUrl, apiKey: api.apiKey, model: api.model } } : {}),
-        };
-        const next = normalizeCharacterImpression({ ...c, emotionConfig: nextEmotion });
-        DB.saveCharacter(next);
-        return next;
-      });
-      return updated;
+    // 先在 updater 外算好新数组再落库：DB 写放进 setState updater 会在 StrictMode
+    // 下双跑造成双写，且失败静默、写序不可控。
+    const updated = characters.map(c => {
+      const prevEmotion = c.emotionConfig;
+      const nextEmotion = {
+        enabled: !!prevEmotion?.enabled,
+        ...(api && api.baseUrl ? { api: { baseUrl: api.baseUrl, apiKey: api.apiKey, model: api.model } } : {}),
+      };
+      return normalizeCharacterImpression({ ...c, emotionConfig: nextEmotion });
+    });
+    setCharacters(updated);
+    Promise.allSettled(updated.map(c => DB.saveCharacter(c))).then(rs => {
+      const failed = rs.filter(r => r.status === 'rejected').length;
+      if (failed) console.warn(`[EmotionSync] ${failed} 个角色情绪 API 落库失败`);
     });
   };
   const updateRemoteVectorConfig = (updates: Partial<typeof defaultRemoteVectorConfig>) => {
@@ -3232,12 +3235,13 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
 
   // 删分组 = 组内角色回落「未分组」+ 删分组定义本身，角色不受影响
   const deleteCharacterGroup = async (id: string) => {
-      setCharacters(prev => prev.map(c => {
-          if (c.groupId !== id) return c;
-          const next = { ...c, groupId: undefined };
-          DB.saveCharacter(next);
-          return next;
-      }));
+      // 先把受影响角色落库、再删分组定义：反过来若中途失败，会留下
+      // 「分组已删、角色 groupId 还指着幽灵分组」的不一致。DB 写也不进 updater（StrictMode 双写）。
+      const affected = characters.filter(c => c.groupId === id).map(c => ({ ...c, groupId: undefined }));
+      setCharacters(prev => prev.map(c => c.groupId === id ? { ...c, groupId: undefined } : c));
+      for (const c of affected) {
+          try { await DB.saveCharacter(c); } catch (e) { console.warn('[Group] 角色脱组落库失败', c.id, e); }
+      }
       await DB.deleteCharacterGroup(id);
       setCharacterGroups(prev => prev.filter(g => g.id !== id));
   };
@@ -3772,13 +3776,14 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                   : undefined,
               
               socialAppData: (mode === 'text_only' || mode === 'media_only' || mode === 'full') ? {
-                  charHandles: JSON.parse(localStorage.getItem('spark_char_handles') || '{}'),
-                  userProfile: sparkSocialProfile ? JSON.parse(sparkSocialProfile) : undefined,
+                  // 独立 try：坏 key 不能让整个备份导出失败（备份是数据的逃生通道）
+                  charHandles: (() => { try { return JSON.parse(localStorage.getItem('spark_char_handles') || '{}'); } catch { return {}; } })(),
+                  userProfile: (() => { try { return sparkSocialProfile ? JSON.parse(sparkSocialProfile) : undefined; } catch { return undefined; } })(),
                   userId: localStorage.getItem('spark_user_id') || undefined,
                   userBg: sparkUserBg || undefined
               } : undefined,
               
-              roomCustomAssets: (mode === 'text_only' || mode === 'media_only' || mode === 'full') ? (roomCustomAssets ? JSON.parse(roomCustomAssets) : []) : undefined,
+              roomCustomAssets: (mode === 'text_only' || mode === 'media_only' || mode === 'full') ? (() => { try { return roomCustomAssets ? JSON.parse(roomCustomAssets) : []; } catch { return []; } })() : undefined,
               mediaAssets: [], // Initialize mediaAssets array
 
               // Study Room settings (localStorage)

@@ -1,3 +1,4 @@
+import { extractLlmContent } from '../utils/llmContent';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
@@ -106,7 +107,7 @@ export async function generatePersonaScript(opts: {
     const data = await safeResponseJson(res);
     // 截断直接报错，不兜底：模型输出被 token 上限截断时 finish_reason 为 'length'
     if (data.choices?.[0]?.finish_reason === 'length') throw new Error('演出生成被截断');
-    const parsed = parseScript(data.choices[0].message.content);
+    const parsed = parseScript(extractLlmContent(data));
     if (!parsed || !parsed.beats?.length) throw new Error('parse');
     // 不兜底：结尾必须是模型自己收束好的 end，否则视为不完整/被截断，报错让用户重试
     if (parsed.beats[parsed.beats.length - 1].kind !== 'end') throw new Error('演出结尾不完整');

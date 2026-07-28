@@ -1,4 +1,5 @@
 
+import { extractLlmContent } from '../utils/llmContent';
 import React, { useState, useEffect, useRef } from 'react';
 import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
@@ -496,7 +497,7 @@ Structure:
 
             if (!response.ok) throw new Error('API Error');
             const data = await safeResponseJson(response);
-            let content = data.choices[0].message.content.trim();
+            let content = extractLlmContent(data).trim();
             content = content.replace(/```json/g, '').replace(/```/g, '').trim();
             
             // Claude 常返回未转义特殊字符（引号 / 反斜杠 / 换行）的 JSON，裸 JSON.parse 会炸。

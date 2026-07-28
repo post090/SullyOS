@@ -848,7 +848,7 @@ const Character: React.FC = () => {
           let targetArray = Array.isArray(parsed) ? parsed : (parsed.memories || parsed.data); 
           
           if (Array.isArray(targetArray)) { 
-              const newMems = targetArray.map((m: any) => ({ id: `mem-${Date.now()}-${Math.random()}`, date: m.date || '未知', summary: m.summary || '无内容', mood: m.mood || '记录' })); 
+              const newMems = targetArray.map((m: any, i: number) => ({ id: `mem-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 8)}`, date: m.date || '未知', summary: m.summary || '无内容', mood: m.mood || '记录' })); 
               
               if (editingIdRef.current === targetId) {
                   handleChange('memories', [...(formData.memories || []), ...newMems]); 
@@ -936,7 +936,7 @@ const Character: React.FC = () => {
 
                     if (summary) {
                         newMemories.push({
-                            id: `mem-${Date.now()}-${Math.random()}`,
+                            id: `mem-${Date.now()}-${newMemories.length}-${Math.random().toString(36).slice(2, 8)}`,
                             date: date,
                             summary: summary,
                             mood: 'auto'

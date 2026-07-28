@@ -1,4 +1,5 @@
 
+import { extractLlmContent } from '../utils/llmContent';
 import React, { useState, useEffect, useRef } from 'react';
 import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
@@ -610,7 +611,7 @@ For each chapter, provide a title, a brief summary of what it covers, and a diff
 
         if (!response.ok) throw new Error('API Error');
         const data = await safeResponseJson(response);
-        const content = data.choices[0].message.content.replace(/```json/g, '').replace(/```/g, '').trim();
+        const content = extractLlmContent(data).replace(/```json/g, '').replace(/```/g, '').trim();
         // 同 generateQuiz：走 extractJson 的多层容错，避免 Claude 未转义字符导致的 parse error。
         const json = extractJson(content);
         if (!json || !Array.isArray(json.chapters)) {
@@ -651,7 +652,7 @@ For each chapter, provide a title, a brief summary of what it covers, and a diff
         if (targetIdx !== course.currentChapterIndex) {
              const updated = { ...course, currentChapterIndex: targetIdx };
              setActiveCourse(updated);
-             DB.saveCourse(updated);
+             DB.saveCourse(updated).catch(e => console.warn('[Study] 课程进度落库失败', e));
              setCourses(prev => prev.map(c => c.id === updated.id ? updated : c)); // Sync
         }
         
@@ -897,7 +898,7 @@ Note: Use "我" (I) to refer to yourself.
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${effectiveApi.apiKey}` },
             body: JSON.stringify({ model: effectiveApi.model, messages: [{ role: "user", content: summaryPrompt }] })
         }).then(res => safeResponseJson(res)).then(data => {
-            const mem = data.choices[0].message.content;
+            const mem = extractLlmContent(data);
             const newMem = { id: `mem-${Date.now()}`, date: new Date().toLocaleDateString(), summary: `[教学] ${mem}`, mood: 'proud' };
             updateCharacter(selectedChar.id, { memories: [...(selectedChar.memories || []), newMem] });
         });
@@ -915,7 +916,7 @@ Note: Use "我" (I) to refer to yourself.
         if (!activeCourse) return;
         const updatedCourse = { ...activeCourse, currentChapterIndex: idx };
         setActiveCourse(updatedCourse);
-        DB.saveCourse(updatedCourse);
+        DB.saveCourse(updatedCourse).catch(e => console.warn('[Study] 跳章落库失败', e));
         setCourses(prev => prev.map(c => c.id === updatedCourse.id ? updatedCourse : c)); // Sync
         handleTeach(updatedCourse, idx);
         setShowChapterMenu(false);
@@ -1498,7 +1499,7 @@ Answer in character. Be helpful and clear. If they're confused about a concept, 
                                 // Save progress before leaving
                                 if (quizSession && quizSession.status === 'in_progress') {
                                     const updated = { ...quizSession, questions: quizSession.questions.map(q => ({ ...q, userAnswer: quizUserAnswers[q.id] || q.userAnswer })) };
-                                    DB.saveQuiz(updated);
+                                    DB.saveQuiz(updated).catch(e => console.warn('[Study] 测验进度落库失败', e));
                                 }
                                 setMode('classroom');
                             }} className="p-2 -ml-2 rounded-full hover:bg-black/5 active:scale-90 transition-transform">

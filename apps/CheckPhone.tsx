@@ -1383,7 +1383,7 @@ ${olderText}
                         detail: `${userProfile.name} 把你和「${contact.name}」${verb}了。`,
                     },
                 },
-            } as any);
+            } as any).catch(e => { console.warn('[CheckPhone] 关系变动卡片落库失败', e); addToast('关系卡片保存失败，聊天里可能看不到这条', 'error'); });
         }
         addToast(status === 'deleted' ? '已删好友' : status === 'blocked' ? '已拉黑' : status === 'friend' ? '已加好友' : '已更新', 'success');
     };

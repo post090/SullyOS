@@ -413,7 +413,7 @@ const SocialApp: React.FC = () => {
         const next = feedRef.current.filter(p => p.id !== postId);
         feedRef.current = next;
         setFeed(next);
-        DB.deleteSocialPost(postId);
+        DB.deleteSocialPost(postId).catch(e => { console.warn('[Social] 删帖落库失败', e); addToast('删除失败，刷新后帖子可能还在', 'error'); });
         setSelectedPost(current => (current?.id === postId ? null : current));
     };
 

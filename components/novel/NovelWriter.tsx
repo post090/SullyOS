@@ -1,4 +1,5 @@
 
+import { extractLlmContent } from '../../utils/llmContent';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { NovelBook, NovelSegment, CharacterProfile, UserProfile } from '../../types';
 import {
@@ -248,7 +249,7 @@ const NovelWriter: React.FC<NovelWriterProps> = ({
                 const data = await safeResponseJson(response);
                 if (data.usage?.total_tokens) setLastTokenUsage(data.usage.total_tokens);
 
-                let content = data.choices[0].message.content.trim();
+                let content = extractLlmContent(data).trim();
                 const originalRaw = content; 
                 content = content.replace(/```json\n?/g, '').replace(/```\n?/g, '');
                 const jsonMatch = content.match(/\{[\s\S]*\}/);
@@ -397,7 +398,7 @@ ${chapterText.substring(0, 200000)}
 
             if (response.ok) {
                 const data = await safeResponseJson(response);
-                setSummaryContent(data.choices[0].message.content);
+                setSummaryContent(extractLlmContent(data));
             } else { setSummaryContent('生成失败，请重试。'); }
         } catch (e: any) { setSummaryContent(`错误: ${e.message}`); } finally { setIsGeneratingSummary(false); }
     };

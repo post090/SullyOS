@@ -1,4 +1,5 @@
 
+import { extractLlmContent } from '../../utils/llmContent';
 import React, { useMemo, useState, useEffect } from 'react';
 import { BankTransaction, SavingsGoal, APIConfig } from '../../types';
 import { safeResponseJson } from '../../utils/safeApi';
@@ -146,7 +147,7 @@ ${txList}
 
             if (res.ok) {
                 const data = await safeResponseJson(res);
-                let jsonStr = data.choices[0].message.content.replace(/```json/g, '').replace(/```/g, '').trim();
+                let jsonStr = extractLlmContent(data).replace(/```json/g, '').replace(/```/g, '').trim();
                 const result = JSON.parse(jsonStr);
 
                 // Map categories to transaction IDs

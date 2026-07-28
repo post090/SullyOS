@@ -1,3 +1,4 @@
+import { extractLlmContent } from '../utils/llmContent';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
@@ -166,7 +167,7 @@ export async function generateDreamScript(opts: {
     if (!res.ok) throw new Error('API');
     const data = await safeResponseJson(res);
     if (data.choices?.[0]?.finish_reason === 'length') throw new Error('梦境生成被截断');
-    const parsed = parseDream(data.choices[0].message.content);
+    const parsed = parseDream(extractLlmContent(data));
     if (!parsed || !parsed.archetype) throw new Error('parse');
     // 深眠（隐藏）允许无碎片——沉默即演出；其它梦必须有碎片
     if (parsed.archetype !== 'deepsleep' && !(parsed.fragments?.length)) throw new Error('梦境为空');

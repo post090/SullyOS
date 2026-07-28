@@ -65,8 +65,26 @@ async function writeTx(charId: string, amount: number, category: string, note: s
  *  - 'user_to_char'：用户发的转账被角色收下 → 用户零钱 −，角色零钱 +
  *  - 'char_to_user'：角色发的转账被用户收下 → 角色零钱 −，用户零钱 +
  * amount 接受 string（聊天 metadata 里存的是字符串，可能带货币符号）。
+ *
+ * 并发安全：chatParser（后台解析）和 Chat（用户点收款）可能同时触发结算，
+ * get→改→save 的读改写并发会丢更新（后写覆盖先写，余额算错）。
+ * 这里用模块级 promise 队列把所有结算串行化。
  */
-export async function settleTransfer(opts: {
+let settleQueue: Promise<void> = Promise.resolve();
+
+export function settleTransfer(opts: {
+    direction: 'user_to_char' | 'char_to_user';
+    charId: string;
+    charName: string;
+    amount: string | number | undefined;
+    note?: string;
+}): Promise<void> {
+    const run = settleQueue.then(() => doSettleTransfer(opts));
+    settleQueue = run.catch(() => { /* 失败不阻塞后续结算 */ });
+    return run;
+}
+
+async function doSettleTransfer(opts: {
     direction: 'user_to_char' | 'char_to_user';
     charId: string;
     charName: string;
