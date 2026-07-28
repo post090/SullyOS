@@ -201,7 +201,7 @@ export const isMcdActivatedInMessages = (messages: MsgLike[]): boolean => {
 
 export interface McdMiniAppSnapshot {
     open: boolean;
-    step?: 'mode' | 'pick' | 'menu' | 'review';
+    step?: 'mode' | 'pick' | 'menu' | 'review' | 'success';
     orderType?: 1 | 2;
     storeCode?: string;
     storeName?: string;
@@ -314,7 +314,7 @@ export const buildMcdMiniAppContextBlock = (snap?: McdMiniAppSnapshot, userName:
     lines.push(`[麦当劳协同点餐 — ${userName} 现在打开了麦当劳小程序, 跟你一起选餐]`);
     lines.push('');
     lines.push('# 当前状态 (实时)');
-    lines.push(`- 步骤: ${snap.step === 'mode' ? '选模式' : snap.step === 'pick' ? '选地址/门店' : snap.step === 'menu' ? '浏览菜单' : snap.step === 'review' ? '确认订单' : '?'}`);
+    lines.push(`- 步骤: ${snap.step === 'mode' ? '选模式' : snap.step === 'pick' ? '选地址/门店' : snap.step === 'menu' ? '浏览菜单' : snap.step === 'review' ? '确认订单' : snap.step === 'success' ? '下单完成' : '?'}`);
     if (snap.orderType) lines.push(`- 取餐方式: ${snap.orderType === 1 ? '到店取餐' : '麦乐送外卖'}`);
     if (snap.storeName || snap.storeCode) lines.push(`- 门店: ${snap.storeName || snap.storeCode}`);
     if (snap.addressLabel) lines.push(`- 收货地址: ${snap.addressLabel}`);
@@ -343,7 +343,7 @@ export const buildMcdMiniAppContextBlock = (snap?: McdMiniAppSnapshot, userName:
     if (menuLoaded) {
         // 把套餐排前面 (人气热卖里的套餐 char 看着最先, 下意识更倾向推套餐)
         const COMBO_RE = /(套餐|单人餐|双人餐|全家桶|三件套|四件套|五件套|超值组合|节省组合)/;
-        const allEntries = Object.entries(snap.menuMeals).filter(([, m]: any) => m?.name);
+        const allEntries = Object.entries(snap.menuMeals || {}).filter(([, m]: any) => m?.name);
         const combos = allEntries.filter(([, m]: any) => COMBO_RE.test(String(m.name)));
         const singles = allEntries.filter(([, m]: any) => !COMBO_RE.test(String(m.name)));
         const ordered = [...combos, ...singles].slice(0, 100);

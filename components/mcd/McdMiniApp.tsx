@@ -1170,7 +1170,7 @@ const McdMiniApp: React.FC<McdMiniAppProps> = ({ open, onClose, char, userProfil
                 }
             }
             if (activeCodes.size > 0) {
-                const filtered: Record<string, { name?: string; currentPrice?: string }> = {};
+                const filtered: NonNullable<typeof fullMeals> = {};
                 for (const code of activeCodes) {
                     if (fullMeals[code]) filtered[code] = fullMeals[code];
                 }
@@ -1237,9 +1237,10 @@ const McdMiniApp: React.FC<McdMiniAppProps> = ({ open, onClose, char, userProfil
         if (!meal) {
             // 服务端没修上 / propose 直接漏了 code 校准: 在这儿按 name 兜底
             const { fixed, fixes } = autoFixProposalCodesByName([it], menuData.meals);
-            if (fixes.length && fixed[0]?.code && menuData.meals[fixed[0].code]) {
-                realCode = fixed[0].code;
-                meal = menuData.meals[realCode];
+            const fixedCode = fixed[0]?.code;
+            if (fixes.length && fixedCode && menuData.meals[fixedCode]) {
+                realCode = fixedCode;
+                meal = menuData.meals[fixedCode];
                 console.log(`🍔 [MCD-MiniApp] 客户端兜底修 code: '${it.code}' → '${realCode}' (${fixes[0].name})`);
             }
         }

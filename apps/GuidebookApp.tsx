@@ -168,10 +168,10 @@ const GameHeader: React.FC<{
 );
 
 // Card wrapper — warm neutral
-const Card: React.FC<{ children: React.ReactNode; className?: string; onClick?: () => void }> = ({ children, className = '', onClick }) => (
+const Card: React.FC<{ children: React.ReactNode; className?: string; onClick?: () => void; style?: React.CSSProperties }> = ({ children, className = '', onClick, style }) => (
     <div onClick={onClick}
         className={`bg-white/70 backdrop-blur-sm rounded-2xl shadow-sm ${onClick ? 'active:scale-[0.98] cursor-pointer' : ''} transition-all ${className}`}
-        style={{ border: '1px solid rgba(200,185,190,0.3)', boxShadow: '0 2px 8px rgba(160,145,150,0.08), 0 1px 3px rgba(0,0,0,0.04)' }}>
+        style={{ border: '1px solid rgba(200,185,190,0.3)', boxShadow: '0 2px 8px rgba(160,145,150,0.08), 0 1px 3px rgba(0,0,0,0.04)', ...style }}>
         {children}
     </div>
 );

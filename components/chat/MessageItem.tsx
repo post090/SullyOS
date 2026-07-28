@@ -565,7 +565,8 @@ export const ThinkingChainBlock: React.FC<{
     const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const pointerIdRef = useRef<number | null>(null);
-    const pointerTypeRef = useRef<React.PointerEvent<HTMLDivElement>['pointerType']>('');
+    // pointerType 存宽 string：初始空串不在 React 的 'mouse'|'pen'|'touch' 联合里
+    const pointerTypeRef = useRef<string>('');
     const pointerStartRef = useRef({ x: 0, y: 0 });
     const longPressReadyRef = useRef(false);
     const suppressNextClickRef = useRef(false);

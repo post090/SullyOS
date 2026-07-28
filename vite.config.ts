@@ -42,6 +42,10 @@ let showBuildBadge = !isReleaseBranch;
 if (process.env.VITE_HIDE_BUILD_BADGE === '1') showBuildBadge = false;
 if (process.env.VITE_SHOW_BUILD_BADGE === '1') showBuildBadge = true;
 
+// Vite 的 ProxyOptions 类型没收录 http-proxy 的 router 选项（运行时一直透传生效），
+// 用宽类型集中断言，避免三处 as any 到处飞。
+type ProxyWithRouter = import('vite').ProxyOptions & { router?: (req: any) => string };
+
 export default defineConfig({
   plugins: [
     react(),
@@ -71,31 +75,31 @@ export default defineConfig({
         secure: true,
         rewrite: () => '/v1/t2a_v2',
         // Route to 国服 / 海外 based on X-MiniMax-Region header sent by the client.
-        router: (req) => {
+        router: (req: any) => {
           const region = String(req.headers['x-minimax-region'] || '').toLowerCase();
           return region === 'overseas' ? 'https://api.minimax.io' : 'https://api.minimaxi.com';
         },
-      },
+      } as ProxyWithRouter,
       '/api/minimax/get-voice': {
         target: 'https://api.minimaxi.com',
         changeOrigin: true,
         secure: true,
         rewrite: () => '/v1/get_voice',
-        router: (req) => {
+        router: (req: any) => {
           const region = String(req.headers['x-minimax-region'] || '').toLowerCase();
           return region === 'overseas' ? 'https://api.minimax.io' : 'https://api.minimaxi.com';
         },
-      },
+      } as ProxyWithRouter,
       '/api/minimax/music': {
         target: 'https://api.minimaxi.com',
         changeOrigin: true,
         secure: true,
         rewrite: () => '/v1/music_generation',
-        router: (req) => {
+        router: (req: any) => {
           const region = String(req.headers['x-minimax-region'] || '').toLowerCase();
           return region === 'overseas' ? 'https://api.minimax.io' : 'https://api.minimaxi.com';
         },
-      },
+      } as ProxyWithRouter,
       // 鱼声 Fish Audio TTS：转发到 https://api.fish.audio/v1/tts（返回二进制音频）
       '/api/fishaudio/tts': {
         target: 'https://api.fish.audio',

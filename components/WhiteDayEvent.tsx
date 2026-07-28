@@ -905,6 +905,7 @@ ${answerSummary}
         if (!char || !apiConfig || !canvasRef.current) return;
         try {
             // 截图必须在 setPhase 之前完成，否则元素会被卸载导致 html2canvas 报错
+            // @ts-ignore esm.sh URL 动态导入没有类型声明，运行时由浏览器解析
             const mod: any = await import('https://esm.sh/html2canvas@1.4.1');
             const html2canvas = mod.default;
             const canvas = await html2canvas(canvasRef.current, {

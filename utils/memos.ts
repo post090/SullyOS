@@ -15,8 +15,8 @@ import type { CharacterMemo, CharacterProfile } from '../types';
 /** 备忘录上限。超限时新增会被拒绝（仅单聊场景才允许新增）。 */
 export const MEMO_MAX_COUNT = 10;
 
-/** 单条备忘内容上限（字符数）。超长会被截断。 */
-export const MEMO_MAX_CONTENT_LEN = 200;
+/** 单条备忘内容上限（字符数）。超长会被截断。用户要求放宽到 5000：AI 想记长内容（会议纪要式/长篇约定）不该被铡。 */
+export const MEMO_MAX_CONTENT_LEN = 5000;
 
 /** 单条备忘 tag 上限。 */
 export const MEMO_MAX_TAGS = 5;
@@ -101,7 +101,7 @@ function renderMemoInstructions(): string {
         `- 新建：[[MEMO_ADD:内容|type:note或todo|tags:标签1,标签2]] —— 上限 ${MEMO_MAX_COUNT} 条，满了会被拒绝；type 可省略默认 note；tags 可省略`,
         `- 编辑：[[MEMO_EDIT:编号|content:新内容|status:active或done|type:note或todo|tags:新标签]] —— 任意字段组合，编号就是上面的序号；status=done 表示划掉，划掉即完成，会直接从备忘录里删除`,
         `- 删除：[[MEMO_DEL:编号]]`,
-        '编号是上面列表里的序号（从 1 开始）。备忘录是随手记的性质，写短句即可，单条不超过 200 字。',
+        '编号是上面列表里的序号（从 1 开始）。备忘录随手记短句、要记长内容也可以，单条上限 5000 字。',
         '只有当前的【单聊】场景才能用这些标签；其他场景（主动消息/通话/小小窝）你只能看不能改。',
     ].join('\n');
 }

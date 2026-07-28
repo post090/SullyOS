@@ -100,7 +100,7 @@ const SongwritingApp: React.FC = () => {
 
     // Write View State
     const [inputText, setInputText] = useState('');
-    const [currentSection, setCurrentSection] = useState<string>('verse');
+    const [currentSection, setCurrentSection] = useState<SongLine['section']>('verse');
     const [isTyping, setIsTyping] = useState(false);
     const [lastTokenUsage, setLastTokenUsage] = useState<number | null>(null);
     const [showStructureGuide, setShowStructureGuide] = useState(false);
@@ -332,7 +332,7 @@ const SongwritingApp: React.FC = () => {
                 content: m.content
             }));
 
-            await injectMemoryPalace(collaborator, undefined, `${updatedSong.title || ''} ${updatedSong.theme || ''} ${userMessage}`.trim() || undefined);
+            await injectMemoryPalace(collaborator, undefined, `${updatedSong.title || ''} ${updatedSong.subtitle || ''} ${userMessage}`.trim() || undefined);
             const systemPrompt = SongPrompts.buildMentorSystemPrompt(collaborator, userProfile, updatedSong, msgContext);
             let userPrompt = SongPrompts.buildUserMessage(updatedSong, userMessage, currentSection);
             if (requestedType) {
@@ -1809,9 +1809,9 @@ const SongwritingApp: React.FC = () => {
                         <div className="rounded-2xl p-4 shizuku-glass" style={{ border: `1px solid ${MusicC.faint}40` }}>
                             <div className="grid grid-cols-3 gap-3">
                                 {[
-                                    { label: '起点色', color: customCoverFrom, position: 'from' },
-                                    { label: '中间色', color: customCoverVia, position: 'via' },
-                                    { label: '终点色', color: customCoverTo,  position: 'to'   }
+                                    { label: '起点色', color: customCoverFrom, position: 'from' as const },
+                                    { label: '中间色', color: customCoverVia, position: 'via' as const },
+                                    { label: '终点色', color: customCoverTo,  position: 'to' as const   }
                                 ].map(item => (
                                     <label key={item.label} className="space-y-1.5">
                                         <span className="block text-[10px]" style={{ color: MusicC.muted }}>{item.label}</span>
@@ -2929,7 +2929,7 @@ const SongwritingApp: React.FC = () => {
                     {/* Section Selector */}
                     <div className="flex gap-1.5 px-4 py-2 overflow-x-auto no-scrollbar border-b border-stone-200/60">
                         {Object.entries(SECTION_LABELS).map(([key, info]) => (
-                            <button key={key} onClick={() => setCurrentSection(key)} className={`px-2.5 py-1 rounded text-[10px] whitespace-nowrap transition-all ${currentSection === key ? 'bg-stone-700 text-stone-50 font-medium' : 'text-stone-400 hover:bg-stone-200/50'}`}>
+                            <button key={key} onClick={() => setCurrentSection(key as SongLine['section'])} className={`px-2.5 py-1 rounded text-[10px] whitespace-nowrap transition-all ${currentSection === key ? 'bg-stone-700 text-stone-50 font-medium' : 'text-stone-400 hover:bg-stone-200/50'}`}>
                                 {info.label}
                             </button>
                         ))}

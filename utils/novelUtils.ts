@@ -651,9 +651,11 @@ export const parsePersonaMarkdown = (rawPersona: string) => {
     const sections: {title: string, content: string[], icon: string}[] = [];
     let currentSection: {title: string, content: string[], icon: string} | null = null;
 
-    lines.forEach(line => {
+    // for...of 而非 forEach：让 TS 能跟踪 currentSection 在循环体内的赋值，
+    // 否则循环后的收尾判断会被收窄成 never（TS 冤案，运行时本来就正确）。
+    for (const line of lines) {
         const trimmed = line.trim();
-        if (!trimmed) return;
+        if (!trimmed) continue;
         
         const headerMatch = trimmed.match(/^###\s*(.+)/) || 
                            trimmed.match(/^\*\*([^*]+)\*\*\s*[:：]\s*(.*)/) ||
@@ -679,7 +681,7 @@ export const parsePersonaMarkdown = (rawPersona: string) => {
                 currentSection.content.push(cleanLine);
             }
         }
-    });
+    }
     
     if (currentSection && currentSection.content.length > 0) {
         sections.push(currentSection);

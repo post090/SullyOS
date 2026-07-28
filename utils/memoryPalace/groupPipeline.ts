@@ -19,7 +19,7 @@ import type { Message, CharacterProfile, GroupProfile } from '../../types';
 import type { EmbeddingConfig, MemoryNode, RemoteVectorConfig, MemoryVector } from './types';
 import type { LightLLMConfig } from './pipeline';
 import { DB } from '../db';
-import { MemoryNodeDB, MemoryVectorDB } from './db';
+import { MemoryNodeDB, MemoryVectorDB, ensureFloat32 } from './db';
 import { getEmbeddings, cosineSimilarity } from './embedding';
 import { extractGroupMemoriesFromBuffer } from './groupExtraction';
 import { isMessageSemanticallyRelevant } from '../messageFormat';
@@ -272,7 +272,8 @@ export async function processGroupNewMessages(
                     const vector = vectors[i];
 
                     // 与该成员已有记忆去重（同样的群记忆草稿可能跟以前的群记忆撞）
-                    const isDup = existingVectors.some(ev => cosineSimilarity(vector, ev.vector) > DEDUP_THRESHOLD);
+                    // ensureFloat32：DB 里的向量可能是 Uint8Array 字节形态，直接算余弦会把字节当浮点、去重全盲
+                    const isDup = existingVectors.some(ev => cosineSimilarity(vector, ensureFloat32(ev.vector)) > DEDUP_THRESHOLD);
                     if (isDup) {
                         console.log(`♻️ [GroupPalace] ${member.name}：重复群记忆跳过 "${draft.content.slice(0, 30)}..."`);
                         continue;

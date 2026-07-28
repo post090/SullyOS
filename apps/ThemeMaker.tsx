@@ -1290,28 +1290,27 @@ const ThemeMaker: React.FC = () => {
                                 </div>
                             </div>
 
-                            {activeTab !== 'css' && (
-                                <div className={`rounded-xl border p-3 ${showLowContrastWarning ? 'border-amber-200 bg-amber-50/80' : 'border-emerald-200 bg-emerald-50/70'}`}>
-                                    <div className="flex flex-wrap items-center justify-between gap-2">
-                                        <div>
-                                            <div className="text-[11px] font-semibold text-slate-700">实时可读性评分：{activeContrastScore.grade}（{activeContrastScore.ratio.toFixed(2)}:1）</div>
-                                            <div className={`text-[10px] mt-1 ${showLowContrastWarning ? 'text-amber-700' : 'text-emerald-700'}`}>
-                                                {showLowContrastWarning ? '文字可读性偏低，建议提升文字与背景对比。' : '当前文字与背景对比良好。'}
-                                            </div>
+                            {/* 冗余的 activeTab !== 'css' 已删：本区块在 L1255 的同条件块内，TS 已把类型收窄到 'user'|'ai' */}
+                            <div className={`rounded-xl border p-3 ${showLowContrastWarning ? 'border-amber-200 bg-amber-50/80' : 'border-emerald-200 bg-emerald-50/70'}`}>
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div>
+                                        <div className="text-[11px] font-semibold text-slate-700">实时可读性评分：{activeContrastScore.grade}（{activeContrastScore.ratio.toFixed(2)}:1）</div>
+                                        <div className={`text-[10px] mt-1 ${showLowContrastWarning ? 'text-amber-700' : 'text-emerald-700'}`}>
+                                            {showLowContrastWarning ? '文字可读性偏低，建议提升文字与背景对比。' : '当前文字与背景对比良好。'}
                                         </div>
-                                        {showLowContrastWarning && (
-                                            <button onClick={oneClickFixContrast} className="text-[10px] px-2.5 py-1 rounded-full bg-amber-500 text-white font-semibold hover:bg-amber-600 transition-colors">
-                                                一键修复
-                                            </button>
-                                        )}
                                     </div>
-                                    {showCombinedRisk && (
-                                        <div className="mt-2 text-[10px] text-rose-600 font-medium">
-                                            组合风险：背景图透明层较强 + 对比度不足，可能在复杂壁纸上难以阅读。
-                                        </div>
+                                    {showLowContrastWarning && (
+                                        <button onClick={oneClickFixContrast} className="text-[10px] px-2.5 py-1 rounded-full bg-amber-500 text-white font-semibold hover:bg-amber-600 transition-colors">
+                                            一键修复
+                                        </button>
                                     )}
                                 </div>
-                            )}
+                                {showCombinedRisk && (
+                                    <div className="mt-2 text-[10px] text-rose-600 font-medium">
+                                        组合风险：背景图透明层较强 + 对比度不足，可能在复杂壁纸上难以阅读。
+                                    </div>
+                                )}
+                            </div>
 
                             {/* Colors & Opacity */}
                             <div className="grid grid-cols-2 gap-4">

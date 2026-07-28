@@ -11,7 +11,7 @@ import TokenImg from '../os/TokenImg';
 import { useOS } from '../../context/OSContext';
 import { DB } from '../../utils/db';
 import { processImage } from '../../utils/file';
-import { Armchair, PaintBucket, SquaresFour, Image as ImageIcon, HouseSimple, PencilSimple } from '@phosphor-icons/react';
+import { Armchair, PaintBucket, SquaresFour, Image as ImageIcon, HouseSimple, PencilSimple, type Icon as PhosphorIcon } from '@phosphor-icons/react';
 
 const ROOM_UNLOCK_COSTS: Record<string, number> = {
     'room-1f-left': 0,
@@ -27,7 +27,7 @@ const CUSTOM_FURNITURE_ASSET_KEY = 'bank_custom_furniture_assets_v1';
 
 type DecorTab = 'layout' | 'rename' | 'wallpaper' | 'furniture' | 'floor' | 'roomTexture';
 
-const DECOR_TAB_ICONS: Record<DecorTab, React.FC<{ size?: number; weight?: string; className?: string }>> = {
+const DECOR_TAB_ICONS: Record<DecorTab, PhosphorIcon> = {
     furniture: Armchair,
     wallpaper: PaintBucket,
     floor: SquaresFour,
@@ -54,7 +54,8 @@ interface CustomFurnitureAsset {
 interface Props {
     shopState: BankShopState;
     dollhouseState: DollhouseState;
-    onDollhouseChange: (updater: DollhouseState | ((prev: DollhouseState) => DollhouseState)) => Promise<void>;
+    /** 允许返回值（BankApp 的持久化实现会 resolve 出新状态），这里只关心完成时机 */
+    onDollhouseChange: (updater: DollhouseState | ((prev: DollhouseState) => DollhouseState)) => Promise<unknown>;
     characters: CharacterProfile[];
     userProfile: UserProfile;
     apiConfig: APIConfig;

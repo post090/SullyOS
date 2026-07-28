@@ -970,6 +970,33 @@ const WorldEditor: React.FC<{
             )}
 
             <div className={sectionCls}>
+                <div className={labelCls}>离线自动运转</div>
+                <div className="text-[10px] text-stone-400 leading-snug">
+                    选中的时段到点后世界自己推进一段（每时段每天最多一轮，错过的时段回到 App 会补上）；全不选 = 只靠你手动「观测」。
+                    {(w.timeMode || 'real') === 'real' && '时段按世界所在时区判定。'}
+                    自动运转会消耗 API 调用，成员多的世界一轮不便宜，量力开。
+                </div>
+                <div className="grid grid-cols-4 gap-1.5">
+                    {([['latenight', '凌晨', '02:00'], ['morning', '早', '09:00'], ['noon', '午', '14:00'], ['evening', '晚', '21:00']] as const).map(([slot, name, time]) => {
+                        const on = (w.offlineTickSlots || []).includes(slot);
+                        return (
+                            <button key={slot} onClick={() => {
+                                const cur = w.offlineTickSlots || [];
+                                upd({ offlineTickSlots: on ? cur.filter(s => s !== slot) : [...cur, slot] });
+                            }}
+                                className={`px-2 py-2 rounded-xl border text-center transition-all ${on ? 'bg-amber-500 border-amber-500 text-white shadow-md' : 'bg-white border-stone-200 text-stone-600'}`}>
+                                <div className="text-[12px] font-bold">{name}</div>
+                                <div className={`text-[9px] mt-0.5 ${on ? 'text-white/75' : 'text-stone-400'}`}>{time} 后</div>
+                            </button>
+                        );
+                    })}
+                </div>
+                {(w.offlineTickSlots?.length || 0) > 0 && (
+                    <div className="text-[9.5px] text-amber-700/80 leading-snug">已开启 {w.offlineTickSlots!.length} 个时段——保存后生效，世界卡片上会亮「离线运转中」。</div>
+                )}
+            </div>
+
+            <div className={sectionCls}>
                 <div className={labelCls}>通知</div>
                 <label className="flex items-center justify-between">
                     <span className="text-[12px] text-stone-700">演绎完成后推送通知</span>
