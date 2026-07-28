@@ -27,7 +27,11 @@
     <!-- KaTeX CSS for Math Rendering -->
     <link rel="stylesheet" href="https://unpkg.com/katex@0.16.9/dist/katex.min.css" integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV" crossorigin="anonymous">
 
-    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Tailwind Play CDN 本地化：这份脚本是全 App 的样式引擎，以前直接从
+         cdn.tailwindcss.com 现场下载——CDN 不可达（墙/代理路由/断网）时整个 App
+         裸奔成无样式文档流（欢迎页/锁屏/桌面全坏）。现在打包进 dist 自带，
+         本地加载失败（理论上不会）才回退 CDN。 -->
+    <script src="./vendor/tailwindcdn.js" onerror="(function(){var s=document.createElement('script');s.src='https://cdn.tailwindcss.com';document.head.appendChild(s);})()"></script>
     <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@300;400;500;600&family=Nunito:wght@400;500;600;700;800;900&family=Noto+Sans+SC:wght@400;500;700;900&family=DM+Serif+Display:ital@0;1&family=Caveat:wght@400;500;600;700&family=Shippori+Mincho:wght@400;500;600;700&family=Courier+Prime:ital,wght@0,400;0,700;1,400&family=Ma+Shan+Zheng&family=Long+Cang&family=ZCOOL+KuaiLe&family=ZCOOL+XiaoWei&display=swap" rel="stylesheet">
     <script>
       tailwind.config = {
