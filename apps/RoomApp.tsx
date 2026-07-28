@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import { DB } from '../utils/db';
 import { RoomItem, CharacterProfile, RoomTodo, RoomNote, DailySchedule, AppID } from '../types';
 import ScheduleCard from '../components/schedule/ScheduleCard';
@@ -351,6 +352,19 @@ const RoomApp: React.FC = () => {
     const [showSampleRoomOffer, setShowSampleRoomOffer] = useState(false);
     const [sampleRoomLoadingId, setSampleRoomLoadingId] = useState<string | null>(null);
     const [showActorArtModal, setShowActorArtModal] = useState(false);
+
+    // 系统返回手势：先关各弹层/侧栏，再从编辑模式回浏览模式，最后才关 App
+    useBackGuard([
+        [showActorArtModal, () => setShowActorArtModal(false)],
+        [showSettingsModal, () => setShowSettingsModal(false)],
+        [showDevModal, () => setShowDevModal(false)],
+        [showRefreshConfirm, () => setShowRefreshConfirm(false)],
+        [showLibrary, () => setShowLibrary(false)],
+        [showDream, () => setShowDream(false)],
+        [showSampleRoomOffer, () => setShowSampleRoomOffer(false)],
+        [showSidebar, () => setShowSidebar(false)],
+        [mode === 'edit', () => setMode('view')],
+    ]);
     
     // Actor & Room State
     const [actorState, setActorState] = useState({ x: 50, y: 75, action: 'idle' });

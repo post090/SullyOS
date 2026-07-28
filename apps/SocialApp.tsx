@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import { DB } from '../utils/db';
 import { CharacterProfile, SocialPost, SocialComment, SubAccount, SocialAppProfile } from '../types';
 import { ContextBuilder } from '../utils/context';
@@ -177,6 +178,15 @@ const SocialApp: React.FC = () => {
     // Sharing State
     const [showShareModal, setShowShareModal] = useState(false);
     const [shareGroupId, setShareGroupId] = useState(GROUP_FILTER_ALL); // 分享帖子弹窗的角色分组筛选
+
+    // 系统返回手势：先关弹层，再关帖子详情，再从"我"回首页，最后才关 App
+    useBackGuard([
+        [showShareModal, () => setShowShareModal(false)],
+        [showSettings, () => setShowSettings(false)],
+        [isCreateOpen, () => setIsCreateOpen(false)],
+        [!!selectedPost, () => setSelectedPost(null)],
+        [activeTab === 'me', () => setActiveTab('home')],
+    ]);
 
     // Profile Sub-tab
     const [profileTab, setProfileTab] = useState<'notes' | 'collects'>('notes');

@@ -2,6 +2,7 @@
 import { extractLlmContent } from '../utils/llmContent';
 import React, { useState, useEffect, useRef } from 'react';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import { DB } from '../utils/db';
 import { BankFullState, BankTransaction, SavingsGoal, ShopStaff, BankGuestbookItem, DollhouseState } from '../types';
 import { safeResponseJson } from '../utils/safeApi';
@@ -87,6 +88,16 @@ const BankApp: React.FC = () => {
     // Staff Edit Form
     const [editingStaff, setEditingStaff] = useState<ShopStaff | null>(null);
     const staffImageInputRef = useRef<HTMLInputElement>(null);
+
+    // 系统返回手势：先关弹窗/全屏留言簿，再从子 Tab 回小店，最后才关 App
+    useBackGuard([
+        [!!editingStaff || showStaffEdit, () => { setEditingStaff(null); setShowStaffEdit(false); }],
+        [showAddTxModal, () => setShowAddTxModal(false)],
+        [showGoalModal, () => setShowGoalModal(false)],
+        [showTutorial, () => setShowTutorial(false)],
+        [showGuestbook, () => setShowGuestbook(false)],
+        [activeTab !== 'game', () => setActiveTab('game')],
+    ]);
 
     // Guestbook Processing
     const [isRefreshingGuestbook, setIsRefreshingGuestbook] = useState(false);

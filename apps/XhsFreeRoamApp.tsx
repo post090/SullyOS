@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import { DB } from '../utils/db';
 import { XhsActivityRecord, CharacterProfile } from '../types';
 import { XhsFreeRoamEngine, FreeRoamCallbacks } from '../utils/xhsFreeRoam';
@@ -60,6 +61,12 @@ const XhsFreeRoamApp: React.FC = () => {
     const [liveActivities, setLiveActivities] = useState<XhsActivityRecord[]>([]);
     const [mcpStatus, setMcpStatus] = useState<'unknown' | 'connected' | 'error'>('unknown');
     const [showDetail, setShowDetail] = useState<XhsActivityRecord | null>(null);
+
+    // 系统返回手势：先关角色选择器/详情页，最后才关 App
+    useBackGuard([
+        [showCharPicker, () => setShowCharPicker(false)],
+        [!!showDetail, () => setShowDetail(null)],
+    ]);
     const [confirmDialog, setConfirmDialog] = useState<{
         isOpen: boolean; title: string; message: string;
         variant: 'danger' | 'warning' | 'info'; onConfirm: () => void;

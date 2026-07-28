@@ -384,12 +384,15 @@ ${groupLogStr}\n`;
         // 8. 资产系统直觉摘要（钱包 + 智能家居）——没生成过档案时两者皆 null，整段跳过。
         //    注入的是模糊档位描述（"手头几千块""洗衣液快没了"），不给精确数字：
         //    角色对自己的钱和家里只有日常直觉，跟真人一样。
+        //    顺手记下"有没有钱包档案"——下面的可用动作段用它决定要不要教记账指令。
+        let walletHasProfile = false;
         const assetIntuitionPromise: Promise<string> = (async () => {
             try {
                 const [wallet, home] = await Promise.all([
                     DB.getWalletProfile(char.id),
                     DB.getHomeProfile(char.id),
                 ]);
+                walletHasProfile = !!wallet;
                 const lines: string[] = [];
                 if (wallet?.intuition) lines.push(`- 钱的直觉：${wallet.intuition}。`);
                 if (home?.intuition) lines.push(`- 家里的直觉：${home.intuition}。`);
@@ -578,7 +581,8 @@ ${uname} 的化身正挂在《彼方》的【${roomName}】${act ? `，状态写
 6. **可用动作**:
    - 回戳用户: \`[[ACTION:POKE]]\`
    - 转账: 必须使用且只使用 \`[[ACTION:TRANSFER:100]]\`（把 100 换成金额）；不要写成 \`[系统: 你向某人转账 100]\` 等系统日志文本。
-   - **处理用户转账**: 当看到 \`[系统: 用户向你转账 X]\` 时，你可以决定收下或退回。收下: \`[[ACTION:TRANSFER_ACCEPT]]\`；退回: \`[[ACTION:TRANSFER_RETURN]]\`。请结合人设和情境自然选择（比如害羞地退回、开心地收下），并配上一句话。
+   - **处理用户转账**: 当看到 \`[系统: 用户向你转账 X]\` 时，你可以决定收下或退回。收下: \`[[ACTION:TRANSFER_ACCEPT]]\`；退回: \`[[ACTION:TRANSFER_RETURN]]\`。请结合人设和情境自然选择（比如害羞地退回、开心地收下），并配上一句话。${walletHasProfile ? `
+   - **记账（你的钱包会真实变动）**: 当你在聊天里**真的发生了**一笔花销或进账时（比如你说自己买了咖啡、点了外卖、打车了，或收到稿费/兼职钱），在那句话的末尾附上: 花钱 \`[[ACTION:SPEND:金额|用途]]\`，进账 \`[[ACTION:INCOME:金额|来源]]\`（如 \`[[ACTION:SPEND:32|一杯燕麦拿铁]]\`）。规则: ①只记你**此刻实际发生**的收支，回忆过去/计划将来/打比方都不记；②金额按物价合理估，跟你的经济状况匹配；③工资、房租、月供这类固定收支系统会自动扣，**不要**用这个指令重复记；④转账走 TRANSFER，不要用 SPEND/INCOME 记转账。这个账本影响你的"钱的直觉"，记了钱就真的少了/多了。` : ''}
    - 调取记忆: \`[[RECALL: YYYY-MM]]\`，请注意，当用户提及具体某个月份时，或者当你想仔细想某个月份的事情时，欢迎你随时使该动作
    - **添加纪念日**: 如果你觉得今天是个值得纪念的日子（或者你们约定了某天），你可以**主动**将它添加到用户的日历中。单独起一行输出: \`[[ACTION:ADD_EVENT | 标题(Title) | YYYY-MM-DD]]\`。
    - **定时发送消息**: 如果你想在未来某个时间主动发消息（比如晚安、早安或提醒），请单独起一行输出: \`[schedule_message | YYYY-MM-DD HH:MM:SS | fixed | 消息内容]\`，分行可以多输出很多该类消息。

@@ -14,6 +14,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import { DB } from '../utils/db';
 import { CharHomeProfile, HomeRoom, HomeSupplyLevel } from '../types';
 import { generateHomeProfile } from '../utils/assetGen';
@@ -56,6 +57,12 @@ const SmartHomeApp: React.FC = () => {
     const [loading, setLoading] = useState(true);
 
     const selChar = useMemo(() => characters.find(c => c.id === selId) || null, [characters, selId]);
+
+    // 系统返回手势：先关重Roll弹窗，再退回角色列表页，最后才轮到关 App
+    useBackGuard([
+        [confirmReroll, () => setConfirmReroll(false)],
+        [!!selId, () => setSelId(null)],
+    ]);
 
     // 列表页：拉一遍所有角色的住所简讯（只取 homeName，轻量）
     useEffect(() => {

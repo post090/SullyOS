@@ -14,6 +14,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import { DB } from '../utils/db';
 import { CharWalletProfile, WalletTransaction, WalletProperty } from '../types';
 import { generateWalletProfile } from '../utils/assetGen';
@@ -55,6 +56,12 @@ const WalletApp: React.FC = () => {
 
     const isUser = selId === WALLET_USER_ID;
     const selChar = useMemo(() => characters.find(c => c.id === selId) || null, [characters, selId]);
+
+    // 系统返回手势：先关重Roll弹窗，再退回角色列表页，最后才轮到关 App
+    useBackGuard([
+        [confirmReroll, () => setConfirmReroll(false)],
+        [!!selId, () => setSelId(null)],
+    ]);
 
     // 列表页：谁已经建档（轻量探测）
     useEffect(() => {

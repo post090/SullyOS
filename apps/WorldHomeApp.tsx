@@ -15,6 +15,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import ApiConnectionPicker from '../components/os/ApiConnectionPicker';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import {
     ArrowLeft, Plus, GearSix, Trash, House, UsersThree,
     CaretRight, CaretDown, Sparkle, MapPin, DeviceMobile, X,
@@ -2112,6 +2113,12 @@ const WorldHomeApp: React.FC<{ embedded?: boolean; onFullscreen?: (full: boolean
         else if (view === 'world') { setActiveId(null); setView('list'); }
         else closeApp();
     };
+
+    // 系统返回手势：先关 API 设置弹窗，再沿 edit→world→list 回退（复用 goBack），最后才关 App
+    useBackGuard([
+        [showApiSettings, () => setShowApiSettings(false)],
+        [view !== 'list', goBack],
+    ]);
 
     // 世界视图的顶栏要压在深色页底上，配色跟着走
     const worldNight = view === 'world' && active ? isNightWorld(active) : false;

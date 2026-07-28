@@ -2,6 +2,7 @@
 import { extractLlmContent } from '../utils/llmContent';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import { SongSheet, SongLine, SongComment, SongMood, SongGenre, SongAudio, MusicProvider, AppID } from '../types';
 import { SONG_GENRES, SONG_MOODS, SECTION_LABELS, COVER_STYLES, SongPrompts, LYRIC_TEMPLATES, getLyricTemplate } from '../utils/songPrompts';
 import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
@@ -148,6 +149,18 @@ const SongwritingApp: React.FC = () => {
     const [coverMode, setCoverMode] = useState<CoverMode>('char');
     const [dualCoverUrl, setDualCoverUrl] = useState<string | null>(null);
     const [isBuildingDual, setIsBuildingDual] = useState(false);
+
+    // 系统返回手势：先关各弹窗，再按 partner→create、其余→书架回退，最后才关 App
+    useBackGuard([
+        [showCoverConfirm, () => setShowCoverConfirm(false)],
+        [showShareModal, () => setShowShareModal(false)],
+        [showPreviewModal, () => setShowPreviewModal(false)],
+        [showCustomPrompt, () => setShowCustomPrompt(false)],
+        [showStructureGuide, () => setShowStructureGuide(false)],
+        [view === 'partner', () => setView('create')],
+        [view === 'preview', () => { setView('shelf'); setActiveSong(null); }],
+        [view !== 'shelf', () => setView('shelf')],
+    ]);
     // 冷却已关闭 — 后端撑得住, 留 0 让所有 cooldownSecsLeft > 0 分支自然成 dead code。
     const COOLDOWN_MS = 0;
     const [cooldownSecsLeft, setCooldownSecsLeft] = useState(0);

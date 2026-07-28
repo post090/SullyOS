@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import { DB } from '../utils/db';
 import { GameSession, GameTheme, CharacterProfile, GameLog, GameActionOption, GameSummary } from '../types';
 import { ContextBuilder } from '../utils/context';
@@ -251,6 +252,16 @@ const GameApp: React.FC = () => {
 
     // SAN Lock: Sync from activeGame on load
     const [sanityLocked, setSanityLocked] = useState(false);
+
+    // 系统返回手势：先关菜单/弹层/多选，再从创建页、对局页回大厅，最后才关 App
+    useBackGuard([
+        [showSystemMenu, () => setShowSystemMenu(false)],
+        [!!deleteConfirmId, () => setDeleteConfirmId(null)],
+        [showArchiveHelp, () => setShowArchiveHelp(false)],
+        [selectMode, () => { setSelectMode(false); setSelectedLogIds(new Set()); }],
+        [view === 'create', () => setView('lobby')],
+        [view === 'play', () => { setView('lobby'); setActiveGame(null); }],
+    ]);
     useEffect(() => {
         if (activeGame) setSanityLocked(!!activeGame.sanityLocked);
     }, [activeGame?.id]);

@@ -2,6 +2,7 @@
 import { extractLlmContent } from '../utils/llmContent';
 import React, { useState, useEffect, useRef } from 'react';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import { DB } from '../utils/db';
 import { CharacterProfile, DiaryEntry, StickerData, DiaryPage, MemoryFragment } from '../types';
 import { ContextBuilder } from '../utils/context';
@@ -110,6 +111,16 @@ const JournalApp: React.FC = () => {
     const [deletingSticker, setDeletingSticker] = useState<{name: string, url: string} | null>(null);
     const [deletingDiary, setDeletingDiary] = useState<DiaryEntry | null>(null);
     const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    // 系统返回手势：先关弹层，再沿 write→calendar→select 回退，最后才关 App
+    useBackGuard([
+        [showImportModal, () => setShowImportModal(false)],
+        [!!deletingDiary, () => setDeletingDiary(null)],
+        [!!deletingSticker, () => setDeletingSticker(null)],
+        [showStickerPanel, () => setShowStickerPanel(false)],
+        [mode === 'write', () => setMode('calendar')],
+        [mode === 'calendar', () => setMode('select')],
+    ]);
 
     // --- Data Loading ---
 

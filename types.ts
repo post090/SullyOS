@@ -2154,6 +2154,9 @@ export interface CharWalletProfile {
     rerollCount?: number;
     monthlyIncome?: number;    // 月收入（0/缺省 = 无固定收入）
     incomeNote?: string;       // 收入来源（工资 / 生活费 / 稿费）
+    incomeDay?: number;        // 每月几号发（缺省按 10 号）
+    /** 固定收支上次结算到哪天（YYYY-MM-DD）；walletSettlement 用来补结算错过的天数 */
+    lastSettledDate?: string;
     accounts: WalletAccount[];
     properties: WalletProperty[];
     loans: WalletLoan[];

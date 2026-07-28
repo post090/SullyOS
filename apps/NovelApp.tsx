@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import { NovelBook, NovelProtagonist, CharacterProfile } from '../types';
 import Modal from '../components/os/Modal';
 import ConfirmDialog from '../components/os/ConfirmDialog';
@@ -71,6 +72,15 @@ const NovelApp: React.FC = () => {
 
     // Dialog
     const [confirmDialog, setConfirmDialog] = useState<{ isOpen: boolean; title: string; message: string; variant: 'danger' | 'warning' | 'info'; confirmText?: string; onConfirm: () => void; } | null>(null);
+
+    // 系统返回手势：弹窗 → 设定页回写作 → 其余子页回书架 → 关 App
+    useBackGuard([
+        [!!confirmDialog, () => setConfirmDialog(null)],
+        [isProtoImportOpen, () => setIsProtoImportOpen(false)],
+        [isProtagonistModalOpen, () => setIsProtagonistModalOpen(false)],
+        [view === 'settings', () => setView('write')],
+        [view !== 'shelf', () => setView('shelf')],
+    ]);
 
     // Writer State (Lifted slightly for init)
     const [targetCharId, setTargetCharId] = useState<string | null>(null);

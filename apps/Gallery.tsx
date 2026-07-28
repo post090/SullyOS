@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import { DB } from '../utils/db';
 import { GalleryImage, CharacterProfile } from '../types';
 import { safeResponseJson } from '../utils/safeApi';
@@ -58,6 +59,12 @@ const Gallery: React.FC = () => {
         else if (view === 'grid') { setView('albums'); setActiveCharId(null); }
         else closeApp();
     };
+
+    // 系统返回手势：先关确认弹窗，再沿 detail→grid→albums 回退，最后才关 App
+    useBackGuard([
+        [!!confirmDialog, () => setConfirmDialog(null)],
+        [view !== 'albums', handleBack],
+    ]);
 
     // Long-press handlers for album deletion
     const handleAlbumPressStart = useCallback((charId: string) => {

@@ -20,6 +20,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import { DB } from '../utils/db';
 import { Anniversary, CharacterProfile, TaskV2 } from '../types';
 import Modal from '../components/os/Modal';
@@ -192,6 +193,13 @@ const ScheduleApp: React.FC = () => {
     // 新建任务表单状态
     const [showTaskModal, setShowTaskModal] = useState(false);
     const [showAnniModal, setShowAnniModal] = useState(false);
+
+    // 系统返回手势：先关新建/编辑弹窗，再关任务详情页，最后才关 App
+    useBackGuard([
+        [showTaskModal, () => setShowTaskModal(false)],
+        [showAnniModal, () => setShowAnniModal(false)],
+        [!!detailTaskId, () => setDetailTaskId(null)],
+    ]);
     const [form, setForm] = useState<{
         title: string;
         type: 'recurring' | 'oneshot';

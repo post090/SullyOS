@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef, useLayoutEffect, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import { DB } from '../utils/db';
 import { Message, GroupProfile, CharacterProfile, MessageType, ChatTheme, BubbleStyle, EmojiCategory } from '../types';
 import { safeResponseJson } from '../utils/safeApi';
@@ -419,6 +420,14 @@ const GroupChat: React.FC = () => {
     // Selection Mode
     const [selectionMode, setSelectionMode] = useState(false);
     const [selectedMsgIds, setSelectedMsgIds] = useState<Set<number>>(new Set());
+
+    // 系统返回手势：先关弹窗/面板/多选，再从群聊回群列表，最后才关 App
+    useBackGuard([
+        [modalType !== 'none', () => setModalType('none')],
+        [showPanel !== 'none', () => setShowPanel('none')],
+        [selectionMode, () => { setSelectionMode(false); setSelectedMsgIds(new Set()); }],
+        [view === 'chat', () => { setView('list'); setActiveGroup(null); }],
+    ]);
 
     // Data State
     const [emojis, setEmojis] = useState<{name: string, url: string, categoryId?: string}[]>([]);

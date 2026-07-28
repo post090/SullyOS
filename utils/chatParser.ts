@@ -13,7 +13,7 @@ import {
 } from './taskSettlement';
 import { syncTaskReminders } from './taskReminderScheduler';
 import { wallClockToTimestamp } from './timezone';
-import { settleTransfer } from './walletOps';
+import { settleTransfer, settleCharExpense } from './walletOps';
 
 export interface MusicActionSnapshot {
     songId: number;
@@ -178,6 +178,19 @@ export const ChatParser = {
             await resolveUserTransfer('returned');
             content = content.replace(/\[\[ACTION:TRANSFER_RETURN\]\]/g, '').trim();
         }
+
+        // SPEND / INCOME — 角色日常收支记账：[[ACTION:SPEND:32|一杯燕麦拿铁]] / [[ACTION:INCOME:800|稿费]]
+        // 钱真实进出角色零钱并落流水（walletOps 内部对没建档角色静默跳过、离谱金额拒收）。
+        // 记账是无声的背景动作，不落聊天消息、不 toast——流水去钱包 App 看。
+        const EXPENSE_RE = /\[\[\s*ACTION\s*[:：]\s*(SPEND|INCOME)\s*[:：]\s*[¥￥]?\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)\s*(?:元)?\s*(?:\|\s*([^\]]*?))?\s*\]\]/gi;
+        let expenseMatch: RegExpExecArray | null;
+        while ((expenseMatch = EXPENSE_RE.exec(content)) !== null) {
+            const kind = expenseMatch[1].toUpperCase() === 'SPEND' ? 'spend' as const : 'income' as const;
+            const amount = expenseMatch[2].replace(/,/g, '');
+            const note = (expenseMatch[3] || '').trim() || undefined;
+            await settleCharExpense({ charId, kind, amount, note });
+        }
+        content = content.replace(EXPENSE_RE, '').trim();
 
         // MUSIC_ACTION — char 对 user 正在听的歌表态（只处理第一次出现，每条消息最多一次插卡）
         // 支持的格式（后两种是为了让 char 自己挑歌单 / 新建歌单）：

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useDeferredValue, useMemo } from 'react';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import {
     MemoryRoom, MemoryNode, ROOM_CONFIGS, ROOM_LABELS, getRoomLabel,
     MemoryNodeDB, AnticipationDB, MemoryLinkDB, EventBoxDB,
@@ -553,6 +554,16 @@ export default function MemoryPalaceApp() {
     const [allSortBy, setAllSortBy] = useState<'time' | 'importance'>('time');
     const [allSortDir, setAllSortDir] = useState<'desc' | 'asc'>('desc');
     const [prevView, setPrevView] = useState<'room' | 'all' | 'boxes'>('room');
+
+    // 系统返回手势：按 memory→来处、room→宫殿、settings→宫殿、globalSettings→选人、
+    // all/boxes→宫殿、palace→选人 逐级回退，最后才关 App（语义对齐各视图自己的返回按钮）
+    useBackGuard([
+        [view === 'memory', () => { setView(prevView); setSelectedNode(null); }],
+        [view === 'room', () => { setView('palace'); setSelectedRoom(null); setSelectMode(false); setSelectedIds(new Set()); }],
+        [view === 'settings' || view === 'all' || view === 'boxes', () => setView('palace')],
+        [view === 'globalSettings', () => setView('picker')],
+        [view === 'palace', () => setView('picker')],
+    ]);
 
     // 认知消化状态
     const [digesting, setDigesting] = useState(false);

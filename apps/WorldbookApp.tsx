@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useRef } from 'react';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import { Worldbook, WorldbookDepthRole, WorldbookPosition, WorldbookSelectiveLogic } from '../types';
 import Modal from '../components/os/Modal';
 import { Check, DiamondsFour, BookOpen, DownloadSimple, Trash, UploadSimple, WarningCircle, X } from '@phosphor-icons/react';
@@ -36,6 +37,17 @@ const WorldbookApp: React.FC = () => {
     const [showCategoryPicker, setShowCategoryPicker] = useState(false);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [showImportConfirm, setShowImportConfirm] = useState(false);
+
+    // 系统返回手势：先关确认弹窗/选择器，再退出编辑页/预览/多选模式，最后才关 App
+    useBackGuard([
+        [showDeleteConfirm, () => setShowDeleteConfirm(false)],
+        [showBulkDeleteConfirm, () => setShowBulkDeleteConfirm(false)],
+        [showImportConfirm, () => setShowImportConfirm(false)],
+        [showCategoryPicker, () => setShowCategoryPicker(false)],
+        [isEditing, () => setIsEditing(false)],
+        [!!previewBookId, () => setPreviewBookId(null)],
+        [isSelecting, () => { setIsSelecting(false); setSelectedBookIds(new Set()); }],
+    ]);
     const importRef = useRef<HTMLInputElement>(null);
     const [tempEnabled, setTempEnabled] = useState(true);
     const [tempConstant, setTempConstant] = useState(true);

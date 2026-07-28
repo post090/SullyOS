@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { SpeakerHigh, PlayCircle, StopCircle, Plus, Trash, FloppyDisk, Lock, Check, Warning } from '@phosphor-icons/react';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import { resolveMiniMaxApiKey } from '../utils/minimaxApiKey';
 import { fetchMiniMaxVoices, MiniMaxVoiceItem } from '../utils/minimaxVoice';
 import { safeResponseJson } from '../utils/safeApi';
@@ -105,6 +106,9 @@ const VoiceDesignerApp: React.FC = () => {
 
   // ── Voice picker modal ──
   const [showVoicePicker, setShowVoicePicker] = useState(false);
+  
+  // 系统返回手势：音色选择器打开时先关它
+  useBackGuard([[showVoicePicker, () => setShowVoicePicker(false)]]);
   const [pickingForIndex, setPickingForIndex] = useState<number>(-1);
 
   useEffect(() => {

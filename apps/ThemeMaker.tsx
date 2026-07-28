@@ -3,6 +3,7 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import { ChatTheme, BubbleStyle } from '../types';
 import { processImage } from '../utils/file';
 import { validateScopedCss, runCssRenderabilityCheck, CssValidationResult } from '../utils/scopedCss';
@@ -463,6 +464,18 @@ const ThemeMaker: React.FC = () => {
     const [applySelection, setApplySelection] = useState<Set<string>>(new Set());
     const [assetUrlDraft, setAssetUrlDraft] = useState<Record<'bg' | 'deco' | 'avatarDeco', string>>({ bg: '', deco: '', avatarDeco: '' });
     const [isThemeLibraryOpen, setIsThemeLibraryOpen] = useState(false);
+
+    // 系统返回手势：先关各弹层/全屏预览，有未保存改动时弹「放弃修改」确认，最后才关 App
+    useBackGuard([
+        [showApplySheet, () => setShowApplySheet(false)],
+        [showLowContrastConfirm, () => setShowLowContrastConfirm(false)],
+        [!!pendingDeleteTheme, () => setPendingDeleteTheme(null)],
+        [!!pendingDiscardAction, () => setPendingDiscardAction(null)],
+        [isPreviewFullscreen, () => setIsPreviewFullscreen(false)],
+        [isThemeLibraryOpen, () => setIsThemeLibraryOpen(false)],
+        [showAdvancedSettings, () => setShowAdvancedSettings(false)],
+        [isDirty, () => setPendingDiscardAction(() => closeApp)],
+    ]);
     const [themeLibrarySearch, setThemeLibrarySearch] = useState('');
     
     // Local state for sliders

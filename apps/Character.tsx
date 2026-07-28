@@ -1,6 +1,7 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import { AppID, CharacterProfile, CharacterExportData, UserImpression, MemoryFragment } from '../types';
 import { SlidersHorizontal, SpeakerHigh, Books, BookOpen } from '@phosphor-icons/react';
 import { DndContext, DragOverlay, PointerSensor, TouchSensor, useSensor, useSensors, useDraggable, useDroppable, pointerWithin } from '@dnd-kit/core';
@@ -519,6 +520,18 @@ const Character: React.FC = () => {
           setEditingId(null);
       } else closeApp();
   };
+
+  // 系统返回手势：先关各弹窗/捏脸工作室，再从详情页回列表，最后才关 App
+  useBackGuard([
+      [showChibiStudio, () => setShowChibiStudio(false)],
+      [showPromptEditor, () => setShowPromptEditor(false)],
+      [showImportModal, () => setShowImportModal(false)],
+      [showExportModal, () => setShowExportModal(false)],
+      [showBatchModal, () => setShowBatchModal(false)],
+      [showWorldbookModal, () => setShowWorldbookModal(false)],
+      [showGroupModal, () => setShowGroupModal(false)],
+      [view === 'detail', handleBack],
+  ]);
 
   const handleAddGroup = async () => {
       const name = newGroupName.trim();

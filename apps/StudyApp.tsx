@@ -2,6 +2,7 @@
 import { extractLlmContent } from '../utils/llmContent';
 import React, { useState, useEffect, useRef } from 'react';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import { DB } from '../utils/db';
 import { StudyCourse, StudyChapter, CharacterProfile, Message, UserProfile, APIConfig, StudyTutorPreset, QuizQuestion, QuizSession, QuizQuestionNote } from '../types';
 import { ContextBuilder } from '../utils/context';
@@ -390,6 +391,18 @@ const StudyApp: React.FC = () => {
     const [askingQuestionId, setAskingQuestionId] = useState<string>(''); // which question is being asked about
     const [followUpInput, setFollowUpInput] = useState('');
     const [followUpLoading, setFollowUpLoading] = useState(false);
+
+    // 系统返回手势：先关弹层，再按 quiz_review→classroom、quiz→classroom、其余→书架回退，最后才关 App
+    useBackGuard([
+        [showImportModal, () => setShowImportModal(false)],
+        [!!editingPreset, () => setEditingPreset(null)],
+        [showStudySettings, () => setShowStudySettings(false)],
+        [showChapterMenu, () => setShowChapterMenu(false)],
+        [!!deleteQuizTarget, () => setDeleteQuizTarget(null)],
+        [mode === 'quiz_review', () => { setMode(reviewingQuiz ? 'practice_book' : 'classroom'); setReviewingQuiz(null); }],
+        [mode === 'quiz', () => setMode('classroom')],
+        [mode !== 'bookshelf', () => setMode('bookshelf')],
+    ]);
 
     const currentSprite = selectedChar?.sprites?.['normal'] || selectedChar?.avatar;
 

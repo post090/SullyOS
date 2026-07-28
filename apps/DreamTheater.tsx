@@ -1,6 +1,7 @@
 import { extractLlmContent } from '../utils/llmContent';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import { DB } from '../utils/db';
 import { CharacterProfile, CharacterBuff, UserProfile } from '../types';
 import type { DreamArchetype, DreamFragment, DreamScript, DreamLog } from '../types';
@@ -593,6 +594,14 @@ const DreamTheater: React.FC<{ char: CharacterProfile; onExit: () => void }> = (
     const [showHelp, setShowHelp] = useState(false);
     const [dayPrompt, setDayPrompt] = useState<'seen' | 'limit' | null>(null);
     const [confirmDelete, setConfirmDelete] = useState<DreamLog | null>(null);
+
+    // 系统返回手势：先关帮助/提醒/删除确认/盲盒结果弹层，最后才关 App（phase 流程不拦，避免打断生成）
+    useBackGuard([
+        [showHelp, () => setShowHelp(false)],
+        [!!dayPrompt, () => setDayPrompt(null)],
+        [!!confirmDelete, () => setConfirmDelete(null)],
+        [!!boxReveal, () => setBoxReveal(null)],
+    ]);
 
     const frags = script?.fragments || [];
     const theme = THEMES[script?.archetype || 'starry'];

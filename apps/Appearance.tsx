@@ -1,6 +1,7 @@
 
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { useOS, DEFAULT_WALLPAPER, DEFAULT_PAPER_APPEARANCE, NOSTALGIA_APPEARANCE } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import { OSTheme, DesktopDecoration, AppearancePreset, Toast } from '../types';
 import { INSTALLED_APPS, Icons } from '../constants';
 import { processImage, processImageToBlob } from '../utils/file';
@@ -520,6 +521,14 @@ const Appearance: React.FC = () => {
   const decoInputRef = useRef<HTMLInputElement>(null);
   const [editingDecoId, setEditingDecoId] = useState<string | null>(null);
   const [showPresetPicker, setShowPresetPicker] = useState(false);
+
+  // 系统返回手势：先关贴纸选择器/装饰编辑/图标选择，最后才关 App
+  useBackGuard([
+      [showPresetPicker, () => setShowPresetPicker(false)],
+      [!!editingDecoId, () => setEditingDecoId(null)],
+      [!!selectedAppId, () => setSelectedAppId(null)],
+      [!!activeWidgetSlot, () => setActiveWidgetSlot(null)],
+  ]);
 
   const decorations = theme.desktopDecorations || [];
   const editingDeco = editingDecoId ? decorations.find(d => d.id === editingDecoId) : null;

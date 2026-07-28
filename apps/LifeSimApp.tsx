@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import {
     LifeSimState, SimAction, SimActionType, SimEventType,
     CharacterProfile, SimNPC,
@@ -128,6 +129,15 @@ const LifeSimApp: React.FC = () => {
 
     const [activeTab, setActiveTab] = useState<'npcs'|'drama'|'relations'>('npcs');
     const [actionPanel, setActionPanel] = useState<'none'|'stir'|'add'>('none');
+
+    // 系统返回手势：先关弹层（NPC编辑/设置/重置确认/回放/操作面板），最后才关 App
+    useBackGuard([
+        [!!editingNpc, () => setEditingNpc(null)],
+        [showResetDialog, () => setShowResetDialog(false)],
+        [showSettings, () => setShowSettings(false)],
+        [showReplay, () => setShowReplay(false)],
+        [actionPanel !== 'none', () => setActionPanel('none')],
+    ]);
 
     // ── 初始化 ──────────────────────────────────────────────────
 

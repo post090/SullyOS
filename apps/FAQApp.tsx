@@ -1,6 +1,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import { Sparkle } from '@phosphor-icons/react';
 import {
     FAQ_TARGET_SECTION_KEY,
@@ -194,6 +195,9 @@ const FAQApp: React.FC = () => {
     const { closeApp } = useOS();
     const [tab, setTab] = useState<Tab>('faq');
     const [activeChangelog, setActiveChangelog] = useState<ChangelogEntry | null>(null);
+
+    // 系统返回手势：更新日志详情打开时先关它
+    useBackGuard([[!!activeChangelog, () => setActiveChangelog(null)]]);
 
     useEffect(() => {
         try {

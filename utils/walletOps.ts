@@ -72,6 +72,13 @@ async function writeTx(charId: string, amount: number, category: string, note: s
  */
 let settleQueue: Promise<void> = Promise.resolve();
 
+/** 给外部模块（walletSettlement 固定收支）排队用：所有钱包余额读改写共享这一条串行队列 */
+export function enqueueWalletOp(fn: () => Promise<void>): Promise<void> {
+    const run = settleQueue.then(fn);
+    settleQueue = run.catch(() => { /* 失败不阻塞后续 */ });
+    return run;
+}
+
 export function settleTransfer(opts: {
     direction: 'user_to_char' | 'char_to_user';
     charId: string;
@@ -119,5 +126,47 @@ async function doSettleTransfer(opts: {
         console.log(`💰 [Wallet] 转账结算 ${opts.direction} ¥${n}（${opts.charName}）`);
     } catch (err) {
         console.warn('[Wallet] 转账结算失败（不影响聊天）:', err);
+    }
+}
+
+/**
+ * 角色日常收支入账：聊天里角色说「买了杯咖啡」「稿费到账了」时由
+ * chatParser 解析 [[ACTION:SPEND/INCOME]] 调这里 —— 钱真实进出零钱、落一条流水。
+ * 没建钱包档案的角色静默跳过（没开资产系统就不记账）。
+ * 复用转账的串行队列：和转账结算共享余额读改写，必须排同一条队。
+ */
+export function settleCharExpense(opts: {
+    charId: string;
+    kind: 'spend' | 'income';
+    amount: string | number | undefined;
+    note?: string;
+}): Promise<void> {
+    const run = settleQueue.then(() => doSettleCharExpense(opts));
+    settleQueue = run.catch(() => { /* 失败不阻塞后续结算 */ });
+    return run;
+}
+
+async function doSettleCharExpense(opts: {
+    charId: string;
+    kind: 'spend' | 'income';
+    amount: string | number | undefined;
+    note?: string;
+}): Promise<void> {
+    try {
+        const n = typeof opts.amount === 'number'
+            ? opts.amount
+            : parseFloat(String(opts.amount ?? '').replace(/[^\d.]/g, ''));
+        if (!Number.isFinite(n) || n <= 0) return;
+        // 单笔上限兜底：LLM 偶尔会写出离谱数字（"花了 999999"），拒掉防止一句话清空存款
+        if (n > 100000) return;
+
+        const profile = await DB.getWalletProfile(opts.charId);
+        if (!profile) return; // 没开资产系统
+        const delta = opts.kind === 'spend' ? -n : n;
+        await adjustCash(profile, delta);
+        await writeTx(opts.charId, delta, opts.kind === 'spend' ? 'daily' : 'income', opts.note || (opts.kind === 'spend' ? '日常消费' : '一笔进账'));
+        console.log(`💰 [Wallet] 日常${opts.kind === 'spend' ? '消费' : '收入'} ¥${n}（${opts.note || ''}）`);
+    } catch (err) {
+        console.warn('[Wallet] 日常收支入账失败（不影响聊天）:', err);
     }
 }

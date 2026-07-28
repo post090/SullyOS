@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import { DB } from '../utils/db';
 import { CharacterProfile, Message, DateState, AppID } from '../types';
 import { DatePrompts, ApiMessage } from '../utils/datePrompts';
@@ -135,6 +136,13 @@ const DateApp: React.FC = () => {
     };
 
     const formatTime = () => `${virtualTime.hours.toString().padStart(2, '0')}:${virtualTime.minutes.toString().padStart(2, '0')}`;
+
+    // 系统返回手势：settings 回来处、peek/history 回选择页；session 由 DateSession 自己的
+    // 处理器接管（栈顶优先，会先弹退出确认）。select 不拦 → 默认关 App。
+    useBackGuard([
+        [mode === 'settings', () => setMode(previousMode)],
+        [mode === 'peek' || mode === 'history', handleBack],
+    ]);
 
     // peek / send / reroll 共用的 LLM 调用（提示词构建统一在 utils/datePrompts.ts）
     const callLLM = async (messages: ApiMessage[], temperature: number): Promise<string> => {

@@ -1,6 +1,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import { useMusic, musicApi, normalizeCookie, toHttps, Song } from '../context/MusicContext';
 import { getProxyWorkerUrl } from '../utils/proxyWorker';
 import { DB } from '../utils/db';
@@ -117,6 +118,16 @@ const MusicApp: React.FC = () => {
   const [plDetail, setPlDetail] = useState<PlaylistSource | null>(null);
   const [commentSong, setCommentSong] = useState<Song | null>(null);
   const [commentsFrom, setCommentsFrom] = useState<View>('player'); // 评论区返回哪一页
+
+  // 系统返回手势：先关弹层，再按页面栈回退（评论→来处，歌单详情→角色主页/我的主页…），最后才关 App
+  useBackGuard([
+      [showLyricSync, () => setShowLyricSync(false)],
+      [showQueue, () => setShowQueue(false)],
+      [view === 'comments', () => setView(commentsFrom)],
+      [view === 'playlist_detail', () => setView(plDetail?.kind === 'char' ? 'visit_char' : 'profile')],
+      [view === 'visit_char', () => { setView('profile'); setVisitCharId(null); }],
+      [view !== 'profile', () => setView('profile')],
+  ]);
   const [keyword, setKeyword] = useState('');
   const [results, setResults] = useState<Song[]>([]);
   const [searching, setSearching] = useState(false);

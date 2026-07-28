@@ -2,6 +2,7 @@
 import { extractLlmContent } from '../utils/llmContent';
 import React, { useState, useEffect, useRef } from 'react';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import { processImage } from '../utils/file';
 import { safeResponseJson } from '../utils/safeApi';
 import Modal from '../components/os/Modal';
@@ -200,6 +201,12 @@ const BrowserApp: React.FC = () => {
             }
         }
     };
+
+    // 系统返回手势：先关设置面板，再走浏览器自己的历史栈回退，历史见底才关 App
+    useBackGuard([
+        [showSettings, () => setShowSettings(false)],
+        [historyIndex > 0, handleBack],
+    ]);
 
     const handleForward = () => {
         if (historyIndex < history.length - 1) {

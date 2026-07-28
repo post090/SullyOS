@@ -880,8 +880,10 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   const schedulerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const interceptorsInitialized = useRef(false);
   
-  // Back Handler Ref
-  const backHandlerRef = useRef<(() => boolean) | null>(null);
+  // Back Handler Stack：支持父 App 和子组件（如 DateApp + DateSession）同时各注册一个
+  // 处理器——后注册的（栈顶，通常是叠在上面的子视图）先问；都不接才走默认关 App。
+  // 旧的"单处理器"实现会让子组件卸载时把父 App 的处理器一起带走。
+  const backHandlerStackRef = useRef<Array<() => boolean>>([]);
 
   // Call Suspend
   const [suspendedCall, setSuspendedCall] = useState<{ charId: string; charName: string; charAvatar?: string; startedAt: number; bubbles?: any[]; sessionId?: string; elapsedSeconds?: number; voiceLang?: string } | null>(() => getRestorableSuspendedCall());
@@ -4711,18 +4713,21 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
 
   // --- Back Handler Logic ---
   const registerBackHandler = useCallback((handler: () => boolean) => {
-      backHandlerRef.current = handler;
+      backHandlerStackRef.current.push(handler);
       return () => {
-          if (backHandlerRef.current === handler) {
-              backHandlerRef.current = null;
-          }
+          const idx = backHandlerStackRef.current.indexOf(handler);
+          if (idx >= 0) backHandlerStackRef.current.splice(idx, 1);
       };
   }, []);
 
   const handleBack = useCallback(() => {
-      if (backHandlerRef.current) {
-          const handled = backHandlerRef.current();
-          if (handled) return;
+      // 栈顶（最后注册的，一般是叠在最上面的子视图）先消费
+      for (let i = backHandlerStackRef.current.length - 1; i >= 0; i--) {
+          try {
+              if (backHandlerStackRef.current[i]()) return;
+          } catch (err) {
+              console.warn('[BackHandler] handler threw, skipping:', err);
+          }
       }
       // Default: Close App
       if (activeApp !== AppID.Launcher) {

@@ -171,6 +171,7 @@ JSON 结构（所有数组都允许为空；金额单位为元，整数）：
 {
   "monthlyIncome": 8000,
   "incomeNote": "收入来源一句话（工资/生活费/稿费/兼职…）",
+  "incomeDay": 10,
   "accounts": [
     { "type": "cash|savings|credit|investment", "name": "账户名", "balance": 0, "creditLimit": 0, "note": "一句话背景" }
   ],
@@ -272,6 +273,7 @@ export async function generateWalletProfile(
         rerollCount: (prev?.rerollCount || 0) + (prev ? 1 : 0),
         monthlyIncome: raw.monthlyIncome != null ? num(raw.monthlyIncome) : undefined,
         incomeNote: str(raw.incomeNote) || undefined,
+        incomeDay: raw.incomeDay != null ? Math.min(28, Math.max(1, num(raw.incomeDay, 10))) : undefined,
         accounts, properties, loans, valuables,
         visibility: prev?.visibility || 'full',
     };

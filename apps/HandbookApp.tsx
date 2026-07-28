@@ -13,6 +13,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import { DB } from '../utils/db';
 import { HandbookEntry, HandbookPage, HandbookLayout, Tracker } from '../types';
 import {
@@ -50,6 +51,13 @@ const HandbookApp: React.FC = () => {
 
     // 角色选择面板
     const [showCharPicker, setShowCharPicker] = useState(false);
+
+    // 系统返回手势：先关弹层，再从日视图回列表，最后才关 App
+    useBackGuard([
+        [showTrackerCreate, () => setShowTrackerCreate(false)],
+        [showCharPicker, () => setShowCharPicker(false)],
+        [view === 'day', () => setView('list')],
+    ]);
     const [chatCharIds, setChatCharIds] = useState<string[]>([]);
     const [excludedChatChars, setExcludedChatChars] = useState<Set<string>>(new Set());
     const [excludedLifeChars, setExcludedLifeChars] = useState<Set<string>>(new Set());

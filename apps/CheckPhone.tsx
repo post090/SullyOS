@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import { DB } from '../utils/db';
 import { CharacterProfile, PhoneEvidence, PhoneCustomApp, PhoneContact, ConvTopic, AiSession, AiServiceKind, TavernCard } from '../types';
 import { ContextBuilder } from '../utils/context';
@@ -442,6 +443,15 @@ const CheckPhone: React.FC = () => {
         setEvidenceBackAppId('home');
         setPage(0);
     };
+
+    // 系统返回手势：聊天记录详情 → 证物详情 → 智能体会话回列表 → 内部小 App 回主屏 → 退回选人页 → 关 App
+    useBackGuard([
+        [!!selectedChatRecord, () => setSelectedChatRecord(null)],
+        [!!selectedEvidenceRecord, () => { setSelectedEvidenceRecord(null); setActiveAppId(evidenceBackAppId); }],
+        [activeAppId === 'ai_session', () => { setSelectedAiSessionId(null); setActiveAppId('aiagent'); }],
+        [view === 'phone' && activeAppId !== 'home', () => setActiveAppId('home')],
+        [view === 'phone', handleExitPhone],
+    ]);
 
     // 切换「查手机内容是否同步到私聊」（默认开）
     const toggleSendToChat = () => {

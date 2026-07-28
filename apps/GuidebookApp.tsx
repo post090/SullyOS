@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import { CharacterProfile, GuidebookSession, GuidebookRound, GuidebookOption } from '../types';
 import { extractJson } from '../utils/safeApi';
 import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
@@ -1059,6 +1060,18 @@ const GuidebookApp: React.FC = () => {
         setView('lobby');
         loadSessions();
     };
+
+    // 系统返回手势：先关弹层；对局中先弹退出确认（跟头部返回键同语义）；其余子页回大厅
+    useBackGuard([
+        [showExitConfirm, () => setShowExitConfirm(false)],
+        [showTutorial, () => setShowTutorial(false)],
+        [showEndCard, () => setShowEndCard(false)],
+        [view === 'playing', () => {
+            if (!session?.rounds.length || session?.status === 'ended') backToLobby();
+            else setShowExitConfirm(true);
+        }],
+        [view !== 'lobby', backToLobby],
+    ]);
 
     // ============ RENDER: LOBBY ============
     if (view === 'lobby') {

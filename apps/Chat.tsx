@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useLayoutEffect, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useOS } from '../context/OSContext';
+import { useBackGuard } from '../hooks/useBackGuard';
 import { DB } from '../utils/db';
 import { Message, MessageType, MemoryFragment, Emoji, EmojiCategory, DailySchedule, ScheduleSlot, TaskV2 } from '../types';
 import { processImage } from '../utils/file';
@@ -173,6 +174,16 @@ const Chat: React.FC = () => {
     // 加号菜单第二页：角色级 API 配置聚合 / 聊天记录搜索
     const [showApiHubModal, setShowApiHubModal] = useState(false);
     const [showChatSearch, setShowChatSearch] = useState(false);
+
+    // 系统返回手势：先关各弹窗/输入面板/消息长按菜单，都没开才关 App 回桌面
+    useBackGuard([
+        [showChatSearch, () => setShowChatSearch(false)],
+        [showApiHubModal, () => setShowApiHubModal(false)],
+        [showProactiveModal, () => setShowProactiveModal(false)],
+        [showThinkingChainModal, () => setShowThinkingChainModal(false)],
+        [!!selectedMessage, () => setSelectedMessage(null)],
+        [showPanel !== 'none', () => setShowPanel('none')],
+    ]);
 
     // Archive Prompts State
     const [archivePrompts, setArchivePrompts] = useState<{id: string, name: string, content: string}[]>(DEFAULT_ARCHIVE_PROMPTS);

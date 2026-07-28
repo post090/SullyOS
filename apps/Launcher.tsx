@@ -6,6 +6,7 @@ import AppIcon from '../components/os/AppIcon';
 import { DB } from '../utils/db';
 import { CharacterProfile, Anniversary, AppID, DailySchedule } from '../types';
 import { runDailyCheck } from '../utils/taskSettlement';
+import { runWalletDailySettlement } from '../utils/walletSettlement';
 import { syncTaskReminders } from '../utils/taskReminderScheduler';
 import { ScheduleHomeWidget, ScheduleFullscreenViewer } from '../components/schedule/ScheduleHomeWidget';
 import NowPlayingSquareWidget from '../components/os/NowPlayingSquareWidget';
@@ -695,6 +696,17 @@ const Launcher: React.FC = () => {
           syncTaskReminders().catch(err => console.warn('[Launcher] syncTaskReminders failed:', err));
       }).catch(err => console.warn('[Launcher] daily check failed:', err));
   }, [isDataLoaded, apiConfig, userProfile, characters, addToast]);
+
+  // 钱包固定收支结算：工资进账、房租/月供/贷款扣款（不依赖 LLM，独立于契约结算的闸门）。
+  // 补结算窗口/串行队列都在 walletSettlement 里，这儿只负责触发一次。
+  const walletSettleRanRef = useRef(false);
+  useEffect(() => {
+      if (!isDataLoaded || walletSettleRanRef.current) return;
+      walletSettleRanRef.current = true;
+      runWalletDailySettlement().then(n => {
+          if (n > 0) addToast(`角色们的固定收支结算了 ${n} 笔（工资/房租/月供）`, 'info');
+      }).catch(err => console.warn('[Launcher] wallet settlement failed:', err));
+  }, [isDataLoaded, addToast]);
 
   // 打开最近聊天面板：每个角色取最后几条消息（含已入宫段）找最后一条可见消息，按时间倒序。
   // 角色数量级很小，逐个查 IndexedDB 索引的成本可忽略；先弹面板再异步填数据，不卡手。
