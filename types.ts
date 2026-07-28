@@ -40,7 +40,7 @@ export enum AppID {
   CharCreatorDev = 'char_creator_dev', // 捏脸系统开发模式 — 仅开发模式可见，向捏人器指定类目追加自定义部件
   WorldHome = 'world_home', // 家园 — 同世界观多角色共同生活的大世界（观测驱动演绎，每角色独立 LLM 调用 + NPC 世界引擎）
   Wallet = 'wallet', // 钱包 — 角色资产系统（账户/房车/贷款/小物件/流水）+ 用户零钱；转账真扣钱
-  SmartHome = 'smart_home', // 智能家居 — 角色住所统计面板（房间/物品/库存档位/保质期钩子），世界观内解释为"她家装了统计 App 且共享了权限"
+  SmartHome = 'smart_home', // 栖居 — 角色住所面板（房间/物品/库存档位/保质期钩子），世界观内解释为"她家装了统计 App 且共享了权限"。AppID 字符串保持 smart_home 不动：桌面布局/预加载等存量数据引用它
 }
 
 export interface SystemLog {

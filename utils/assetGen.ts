@@ -15,6 +15,9 @@ import {
     CharHomeProfile, HomeRoom, HomeItem, HomeSupply, HomeSupplyLevel,
 } from '../types';
 import { safeResponseJson } from './safeApi';
+import { DB } from './db';
+import { resolveWorldbookEntries } from './worldbook';
+import { injectMemoryPalace } from './memoryPalace';
 
 // ---------- 通用 ----------
 
@@ -94,6 +97,52 @@ function personaBrief(char: CharacterProfile): string {
     return parts.join('\n');
 }
 
+/**
+ * 生成上下文：世界书主题触发 + 记忆宫殿召回 + 最近聊天摘录。
+ * 让生成出来的资产/住所跟角色真实生活对得上号，而不是只看人设自由发挥。
+ * 任一来源失败都静默跳过，不阻塞生成。
+ */
+async function buildGenContext(char: CharacterProfile, theme: 'wallet' | 'home'): Promise<string> {
+    const parts: string[] = [];
+    const themeWords = theme === 'wallet'
+        ? '钱 收入 工资 存款 消费 买东西 贷款 房租 转账 随身物品 手机 包'
+        : '家 房子 房间 住处 搬家 做饭 冰箱 家具 日用品 补给 打扫';
+
+    // 1. 世界书：常驻条目照常激活；关键词条目用「角色名 + 主题词」探针触发
+    try {
+        const userName = (await DB.getUserProfile())?.name || '';
+        const probe = [{ role: 'user', content: `${char.name} ${themeWords}` }];
+        const entries = resolveWorldbookEntries(char.mountedWorldbooks || [], probe, char.name, userName);
+        if (entries.length > 0) {
+            const text = entries.map(e => e.content.trim()).join('\n').slice(0, 1500);
+            parts.push(`【世界书设定（必须遵守）】\n${text}`);
+        }
+    } catch { /* 世界书失败不阻塞 */ }
+
+    // 2. 记忆宫殿：按主题检索相关记忆（在浅拷贝上注入，不污染原角色对象）
+    try {
+        if ((char as any).memoryPalaceEnabled) {
+            const probe: any = { ...char };
+            await injectMemoryPalace(probe, undefined, `${char.name} ${themeWords}`);
+            if (probe.memoryPalaceInjection) {
+                parts.push(`【相关记忆】\n${String(probe.memoryPalaceInjection).slice(0, 1200)}`);
+            }
+        }
+    } catch { /* 记忆检索失败不阻塞 */ }
+
+    // 3. 最近聊天摘录：聊过的物件/收支/住处，生成结果不得与之矛盾
+    try {
+        const msgs = await DB.getRecentMessagesByCharId(char.id, 30, true);
+        const lines = msgs
+            .filter(m => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim() && !m.content.startsWith('data:') && !m.content.startsWith('['))
+            .slice(-16)
+            .map(m => `${m.role === 'user' ? '用户' : char.name}：${m.content.replace(/\s+/g, ' ').slice(0, 80)}`);
+        if (lines.length > 0) parts.push(`【最近聊天摘录（生成内容不得与聊过的事实矛盾）】\n${lines.join('\n')}`);
+    } catch { /* 聊天读取失败不阻塞 */ }
+
+    return parts.length > 0 ? `\n\n参考背景（生成必须与以下信息自洽，冲突时以这些为准）：\n${parts.join('\n\n')}` : '';
+}
+
 async function callJsonLLM(apiConfig: APIConfig, system: string, user: string): Promise<any> {
     const response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
         method: 'POST',
@@ -144,7 +193,7 @@ JSON 结构（所有数组都允许为空；金额单位为元，整数）：
 3. 住房：绝大多数普通人是 renting（租的），要给 rentMonthly / rentDueDay / leaseEndDate（今天之后 2~14 个月内）/ deposit。mortgaged 要给月供和剩余期数。可以完全没有房（住宿舍/家里，就不写 home）。
 4. credit 账户的 balance 表示已欠金额（正数），creditLimit 为额度；没有信用卡就不生成。
 5. loans 里的每笔都要有真实可信的原因（note），跟人设呼应。
-6. valuables 是 2~5 件有生活气的小物件（游戏机/乐器/首饰…），要跟人设有关。
+6. valuables 是 2~5 件**随身物品**——能带出门、随身携带的东西（手机/耳机/手表/首饰/包/钥匙串挂件…），要跟人设有关。**严禁生成家具、家电、摆件、厨具这类住所里的东西**——那些属于住所档案，不归钱包管。
 7. 数字要"难看"一点才真实：用 3847 这种零头，别全是整千整万。`;
 
 export interface WalletGenResult {
@@ -155,9 +204,12 @@ export async function generateWalletProfile(
     char: CharacterProfile,
     apiConfig: APIConfig,
     prev?: CharWalletProfile | null,
+    homeHint?: string,
 ): Promise<CharWalletProfile> {
     const todayStr = new Date().toISOString().slice(0, 10);
-    const userPrompt = `${personaBrief(char)}\n\n今天的日期：${todayStr}\n${prev ? '这是一次重Roll：生成一份跟上次明显不同的新档案（换一种合理的生活状态）。\n' : ''}请生成这个角色的资产档案 JSON。`;
+    const ctx = await buildGenContext(char, 'wallet');
+    const home = homeHint ? `\n住所背景（住房条目必须与之一致，随身物品不得与住所内物品重复）：${homeHint}` : '';
+    const userPrompt = `${personaBrief(char)}${home}${ctx}\n\n今天的日期：${todayStr}\n${prev ? '这是一次重Roll：生成一份跟上次明显不同的新档案（换一种合理的生活状态）。\n' : ''}请生成这个角色的资产档案 JSON。`;
     const raw = await callJsonLLM(apiConfig, WALLET_GEN_SYSTEM, userPrompt);
 
     // 清洗 + 兜底：不信任模型输出的任何数值/枚举
@@ -245,7 +297,7 @@ JSON 结构：
 }
 
 硬性约束：
-1. 房间 1~4 间（住宿舍就 1 间），每间 3~8 件有生活气的物品，跟人设强相关。
+1. 房间 1~4 间（住宿舍就 1 间），每间 3~8 件有生活气的物品，跟人设强相关。**只记住所里的东西**——严禁生成手机/钱包/首饰/随身包这类随身物品（它们属于钱包档案的随身物品栏，不归住所管）。
 2. supplies 固定 4~8 类，覆盖：冰箱食材、至少两种日用品；level 分布要真实（不能全是 plenty）。
 3. **全屋最多 3 件物品带 expiryDate**（今天之后 3~60 天），选有剧情价值的（对方送的巧克力/快到期的酸奶）；其余物品一律不写 expiryDate。
 4. 物品记类别不记个数（写"鸡蛋和青菜"，不写"鸡蛋×7"）。`;
@@ -257,8 +309,9 @@ export async function generateHomeProfile(
     prev?: CharHomeProfile | null,
 ): Promise<CharHomeProfile> {
     const todayStr = new Date().toISOString().slice(0, 10);
+    const ctx = await buildGenContext(char, 'home');
     const hint = walletHint ? `\n住房背景（必须与之一致）：${walletHint}` : '';
-    const userPrompt = `${personaBrief(char)}${hint}\n\n今天的日期：${todayStr}\n${prev ? '这是一次重Roll：生成一份跟上次明显不同的新档案。\n' : ''}请生成这个角色的住所档案 JSON。`;
+    const userPrompt = `${personaBrief(char)}${hint}${ctx}\n\n今天的日期：${todayStr}\n${prev ? '这是一次重Roll：生成一份跟上次明显不同的新档案。\n' : ''}请生成这个角色的住所档案 JSON。`;
     const raw = await callJsonLLM(apiConfig, HOME_GEN_SYSTEM, userPrompt);
 
     let expiryBudget = 3; // 硬约束兜底：全屋最多 3 件带保质期

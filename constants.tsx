@@ -111,7 +111,7 @@ export const INSTALLED_APPS: AppConfig[] = [
   { id: AppID.HotNews, name: '热点', icon: 'HotNews', color: 'red' },
   { id: AppID.Memo, name: '备忘录', icon: 'Memo', color: 'amber' },
     { id: AppID.Wallet, name: '钱包', icon: 'Wallet', color: 'violet' },
-    { id: AppID.SmartHome, name: '智能家居', icon: 'SmartHome', color: 'teal' },
+    { id: AppID.SmartHome, name: '栖居', icon: 'SmartHome', color: 'teal' },
   { id: AppID.FAQ, name: '使用帮助', icon: 'FAQ', color: 'indigo' },
   { id: AppID.Gallery, name: '相册', icon: 'Gallery', color: 'orange' },
   { id: AppID.XhsFreeRoam, name: '自由活动', icon: 'XhsFreeRoam', color: 'rose' },

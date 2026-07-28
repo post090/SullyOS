@@ -1,12 +1,13 @@
 /**
- * 智能家居 App —— 资产系统的空间与物品面板。
+ * 栖居 App —— 资产系统的空间与物品面板（原「智能家居」，AppID 仍为 smart_home）。
  *
- * 世界观包装：假装角色家里装了一个"智能家居统计 App"，把房间/物品/补给情况
+ * 世界观包装：假装角色家里装了一个"栖居统计 App"，把房间/物品/补给情况
  * 统计出来并共享给用户看——这解释了"你为什么能看到 ta 家里有几卷纸"。
  *
+ *  - 两级导航：角色列表页（每人一张住所卡）→ 点击推入角色住所详情页
  *  - 房间卡网格 → 点开看物品清单（少数物品带保质期钩子，过期/临期高亮）
  *  - 补给（冰箱/日用品）走档位制：充足/还够/快没了/用完了——记类别不数鸡蛋
- *  - 一键生成/重Roll；若角色钱包档案里有住房，生成时喂给 LLM 保持一致
+ *  - 一键生成/重Roll；生成时接入世界书主题触发 + 记忆宫殿 + 最近聊天（见 assetGen）
  *
  * UI：浅色玻璃 + 温和卡片（对齐全站扁平毛玻璃规范；安全区走 --chrome-top）。
  */
@@ -43,9 +44,12 @@ const BAR_COLOR: Record<HomeSupplyLevel, string> = {
 const daysUntil = (dateStr: string) => Math.ceil((new Date(dateStr).getTime() - Date.now()) / 86400000);
 
 const SmartHomeApp: React.FC = () => {
-    const { closeApp, characters, activeCharacterId, apiConfig, addToast } = useOS();
-    const [selId, setSelId] = useState<string>(activeCharacterId || characters[0]?.id || '');
+    const { closeApp, characters, apiConfig, addToast } = useOS();
+    // 两级导航：selId=null → 角色列表页；有值 → 该角色的住所详情页
+    const [selId, setSelId] = useState<string | null>(null);
     const [profile, setProfile] = useState<CharHomeProfile | null>(null);
+    // 列表页角标用：每个角色是否已接入 + 住所名
+    const [homeBriefs, setHomeBriefs] = useState<Record<string, string>>({});
     const [openRoomId, setOpenRoomId] = useState<string | null>(null);
     const [generating, setGenerating] = useState(false);
     const [confirmReroll, setConfirmReroll] = useState(false);
@@ -53,13 +57,30 @@ const SmartHomeApp: React.FC = () => {
 
     const selChar = useMemo(() => characters.find(c => c.id === selId) || null, [characters, selId]);
 
+    // 列表页：拉一遍所有角色的住所简讯（只取 homeName，轻量）
+    useEffect(() => {
+        if (selId) return;
+        let cancelled = false;
+        (async () => {
+            const briefs: Record<string, string> = {};
+            for (const c of characters) {
+                try {
+                    const p = await DB.getHomeProfile(c.id);
+                    if (p) briefs[c.id] = p.homeName || '已接入';
+                } catch { /* 单个失败不影响列表 */ }
+            }
+            if (!cancelled) setHomeBriefs(briefs);
+        })();
+        return () => { cancelled = true; };
+    }, [selId, characters]);
+
     const reload = useCallback(async () => {
         if (!selId) { setLoading(false); return; }
         setLoading(true);
         try {
             setProfile(await DB.getHomeProfile(selId));
         } catch (e) {
-            console.error('[SmartHome] load failed:', e);
+            console.error('[栖居] load failed:', e);
         } finally {
             setLoading(false);
         }
@@ -154,18 +175,29 @@ const SmartHomeApp: React.FC = () => {
             {/* 背景辉光 */}
             <div className="absolute inset-x-0 top-0 h-[45%] pointer-events-none" style={{ background: 'radial-gradient(120% 70% at 50% 0%, rgba(255,255,255,0.9), rgba(94,234,212,0.14) 45%, transparent 72%)' }} />
 
-            {/* Header */}
+            {/* Header：列表页返回=关App；详情页返回=回列表 */}
             <div className="border-b border-slate-200/60 sticky top-0 z-20 shrink-0 backdrop-blur-sm" style={{ paddingTop: 'var(--chrome-top)' }}>
                 <div className="pt-1 pb-3 px-5 flex items-center gap-2.5">
-                    <button onClick={closeApp} className="p-2 -ml-2 rounded-full active:scale-90 transition-transform hover:bg-black/5" aria-label="返回">
+                    <button onClick={() => selId ? setSelId(null) : closeApp()} className="p-2 -ml-2 rounded-full active:scale-90 transition-transform hover:bg-black/5" aria-label="返回">
                         <ArrowLeft size={22} className="text-teal-500" weight="bold" />
                     </button>
                     <div className="flex items-center gap-2">
-                        <Lightbulb size={18} className="text-teal-500" weight="fill" />
-                        <span className="text-sm font-bold tracking-wide">智能家居</span>
+                        {selId && selChar ? (
+                            <>
+                                <div className="w-6 h-6 rounded-lg overflow-hidden shrink-0">
+                                    {selChar.avatar ? <img src={selChar.avatar} className="w-full h-full object-cover" alt="" /> : <div className="w-full h-full bg-slate-200 flex items-center justify-center text-[10px] font-bold">{selChar.name[0]}</div>}
+                                </div>
+                                <span className="text-sm font-bold tracking-wide">{selChar.name} 的栖居</span>
+                            </>
+                        ) : (
+                            <>
+                                <Lightbulb size={18} className="text-teal-500" weight="fill" />
+                                <span className="text-sm font-bold tracking-wide">栖居</span>
+                            </>
+                        )}
                     </div>
                     <div className="ml-auto">
-                        {profile && (
+                        {selId && profile && (
                             <button onClick={() => setConfirmReroll(true)} disabled={generating} className="p-2 rounded-full active:scale-90 transition-transform hover:bg-black/5 disabled:opacity-40" aria-label="重Roll">
                                 <ArrowsClockwise size={18} className="text-teal-500" weight="bold" />
                             </button>
@@ -174,24 +206,31 @@ const SmartHomeApp: React.FC = () => {
                 </div>
             </div>
 
-            {/* 选人条 */}
-            <div className="shrink-0 px-5 pt-3 pb-1 z-10">
-                <div className="flex gap-2 overflow-x-auto no-scrollbar py-1 -mx-1 px-1">
-                    {characters.map(c => {
-                        const active = c.id === selId;
-                        return (
-                            <button key={c.id} onClick={() => setSelId(c.id)} className="shrink-0 flex flex-col items-center gap-1 active:scale-95 transition-transform" style={{ width: 52 }}>
-                                <div className={`w-11 h-11 rounded-2xl overflow-hidden transition-all ${active ? 'scale-105' : 'opacity-55'}`}
-                                    style={{ border: active ? '2px solid #14b8a6' : '2px solid rgba(15,23,42,0.08)', boxShadow: active ? '0 6px 18px rgba(20,184,166,0.35)' : 'none' }}>
-                                    {c.avatar ? <img src={c.avatar} className="w-full h-full object-cover" alt="" loading="lazy" /> : <div className="w-full h-full bg-slate-200 flex items-center justify-center text-sm font-bold">{c.name[0]}</div>}
-                                </div>
-                                <span className={`text-[10px] truncate max-w-full font-semibold ${active ? 'text-slate-600' : 'text-slate-400'}`}>{c.name}</span>
-                            </button>
-                        );
-                    })}
+            {/* 角色列表页 */}
+            {!selId && (
+                <div className="flex-1 overflow-y-auto no-scrollbar px-5 py-4 z-10">
+                    <div className="text-[10px] text-slate-400 leading-relaxed mb-3 px-1">选一个人，看看 ta 栖身的地方。</div>
+                    <div className="grid grid-cols-2 gap-3">
+                        {characters.map(c => {
+                            const brief = homeBriefs[c.id];
+                            return (
+                                <button key={c.id} onClick={() => setSelId(c.id)} className="rounded-3xl p-4 text-left active:scale-[0.97] transition-transform" style={CARD}>
+                                    <div className="w-12 h-12 rounded-2xl overflow-hidden border-2 border-white shadow-sm">
+                                        {c.avatar ? <img src={c.avatar} className="w-full h-full object-cover" alt="" loading="lazy" /> : <div className="w-full h-full bg-slate-200 flex items-center justify-center text-base font-bold">{c.name[0]}</div>}
+                                    </div>
+                                    <div className="text-sm font-black text-slate-700 truncate mt-3">{c.name}</div>
+                                    <div className={`text-[10px] truncate mt-1 ${brief ? 'text-teal-600' : 'text-slate-300'}`}>
+                                        {brief ? `🏠 ${brief}` : '还没接入'}
+                                    </div>
+                                </button>
+                            );
+                        })}
+                    </div>
+                    {characters.length === 0 && <div className="text-center text-slate-300 text-xs py-16">还没有角色</div>}
                 </div>
-            </div>
+            )}
 
+            {selId && (
             <div className="flex-1 overflow-y-auto no-scrollbar px-5 py-4 space-y-3 z-10">
                 {loading && <div className="text-center text-slate-300 text-xs py-16">加载中…</div>}
 
@@ -270,6 +309,7 @@ const SmartHomeApp: React.FC = () => {
                     </>
                 )}
             </div>
+            )}
 
             {/* 重Roll 确认 */}
             {confirmReroll && (

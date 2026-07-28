@@ -2,8 +2,10 @@
  * 钱包 App —— 资产系统的金钱面板。
  *
  * 概念边界：跟 BankApp（用户记账储蓄罐）完全独立。这里管"谁名下有什么"：
- *  - 角色侧：账户（零钱/储蓄/信用/投资）、房车（自有/租/贷）、贷款、小物件、流水
- *  - 用户侧：P1 只有零钱 + 转账流水（选人条第一格"我"）
+ *  - 两级导航：角色列表页（第一张是"我"）→ 点谁进谁的钱包详情页
+ *  - 角色侧：账户（零钱/储蓄/信用/投资）、房车（自有/租/贷）、贷款、随身物品、流水
+ *    随身物品=能带出门的（手机/包/首饰），住所内物品归栖居 App 管，生成时互相对账
+ *  - 用户侧：P1 只有零钱 + 转账流水
  *  - 没档案的角色一屏引导 → 一键生成（LLM 按人设产出，收支自洽）→ 可重Roll
  *  - 浏览范围：full 全明细 / summary 只看直觉摘要（给想保留神秘感的用户）
  *
@@ -39,19 +41,37 @@ const ACCOUNT_META: Record<string, { label: string; icon: React.ReactNode; tint:
 };
 
 const WalletApp: React.FC = () => {
-    const { closeApp, characters, activeCharacterId, apiConfig, addToast } = useOS();
-    const [selId, setSelId] = useState<string>(activeCharacterId || WALLET_USER_ID);
+    const { closeApp, characters, apiConfig, addToast } = useOS();
+    // 两级导航：selId=null → 角色列表页；有值 → 该角色（或"我"）的钱包详情页
+    const [selId, setSelId] = useState<string | null>(null);
     const [profile, setProfile] = useState<CharWalletProfile | null>(null);
     const [txs, setTxs] = useState<WalletTransaction[]>([]);
     const [tab, setTab] = useState<'overview' | 'txs'>('overview');
     const [generating, setGenerating] = useState(false);
     const [confirmReroll, setConfirmReroll] = useState(false);
     const [loading, setLoading] = useState(true);
+    // 列表页角标：已建档角色
+    const [walletBriefs, setWalletBriefs] = useState<Record<string, boolean>>({});
 
     const isUser = selId === WALLET_USER_ID;
     const selChar = useMemo(() => characters.find(c => c.id === selId) || null, [characters, selId]);
 
+    // 列表页：谁已经建档（轻量探测）
+    useEffect(() => {
+        if (selId) return;
+        let cancelled = false;
+        (async () => {
+            const briefs: Record<string, boolean> = {};
+            for (const c of characters) {
+                try { briefs[c.id] = !!(await DB.getWalletProfile(c.id)); } catch { /* 单个失败不影响列表 */ }
+            }
+            if (!cancelled) setWalletBriefs(briefs);
+        })();
+        return () => { cancelled = true; };
+    }, [selId, characters]);
+
     const reload = useCallback(async () => {
+        if (!selId) { setProfile(null); setTxs([]); setLoading(false); return; }
         setLoading(true);
         try {
             const p = isUser ? await getOrCreateUserWallet() : await DB.getWalletProfile(selId);
@@ -82,7 +102,16 @@ const WalletApp: React.FC = () => {
         setGenerating(true);
         setConfirmReroll(false);
         try {
-            const next = await generateWalletProfile(selChar, apiConfig, isReroll ? profile : null);
+            // 栖居里已有住所 → 喂给生成器对账：住房一致 + 随身物品不与住所内物品重复
+            let homeHint: string | undefined;
+            try {
+                const home = await DB.getHomeProfile(selChar.id);
+                if (home) {
+                    const itemNames = home.rooms.flatMap(r => r.items.map(it => it.name)).slice(0, 20).join('、');
+                    homeHint = `${home.homeName || '已有住所'}${itemNames ? `；住所内已有物品：${itemNames}` : ''}`;
+                }
+            } catch { /* 栖居没档案就自由发挥 */ }
+            const next = await generateWalletProfile(selChar, apiConfig, isReroll ? profile : null, homeHint);
             if (isReroll) await DB.deleteWalletTransactionsByChar(selChar.id);
             await DB.saveWalletProfile(next);
             await reload();
@@ -160,15 +189,31 @@ const WalletApp: React.FC = () => {
             {/* Header */}
             <div className="border-b border-white/[0.06] sticky top-0 z-20 shrink-0" style={{ paddingTop: 'var(--chrome-top)' }}>
                 <div className="pt-1 pb-3 px-5 flex items-center gap-2.5">
-                    <button onClick={closeApp} className="p-2 -ml-2 rounded-full active:scale-90 transition-transform hover:bg-white/10" aria-label="返回">
+                    {/* 列表页返回=关App；详情页返回=回列表 */}
+                    <button onClick={() => selId ? setSelId(null) : closeApp()} className="p-2 -ml-2 rounded-full active:scale-90 transition-transform hover:bg-white/10" aria-label="返回">
                         <ArrowLeft size={22} className="text-violet-300" weight="bold" />
                     </button>
-                    <div className="flex items-center gap-2">
-                        <WalletIcon size={18} className="text-violet-300" weight="fill" />
-                        <span className="text-sm font-bold tracking-wide">钱包</span>
+                    <div className="flex items-center gap-2 min-w-0">
+                        {selId ? (
+                            <>
+                                {isUser ? (
+                                    <div className="w-6 h-6 rounded-lg flex items-center justify-center text-[10px] font-black shrink-0" style={{ background: 'rgba(139,92,246,0.3)' }}>我</div>
+                                ) : selChar?.avatar ? (
+                                    <img src={selChar.avatar} className="w-6 h-6 rounded-lg object-cover shrink-0" alt="" />
+                                ) : (
+                                    <WalletIcon size={18} className="text-violet-300" weight="fill" />
+                                )}
+                                <span className="text-sm font-bold tracking-wide truncate">{isUser ? '我的钱包' : `${selChar?.name || 'TA'} 的钱包`}</span>
+                            </>
+                        ) : (
+                            <>
+                                <WalletIcon size={18} className="text-violet-300" weight="fill" />
+                                <span className="text-sm font-bold tracking-wide">钱包</span>
+                            </>
+                        )}
                     </div>
-                    <div className="ml-auto flex gap-2">
-                        {!isUser && profile && (
+                    <div className="ml-auto flex gap-2 shrink-0">
+                        {selId && !isUser && profile && (
                             <button onClick={toggleVisibility} className="px-2.5 h-8 flex items-center gap-1.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 active:scale-90 transition-all" aria-label="浏览范围">
                                 {summaryOnly ? <EyeSlash size={13} className="text-white/60" /> : <Eye size={13} className="text-white/60" />}
                                 <span className="text-[10px] font-bold text-white/60">{summaryOnly ? '只看摘要' : '全部明细'}</span>
@@ -183,31 +228,33 @@ const WalletApp: React.FC = () => {
                 </div>
             </div>
 
-            {/* 选人条：第一格是"我" */}
-            <div className="shrink-0 px-5 pt-3 pb-1 z-10">
-                <div className="flex gap-2 overflow-x-auto no-scrollbar py-1 -mx-1 px-1">
-                    <button onClick={() => setSelId(WALLET_USER_ID)} className="shrink-0 flex flex-col items-center gap-1 active:scale-95 transition-transform" style={{ width: 52 }}>
-                        <div className={`w-11 h-11 rounded-2xl flex items-center justify-center text-sm font-black transition-all ${isUser ? 'scale-105' : 'opacity-55'}`}
-                            style={{ background: 'rgba(139,92,246,0.25)', border: isUser ? '2px solid hsl(260,70%,65%)' : '2px solid rgba(255,255,255,0.12)', boxShadow: isUser ? '0 6px 18px hsla(260,70%,55%,0.45)' : 'none' }}>
-                            我
-                        </div>
-                        <span className={`text-[10px] font-semibold ${isUser ? 'opacity-100' : 'opacity-45'}`}>我的</span>
-                    </button>
-                    {characters.map(c => {
-                        const active = c.id === selId;
-                        return (
-                            <button key={c.id} onClick={() => setSelId(c.id)} className="shrink-0 flex flex-col items-center gap-1 active:scale-95 transition-transform" style={{ width: 52 }}>
-                                <div className={`w-11 h-11 rounded-2xl overflow-hidden transition-all ${active ? 'scale-105' : 'opacity-55'}`}
-                                    style={{ border: active ? '2px solid hsl(260,70%,65%)' : '2px solid rgba(255,255,255,0.12)', boxShadow: active ? '0 6px 18px hsla(260,70%,55%,0.45)' : 'none' }}>
-                                    {c.avatar ? <img src={c.avatar} className="w-full h-full object-cover" alt="" loading="lazy" /> : <div className="w-full h-full bg-white/10 flex items-center justify-center text-sm font-bold">{c.name[0]}</div>}
+            {/* 角色列表页：第一张是"我"，点谁进谁的钱包详情页 */}
+            {!selId && (
+                <div className="flex-1 overflow-y-auto no-scrollbar px-5 py-4 z-10">
+                    <div className="text-[10px] text-white/40 leading-relaxed mb-3 px-1">选一个人，翻翻 ta 的钱包。</div>
+                    <div className="grid grid-cols-2 gap-3">
+                        <button onClick={() => setSelId(WALLET_USER_ID)} className="rounded-3xl p-4 text-left active:scale-[0.97] transition-transform" style={GLASS_CARD}>
+                            <div className="w-12 h-12 rounded-2xl flex items-center justify-center text-base font-black"
+                                style={{ background: 'rgba(139,92,246,0.25)', border: '2px solid rgba(255,255,255,0.15)', boxShadow: '0 6px 18px hsla(260,70%,55%,0.35)' }}>
+                                我
+                            </div>
+                            <div className="text-sm font-black text-white/95 truncate mt-3">我的钱包</div>
+                            <div className="text-[10px] text-violet-300 truncate mt-1">零钱 · 转账流水</div>
+                        </button>
+                        {characters.map(c => (
+                            <button key={c.id} onClick={() => setSelId(c.id)} className="rounded-3xl p-4 text-left active:scale-[0.97] transition-transform" style={GLASS_CARD}>
+                                <div className="w-12 h-12 rounded-2xl overflow-hidden" style={{ border: '2px solid rgba(255,255,255,0.15)' }}>
+                                    {c.avatar ? <img src={c.avatar} className="w-full h-full object-cover" alt="" loading="lazy" /> : <div className="w-full h-full bg-white/10 flex items-center justify-center text-base font-bold">{c.name[0]}</div>}
                                 </div>
-                                <span className={`text-[10px] truncate max-w-full font-semibold ${active ? 'opacity-100' : 'opacity-45'}`}>{c.name}</span>
+                                <div className="text-sm font-black text-white/95 truncate mt-3">{c.name}</div>
+                                <div className={`text-[10px] truncate mt-1 ${walletBriefs[c.id] ? 'text-emerald-300' : 'text-white/30'}`}>{walletBriefs[c.id] ? '💰 已建档' : '还没建档'}</div>
                             </button>
-                        );
-                    })}
+                        ))}
+                    </div>
                 </div>
-            </div>
+            )}
 
+            {selId && (<>
             {/* Tab */}
             <div className="shrink-0 px-5 pt-2 pb-1 z-10">
                 <div className="flex gap-1 p-1 rounded-xl bg-white/[0.05] border border-white/[0.08]">
@@ -224,7 +271,7 @@ const WalletApp: React.FC = () => {
                     <div className="rounded-3xl p-8 text-center" style={GLASS_CARD}>
                         <Sparkle size={32} className="text-violet-300 mx-auto" weight="fill" />
                         <div className="text-base font-black mt-4">{selChar?.name || 'TA'} 还没有资产档案</div>
-                        <div className="text-[11px] text-white/45 mt-2 leading-relaxed">按人设一键生成 ta 的账户、房车、贷款和小物件——<br />穷学生就该只有零钱，社畜大概率背着房租，收支自洽。</div>
+                        <div className="text-[11px] text-white/45 mt-2 leading-relaxed">按人设一键生成 ta 的账户、房车、贷款和随身物品——<br />穷学生就该只有零钱，社畜大概率背着房租，收支自洽。</div>
                         <button onClick={() => handleGenerate(false)} disabled={generating}
                             className="mt-6 px-6 py-3 rounded-2xl text-sm font-bold bg-violet-500 hover:bg-violet-400 active:scale-95 transition-all disabled:opacity-50 shadow-[0_6px_20px_rgba(139,92,246,0.35)]">
                             {generating ? '生成中…（十几秒）' : '✨ 一键生成资产档案'}
@@ -316,10 +363,10 @@ const WalletApp: React.FC = () => {
                             </div>
                         )}
 
-                        {/* 小物件 */}
+                        {/* 随身物品（能带出门的；住所里的东西归栖居管） */}
                         {!summaryOnly && !isUser && profile.valuables.length > 0 && (
                             <div>
-                                <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/35 px-1 mb-2">名下小物件</div>
+                                <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/35 px-1 mb-2">随身物品</div>
                                 <div className="rounded-2xl divide-y divide-white/[0.06]" style={GLASS_CARD}>
                                     {profile.valuables.map(v => (
                                         <div key={v.id} className="px-4 py-3 flex items-center gap-3">
@@ -370,6 +417,7 @@ const WalletApp: React.FC = () => {
                     )
                 )}
             </div>
+            </>)}
 
             {/* 重Roll 确认 */}
             {confirmReroll && (
