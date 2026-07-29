@@ -196,6 +196,10 @@ type SttPhase = 'idle' | 'starting' | 'listening' | 'recognizing';
 
 // ─── 主组件 ─────────────────────────────────────────────
 
+// 2.0 旧会话迁移的模块级同步闸：StrictMode 双跑 effect 时第二次能同步看到，
+// 不像 localStorage 标记要等异步迁移跑完才写入
+let jobMigrationRunning = false;
+
 const JobHuntApp: React.FC = () => {
     const { closeApp, characters, activeCharacterId, setActiveCharacterId, openApp, apiConfig, addToast, userProfile, memoryPalaceConfig, realtimeConfig, updateCharacter } = useOS();
 
@@ -314,40 +318,53 @@ const JobHuntApp: React.FC = () => {
     // 求职能力已并入单聊（jobHuntEnabled + JOB 指令），工作台只留模拟面试。
     // 单聊消息流按主键 id 排序而非 timestamp，所以走 insertMessagesByTimestamp：
     // 按原时间戳定位到历史中的正确位置插入（小数 id），信息流/时间线严丝合缝，
-    // 且不会被记忆宫殿水位线当成新消息灌进 AI 上下文。localStorage 标记防重跑。
+    // 且不会被记忆宫殿水位线当成新消息灌进 AI 上下文。
+    // 幂等三道闸：模块级同步锁挡 StrictMode 双跑 effect；逐个角色「插完即删会话」
+    // 保证中途失败不重复插（下次只重试剩余会话）；全部完成才写 localStorage 标记。
     useEffect(() => {
         (async () => {
             try {
                 if (localStorage.getItem('os_jobhunt_migrated_v2')) return;
+                if (jobMigrationRunning) return; // StrictMode 双跑 / 重复挂载护栏
+                jobMigrationRunning = true;
                 const all = await DB.getJobSessions();
                 const daily = all.filter(s => s.topic !== 'interview');
-                if (daily.length === 0) { localStorage.setItem('os_jobhunt_migrated_v2', '1'); return; }
+                if (daily.length === 0) {
+                    localStorage.setItem('os_jobhunt_migrated_v2', '1');
+                    jobMigrationRunning = false;
+                    return;
+                }
                 let moved = 0;
                 // 按角色分组：同角色的所有旧会话一次性插入（同一事务，区间定位也更准）
-                const byChar = new Map<string, { role: 'user' | 'assistant'; content: string; ts: number }[]>();
+                const byChar = new Map<string, { sessions: JobSession[]; msgs: { role: 'user' | 'assistant'; content: string; ts: number }[] }>();
                 for (const s of daily) {
-                    const arr = byChar.get(s.charId) || [];
+                    const g = byChar.get(s.charId) || { sessions: [], msgs: [] };
+                    g.sessions.push(s);
                     for (const m of s.messages) {
                         if (!m.content?.trim()) continue;
-                        arr.push({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content, ts: m.ts });
+                        g.msgs.push({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content, ts: m.ts });
                     }
-                    byChar.set(s.charId, arr);
+                    byChar.set(s.charId, g);
                 }
-                for (const [charId, msgs] of byChar) {
-                    if (msgs.length === 0) continue;
-                    moved += await DB.insertMessagesByTimestamp(charId, msgs.map(m => ({
-                        charId,
-                        role: m.role,
-                        type: 'text' as const,
-                        content: m.content,
-                        timestamp: m.ts,
-                    })) as any);
+                for (const [charId, g] of byChar) {
+                    // 插入与删会话按角色成对提交：插成功立刻删掉该角色的旧会话，
+                    // 后续角色失败只影响未迁移部分，重试不会重复插已成功的
+                    if (g.msgs.length > 0) {
+                        moved += await DB.insertMessagesByTimestamp(charId, g.msgs.map(m => ({
+                            charId,
+                            role: m.role,
+                            type: 'text' as const,
+                            content: m.content,
+                            timestamp: m.ts,
+                        })) as any);
+                    }
+                    for (const s of g.sessions) await DB.deleteJobSession(s.id);
                 }
-                for (const s of daily) await DB.deleteJobSession(s.id);
                 localStorage.setItem('os_jobhunt_migrated_v2', '1');
                 if (moved > 0) addToast(`已把 ${daily.length} 场求职对话按原时间线合入单聊记录（${moved} 条）`, 'success');
                 reloadAll();
-            } catch (e) { console.warn('[JobHunt] 旧会话迁移失败', e); }
+            } catch (e) { console.warn('[JobHunt] 旧会话迁移失败（下次进入继续重试剩余部分）', e); }
+            finally { jobMigrationRunning = false; }
         })();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);

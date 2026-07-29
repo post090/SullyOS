@@ -1433,28 +1433,27 @@ ${lines.join(String.fromCharCode(10))}
 
     // 5.9d Handle Job Hunt directives (上岸计划：岗位卡/求职笔记增删改)
     // 仅 jobHuntEnabled 角色才会被教这套标签；但与备忘录同款保险：检测到就执行。
-    // 每条成功指令落一张 job_card 消息（用户可见的操作回执，MessageItem 渲染）。
+    // 同一轮回复的所有指令合并落一张聚合 job_card（metadata.jobCards 数组），
+    // 避免 AI 一次建四张卡刷屏七条胶囊；MessageItem 的 job-event 聚合卡渲染。
     if (/\[\[JOB_(?:UPDATE|DEL|NOTE|NOTE_EDIT|NOTE_DEL):/.test(aiContent)) {
         try {
             const { parseJobHuntCommands } = await import('./jobHuntParser');
-            const { applyJobDirectives, describeJobCard } = await import('./jobDirectives');
+            const { applyJobDirectives, describeJobBatch } = await import('./jobDirectives');
             const parsedJob = parseJobHuntCommands(aiContent);
             aiContent = parsedJob.cleanText;
             const { cards, rejected } = await applyJobDirectives(parsedJob, char.id);
-            for (const card of cards) {
+            if (cards.length > 0) {
                 try {
                     await DB.saveMessage({
                         charId: char.id,
                         role: 'system',
                         type: 'job_card',
-                        content: describeJobCard(card, char.name),
-                        metadata: { source: 'job-event', charName: char.name, charAvatar: char.avatar, jobCard: card },
+                        content: describeJobBatch(cards, char.name),
+                        metadata: { source: 'job-event', charName: char.name, charAvatar: char.avatar, jobCards: cards },
                     });
                 } catch (msgErr) {
                     console.warn('💼 [JobHunt] saveMessage for job_card failed:', msgErr);
                 }
-            }
-            if (cards.length > 0) {
                 addToast(`💼 ${char.name} 更新了求职工作台（${cards.length} 项）`, 'success');
                 // 刷新消息列表让卡片马上可见（与备忘录不同：job_card 不是隐藏系统日志）
                 try {

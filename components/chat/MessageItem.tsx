@@ -2099,6 +2099,88 @@ const MessageItem = React.memo(({
             );
         }
 
+        // 求职工作台聚合卡：同一轮回复的所有 JOB 指令合并一张卡（照 memo-event 摘要卡样式）。
+        // 兼容旧数据：早期每条指令单独落卡时 metadata 只有 jobCard（单数）。
+        if (m.metadata?.source === 'job-event') {
+            const meta = m.metadata as any;
+            const jCharName = String(meta.charName || charName || '—');
+            const jCharAvatar = String(meta.charAvatar || charAvatar || '');
+            const cards: any[] = Array.isArray(meta.jobCards) ? meta.jobCards : (meta.jobCard ? [meta.jobCard] : []);
+            const posCount = cards.filter(c => c.jobKind === 'update').length;
+            const noteCount = cards.filter(c => c.jobKind === 'note' || c.jobKind === 'note_edit').length;
+            const delCount = cards.filter(c => c.jobKind === 'delete' || c.jobKind === 'note_del').length;
+            const summaryParts: string[] = [];
+            if (posCount) summaryParts.push(`岗位 ${posCount}`);
+            if (noteCount) summaryParts.push(`笔记 ${noteCount}`);
+            if (delCount) summaryParts.push(`删除 ${delCount}`);
+            return (
+                <div className={`flex items-center w-full ${selectionMode ? 'pl-8' : ''} animate-fade-in relative transition-[padding] duration-300`}>
+                    {selectionMode && (
+                        <div className="absolute left-2 top-1/2 -translate-y-1/2 cursor-pointer z-20" onClick={() => onToggleSelect(m.id)}>
+                            <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors ${isSelected ? 'bg-primary border-primary' : 'border-slate-300 bg-white/80'}`}>
+                                {isSelected && <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>}
+                            </div>
+                        </div>
+                    )}
+                    <div className="w-full px-5 my-2.5" {...interactionProps}>
+                        <div className="mx-auto max-w-[300px] rounded-2xl bg-gradient-to-br from-sky-50 to-white border border-sky-100 p-3 shadow-sm">
+                            <div className="flex items-center gap-2.5">
+                                {jCharAvatar
+                                    ? <img src={jCharAvatar} alt={jCharName} className="h-8 w-8 rounded-full object-cover ring-2 ring-sky-100" loading="lazy" decoding="async" />
+                                    : <div className="h-8 w-8 rounded-full bg-white/80 flex items-center justify-center text-base ring-2 ring-sky-100">💼</div>}
+                                <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-1.5">
+                                        <span className="text-[10px]">💼</span>
+                                        <span className="text-[11px] font-bold text-slate-600 truncate">{jCharName} 更新了求职工作台</span>
+                                    </div>
+                                    <div className="text-[11px] text-slate-500 mt-0.5">{summaryParts.join(' · ') || '工作台操作'}</div>
+                                </div>
+                            </div>
+                            {cards.length > 0 && (
+                                <div className="mt-2 space-y-1">
+                                    {cards.map((c, i) => {
+                                        if (c.jobKind === 'update') {
+                                            return (
+                                                <div key={i} className="rounded-lg bg-white/70 border border-white/60 px-2.5 py-1.5">
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0 bg-sky-400" />
+                                                        <span className="text-[10px] font-bold text-sky-600">[{c.created ? '建卡' : '进展'}]</span>
+                                                        <span className="text-[12px] font-semibold text-slate-700 truncate">{c.code}</span>
+                                                        {c.stageLabel && <span className="ml-auto shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-sky-500/10 text-sky-600 border border-sky-200/70">{c.stageLabel}</span>}
+                                                    </div>
+                                                    {c.nextStep && <div className="text-[11px] text-slate-500 mt-1 pl-3">下一步：{c.nextStep}</div>}
+                                                </div>
+                                            );
+                                        }
+                                        if (c.jobKind === 'note' || c.jobKind === 'note_edit') {
+                                            return (
+                                                <div key={i} className="rounded-lg bg-white/70 border border-white/60 px-2.5 py-1.5">
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0 bg-indigo-400" />
+                                                        <span className="text-[10px] font-bold text-indigo-500">[{c.jobKind === 'note_edit' ? '改笔记' : c.noteKindLabel || '笔记'}]</span>
+                                                        <span className="text-[12px] text-slate-600 truncate">《{c.title}》</span>
+                                                    </div>
+                                                    {c.preview && c.jobKind === 'note' && <div className="text-[11px] text-slate-400 mt-1 pl-3 line-clamp-2">{c.preview}</div>}
+                                                </div>
+                                            );
+                                        }
+                                        return (
+                                            <div key={i} className="flex items-center gap-1.5 rounded-lg bg-white/70 border border-white/60 px-2.5 py-1.5">
+                                                <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0 bg-rose-400" />
+                                                <span className="text-[10px] font-bold text-rose-500">[删除]</span>
+                                                <span className="text-[12px] text-slate-500 truncate">{c.jobKind === 'delete' ? `岗位卡 ${c.code}` : `笔记《${c.title}》`}</span>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                            <div className="mt-2 text-[10px] text-slate-400 text-right">详情见上岸计划 / 加号菜单·上岸计划</div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
         return (
             <div className={`flex items-center w-full ${selectionMode ? 'pl-8' : ''} animate-fade-in relative transition-[padding] duration-300`}>
                 {selectionMode && (
@@ -2806,81 +2888,6 @@ const MessageItem = React.memo(({
                 <div className="px-4 py-2 border-t border-violet-100 text-[9px] text-violet-400 flex justify-between">
                     <span>{box.groupName || '群聊'} · 共同经历</span>
                     <span>{box.messageCount ? `${box.messageCount} 条原文` : ''}</span>
-                </div>
-            </div>
-        );
-        return commonLayout(card);
-    }
-
-    if (m.type === 'job_card') {
-        const jc: any = m.metadata?.jobCard || {};
-        // 删除类回执：灰调一行式，不喧宾夺主
-        if (jc.jobKind === 'delete' || jc.jobKind === 'note_del') {
-            const receipt = (
-                <div className="w-72 rounded-xl border border-slate-200/80 bg-slate-50/90 px-3.5 py-2.5 flex items-center gap-2.5">
-                    <span className="w-6 h-6 rounded-lg bg-slate-200/70 text-slate-400 flex items-center justify-center text-[11px] shrink-0">🗑</span>
-                    <p className="text-[11.5px] leading-5 text-slate-500 min-w-0 truncate">
-                        {jc.jobKind === 'delete'
-                            ? <>已删除岗位卡 <span className="font-semibold text-slate-600">{jc.code}</span>{jc.stageLabel ? <span className="text-slate-400">（{jc.stageLabel}）</span> : null}</>
-                            : <>已删除笔记 <span className="font-semibold text-slate-600">《{jc.title}》</span></>}
-                    </p>
-                </div>
-            );
-            return commonLayout(receipt);
-        }
-        // 岗位进展卡
-        if (jc.jobKind === 'update') {
-            const card = (
-                <div className="w-72 rounded-2xl overflow-hidden border border-sky-200/70 bg-gradient-to-br from-sky-50 via-white to-cyan-50 shadow-sm">
-                    <div className="px-4 pt-3 pb-2 border-b border-sky-100 flex items-center gap-2">
-                        <span className="w-8 h-8 rounded-xl bg-sky-100 text-sky-600 flex items-center justify-center">💼</span>
-                        <div className="min-w-0 flex-1">
-                            <div className="text-[9px] font-bold tracking-[0.18em] text-sky-400 uppercase">上岸计划 · {jc.created ? '新岗位建档' : '岗位进展'}</div>
-                            <div className="text-[13px] font-bold text-slate-700 truncate">{jc.code || '未命名岗位'}</div>
-                        </div>
-                        {jc.stageLabel && (
-                            <span className="shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-600 border border-sky-200/70">{jc.stageLabel}</span>
-                        )}
-                    </div>
-                    <div className="px-4 py-3">
-                        {jc.nextStep ? (
-                            <p className="text-[12px] leading-6 text-slate-600"><span className="text-[10px] font-bold text-sky-500 mr-1.5">下一步</span>{jc.nextStep}</p>
-                        ) : (
-                            <p className="text-[12px] leading-6 text-slate-400">{jc.created ? '新卡已建，进展随聊随更' : '阶段已更新'}</p>
-                        )}
-                    </div>
-                    <div className="px-4 py-2 border-t border-sky-100 text-[9px] text-sky-400 flex justify-between">
-                        <span>求职工作台已同步</span>
-                        <span>{new Date(m.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
-                    </div>
-                </div>
-            );
-            return commonLayout(card);
-        }
-        // 笔记卡（note / note_edit）：默认收起摘要，<details> 展开看全预览（同 phone_card 折叠先例，分支里不碰 hook）
-        const card = (
-            <div className="w-72 rounded-2xl overflow-hidden border border-sky-200/70 bg-gradient-to-br from-sky-50 via-white to-indigo-50 shadow-sm">
-                <div className="px-4 pt-3 pb-2 border-b border-sky-100 flex items-center gap-2">
-                    <span className="w-8 h-8 rounded-xl bg-sky-100 text-sky-600 flex items-center justify-center">📝</span>
-                    <div className="min-w-0 flex-1">
-                        <div className="text-[9px] font-bold tracking-[0.18em] text-sky-400 uppercase">求职笔记 · {jc.jobKind === 'note_edit' ? '已修改' : '新记一篇'}</div>
-                        <div className="text-[13px] font-bold text-slate-700 truncate">{jc.title || '未命名笔记'}</div>
-                    </div>
-                    {jc.noteKindLabel && (
-                        <span className="shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-500 border border-indigo-200/70">{jc.noteKindLabel}</span>
-                    )}
-                </div>
-                {jc.preview && (
-                    <details className="group">
-                        <summary className="list-none cursor-pointer px-4 py-3 select-none">
-                            <p className="text-[12px] leading-6 text-slate-600 line-clamp-2 group-open:hidden">{jc.preview}</p>
-                            <p className="text-[12px] leading-6 text-slate-600 whitespace-pre-wrap hidden group-open:block max-h-48 overflow-y-auto no-scrollbar">{jc.preview}</p>
-                        </summary>
-                    </details>
-                )}
-                <div className="px-4 py-2 border-t border-sky-100 text-[9px] text-sky-400 flex justify-between">
-                    <span>已写入求职笔记本</span>
-                    <span>点摘要展开 · 全文见上岸计划</span>
                 </div>
             </div>
         );

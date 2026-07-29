@@ -200,3 +200,23 @@ export function describeJobCard(card: JobCardPayload | undefined, charName: stri
             return '[求职工作台操作]';
     }
 }
+
+/**
+ * 整批操作的一段话转述：同一轮回复的所有指令合并成一张聚合卡后，
+ * content 用这段文本（历史/归档/记忆宫殿可读，不丢信息）。
+ */
+export function describeJobBatch(cards: JobCardPayload[], charName: string): string {
+    if (cards.length === 0) return '[求职工作台操作]';
+    if (cards.length === 1) return describeJobCard(cards[0], charName);
+    const parts = cards.map(c => {
+        switch (c.jobKind) {
+            case 'update': return `${c.created ? '建卡' : '更新'} ${c.code} → ${c.stageLabel}${c.nextStep ? `（下一步：${c.nextStep}）` : ''}`;
+            case 'delete': return `删岗位卡 ${c.code}`;
+            case 'note': return `记${c.noteKindLabel}《${c.title}》`;
+            case 'note_edit': return `改笔记《${c.title}》`;
+            case 'note_del': return `删笔记《${c.title}》`;
+            default: return '工作台操作';
+        }
+    });
+    return `[系统: ${charName}更新了求职工作台（${cards.length} 项）：${parts.join('；')}]`;
+}
