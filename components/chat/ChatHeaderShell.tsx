@@ -23,6 +23,8 @@ interface ChatHeaderShellProps {
     isSummarizing: boolean;
     /** 覆盖状态区的 "Online" 文案（群聊传 "N 成员"）。不传 = 原行为 */
     statusText?: string;
+    /** 可选的附加操作，群聊用来放置“记忆规则”帮助入口。 */
+    extraAction?: { label: string; icon: React.ReactNode; onClick: () => void };
     /** 触发按钮图标：生成中想显示"停止"时传 'stop'。不传 = 原行为（闪电） */
     triggerIcon?: 'lightning' | 'stop';
     isEmotionEvaluating?: boolean;
@@ -79,6 +81,7 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
     onShowCharsPanel,
     onDeleteBuff,
     statusText,
+    extraAction,
     triggerIcon = 'lightning',
     hideBuffs = false,
     headerStyle = 'default',
@@ -324,7 +327,7 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
     };
 
     const floatingStatusNodes = (lastTokenUsage || isInstantSending || isEmotionEvaluating || isMemoryPalaceProcessing) ? (
-        <div className="absolute right-12 top-1/2 -translate-y-1/2 flex items-center gap-1.5 pointer-events-none">
+        <div className={`absolute ${extraAction ? 'right-20' : 'right-12'} top-1/2 -translate-y-1/2 flex items-center gap-1.5 pointer-events-none`}>
             {lastTokenUsage && (
                 <div className={`sully-chat-token text-[9px] px-1.5 py-0.5 rounded-md font-mono border ${isDarkHeader ? 'bg-slate-800 text-slate-300 border-white/10' : isPixelHeader ? 'bg-[#fff7ed] text-[#8f674a] border-[#8f674a]/20' : 'bg-slate-100/95 text-slate-400 border-slate-200'}`}>
                     {lastTokenUsage}
@@ -420,7 +423,7 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
 
                     <div
                         onClick={onShowCharsPanel}
-                        className="flex w-[calc(100%-7rem)] max-w-[420px] cursor-pointer items-end justify-center"
+                        className={`flex ${extraAction ? 'w-[calc(100%-11rem)]' : 'w-[calc(100%-7rem)]'} max-w-[420px] cursor-pointer items-end justify-center`}
                     >
                         {renderCenteredInfo()}
                     </div>
@@ -428,6 +431,12 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
                     <button onClick={onTriggerAI} className={`sully-chat-trigger absolute right-0 bottom-2 p-2 ${actionButtonClass}`} title={triggerIcon === 'stop' ? '停止生成' : '触发 AI'}>
                         {triggerIconNode}
                     </button>
+                    {extraAction && (
+                        <button onClick={extraAction.onClick} className={`absolute right-10 bottom-2 p-2 ${iconButtonClass}`} title={extraAction.label} aria-label={extraAction.label}>
+                            {extraAction.icon}
+                        </button>
+                    )}
+
                 </div>
             ) : (
                 <div className="flex items-center gap-3 w-full">
@@ -439,7 +448,12 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
                         {renderStandardInfo()}
                     </div>
 
-                    <button onClick={onTriggerAI} className={`sully-chat-trigger p-2 ml-auto ${actionButtonClass}`} title={triggerIcon === 'stop' ? '停止生成' : '触发 AI'}>
+                    {extraAction && (
+                        <button onClick={extraAction.onClick} className={`p-2 ml-auto ${iconButtonClass}`} title={extraAction.label} aria-label={extraAction.label}>
+                            {extraAction.icon}
+                        </button>
+                    )}
+                    <button onClick={onTriggerAI} className={`sully-chat-trigger p-2 ${extraAction ? '' : 'ml-auto'} ${actionButtonClass}`} title={triggerIcon === 'stop' ? '停止生成' : '触发 AI'}>
                         {triggerIconNode}
                     </button>
                 </div>

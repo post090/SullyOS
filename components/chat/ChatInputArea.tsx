@@ -5,7 +5,7 @@ import { PRESET_THEMES } from './ChatConstants';
 import { AcnhActionTile } from '../os/acnhIcons';
 import NetImg from '../os/NetImg';
 import { isIOSStandaloneWebApp } from '../../utils/iosStandalone';
-import { useIncrementalReveal } from '../../hooks/useIncrementalReveal';
+const EMOJI_PAGE_SIZE = 40;
 
 interface ChatInputAreaProps {
     input: string;
@@ -97,8 +97,17 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
     const [selectedEmojis, setSelectedEmojis] = useState<any[]>([]);
     // 分组太多时横向拖不动：提供「展开全部分组」网格总览
     const [showCategoryOverview, setShowCategoryOverview] = useState(false);
-    // 表情网格增量渲染：几百张 base64 图一次性挂载会卡爆，滚动到底再补
-    const { count: visibleEmojiCount, hasMore: hasMoreEmojis, sentinelRef: emojiSentinelRef } = useIncrementalReveal(emojis.length, 48, activeCategory);
+    // 手动分页避免旧版/第三方 WebView 不触发 IntersectionObserver，永远卡在「加载中」。
+    const [emojiPage, setEmojiPage] = useState(0);
+    const emojiPageCount = Math.max(1, Math.ceil(emojis.length / EMOJI_PAGE_SIZE));
+    const emojiPageStart = emojiPage * EMOJI_PAGE_SIZE;
+    const visibleEmojis = emojis.slice(emojiPageStart, emojiPageStart + EMOJI_PAGE_SIZE);
+    useEffect(() => {
+        setEmojiPage(0);
+    }, [activeCategory]);
+    useEffect(() => {
+        setEmojiPage(current => Math.min(current, emojiPageCount - 1));
+    }, [emojiPageCount]);
     const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const startPos = useRef({ x: 0, y: 0 });
     const isLongPressTriggered = useRef(false); // Track if long press action fired
@@ -598,7 +607,7 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                                     ) : (
                                         <button onClick={() => onPanelAction('emoji-import')} className={emojiImportTileClass}>+</button>
                                     )}
-                                    {emojis.slice(0, visibleEmojiCount).map((e) => {
+                                    {visibleEmojis.map((e) => {
                                         const isSelected = selectedEmojiUrls.has(e.url);
                                         return (
                                         <button
@@ -627,9 +636,29 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                                         );
                                     })}
                                 </div>
-                                {hasMoreEmojis && (
-                                    <div ref={emojiSentinelRef} className={`py-3 text-center text-[10px] ${emojiLabelClass}`}>
-                                        加载中... ({visibleEmojiCount}/{emojis.length})
+                                {emojiPageCount > 1 && (
+                                    <div className={`py-3 flex items-center justify-center gap-3 text-[10px] ${emojiLabelClass}`}>
+                                        <button
+                                            type="button"
+                                            aria-label="上一页表情"
+                                            disabled={emojiPage === 0}
+                                            onClick={() => setEmojiPage(page => Math.max(0, page - 1))}
+                                            className="w-8 h-7 rounded-full border border-current/20 disabled:opacity-30 active:scale-95"
+                                        >
+                                            ‹
+                                        </button>
+                                        <span>
+                                            {emojiPage + 1}/{emojiPageCount} 页 · {emojiPageStart + 1}-{Math.min(emojiPageStart + EMOJI_PAGE_SIZE, emojis.length)}/{emojis.length}
+                                        </span>
+                                        <button
+                                            type="button"
+                                            aria-label="下一页表情"
+                                            disabled={emojiPage >= emojiPageCount - 1}
+                                            onClick={() => setEmojiPage(page => Math.min(emojiPageCount - 1, page + 1))}
+                                            className="w-8 h-7 rounded-full border border-current/20 disabled:opacity-30 active:scale-95"
+                                        >
+                                            ›
+                                        </button>
                                     </div>
                                 )}
                             </div>

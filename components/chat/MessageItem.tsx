@@ -4,6 +4,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import NetImg from '../os/NetImg';
 import { Message, ChatTheme } from '../../types';
+import { phoneFieldToText } from '../../utils/phoneEvidence';
 import { tryParseLifeSimResetCard } from '../../utils/lifeSimChatCard';
 import { VALID_INTERJECTION_TAGS, cleanVoiceMarkupForDisplay } from '../../utils/minimaxTts';
 import { stripFishCuesForDisplay } from '../../utils/fishAudioTts';
@@ -2938,7 +2939,20 @@ const MessageItem = React.memo(({
     }
 
     if (m.type === 'phone_card') {
-        const pc: any = m.metadata?.phoneCard || {};
+        const rawPhoneCard: any = m.metadata?.phoneCard || {};
+        const pc: any = {
+            ...rawPhoneCard,
+            kind: phoneFieldToText(rawPhoneCard.kind),
+            service: phoneFieldToText(rawPhoneCard.service),
+            serviceName: phoneFieldToText(rawPhoneCard.serviceName),
+            title: phoneFieldToText(rawPhoneCard.title),
+            detail: phoneFieldToText(rawPhoneCard.detail),
+            value: phoneFieldToText(rawPhoneCard.value),
+            app: phoneFieldToText(rawPhoneCard.app),
+            by: phoneFieldToText(rawPhoneCard.by),
+            contactName: phoneFieldToText(rawPhoneCard.contactName),
+            action: phoneFieldToText(rawPhoneCard.action),
+        };
         const timeStr = new Date(m.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 
         // 智能体卡片（偷看到 TA 在玩 AI：助手 / 树洞 / 酒馆）

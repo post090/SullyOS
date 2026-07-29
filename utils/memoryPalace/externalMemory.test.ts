@@ -58,6 +58,13 @@ describe('外部记忆搬家', () => {
         expect(prompt).toContain('不能省略');
         expect(prompt).toContain('严禁猜日期');
         expect(prompt).toContain('阿宁');
+        expect(prompt).toContain('姓名或角色标签 > 说话人标签与上下文 > 代词');
+        expect(prompt).toContain('引号内的第一人称属于原说话人');
+        expect(prompt).toContain('代词指向无法可靠判断');
+        expect(prompt).toContain('阿宁带了娃娃出门');
+        expect(prompt).toContain('不要看到负面内容就塞进阁楼');
+        expect(prompt).toContain('低 valence 本身都不等于阁楼');
+        expect(prompt).toContain('当前仍明确未解决');
     });
 
     it('搬家只接受完整 JSON，不把截断对象抢救成半份成功', () => {

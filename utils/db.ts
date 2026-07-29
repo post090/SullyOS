@@ -1268,8 +1268,13 @@ export const DB = {
 
   saveAssetRaw: async (id: string, data: any): Promise<void> => {
       const db = await openDB();
-      const transaction = db.transaction(STORE_ASSETS, 'readwrite');
-      transaction.objectStore(STORE_ASSETS).put({ id, data });
+      return new Promise((resolve, reject) => {
+          const transaction = db.transaction(STORE_ASSETS, 'readwrite');
+          transaction.objectStore(STORE_ASSETS).put({ id, data });
+          transaction.oncomplete = () => resolve();
+          transaction.onerror = () => reject(transaction.error);
+          transaction.onabort = () => reject(transaction.error || new Error('saveAssetRaw transaction aborted'));
+      });
   },
 
   deleteAsset: async (id: string): Promise<void> => {
@@ -2692,27 +2697,51 @@ export const DB = {
   appendApiCallLog: async (entry: any): Promise<void> => {
       const db = await openDB();
       if (!db.objectStoreNames.contains(STORE_API_CALL_LOG)) return;
-      const read = (): Promise<any[]> => new Promise((resolve) => {
-          const tx = db.transaction(STORE_API_CALL_LOG, 'readonly');
-          const req = tx.objectStore(STORE_API_CALL_LOG).get('log');
-          req.onsuccess = () => resolve(req.result?.entries ?? []);
-          req.onerror = () => resolve([]);
+      // 必须在同一个 readwrite 事务里完成“读 → 合并/去重 → 写”。
+      // 旧实现先 readonly、再另开 readwrite；两条 API 同时返回时会读到同一旧数组，
+      // 后写入者把前一条整笔覆盖，表现为供应商有调用而本地日志随机缺行。
+      return new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE_API_CALL_LOG, 'readwrite');
+          const store = tx.objectStore(STORE_API_CALL_LOG);
+          const req = store.get('log');
+          req.onsuccess = () => {
+              const cur: any[] = req.result?.entries ?? [];
+              const duplicateIndex = cur.findIndex((e) => e?.id && e.id === entry?.id);
+              if (duplicateIndex >= 0) {
+                  // 显式 safeFetch 记录和全局 clone 兜底可能先后抵达；合并非空字段，
+                  // 既不重复计费，也能让后到的 usage/backendModel 补齐早到的简版记录。
+                  const existing = cur[duplicateIndex];
+                  const defined = Object.fromEntries(
+                      Object.entries(entry || {}).filter(([, value]) => value !== undefined),
+                  );
+                  cur[duplicateIndex] = { ...existing, ...defined, id: existing.id };
+              } else {
+                  cur.unshift(entry);
+              }
+              const cutoff = Date.now() - API_CALL_LOG_MAX_AGE_MS;
+              const pruned = cur
+                  .filter((e) => (e?.timestamp ?? 0) > cutoff)
+                  .sort((a, b) => (b?.timestamp ?? 0) - (a?.timestamp ?? 0))
+                  .slice(0, API_CALL_LOG_MAX_ENTRIES);
+              store.put({ id: 'log', entries: pruned });
+          };
+          req.onerror = () => tx.abort();
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error || new Error('appendApiCallLog transaction failed'));
+          tx.onabort = () => reject(tx.error || new Error('appendApiCallLog transaction aborted'));
       });
-      const cur = await read();
-      cur.unshift(entry);
-      const cutoff = Date.now() - API_CALL_LOG_MAX_AGE_MS;
-      const pruned = cur
-          .filter((e) => (e?.timestamp ?? 0) > cutoff)
-          .slice(0, API_CALL_LOG_MAX_ENTRIES);
-      const tx = db.transaction(STORE_API_CALL_LOG, 'readwrite');
-      tx.objectStore(STORE_API_CALL_LOG).put({ id: 'log', entries: pruned });
   },
 
   clearApiCallLog: async (): Promise<void> => {
       const db = await openDB();
       if (!db.objectStoreNames.contains(STORE_API_CALL_LOG)) return;
-      const tx = db.transaction(STORE_API_CALL_LOG, 'readwrite');
-      tx.objectStore(STORE_API_CALL_LOG).put({ id: 'log', entries: [] });
+      return new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE_API_CALL_LOG, 'readwrite');
+          tx.objectStore(STORE_API_CALL_LOG).put({ id: 'log', entries: [] });
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error || new Error('clearApiCallLog transaction failed'));
+          tx.onabort = () => reject(tx.error || new Error('clearApiCallLog transaction aborted'));
+      });
   },
 
   // 导入备份用：直接写回一条 vr_settings 原始记录（{id, ...}）。

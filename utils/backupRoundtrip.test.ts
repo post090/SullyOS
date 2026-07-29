@@ -76,6 +76,23 @@ describe('v2 真实链路：分片 → 组装 → importFullData', () => {
         // 旧 'old' 被 clear、5 条全部还原（老的「逐片喂 importFullData」写法只会剩最后一片 → 这里会挂）
         expect(ids).toEqual(['g0', 'g1', 'g2', 'g3', 'g4']);
     });
+    it('MCP 配置作为 v2 元数据完整组装并由全量导入恢复', async () => {
+        const mcpLocal = {
+            'aetheros.mcp.servers': '[{"id":"srv-test","name":"测试 MCP"}]',
+            'aetheros.mcp.useNativeTools': 'false',
+        };
+        const zip = new FakeZip();
+        const manifest = await writeV2Backup(zip, { mcpLocal } as any, {});
+        const data: any = await assembleV2Backup(zip, manifest);
+        expect(data.mcpLocal).toEqual(mcpLocal);
+        localStorage.removeItem('aetheros.mcp.servers');
+        localStorage.removeItem('aetheros.mcp.useNativeTools');
+        await DB.importFullData(data);
+        expect(localStorage.getItem('aetheros.mcp.servers')).toBe(mcpLocal['aetheros.mcp.servers']);
+        expect(localStorage.getItem('aetheros.mcp.useNativeTools')).toBe('false');
+        localStorage.removeItem('aetheros.mcp.servers');
+        localStorage.removeItem('aetheros.mcp.useNativeTools');
+    });
 
     it('media_only 补丁：文字角色字段 + 文字消息存活，只有媒体被更新（R4·F1）', async () => {
         await seedStore('characters', [{ id: 'c1', name: 'Alice', bio: 'text-bio', avatar: 'old-avatar' }]);

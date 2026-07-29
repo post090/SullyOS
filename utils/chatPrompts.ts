@@ -21,6 +21,7 @@ import { getCharNameById } from './charNameRegistry';
 import { renderMemosForPrompt, renderMemoInstructionsOnly, MEMO_MAX_COUNT } from './memos';
 import { getLocalDateKey } from './localDate';
 import { getDailyScheduleForChar } from './dailySchedule';
+import { formatRelativeAge } from './groupChat/relativeTime';
 
 // 语音格式指导按当前 TTS 服务商三选一：用 MiniMax 才注入 MiniMax 那套（含 <#秒#> 停顿标记），
 // 用鱼声注入鱼声版（方括号 cue [laughing]/[whispering]…），用 ElevenLabs 注入 v3 版（[laugh]/[whisper]…）。
@@ -316,7 +317,8 @@ export const ChatPrompts = {
                 };
                 const groupLogStr = recentGroupMsgs.map(m => {
                     const dateStr = new Date(m.timestamp).toLocaleString([], {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'});
-                    return `[${dateStr}] [群：${m.groupName}] ${speakerOf(m)}: ${summarizeGroupMsgContent(m)}`;
+                    const relativeAge = formatRelativeAge(m.timestamp);
+                    return `[${dateStr} · ${relativeAge}] [群：${m.groupName}] ${speakerOf(m)}: ${summarizeGroupMsgContent(m)}`;
                 }).join('\n');
                 return `\n### 【群聊背景 · 你亲历的近期群聊】
 （以下是你所在群里最近的真实聊天记录，按时间排序，发言人已标注；标「你」的就是你自己说的话。这些事你都亲身经历、记得清楚——私聊里对方问起或话题相关时，自然地接上就好，不要装作不知道；也不必刻意逐条汇报群里的动静。）

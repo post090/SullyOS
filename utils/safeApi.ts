@@ -11,7 +11,7 @@
 //   - 全局 fetch 拦截器 + apiCallLog（用户在「设置 → API 调用记录」里看）
 // 后者的 meta 通过下面 safeFetchJson 的第 5 个参数挂到 __sullyMeta 上传出去。
 import { appendDevDebugApiLog, makeDebugLogger } from './devDebug';
-import { recordApiCall, type ApiCallMeta } from './apiCallLog';
+import { getApiCallAmbientContext, recordApiCall, type ApiCallMeta } from './apiCallLog';
 import {
     canUseNativeChatRuntime,
     isNativeSamplingError,
@@ -391,15 +391,21 @@ export async function safeFetchJson(
     const urlStr = String(url);
     let lastStatus: number | undefined;
 
-    // 把 meta 挂到 RequestInit 上（浏览器忽略未知字段），交给全局 fetch 拦截器统一记录
-    // 到「API 调用记录」。这样裸 fetch 和 safeFetchJson 走同一个记录入口，不会重复计。
+    // 显式 meta 挂到 RequestInit 给全局 fetch 兜底；同时快照环境标签，避免长响应期间
+    // 用户切 App 后被错标。safeFetchJson 与全局拦截器以 requestId 原子去重。
     const metaOptions: RequestInit = meta ? { ...options, __sullyMeta: meta } as RequestInit : options;
     let forcedBodyOverride: string | null = null;
+    const logMeta = meta || getApiCallAmbientContext();
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        // 全局 fetch 拦截器和这里的“已解析响应兜底”共享 ID。前者覆盖裸 fetch，
+        // 后者不依赖 Response.clone()，避免部分 iOS/WebView 克隆流不结束时漏记。
+        const requestId = `api-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
         // 每次 attempt 建一个独立的 AbortController（仅用于 timeout）
         // 调用方自己的 options.signal 仍然有效，两者任一触发就 abort
-        let attemptOptions = forcedBodyOverride != null ? { ...metaOptions, body: forcedBodyOverride } : metaOptions;
+        let attemptOptions = forcedBodyOverride != null
+            ? { ...metaOptions, body: forcedBodyOverride, __sullyApiCallId: requestId } as RequestInit
+            : { ...metaOptions, __sullyApiCallId: requestId } as RequestInit;
         let timeoutHandle: any = null;
         if (timeoutMs > 0) {
             const ac = new AbortController();
@@ -478,13 +484,14 @@ export async function safeFetchJson(
                         headersMs: nativeResult.headersMs,
                     });
                     recordApiCall({
+                        requestId,
                         url: urlStr,
-                        body: options.body,
+                        body: attemptOptions.body,
                         status: nativeResult.statusCode,
                         ok: true,
                         response: data,
                         responseText: nativeResult.body,
-                        meta,
+                        meta: logMeta,
                         durationMs: nativeResult.totalMs,
                     });
                 }
@@ -531,6 +538,18 @@ export async function safeFetchJson(
                     durationMs: totalMs,
                     headersMs,
                     firstDeltaMs: timing.firstDeltaMs,
+                });
+                // 已解析响应是最可靠的日志来源：不再把记账成败押在异步
+                // response.clone().text() 上。全局拦截器仍负责裸 fetch，并以 requestId 去重。
+                recordApiCall({
+                    requestId,
+                    url: urlStr,
+                    body: attemptOptions.body,
+                    status: response.status,
+                    ok: response.ok,
+                    response: data,
+                    meta: logMeta,
+                    durationMs: totalMs,
                 });
             }
             return data;

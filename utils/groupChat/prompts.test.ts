@@ -32,7 +32,9 @@ describe('buildGroupHistoryBlock 时间跳变分隔行', () => {
         ];
         const { text } = buildGroupHistoryBlock(msgs, chars, [], '用户');
         expect(text).not.toContain('中间群里没人说话');
-        expect(text).toBe('小夏: 早\n用户: 早呀');
+        expect(text).toContain('小夏: 早');
+        expect(text).toMatch(/\[(?:刚刚|约 .+前)\] 小夏: 早/);
+        expect(text).toContain('用户: 早呀');
     });
 
     it('阈值常量为 3 小时', () => {

@@ -24,7 +24,7 @@ import { completeGroupChatWithMcp } from '../utils/groupChat/mcp';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
 // 群聊输入区/表情面板已改用共享 ChatInputArea（其表情网格自带 useIncrementalReveal 增量渲染），
 // master 上给旧内联表情抽屉加的增量渲染随旧抽屉一并退役。
-import { UsersThree, Money, GearSix, Image as ImageIcon, ArrowsClockwise, PaintBrush, BellSimpleRinging, Code } from '@phosphor-icons/react';
+import { UsersThree, Money, GearSix, Image as ImageIcon, ArrowsClockwise, PaintBrush, BellSimpleRinging, Code, Question } from '@phosphor-icons/react';
 import ChatHeaderShell from '../components/chat/ChatHeaderShell';
 import ChatInputArea from '../components/chat/ChatInputArea';
 import ChromeCssEditor from '../components/chat/ChromeCssEditor';
@@ -395,7 +395,7 @@ const GroupChat: React.FC = () => {
     // UI State — 面板状态对齐私聊 ChatInputArea 的 showPanel 约定
     const [showPanel, setShowPanel] = useState<'none' | 'actions' | 'emojis' | 'chars'>('none');
     const [activeEmojiCategory, setActiveEmojiCategory] = useState('default');
-    const [modalType, setModalType] = useState<'none' | 'create' | 'settings' | 'transfer' | 'member_select' | 'message-options' | 'edit-message' | 'packet-detail' | 'chrome-css' | 'chrome-sound' | 'html-prompt'>('none');
+    const [modalType, setModalType] = useState<'none' | 'create' | 'settings' | 'transfer' | 'member_select' | 'message-options' | 'edit-message' | 'packet-detail' | 'chrome-css' | 'chrome-sound' | 'html-prompt' | 'help'>('none');
     const [tempHtmlPrompt, setTempHtmlPrompt] = useState('');
     const [selectedMessage, setSelectedMessage] = useState<Message | null>(null);
     const [replyTarget, setReplyTarget] = useState<Message | null>(null);
@@ -1588,6 +1588,11 @@ ${memberTimeline || '(暂无互动记录)'}
                 lastTokenUsage={lastTokenUsage}
                 tokenBreakdown={tokenBreakdown}
                 statusText={`${activeGroup?.members.length ?? 0} 成员`}
+                extraAction={{
+                    label: '群聊记忆规则',
+                    icon: <Question className="w-5 h-5" weight="bold" />,
+                    onClick: () => setModalType('help'),
+                }}
                 triggerIcon={isTyping ? 'stop' : 'lightning'}
                 onClose={() => setView('list')}
                 onTriggerAI={() => triggerGroupAI(messages)}
@@ -2197,6 +2202,30 @@ ${memberTimeline || '(暂无互动记录)'}
                     </div>
                 );
             })()}
+
+            {/* 群聊记忆规则 */}
+            <Modal isOpen={modalType === 'help'} title="群聊记忆规则" onClose={() => setModalType('none')}>
+                <div className="space-y-4 text-sm text-slate-600 leading-relaxed">
+                    <div className="rounded-2xl bg-violet-50 border border-violet-100 p-4 text-violet-800">
+                        群聊内容不是排队延迟发送。角色在私聊中“隔天提起”，通常是最近群聊、话题盒或个人群聊记忆被当作本轮话题选中了。
+                    </div>
+                    <div>
+                        <div className="font-bold text-slate-800 mb-1">最近群聊</div>
+                        <p>角色生成私聊回复时，会看到自己参与群聊中的最近一段消息。记录同时带具体日期和“约 N 天前”，避免把旧消息误认成刚刚发生。</p>
+                    </div>
+                    <div>
+                        <div className="font-bold text-slate-800 mb-1">公共话题盒</div>
+                        <p>群聊积累到一定数量后，较旧内容会被压缩成群成员共享的话题盒，并进入各成员的私聊背景。因此旧话题可能在之后再次被提起。</p>
+                    </div>
+                    <div>
+                        <div className="font-bold text-slate-800 mb-1">个人群聊记忆</div>
+                        <p>启用群聊记忆宫殿后，较旧群聊会以第三人称分别整理进参与角色的记忆宫殿。它不会要求角色立刻回复，只提供后续回忆依据。</p>
+                    </div>
+                    <div className="rounded-2xl bg-slate-50 border border-slate-100 p-4 text-xs text-slate-500">
+                        模型看到一段记录，不代表必须马上回应；是否主动提起仍会受当前话题和角色性格影响。
+                    </div>
+                </div>
+            </Modal>
 
             {/* HTML 模式自定义提示词 Modal（瓦片右键/长按进入） */}
             <Modal

@@ -3,6 +3,7 @@
 import { Message, CharacterProfile, EmojiCategory } from '../../types';
 import { stickerNameFromUrl } from '../messageFormat';
 import { packetHistoryLine } from './redpacket';
+import { formatRelativeAge } from './relativeTime';
 
 interface EmojiItem { name: string; url: string; categoryId?: string }
 
@@ -96,6 +97,7 @@ export function buildGroupHistoryBlock(
             lines.push(`———（这里隔了 ${formatGapDuration(m.timestamp - prevTs)}，中间群里没人说话）———`);
         }
         if (typeof m.timestamp === 'number') prevTs = m.timestamp;
+        const timePrefix = typeof m.timestamp === 'number' ? `[${formatRelativeAge(m.timestamp, now)}] ` : '';
 
         let name = '用户';
         if (m.role === 'assistant') {
@@ -115,7 +117,7 @@ export function buildGroupHistoryBlock(
             content = `[表情包: ${stickerNameFromUrl(emojis, rawText.trim())}]`;
         } else if (m.type === 'transfer') {
             // 回执行自带完整句子（[系统: X 领取了 Y 的红包]），不加名字前缀
-            if (m.metadata?.packetReceipt) { lines.push(packetHistoryLine(m, nameOf, now)); return; }
+            if (m.metadata?.packetReceipt) { lines.push(`${timePrefix}${packetHistoryLine(m, nameOf, now)}`); return; }
             content = packetHistoryLine(m, nameOf, now);
         } else if (/^(data:|https?:\/\/)/i.test(rawText.trim())) {
             content = '[媒体]';
@@ -126,10 +128,10 @@ export function buildGroupHistoryBlock(
         if (m.replyTo) {
             const rawQuote = typeof m.replyTo.content === 'string' ? m.replyTo.content : '';
             const quoted = rawQuote.length > 60 ? rawQuote.slice(0, 60) + '…' : rawQuote;
-            lines.push(`[${name} 引用了 ${m.replyTo.name || '对方'} 说的「${quoted}」，并回复了 ↓]\n${name}: ${content}`);
+            lines.push(`${timePrefix}[${name} 引用了 ${m.replyTo.name || '对方'} 说的「${quoted}」，并回复了 ↓]\n${name}: ${content}`);
             return;
         }
-        lines.push(`${name}: ${content}`);
+        lines.push(`${timePrefix}${name}: ${content}`);
     });
     const text = lines.join('\n');
     const attachedImagesNote = attachedImages.length > 0

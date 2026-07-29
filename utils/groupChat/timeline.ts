@@ -1,5 +1,6 @@
 import { Message } from '../../types';
 import { messageLogText } from './format';
+import { formatRelativeAge } from './relativeTime';
 
 export const DEFAULT_MEMBER_TIMELINE_CAP = 40;
 
@@ -57,7 +58,7 @@ export function buildMemberTimeline(opts: MemberTimelineOptions): string {
             // 私聊行的"我"= 该成员本人；群聊行用真名，成员才能分清谁说的
             const speaker = m.role === 'user' ? '用户' : (isGroup ? resolveSpeaker(m) : '我');
             const text = truncate(messageLogText(m, stickerName), LINE_MAX_CHARS);
-            return `${tag}[${formatTime(m.timestamp)}] ${speaker}: ${text}`;
+            return `${tag}[${formatTime(m.timestamp)} · ${formatRelativeAge(m.timestamp)}] ${speaker}: ${text}`;
         })
         .join('\n');
 }

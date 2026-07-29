@@ -60,6 +60,10 @@ const StatusBar: React.FC = () => {
   }, []);
 
   const hasError = systemLogs.length > 0;
+  const hasIndexedDbBackingStoreError = systemLogs.some(log => {
+    const text = `${log.message} ${log.detail || ''}`.toLowerCase();
+    return text.includes('backing store') || text.includes('indexeddb.open');
+  });
 
   // 时钟/电量条是否隐藏：外观「隐藏顶部时间栏」开关 + 平台默认（iOS 全屏 PWA 系统已有状态栏，默认隐藏避免双显）。
   // 仅隐藏下面这条时钟/电量条；错误指示器 + 系统调试终端与本开关无关，始终独立渲染。virtualTime 实为真实时间，隐藏不丢信息。
@@ -134,6 +138,12 @@ const StatusBar: React.FC = () => {
               </div>
           }
       >
+          {hasIndexedDbBackingStoreError && (
+              <div className="mb-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs leading-relaxed text-amber-900">
+                  <div className="font-bold mb-1">检测到浏览器存储无法打开</div>
+                  <div>请先不要清除浏览器数据、格式化或重置 SullyOS。彻底关闭浏览器后重启设备，并确认仍从原来的网址进入；若恢复打开，请立即完整导出备份。此错误通常来自浏览器/WebView 的站点存储，而不是应用主动删除数据。</div>
+              </div>
+          )}
           <div className="h-64 bg-slate-900 rounded-xl p-3 overflow-y-auto font-mono text-[10px] space-y-2 no-scrollbar shadow-inner">
               {systemLogs.length === 0 ? (
                   <div className="text-slate-500 text-center mt-20">系统运行正常，暂无错误日志。</div>
