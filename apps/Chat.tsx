@@ -180,6 +180,27 @@ const Chat: React.FC = () => {
     const [showChatSearch, setShowChatSearch] = useState(false);
     // 上岸计划：求职快捷面板（加号菜单第 2 页「上岸计划」）
     const [jobHuntPanelOpen, setJobHuntPanelOpen] = useState(false);
+    // 点求职聚合卡 → 跳上岸计划（MessageItem 是 memo 组件，回调必须稳定）
+    const handleOpenJobHunt = useCallback(() => openApp(AppID.JobHunt), [openApp]);
+
+    // 一次性历史迁移：聚合卡上线前逐条落库的 job_card 刷屏，按「同一轮回复」
+    // 合并成聚合卡（与新数据同构）。完成后若当前聊天有合并，刷新消息列表。
+    useEffect(() => {
+        if (characters.length === 0) return;
+        if (localStorage.getItem('os_jobcard_merge_v1')) return;
+        (async () => {
+            try {
+                const { mergeLegacyJobCardRuns } = await import('../utils/jobDirectives');
+                const merged = await mergeLegacyJobCardRuns(characters.map(c => c.id));
+                localStorage.setItem('os_jobcard_merge_v1', '1');
+                if (merged > 0 && activeCharIdRef.current) {
+                    const { messages: recent } = await DB.getRecentMessagesWithCount(activeCharIdRef.current, 200);
+                    setMessages(prev => (prev.length > 0 ? recent.slice(-Math.max(prev.length, 50)) : prev));
+                    console.log(`💼 [JobHunt] 历史卡片合并完成：收起 ${merged} 条逐条卡`);
+                }
+            } catch (e) { console.warn('💼 [JobHunt] 历史卡片合并迁移失败（下次挂载重试）:', e); }
+        })();
+    }, [characters.length]);
 
     // 系统返回手势：先关各弹窗/输入面板/消息长按菜单，都没开才关 App 回桌面
     useBackGuard([
@@ -3460,6 +3481,7 @@ const Chat: React.FC = () => {
                             onResolveLifeRecord={handleResolveLifeRecord}
                             onConfirmTaskProposal={handleConfirmTaskProposal}
                             onDismissTaskProposal={handleDismissTaskProposal}
+                            onOpenJobHunt={handleOpenJobHunt}
                             thinkingChainOptions={thinkingChainOptions}
                         />
                         </div>

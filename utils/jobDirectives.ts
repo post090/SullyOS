@@ -13,7 +13,7 @@
  */
 
 import { DB } from './db';
-import { JobNote, JobPosition } from '../types';
+import { JobNote, JobPosition, Message } from '../types';
 import { JobParseResult, JOB_COMMAND_GUIDE } from './jobHuntParser';
 
 const STAGE_LABEL: Record<string, string> = {
@@ -219,4 +219,50 @@ export function describeJobBatch(cards: JobCardPayload[], charName: string): str
         }
     });
     return `[系统: ${charName}更新了求职工作台（${cards.length} 项）：${parts.join('；')}]`;
+}
+
+/**
+ * 一次性历史迁移：聚合卡上线前，每条 JOB 指令单独落一张卡（metadata.jobCard 单数），
+ * AI 连发指令时聊天里刷屏。把同一轮回复产生的连续旧卡合并成一张聚合卡
+ * （jobCards 数组，与新数据同构），正文重写成整批转述。
+ * 判定「同一轮」：消息流里相邻（中间无其他消息）+ 时间戳间隔 ≤ 15 秒。
+ * 单张旧卡不动（渲染端本就兼容单数形态）。返回被合并掉的消息条数。
+ */
+export async function mergeLegacyJobCardRuns(charIds: string[]): Promise<number> {
+    let merged = 0;
+    for (const charId of charIds) {
+        try {
+            const all: Message[] = await DB.getMessagesByCharId(charId, true);
+            let run: Message[] = [];
+            const flush = async () => {
+                if (run.length >= 2) {
+                    const cards = run.map(x => (x.metadata as any).jobCard as JobCardPayload);
+                    const head = run[0];
+                    const headName = String((head.metadata as any)?.charName || '');
+                    await DB.updateMessageMetadata(head.id, (prev: any) => {
+                        const { jobCard, ...rest } = prev || {};
+                        return { ...rest, jobCards: cards };
+                    });
+                    await DB.updateMessage(head.id, describeJobBatch(cards, headName));
+                    await DB.deleteMessages(run.slice(1).map(x => x.id));
+                    merged += run.length - 1;
+                }
+                run = [];
+            };
+            for (const msg of all) {
+                const meta: any = msg.metadata;
+                const isLegacy = msg.type === 'job_card' && meta?.source === 'job-event' && !!meta.jobCard && !Array.isArray(meta.jobCards);
+                if (isLegacy && (run.length === 0 || msg.timestamp - run[run.length - 1].timestamp <= 15000)) {
+                    run.push(msg);
+                } else {
+                    await flush();
+                    if (isLegacy) run.push(msg);
+                }
+            }
+            await flush();
+        } catch (e) {
+            console.warn('💼 [JobHunt] 旧卡片合并迁移失败（该角色跳过）:', e);
+        }
+    }
+    return merged;
 }

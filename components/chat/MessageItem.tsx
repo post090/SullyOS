@@ -1555,6 +1555,8 @@ interface MessageItemProps {
     onConfirmTaskProposal?: (m: Message, editedMeta: TaskProposalMeta) => Promise<void> | void;
     /** 用户在「时光契约提议」卡上拒绝 → 父组件把 metadata.status 标为 dismissed */
     onDismissTaskProposal?: (m: Message) => Promise<void> | void;
+    /** 点求职工作台聚合卡 → 跳转上岸计划 App */
+    onOpenJobHunt?: () => void;
     /** 思考链卡片视觉与交互 */
     thinkingChainOptions?: {
         styleId?: ThinkingChainStyleId;
@@ -1603,6 +1605,7 @@ const MessageItem = React.memo(({
     onResolveLifeRecord,
     onConfirmTaskProposal,
     onDismissTaskProposal,
+    onOpenJobHunt,
     thinkingChainOptions,
 }: MessageItemProps) => {
     const isUser = m.role === 'user';
@@ -2129,7 +2132,10 @@ const MessageItem = React.memo(({
                         </div>
                     )}
                     <div className="w-full px-5 my-2.5" {...interactionProps}>
-                        <div className="mx-auto max-w-[300px] rounded-2xl bg-gradient-to-br from-sky-50 to-white border border-sky-100 p-3 shadow-sm">
+                        <div
+                            className="mx-auto max-w-[300px] rounded-2xl bg-gradient-to-br from-sky-50 to-white border border-sky-100 p-3 shadow-sm cursor-pointer active:scale-[0.98] transition-transform"
+                            onClick={() => onOpenJobHunt?.()}
+                        >
                             <div className="flex items-center gap-2.5">
                                 {jCharAvatar
                                     ? <img src={jCharAvatar} alt={jCharName} className="h-8 w-8 rounded-full object-cover ring-2 ring-sky-100" loading="lazy" decoding="async" />
@@ -2180,7 +2186,7 @@ const MessageItem = React.memo(({
                                     })}
                                 </div>
                             )}
-                            <div className="mt-2 text-[10px] text-slate-400 text-right">详情见上岸计划 / 加号菜单·上岸计划</div>
+                            <div className="mt-2 text-[10px] text-slate-400 text-right">点卡片打开上岸计划 →</div>
                         </div>
                     </div>
                 </div>
