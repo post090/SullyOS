@@ -847,7 +847,7 @@ const PhoneShell: React.FC = () => {
       case AppID.WorldHome: return <WorldHomeApp />;
       case AppID.CharCreatorDev: return <CharCreatorDevApp />;
       case AppID.Launcher:
-      default: return <Launcher />;
+      default: return null;
     }
   };
 
@@ -890,19 +890,35 @@ const PhoneShell: React.FC = () => {
       >
           {/* App Container */}
           <div className="flex-1 relative overflow-hidden" style={{ contain: useIOSStandaloneLayout ? undefined : 'layout style paint' }}>
-            <AppErrorBoundary onCloseApp={closeApp} resetKey={`${activeApp}:${activeCharacterId || 'none'}`}>
-              <Suspense fallback={<AppLoadingFallback onReturn={closeApp} />}>
-                {/* 统一「淡入」过渡：每次切换 App 时 key 变化 → 重新挂载并淡入，
-                    让所有 App 都像个人档案那样「渐变进去」，而非瞬间咚一下。
-                    关键：只动 opacity、不做 scale/translate —— 否则会把整棵（常含大量头像图片的）
-                    App 子树栅格化进 transform 图层，角色列表类 App 首帧会卡顿一下（停顿一秒）。
-                    时长也压短，进重 App 时不至于多等。 */}
-                <div key={activeApp} className="w-full h-full" style={{ animation: 'appEnterFade 200ms ease-out both' }}>
-                  <style>{`@keyframes appEnterFade{from{opacity:0}to{opacity:1}}`}</style>
-                  {renderApp()}
-                </div>
-              </Suspense>
-            </AppErrorBoundary>
+            {/* Launcher 永远保留在底层：进 App 时只隐藏不卸载，回桌面瞬间到位，
+                避免每次回桌面 WidgetsPage 重新 mount 导致小组件加载跳动。
+                进 App 时立即消失（无过渡），回桌面时 300ms 淡入——比 App 的 200ms 稍长更明显。 */}
+            <div
+              className="absolute inset-0"
+              style={{
+                opacity: activeApp === AppID.Launcher ? 1 : 0,
+                transition: activeApp === AppID.Launcher ? 'opacity 300ms ease-out' : 'none',
+                pointerEvents: activeApp === AppID.Launcher ? 'auto' : 'none',
+              }}
+            >
+              <Launcher />
+            </div>
+            {/* 非 Launcher App 叠在上层 */}
+            {activeApp !== AppID.Launcher && (
+              <AppErrorBoundary onCloseApp={closeApp} resetKey={`${activeApp}:${activeCharacterId || 'none'}`}>
+                <Suspense fallback={<AppLoadingFallback onReturn={closeApp} />}>
+                  {/* 统一「淡入」过渡：每次切换 App 时 key 变化 → 重新挂载并淡入，
+                      让所有 App 都像个人档案那样「渐变进去」，而非瞬间咚一下。
+                      关键：只动 opacity、不做 scale/translate —— 否则会把整棵（常含大量头像图片的）
+                      App 子树栅格化进 transform 图层，角色列表类 App 首帧会卡顿一下（停顿一秒）。
+                      时长也压短，进重 App 时不至于多等。 */}
+                  <div key={activeApp} className="absolute inset-0 w-full h-full" style={{ animation: 'appEnterFade 200ms ease-out both' }}>
+                    <style>{`@keyframes appEnterFade{from{opacity:0}to{opacity:1}}`}</style>
+                    {renderApp()}
+                  </div>
+                </Suspense>
+              </AppErrorBoundary>
+            )}
           </div>
 
           {/* Overlays: Status Bar (Top) —— 常驻渲染：时钟/电量条由开关+平台默认决定显隐（StatusBar 内部 isStatusBarHidden），

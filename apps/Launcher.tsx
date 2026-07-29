@@ -84,7 +84,7 @@ const DesktopClock = React.memo(() => {
             {/* 主时钟 */}
             <div className="flex items-end gap-4">
                 <div className="relative">
-                    <div className={`${paper ? 'text-[5.65rem] font-semibold tracking-[-0.055em] drop-shadow-[0_2px_0_rgba(255,255,255,0.34)]' : 'text-[6.25rem] font-black tracking-tighter drop-shadow-2xl'} leading-[0.84]`}
+                    <div className={`${paper ? 'text-[clamp(4.5rem,15vw,5.65rem)] font-semibold tracking-[-0.055em] drop-shadow-[0_2px_0_rgba(255,255,255,0.34)]' : 'text-[clamp(5rem,16vw,6rem)] font-black tracking-tighter drop-shadow-2xl'} leading-[0.84]`}
                         style={{ fontFamily: paper ? `'Iowan Old Style', 'Baskerville', 'Times New Roman', serif` : `'Space Grotesk', 'SF Pro Display', sans-serif`, fontFeatureSettings: '"tnum"' }}>
                         <span>{virtualTime.hours.toString().padStart(2, '0')}</span>
                         <span className="opacity-35 font-thin mx-0.5 animate-pulse">:</span>
@@ -510,6 +510,8 @@ const Launcher: React.FC = () => {
       grabOffsetX?: number;
       grabOffsetY?: number;
       lastTarget?: string;
+      lastTargetKind?: string;
+      lastTargetPos?: 'before' | 'after';  // 插入位置：target 左半=before，右半=after
       targetElement?: HTMLElement;
   } | null>(null);
   const suppressLayoutClickUntil = useRef(0);
@@ -536,18 +538,18 @@ const Launcher: React.FC = () => {
   // 会让它锁在 mount 时的初值。
   const [devDebugVisible, setDevDebugVisible] = useState(() => isDevDebugAvailable());
   useEffect(() => subscribeDevDebugAvailability(setDevDebugVisible), []);
-  const availableGridApps = useMemo(() => {
+  const allAppsList = useMemo(() => {
     return INSTALLED_APPS.filter(app =>
-      !DOCK_APPS.includes(app.id)
       // 「捏脸·开发」仅在开发模式（右下角开发徽标可见或手动解锁时）显示
-      && (app.id !== AppID.CharCreatorDev || devDebugVisible)
+      app.id !== AppID.CharCreatorDev || devDebugVisible
     );
   }, [devDebugVisible]);
 
-    const normalizeOrder = useCallback((saved: string[] | undefined, available: string[]) => {
+    const normalizeOrder = useCallback((saved: string[] | undefined, available: string[], exclude: string[] = []) => {
       const valid = new Set(available);
-      const savedKept = (saved || []).filter((id, index, all) => valid.has(id) && all.indexOf(id) === index);
-      const missing = available.filter(id => !(saved || []).includes(id));
+      const excludeSet = new Set(exclude);
+      const savedKept = (saved || []).filter((id, index, all) => valid.has(id) && !excludeSet.has(id) && all.indexOf(id) === index);
+      const missing = available.filter(id => !(saved || []).includes(id) && !excludeSet.has(id));
       // 钱包/智能家居/上岸计划钦定进第一页**末尾**：首页特批 11 席（原 8 个 + 这三个垫尾），
       // 插到第 8 位之后而非最前——保持神经链接开头、新 App 收尾，原第二页成员不动。
       // 用户手动拖过位置（已在 saved 里）则完全尊重，不再强插。
@@ -559,9 +561,21 @@ const Launcher: React.FC = () => {
       return base;
   }, []);
 
-  const availableGridIds = useMemo(() => availableGridApps.map(app => app.id), [availableGridApps]);
-  const [launcherAppOrder, setLauncherAppOrder] = useState<string[]>(() => normalizeOrder(theme.launcherAppOrder, INSTALLED_APPS.filter(app => !DOCK_APPS.includes(app.id)).map(app => app.id)));
-  const [launcherDockOrder, setLauncherDockOrder] = useState<string[]>(() => normalizeOrder(theme.launcherDockOrder, DOCK_APPS));
+  const allAppIds = useMemo(() => allAppsList.map(app => app.id), [allAppsList]);
+  // dock 初始化：用户自定义 + 默认 DOCK_APPS 补齐，最多 4 个
+  const [launcherDockOrder, setLauncherDockOrder] = useState<string[]>(() => {
+      const saved = theme.launcherDockOrder || [];
+      const valid = new Set<string>(allAppIds);
+      const kept = saved.filter((id, index, all) => valid.has(id) && all.indexOf(id) === index);
+      const defaults = DOCK_APPS.filter(id => valid.has(id) && !kept.includes(id));
+      return [...kept, ...defaults].slice(0, 4);
+  });
+  // grid 初始化：所有 app 减去 dock 成员
+  const [launcherAppOrder, setLauncherAppOrder] = useState<string[]>(() => {
+      const dockSet = new Set(launcherDockOrder);
+      const gridAvailable = allAppIds.filter(id => !dockSet.has(id));
+      return normalizeOrder(theme.launcherAppOrder, gridAvailable);
+  });
   const [pinwheelOrder, setPinwheelOrder] = useState<Array<'music' | 'appsA' | 'appsB' | 'image'>>(() => {
       const available = ['music', 'appsA', 'appsB', 'image'] as const;
       const saved = theme.launcherPinwheelOrder || [];
@@ -571,22 +585,28 @@ const Launcher: React.FC = () => {
   const launcherDockOrderRef = useRef(launcherDockOrder);
   const pinwheelOrderRef = useRef(pinwheelOrder);
 
+  // appOrder 同步：theme 或 dockOrder 变化时重算（排除 dock 成员，互斥）
   useEffect(() => {
       setLauncherAppOrder(prev => {
-          const next = normalizeOrder(prev.length ? prev : theme.launcherAppOrder, availableGridIds);
+          const next = normalizeOrder(prev.length ? prev : theme.launcherAppOrder, allAppIds, launcherDockOrder);
           launcherAppOrderRef.current = next;
           return next;
       });
-  }, [availableGridIds, normalizeOrder, theme.launcherAppOrder]);
+  }, [allAppIds, normalizeOrder, theme.launcherAppOrder, launcherDockOrder]);
   useEffect(() => { launcherAppOrderRef.current = launcherAppOrder; }, [launcherAppOrder]);
   useEffect(() => { launcherDockOrderRef.current = launcherDockOrder; }, [launcherDockOrder]);
   useEffect(() => { pinwheelOrderRef.current = pinwheelOrder; }, [pinwheelOrder]);
   useEffect(() => {
       if (layoutEditing) return;
-      const next = normalizeOrder(theme.launcherDockOrder, DOCK_APPS);
+      // dock 同步：保留 theme 中有效的，补默认，最多 4 个
+      const saved = theme.launcherDockOrder || [];
+      const valid = new Set<string>(allAppIds);
+      const kept = saved.filter((id, index, all) => valid.has(id) && all.indexOf(id) === index);
+      const defaults = DOCK_APPS.filter(id => valid.has(id) && !kept.includes(id));
+      const next = [...kept, ...defaults].slice(0, 4);
       launcherDockOrderRef.current = next;
       setLauncherDockOrder(next);
-  }, [layoutEditing, normalizeOrder, theme.launcherDockOrder]);
+  }, [layoutEditing, theme.launcherDockOrder, allAppIds]);
   useEffect(() => {
       if (layoutEditing) return;
       const available = ['music', 'appsA', 'appsB', 'image'] as const;
@@ -597,9 +617,9 @@ const Launcher: React.FC = () => {
   }, [layoutEditing, theme.launcherPinwheelOrder]);
 
   const gridApps = useMemo(() => {
-      const byId = new Map(availableGridApps.map(app => [app.id, app]));
+      const byId = new Map(allAppsList.map(app => [app.id, app]));
       return launcherAppOrder.map(id => byId.get(id as AppID)).filter(Boolean) as typeof INSTALLED_APPS;
-  }, [availableGridApps, launcherAppOrder]);
+  }, [allAppsList, launcherAppOrder]);
 
   const dockAppsConfig = useMemo(() => {
       const byId = new Map(INSTALLED_APPS.map(app => [app.id, app]));
@@ -627,8 +647,16 @@ const Launcher: React.FC = () => {
   const page2QuadA = useMemo(() => page2Apps.slice(0, 4), [page2Apps]);
   const page2QuadB = useMemo(() => page2Apps.slice(4, 8), [page2Apps]);
 
+  // 统一页数组：appPages + widgets 页
+  type LogicalPage = { type: 'app'; apps: typeof INSTALLED_APPS; idx: number } | { type: 'widgets' };
+  const allPages = useMemo<LogicalPage[]>(() => {
+      const pages: LogicalPage[] = appPages.map((apps, idx) => ({ type: 'app' as const, apps, idx }));
+      pages.push({ type: 'widgets' });
+      return pages;
+  }, [appPages]);
+
   // Total pages = App Pages + 1 Widget Page
-  const totalPages = appPages.length + 1;
+  const totalPages = allPages.length;
 
   useEffect(() => { activePageIndexRef.current = activePageIndex; }, [activePageIndex]);
 
@@ -756,10 +784,8 @@ const Launcher: React.FC = () => {
   useLayoutEffect(() => {
       const el = scrollContainerRef.current;
       if (el && _lastPageIndex > 0) {
-          // Temporarily disable smooth scroll so jump is instant
           el.style.scrollBehavior = 'auto';
           el.scrollLeft = el.clientWidth * _lastPageIndex;
-          // Re-enable on next frame
           requestAnimationFrame(() => { el.style.scrollBehavior = 'smooth'; });
       }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -771,7 +797,7 @@ const Launcher: React.FC = () => {
           const index = Math.round(scrollLeft / width);
           setActivePageIndex(index);
           activePageIndexRef.current = index;
-          _lastPageIndex = index; // Persist across remounts
+          _lastPageIndex = index;
       }
   };
 
@@ -820,29 +846,76 @@ const Launcher: React.FC = () => {
       }
   };
 
-  const reorderByTarget = useCallback((kind: string, source: string, target: string) => {
-      if (source === target) return;
-      const reorder = <T extends string>(items: T[]) => {
-          const from = items.indexOf(source as T);
-          const to = items.indexOf(target as T);
-          if (from < 0 || to < 0) return items;
-          const next = [...items];
-          const [moved] = next.splice(from, 1);
-          next.splice(to, 0, moved);
-          return next;
-      };
-      if (kind === 'app') {
-          const next = reorder(launcherAppOrderRef.current);
-          launcherAppOrderRef.current = next;
-          setLauncherAppOrder(next);
-      } else if (kind === 'dock') {
-          const next = reorder(launcherDockOrderRef.current);
-          launcherDockOrderRef.current = next;
-          setLauncherDockOrder(next);
-      } else if (kind === 'widget') {
-          const next = reorder(pinwheelOrderRef.current) as Array<'music' | 'appsA' | 'appsB' | 'image'>;
-          pinwheelOrderRef.current = next;
-          setPinwheelOrder(next);
+  const reorderByTarget = useCallback((sourceKind: string, sourceId: string, targetKind: string, targetId: string, pos: 'before' | 'after') => {
+      if (sourceId === targetId) return;
+      // widget 只能在自己内部插入（隔离，不参与跨容器）
+      if (sourceKind === 'widget' || targetKind === 'widget') {
+          if (sourceKind !== 'widget' || targetKind !== 'widget') return;
+          const items = [...pinwheelOrderRef.current];
+          const from = items.indexOf(sourceId as any);
+          if (from < 0) return;
+          const [moved] = items.splice(from, 1);
+          let to = items.indexOf(targetId as any);
+          if (to < 0) return;
+          if (pos === 'after') to += 1;
+          items.splice(to, 0, moved);
+          pinwheelOrderRef.current = items;
+          setPinwheelOrder(items);
+          return;
+      }
+      // 同 kind 插入
+      if (sourceKind === targetKind) {
+          const items = sourceKind === 'app' ? [...launcherAppOrderRef.current] : [...launcherDockOrderRef.current];
+          const from = items.indexOf(sourceId);
+          if (from < 0) return;
+          const [moved] = items.splice(from, 1);
+          let to = items.indexOf(targetId);
+          if (to < 0) return;
+          if (pos === 'after') to += 1;
+          items.splice(to, 0, moved);
+          if (sourceKind === 'app') {
+              launcherAppOrderRef.current = items;
+              setLauncherAppOrder(items);
+          } else {
+              launcherDockOrderRef.current = items;
+              setLauncherDockOrder(items);
+          }
+          return;
+      }
+      // 跨 kind：app ↔ dock（插入语义）
+      if (sourceKind === 'app' && targetKind === 'dock') {
+          const appArr = launcherAppOrderRef.current.filter(id => id !== sourceId);
+          const dockArr = [...launcherDockOrderRef.current];
+          let targetIdx = dockArr.indexOf(targetId);
+          if (targetIdx < 0) return;
+          if (pos === 'after') targetIdx += 1;
+          // dock 满 4 个：挤出末位回 app（插到 source 原位置附近）
+          if (dockArr.length >= 4) {
+              const evicted = dockArr.pop();
+              if (evicted) {
+                  const sourceOrigIdx = launcherAppOrderRef.current.indexOf(sourceId);
+                  appArr.splice(Math.min(sourceOrigIdx, appArr.length), 0, evicted);
+              }
+          }
+          dockArr.splice(targetIdx, 0, sourceId);
+          launcherAppOrderRef.current = appArr;
+          setLauncherAppOrder(appArr);
+          launcherDockOrderRef.current = dockArr;
+          setLauncherDockOrder(dockArr);
+          return;
+      }
+      if (sourceKind === 'dock' && targetKind === 'app') {
+          const dockArr = launcherDockOrderRef.current.filter(id => id !== sourceId);
+          const appArr = [...launcherAppOrderRef.current];
+          let targetIdx = appArr.indexOf(targetId);
+          if (targetIdx < 0) return;
+          if (pos === 'after') targetIdx += 1;
+          appArr.splice(targetIdx, 0, sourceId);
+          launcherAppOrderRef.current = appArr;
+          setLauncherAppOrder(appArr);
+          launcherDockOrderRef.current = dockArr;
+          setLauncherDockOrder(dockArr);
+          return;
       }
   }, []);
 
@@ -893,7 +966,7 @@ const Launcher: React.FC = () => {
       const turn = () => {
           const pointer = layoutPointer.current;
           const scroller = scrollContainerRef.current;
-          if (!pointer?.active || pointer.kind !== 'app' || !scroller || layoutPageTurnDirection.current !== direction) {
+          if (!pointer?.active || (pointer.kind !== 'app' && pointer.kind !== 'dock') || !scroller || layoutPageTurnDirection.current !== direction) {
               clearLayoutPageTurn();
               return;
           }
@@ -903,7 +976,7 @@ const Launcher: React.FC = () => {
               clearLayoutPageTurn();
               return;
           }
-          pointer.targetElement?.classList.remove('launcher-drop-target');
+          pointer.targetElement?.classList.remove('launcher-drop-target', 'launcher-drop-before', 'launcher-drop-after');
           pointer.targetElement = undefined;
           pointer.lastTarget = undefined;
           activePageIndexRef.current = nextPage;
@@ -913,7 +986,7 @@ const Launcher: React.FC = () => {
           layoutPageTurnTimer.current = setTimeout(turn, 760);
       };
       layoutPageTurnTimer.current = setTimeout(turn, 560);
-  }, [appPages.length, clearLayoutPageTurn]);
+  }, [appPages.length, totalPages, clearLayoutPageTurn]);
 
   useEffect(() => () => {
       clearLayoutPressTimer();
@@ -952,7 +1025,7 @@ const Launcher: React.FC = () => {
       const pointer = layoutPointer.current;
       if (!pointer || pointer.pointerId !== e.pointerId) return;
       if (!pointer.active) {
-          if (Math.hypot(e.clientX - pointer.x, e.clientY - pointer.y) > 9) {
+          if (Math.hypot(e.clientX - pointer.x, e.clientY - pointer.y) > 14) {
               clearLayoutPressTimer();
               layoutPointer.current = null;
           }
@@ -964,24 +1037,32 @@ const Launcher: React.FC = () => {
           pointer.ghost.style.top = `${e.clientY - (pointer.grabOffsetY || 0)}px`;
       }
       const rootRect = e.currentTarget.getBoundingClientRect();
-      if (pointer.kind === 'app' && e.clientX <= rootRect.left + 72) queueLayoutPageTurn(-1);
-      else if (pointer.kind === 'app' && e.clientX >= rootRect.right - 72) queueLayoutPageTurn(1);
+      // dock→app 拖到边缘也要能翻页（widget 不参与）
+      const canPageTurn = pointer.kind === 'app' || pointer.kind === 'dock';
+      if (canPageTurn && e.clientX <= rootRect.left + 72) queueLayoutPageTurn(-1);
+      else if (canPageTurn && e.clientX >= rootRect.right - 72) queueLayoutPageTurn(1);
       else clearLayoutPageTurn();
       const target = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>('[data-launcher-item]');
       const targetKey = target?.dataset.launcherItem;
       const targetKind = target?.dataset.launcherKind;
-      const validTarget = !!targetKey && targetKind === pointer.kind && targetKey !== pointer.key;
+      // widget 隔离：只跟 widget 换；app/dock 可互相换；排除自身
+      const isWidgetCross = (pointer.kind === 'widget') !== (targetKind === 'widget');
+      const validTarget = !!targetKey && !!targetKind && targetKey !== pointer.key && !isWidgetCross;
       if (!validTarget) {
-          pointer.targetElement?.classList.remove('launcher-drop-target');
-          pointer.targetElement = undefined;
-          pointer.lastTarget = undefined;
+          // 空白区域：不清空 lastTarget，保留上一个有效 target 让用户能拖到两个图标中间。
+          // 只清视觉指示，松手时仍按 lastTarget 插入。
           return;
       }
-      if (target === pointer.targetElement) return;
-      pointer.targetElement?.classList.remove('launcher-drop-target');
-      target?.classList.add('launcher-drop-target');
+      // 检测鼠标在 target 左半还是右半，决定插入到 target 前/后
+      const targetRect = target!.getBoundingClientRect();
+      const pos: 'before' | 'after' = (e.clientX - targetRect.left) < targetRect.width / 2 ? 'before' : 'after';
+      if (target === pointer.targetElement && pos === pointer.lastTargetPos) return;
+      pointer.targetElement?.classList.remove('launcher-drop-target', 'launcher-drop-before', 'launcher-drop-after');
+      target?.classList.add('launcher-drop-target', `launcher-drop-${pos}`);
       pointer.targetElement = target;
       pointer.lastTarget = targetKey;
+      pointer.lastTargetKind = targetKind;
+      pointer.lastTargetPos = pos;
   };
 
   const finishLayoutPointer = (e?: React.PointerEvent<HTMLDivElement>) => {
@@ -994,8 +1075,10 @@ const Launcher: React.FC = () => {
           pointer.element.style.pointerEvents = '';
           pointer.element.classList.remove('launcher-dragging');
           pointer.ghost?.remove();
-          pointer.targetElement?.classList.remove('launcher-drop-target');
-          if (pointer.lastTarget) reorderByTarget(pointer.kind, pointer.key, pointer.lastTarget);
+          pointer.targetElement?.classList.remove('launcher-drop-target', 'launcher-drop-before', 'launcher-drop-after');
+          if (pointer.lastTarget && pointer.lastTargetKind && pointer.lastTargetPos) {
+              reorderByTarget(pointer.kind, pointer.key, pointer.lastTargetKind, pointer.lastTarget, pointer.lastTargetPos);
+          }
           void updateTheme({
               launcherAppOrder: launcherAppOrderRef.current,
               launcherDockOrder: launcherDockOrderRef.current,
@@ -1042,6 +1125,10 @@ const Launcher: React.FC = () => {
       }}
     >
       <style>{`
+        /* 图标本身允许浏览器长按延迟（不被容器 pan-x pan-y 抢走），编辑模式完全接管 */
+        [data-launcher-item] {
+          touch-action: manipulation;
+        }
         .launcher-edit-item {
           touch-action: none;
           cursor: grab;
@@ -1063,6 +1150,13 @@ const Launcher: React.FC = () => {
           outline: 1.5px dashed rgba(75,65,54,.36);
           outline-offset: 5px;
           border-radius: 1.35rem;
+        }
+        /* 插入位置指示：左/右一条高亮竖线 */
+        .launcher-drop-before {
+          box-shadow: -3px 0 0 0 rgba(75,65,54,.55);
+        }
+        .launcher-drop-after {
+          box-shadow: 3px 0 0 0 rgba(75,65,54,.55);
         }
       `}</style>
 
@@ -1105,14 +1199,23 @@ const Launcher: React.FC = () => {
             WebkitOverflowScrolling: 'touch',
         }}
       >
-          {/* Render App Pages */}
-          {appPages.map((pageApps, idx) => (
+          {/* Render Pages */}
+          {allPages.map((page, idx) => (
               <div
                 key={idx}
-                className="w-full flex-shrink-0 snap-center snap-always flex flex-col px-6 pt-12 pb-8 h-full"
+                className={`w-full flex-shrink-0 snap-center snap-always h-full ${page.type === 'widgets' ? '' : 'flex flex-col px-6 pt-12 pb-8'}`}
                 style={{ contentVisibility: 'auto', contain: 'layout paint', transform: 'translateZ(0)' }}
               >
-                  {idx === 0 ? (
+                  {page.type === 'widgets' ? (
+                      <WidgetsPage
+                        contentColor={contentColor}
+                        openApp={openApp}
+                        anniversaries={anniversaries}
+                        characters={characters}
+                        acnh={acnh}
+                        paper={paper}
+                      />
+                  ) : page.idx === 0 ? (
                       // Page 1 (original): Clock + Chat + 4x2 App Grid
                       <>
                         <DesktopClock />
@@ -1125,10 +1228,10 @@ const Launcher: React.FC = () => {
                             paper={paper}
                         />
                         <div className="flex-1">
-                            <AppGridPage apps={pageApps} openApp={openApp} acnh={acnh} editing={layoutEditing} />
+                            <AppGridPage apps={page.apps} openApp={openApp} acnh={acnh} editing={layoutEditing} />
                         </div>
                       </>
-                  ) : idx === 1 ? (
+                  ) : page.idx === 1 ? (
                       // Page 2: Schedule 4x2 widget on top + Pinwheel (Music / 2x2 icons / 2x2 icons / Image) below
                       <div className="flex-1 min-h-0 w-full flex flex-col gap-5 justify-center">
                           {scheduleChar && (
@@ -1170,7 +1273,7 @@ const Launcher: React.FC = () => {
                   ) : (
                       // Page 3+: Widget Images (idx===2 only) + Free Decorations + Apps
                       <div className="pt-10 flex-1 flex flex-col relative">
-                          {idx === 2 && (() => {
+                          {page.idx === 2 && (() => {
                             const raw = theme.launcherWidgets || {};
                             const w = { ...raw };
                             const hasAny = w['tl'] || w['tr'] || w['wide'];
@@ -1222,7 +1325,7 @@ const Launcher: React.FC = () => {
                           })()}
 
                           <AppGridPage
-                                apps={pageApps}
+                                apps={page.apps}
                                 openApp={openApp}
                                 acnh={acnh}
                                 editing={layoutEditing}
@@ -1232,16 +1335,6 @@ const Launcher: React.FC = () => {
                   )}
               </div>
           ))}
-
-          {/* Final Page: Widgets */}
-          <WidgetsPage
-            contentColor={contentColor}
-            openApp={openApp}
-            anniversaries={anniversaries}
-            characters={characters}
-            acnh={acnh}
-            paper={paper}
-          />
 
       </div>
 
@@ -1265,7 +1358,7 @@ const Launcher: React.FC = () => {
            style={{ paddingBottom: launcherBottomInset }}
       >
            <div
-             className={`rounded-[1.75rem] px-4 py-3 flex gap-3 sm:gap-6 items-center mx-auto max-w-full justify-between overflow-x-auto no-scrollbar transform-gpu ${acnh || paper ? '' : 'bg-white/30 border border-white/25 shadow-[0_8px_40px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.08)]'}`}
+             className={`rounded-[1.75rem] px-4 py-3 flex gap-3 sm:gap-6 items-center mx-auto w-fit max-w-full justify-center no-scrollbar transform-gpu transition-all duration-300 ease-out ${acnh || paper ? '' : 'bg-white/30 border border-white/25 shadow-[0_8px_40px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.08)]'}`}
              style={acnh ? { background: 'transparent' } : paper ? {
                background: 'rgba(224,221,215,0.42)',
                border: '1px solid rgba(91,72,51,0.07)',
@@ -1273,7 +1366,7 @@ const Launcher: React.FC = () => {
              } : undefined}
            >
                {dockAppsConfig.map(app => (
-                   <div key={app.id} data-launcher-item={app.id} data-launcher-kind="dock" className={`relative ${layoutEditing ? 'launcher-edit-item' : ''}`}>
+                   <div key={app.id} data-launcher-item={app.id} data-launcher-kind="dock" className={`relative transition-all duration-300 ease-out ${layoutEditing ? 'launcher-edit-item' : ''}`}>
                         <AppIcon app={app} onClick={() => { if (!layoutEditing) openApp(app.id); }} variant="dock" size="md" />
                         {app.id === 'chat' && totalUnread > 0 && (
                             <div className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full text-white text-[9px] flex items-center justify-center border-2 border-white/20 shadow-sm font-bold pointer-events-none animate-pop-in">
