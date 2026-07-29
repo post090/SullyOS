@@ -12,6 +12,7 @@
 
 import { CharacterProfile, UserProfile, XhsActivityRecord, XhsFreeRoamSession, APIConfig, RealtimeConfig } from '../types';
 import { ContextBuilder } from './context';
+import { resilientFetch } from './resilientFetch';
 import { nowInTimeZone, resolveCharTimeZone } from './timezone';
 import {
     XhsMcpClient,
@@ -63,7 +64,7 @@ const callLlm = async (
     userMessage: string,
 ): Promise<string> => {
     const baseUrl = apiConfig.baseUrl.replace(/\/+$/, '');
-    const resp = await fetch(`${baseUrl}/chat/completions`, {
+    const resp = await resilientFetch(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -80,7 +81,7 @@ const callLlm = async (
         }),
         // API 调用记录标签：自由活动是后台任务，不标会被兜底成「用户当时打开的 App」
         __sullyMeta: { appName: '自由活动', purpose: '自由活动生成' },
-    } as RequestInit);
+    } as RequestInit, { timeoutMs: 120_000, retries: 1 });
 
     if (!resp.ok) throw new Error(`LLM API ${resp.status}: ${await resp.text().catch(() => '')}`);
     const data = await resp.json();

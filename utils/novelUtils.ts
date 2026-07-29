@@ -3,6 +3,7 @@ import { extractLlmContent } from './llmContent';
 import { CharacterProfile, NovelBook, NovelSegment, UserProfile } from '../types';
 import { ContextBuilder } from './context';
 import { safeResponseJson } from './safeApi';
+import { resilientFetch } from './resilientFetch';
 
 // --- Visual Themes ---
 export const NOVEL_THEMES = [
@@ -389,7 +390,7 @@ ${char.memories?.slice(-3).map(m => `- ${m.summary}`).join('\n') || '- 无记忆
 **字数要求**：总共400-600字。`;
 
     try {
-        const response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+        const response = await resilientFetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
             method: 'POST',
             headers: { 
                 'Content-Type': 'application/json', 
@@ -401,7 +402,7 @@ ${char.memories?.slice(-3).map(m => `- ${m.summary}`).join('\n') || '- 无记忆
                 temperature: 0.7,
                 max_tokens: 8000
             })
-        });
+        }, { timeoutMs: 120_000, retries: 1 });
         
         if (response.ok) {
             const data = await safeResponseJson(response);

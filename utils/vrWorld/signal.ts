@@ -11,6 +11,7 @@
 
 import { SignalBooklet, SignalPoem } from '../../types';
 import { getPostOfficeBase, getDeviceId, maskPen } from './postOffice';
+import { resilientFetch } from '../resilientFetch';
 
 export interface SignalState {
     booklet: SignalBooklet;
@@ -106,11 +107,14 @@ export function takeSignalWhisper(charId: string): string {
 async function call<T>(path: string, opts: RequestInit & { query?: Record<string, string> } = {}): Promise<T> {
     const base = getPostOfficeBase();
     const qs = opts.query ? '?' + new URLSearchParams(opts.query).toString() : '';
-    const res = await fetch(`${base}${path}${qs}`, {
-        method: opts.method || 'GET',
+    const method = opts.method || 'GET';
+    // 15s 超时防弱网挂起。补枪只给 GET：POST（start/append/lock）非幂等，
+    // 瞬断重发可能写两句诗/抢两次锁，宁可这次失败让上层自然放弃。
+    const res = await resilientFetch(`${base}${path}${qs}`, {
+        method,
         headers: { ...(opts.body ? { 'Content-Type': 'application/json' } : {}), ...(opts.headers as Record<string, string> || {}) },
         body: opts.body,
-    });
+    }, { timeoutMs: 15_000, retries: method === 'GET' ? 1 : 0, retryOn5xx: method === 'GET' });
     const data = await res.json().catch(() => ({}));
     // 409 poem-open 是预期内的「该改去接龙」信号，连同 body 抛出让调用方识别
     if (!res.ok || (data && data.ok === false)) {

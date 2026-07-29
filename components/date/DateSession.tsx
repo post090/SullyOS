@@ -14,6 +14,7 @@ import { synthesizeSpeech, characterHasVoice } from '../../utils/ttsRouter';
 import { resolveTtsProvider } from '../../utils/ttsProvider';
 import { cleanTextForTtsFish } from '../../utils/fishAudioTts';
 import { cleanTextForTtsEleven } from '../../utils/elevenLabsTts';
+import { resilientFetch } from '../../utils/resilientFetch';
 
 // 语音情绪标记 [v:xxx]：跟立绘情绪 [emotion] 分开的独立通道。立绘的 happy 是
 // 夸张的表情、语音的 happy 是音色情绪，两者强度/语义差异大，不能一概而论。
@@ -198,7 +199,7 @@ const DateSession: React.FC<DateSessionProps> = ({
             if (voiceLang) {
                 const langLabel = VOICE_LANG_LABELS[voiceLang] || voiceLang;
                 try {
-                    const transRes = await fetch(`${apiConfig.baseUrl}/chat/completions`, {
+                    const transRes = await resilientFetch(`${apiConfig.baseUrl}/chat/completions`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiConfig.apiKey}` },
                         body: JSON.stringify({
@@ -206,7 +207,7 @@ const DateSession: React.FC<DateSessionProps> = ({
                             messages: [{ role: 'system', content: `Translate the following text to ${langLabel}. Output ONLY the translation, nothing else.` }, { role: 'user', content: ttsText }],
                             temperature: 0.3,
                         }),
-                    });
+                    }, { timeoutMs: 60_000, retries: 1 });
                     const transData = await transRes.json();
                     const translated = transData?.choices?.[0]?.message?.content?.trim();
                     if (translated) ttsText = translated;

@@ -14,10 +14,11 @@
 
 import { APIConfig, CharacterProfile, CharMusicProfile, CharPlaylist, UserProfile } from '../types';
 import { ContextBuilder } from './context';
+import { resilientFetch } from './resilientFetch';
 
 const callLlm = async (api: APIConfig, sys: string, user: string): Promise<string> => {
     const baseUrl = api.baseUrl.replace(/\/+$/, '');
-    const resp = await fetch(`${baseUrl}/chat/completions`, {
+    const resp = await resilientFetch(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -38,7 +39,7 @@ const callLlm = async (api: APIConfig, sys: string, user: string): Promise<strin
         }),
         // API 调用记录标签：音乐人格生成是后台任务，不标会被兜底成「用户当时打开的 App」
         __sullyMeta: { appName: '音乐', purpose: '音乐人格生成' },
-    } as RequestInit);
+    } as RequestInit, { timeoutMs: 120_000, retries: 1 });
     if (!resp.ok) throw new Error(`LLM ${resp.status}`);
     const j = await resp.json();
     return j?.choices?.[0]?.message?.content || '';

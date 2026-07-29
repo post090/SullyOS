@@ -3,6 +3,7 @@ import { CharacterProfile, UserProfile, DailySchedule, ScheduleSlot, Message } f
 import { ContextBuilder } from './context';
 import { DB } from './db';
 import { safeResponseJson, extractContent, extractJson } from './safeApi';
+import { resilientFetch } from './resilientFetch';
 import { injectMemoryPalace } from './memoryPalace/pipeline';
 import { replacePromptPlaceholders } from '../components/chat/ChatConstants';
 import { getDailyScheduleForChar } from './dailySchedule';
@@ -340,7 +341,7 @@ export async function generateDailyScheduleForChar(
         : buildLifestylePrompt(baseContext, char, userProfile, today, dayOfWeek, chatHistoryBlock);
 
     try {
-        const response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+        const response = await resilientFetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },
             body: JSON.stringify({
@@ -352,7 +353,7 @@ export async function generateDailyScheduleForChar(
             // API 调用记录标签（全局 fetch 拦截器读取）；不传会兜底成「用户当时打开的 App」，
             // 后台任务被标成 Message/群聊 之类，用户看记录一头雾水。
             __sullyMeta: { appName: '日程系统', charId: char.id, charName: char.name, purpose: '生成当日日程' },
-        } as RequestInit);
+        } as RequestInit, { timeoutMs: 120_000, retries: 1 });
 
         if (!response.ok) {
             console.error('[Schedule] API error:', response.status);

@@ -6,6 +6,7 @@ import { DB } from '../utils/db';
 import { Message, MessageType, MemoryFragment, Emoji, EmojiCategory, DailySchedule, ScheduleSlot, TaskV2 } from '../types';
 import { processImage } from '../utils/file';
 import { safeResponseJson, extractContent } from '../utils/safeApi';
+import { resilientFetch } from '../utils/resilientFetch';
 import { buildChatFineTuneCss, mergeChatFineTune } from '../utils/chatFineTuneCss';
 import ChatFineTunePanel from '../components/chat/ChatFineTunePanel';
 import { FadersHorizontal } from '@phosphor-icons/react';
@@ -481,9 +482,10 @@ const Chat: React.FC = () => {
 
     // LLM 翻译兜底（语音条中外对照用）。查 res.ok + 失败重试一次 ——
     // 以前不查状态码、失败静默吞掉，翻译一次拿不到就永远空着（「外语语音没翻译」主因）。
+    // resilientFetch 自带瞬断补枪 + 60s 超时；外层再兜一次业务级重试（共至多 4 发）。
     const llmTranslate = async (systemPrompt: string, text: string): Promise<string> => {
         const attempt = async (): Promise<string> => {
-            const res = await fetch(`${apiConfig.baseUrl}/chat/completions`, {
+            const res = await resilientFetch(`${apiConfig.baseUrl}/chat/completions`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiConfig.apiKey}` },
                 body: JSON.stringify({
@@ -491,7 +493,7 @@ const Chat: React.FC = () => {
                     messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }],
                     temperature: 0.3,
                 }),
-            });
+            }, { timeoutMs: 60_000, retries: 1 });
             if (!res.ok) throw new Error(`translate http ${res.status}`);
             const data = await res.json();
             return data?.choices?.[0]?.message?.content?.trim() || '';

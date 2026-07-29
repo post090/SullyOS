@@ -22,6 +22,7 @@ import { Capacitor, CapacitorHttp } from '@capacitor/core';
 
 import { CloudBackupConfig, CloudBackupFile } from '../types';
 import { getProxyWorkerUrl } from './proxyWorker';
+import { resilientFetch } from './resilientFetch';
 
 const API_HOST = 'https://api.github.com';
 const UPLOAD_HOST = 'https://uploads.github.com';
@@ -125,11 +126,14 @@ const ghRequest = async (
             ...baseHeaders,
             'X-GitHub-Method': method,
         };
-        const res = await fetch(proxify(fullUrl), {
+        // 备份是覆盖写（PUT sha 幂等）、读是 GET，重发都无副作用 → 瞬断补枪 1 次。
+        // 超时：读 30s；带 body 的上传可能是几 MB 的备份档，慢网放宽到 120s 防误杀。
+        // GFW 下走 Worker 代理这一跳本身就不稳，切后台回来更容易撞尸体连接。
+        const res = await resilientFetch(proxify(fullUrl), {
             method: 'POST',
             headers,
             body: (opts.body as BodyInit | undefined) ?? null,
-        });
+        }, { timeoutMs: opts.body ? 120_000 : 30_000, retries: 1 });
         const respHeaders: Record<string, string> = {};
         res.headers.forEach((v, k) => { respHeaders[k.toLowerCase()] = v; });
         return {
@@ -183,12 +187,12 @@ const ghRequest = async (
         };
     }
 
-    const res = await fetch(fullUrl, {
+    const res = await resilientFetch(fullUrl, {
         method,
         headers: baseHeaders,
         body: (opts.body as BodyInit | undefined) ?? null,
         redirect: 'follow',
-    });
+    }, { timeoutMs: opts.body ? 120_000 : 30_000, retries: 1 });
     const respHeaders: Record<string, string> = {};
     res.headers.forEach((v, k) => { respHeaders[k.toLowerCase()] = v; });
     return {

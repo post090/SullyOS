@@ -15,6 +15,7 @@ import {
     CharHomeProfile, HomeRoom, HomeItem, HomeSupply, HomeSupplyLevel,
 } from '../types';
 import { safeResponseJson } from './safeApi';
+import { resilientFetch } from './resilientFetch';
 import { DB } from './db';
 import { resolveWorldbookEntries } from './worldbook';
 import { injectMemoryPalace } from './memoryPalace';
@@ -144,7 +145,7 @@ async function buildGenContext(char: CharacterProfile, theme: 'wallet' | 'home')
 }
 
 async function callJsonLLM(apiConfig: APIConfig, system: string, user: string): Promise<any> {
-    const response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+    const response = await resilientFetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiConfig.apiKey}` },
         body: JSON.stringify({
@@ -156,7 +157,7 @@ async function callJsonLLM(apiConfig: APIConfig, system: string, user: string): 
             temperature: 0.9,
             max_tokens: 2000,
         }),
-    });
+    }, { timeoutMs: 120_000, retries: 1 });
     if (!response.ok) throw new Error(`LLM ${response.status}`);
     const data = await safeResponseJson(response);
     const text = data?.choices?.[0]?.message?.content || '';

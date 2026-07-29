@@ -4,6 +4,7 @@
  */
 
 import { safeResponseJson } from './safeApi';
+import { resilientFetch } from './resilientFetch';
 import { DB } from './db';
 import { getProxyWorkerUrl } from './proxyWorker';
 import { nowInTimeZone } from './timezone';
@@ -163,18 +164,12 @@ const WMO_WEATHER_CODES: Record<number, { description: string; icon: string }> =
 };
 
 /**
- * 天气/地理编码专用的带超时 fetch：这些请求挂在聊天发送的 buildSystemPromptParts 链路上，
- * 没超时的话弱网下会拖住整轮发送。10 秒拿不到就放弃（有陈旧缓存兜底，见 fetchWeather）。
+ * 天气/新闻等实时数据的带超时+瞬断补枪 fetch：这些请求挂在聊天发送的 buildSystemPromptParts
+ * 链路上，没超时的话弱网下会拖住整轮发送。10 秒拿不到就放弃（天气有陈旧缓存兜底，
+ * 新闻各源失败各自返回 []）。瞬断补枪 1 次由 resilientFetch 统一提供。
  */
-const fetchWithTimeout = async (url: string, timeoutMs = 10_000): Promise<Response> => {
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(new Error(`weather fetch timeout ${timeoutMs}ms`)), timeoutMs);
-    try {
-        return await fetch(url, { signal: ac.signal });
-    } finally {
-        clearTimeout(timer);
-    }
-};
+const fetchWithTimeout = (url: string, timeoutMs = 10_000, init: RequestInit = {}): Promise<Response> =>
+    resilientFetch(url, init, { timeoutMs, retries: 1 });
 
 /**
  * OpenWeatherMap 源（需要 API Key）。失败时抛错，由调用方决定是否回落。
@@ -503,7 +498,7 @@ export const RealtimeContextManager = {
             }
 
             try {
-                const res = await fetch(reqUrl, { headers: { 'Accept': 'application/json' } });
+                const res = await fetchWithTimeout(reqUrl, 10_000, { headers: { 'Accept': 'application/json' } });
                 if (!res.ok) {
                     console.warn(`[rss] ${label} HTTP ${res.status}`);
                     return [];
@@ -556,7 +551,7 @@ export const RealtimeContextManager = {
         const perPlatformResults = await Promise.all(list.map(async (p): Promise<NewsItem[]> => {
             const label = RealtimeContextManager.HOTNEWS_PLATFORM_LABELS[p] || p;
             try {
-                const res = await fetch(`https://orz.ai/api/v1/dailynews/?platform=${encodeURIComponent(p)}`, {
+                const res = await fetchWithTimeout(`https://orz.ai/api/v1/dailynews/?platform=${encodeURIComponent(p)}`, 10_000, {
                     headers: { 'Accept': 'application/json' },
                 });
                 if (!res.ok) {
@@ -738,7 +733,7 @@ export const RealtimeContextManager = {
             // 使用自建的 Cloudflare Worker 代理
             const workerUrl = `${getProxyWorkerUrl()}/news?q=热点新闻&count=5&country=cn`;
 
-            const response = await fetch(workerUrl, {
+            const response = await fetchWithTimeout(workerUrl, 12_000, {
                 headers: {
                     'Accept': 'application/json',
                     'X-Brave-API-Key': apiKey  // Worker 需要这个 header
@@ -747,7 +742,9 @@ export const RealtimeContextManager = {
 
             if (!response.ok) {
                 const errorText = await response.text();
-                console.error('Brave API error:', response.status, errorText);
+                // warn 而非 error：新闻失败有回落链（hot_news → Brave → HN），
+                // console.error 会被全局拦截器抓进 systemLogs 红字吓用户。
+                console.warn('Brave API error:', response.status, errorText);
                 return [];
             }
 
@@ -817,7 +814,7 @@ export const RealtimeContextManager = {
      */
     fetchBackupNews: async (): Promise<NewsItem[]> => {
         try {
-            const response = await fetch('https://hacker-news.firebaseio.com/v0/topstories.json');
+            const response = await fetchWithTimeout('https://hacker-news.firebaseio.com/v0/topstories.json');
             if (!response.ok) return [];
 
             const ids = await safeResponseJson(response);
@@ -825,7 +822,7 @@ export const RealtimeContextManager = {
 
             const stories = await Promise.all(
                 topIds.map(async (id: number) => {
-                    const storyRes = await fetch(`https://hacker-news.firebaseio.com/v0/item/${id}.json`);
+                    const storyRes = await fetchWithTimeout(`https://hacker-news.firebaseio.com/v0/item/${id}.json`);
                     return safeResponseJson(storyRes);
                 })
             );

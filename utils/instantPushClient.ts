@@ -11,6 +11,7 @@ import {
 } from './pushSubscribeShared';
 import { ReiClient } from '@rei-standard/amsg-client';
 import { INSTANT_WORKER_VERSION } from './instantWorkerVersion';
+import { fetchWithTimeout } from './resilientFetch';
 
 const log = makeDebugLogger('instant-push', 'InstantPush');
 
@@ -411,7 +412,7 @@ export async function probeInstantWorkerVersion(
     return { ok: false, reachable: false, error: 'Worker URL 未配置或不是 https' };
   }
   try {
-    const res = await fetch(`${workerUrl}/version`, { method: 'GET' });
+    const res = await fetchWithTimeout(`${workerUrl}/version`, { method: 'GET' }, 15_000);
     const { parsed } = await resolveSafeFetchText(res);
     if (!res.ok) {
       return { ok: false, reachable: true, error: parsed?.error?.message ?? `HTTP ${res.status}` };
@@ -442,11 +443,11 @@ export async function probeInstantWorkerCapabilities(
   if (cfg.clientToken) headers['X-Client-Token'] = cfg.clientToken;
 
   try {
-    const res = await fetch(`${workerUrl}/capabilities`, {
+    const res = await fetchWithTimeout(`${workerUrl}/capabilities`, {
       method: 'POST',
       headers,
       body: '{}',
-    });
+    }, 15_000);
     const { text, parsed } = await resolveSafeFetchText(res);
 
     if (!res.ok) {

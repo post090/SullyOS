@@ -6,6 +6,7 @@
  */
 
 import type { EmbeddingConfig } from './types';
+import { fetchWithTimeout } from '../resilientFetch';
 
 // ─── 核心 API 调用 ────────────────────────────────────
 
@@ -124,14 +125,16 @@ async function callEmbeddingAPI(
     }
 
     try {
-        const response = await fetch(url, {
+        // 30s 超时：弱网/切后台瞬断时裸 fetch 会无限挂起，拖死整条向量化流水线。
+        // 重试不在这里做（retries:0）——下面 catch 里已有自己的网络错误/5xx/429 重试。
+        const response = await fetchWithTimeout(url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${config.apiKey}`,
             },
             body: JSON.stringify(body),
-        });
+        }, 30_000);
 
         if (!response.ok) {
             const errorText = await response.text().catch(() => 'Unknown error');

@@ -18,6 +18,7 @@ import { DB } from './db';
 import { ContextBuilder } from './context';
 import { injectMemoryPalace } from './memoryPalace/pipeline';
 import { safeResponseJson } from './safeApi';
+import { resilientFetch } from './resilientFetch';
 import {
     settleDecision,
     archiveDecision,
@@ -62,7 +63,7 @@ async function generateSupervisorReaction(
         await injectMemoryPalace(char, undefined, ctx.task.title);
         const baseContext = ContextBuilder.buildCoreContext(char, user);
         const userPrompt = buildTaskPrompt(ctx);
-        const response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+        const response = await resilientFetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiConfig.apiKey}` },
             body: JSON.stringify({
@@ -74,7 +75,7 @@ async function generateSupervisorReaction(
                 temperature: 0.9,
                 max_tokens: 200,
             }),
-        });
+        }, { timeoutMs: 120_000, retries: 1 });
         if (!response.ok) return '';
         const data = await safeResponseJson(response);
         let text = (data?.choices?.[0]?.message?.content || '').trim();

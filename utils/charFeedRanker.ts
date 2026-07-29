@@ -12,6 +12,7 @@
 
 import { APIConfig, CharacterProfile } from '../types';
 import { ContextBuilder } from './context';
+import { resilientFetch } from './resilientFetch';
 
 /** AI 排档结果：origin → tier（0=不订阅, 1=浏览, 2=关注, 3=偏爱, 4=必看） */
 export type FeedRanking = Record<string, number>;
@@ -24,7 +25,7 @@ export interface FeedSourceInput {
 
 const callLlm = async (api: APIConfig, sys: string, user: string): Promise<string> => {
     const baseUrl = api.baseUrl.replace(/\/+$/, '');
-    const resp = await fetch(`${baseUrl}/chat/completions`, {
+    const resp = await resilientFetch(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -41,7 +42,7 @@ const callLlm = async (api: APIConfig, sys: string, user: string): Promise<strin
             stream: false,
         }),
         __sullyMeta: { appName: '神经链接', purpose: '热点订阅排档' },
-    } as RequestInit);
+    } as RequestInit, { timeoutMs: 120_000, retries: 1 });
     if (!resp.ok) throw new Error(`LLM ${resp.status}`);
     const j = await resp.json();
     return j?.choices?.[0]?.message?.content || '';
