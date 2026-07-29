@@ -14,7 +14,7 @@
 
 import { DB } from './db';
 import { JobNote, JobPosition, Message } from '../types';
-import { JobParseResult, JOB_COMMAND_GUIDE } from './jobHuntParser';
+import { JobParseResult, JOB_COMMAND_GUIDE, normalizeJobStage, JobSettableField } from './jobHuntParser';
 import { redactPrivacy, codifyCompanies } from './privacyRedact';
 
 const STAGE_LABEL: Record<string, string> = {
@@ -52,14 +52,17 @@ export function buildPositionPromptLine(p: JobPosition, allPositions: JobPositio
 
 /** 一张 job_card 消息的 metadata.jobCard 结构 */
 export interface JobCardPayload {
-    jobKind: 'update' | 'delete' | 'note' | 'note_edit' | 'note_del';
-    /** update/delete：岗位代号 */
+    jobKind: 'update' | 'set' | 'delete' | 'note' | 'note_edit' | 'note_del';
+    /** update/set/delete：岗位代号 */
     code?: string;
     stage?: string;
     stageLabel?: string;
     nextStep?: string;
     /** update 时是否为新建卡 */
     created?: boolean;
+    /** set：被改的字段中文标签 + 值摘要 */
+    fieldLabel?: string;
+    valuePreview?: string;
     /** note 系列 */
     noteId?: string;
     noteKind?: string;
@@ -68,6 +71,10 @@ export interface JobCardPayload {
     /** 笔记摘要（截断，点卡片弹全文时从 DB 按 noteId 取） */
     preview?: string;
 }
+
+const FIELD_LABEL: Record<JobSettableField, string> = {
+    title: '岗位名', projectName: '项目名', jd: 'JD', nextStep: '下一步', stage: '阶段',
+};
 
 /**
  * 求职模式 prompt 注入块：岗位列表 + 近期笔记标题（AI 能看见才能改/删）+ 指令教学。
@@ -137,6 +144,38 @@ export async function applyJobDirectives(
                 cards.push({ jobKind: 'update', code: u.code, stage: u.stage, stageLabel: STAGE_LABEL[u.stage] || u.stage, nextStep: u.nextStep || undefined, created: true });
             }
         } catch (e: any) { rejected.push(`JOB_UPDATE ${u.code}: ${e?.message || e}`); }
+    }
+
+    // ── 岗位字段编辑（任意可写字段） ──
+    for (const s of parsed.sets) {
+        try {
+            const all = await DB.getJobPositions();
+            const target = all.find(p => p.code === s.code);
+            if (!target) { rejected.push(`JOB_SET: 找不到代号「${s.code}」`); continue; }
+            const next: JobPosition = { ...target, updatedAt: now };
+            let valuePreview = s.value;
+            if (s.field === 'stage') {
+                const st = normalizeJobStage(s.value);
+                next.stage = st;
+                next.timeline = [...target.timeline, { ts: now, stage: st }];
+                valuePreview = STAGE_LABEL[st] || st;
+            } else if (s.field === 'title') {
+                next.title = s.value;
+            } else if (s.field === 'projectName') {
+                next.projectName = s.value || undefined;
+            } else if (s.field === 'nextStep') {
+                next.nextStep = s.value || undefined;
+            } else if (s.field === 'jd') {
+                next.jd = s.value || undefined;
+                valuePreview = s.value.replace(/\s+/g, ' ').slice(0, 40);
+            }
+            await DB.saveJobPosition(next);
+            cards.push({
+                jobKind: 'set', code: s.code,
+                fieldLabel: FIELD_LABEL[s.field],
+                valuePreview: valuePreview.length > 60 ? `${valuePreview.slice(0, 60)}…` : valuePreview,
+            });
+        } catch (e: any) { rejected.push(`JOB_SET ${s.code}: ${e?.message || e}`); }
     }
 
     // ── 岗位删除 ──
@@ -213,6 +252,8 @@ export function describeJobCard(card: JobCardPayload | undefined, charName: stri
     switch (card.jobKind) {
         case 'update':
             return `[系统: ${charName}${card.created ? '为你建了岗位卡' : '更新了岗位进展'} ${card.code} → ${card.stageLabel}${card.nextStep ? `，下一步：${card.nextStep}` : ''}]`;
+        case 'set':
+            return `[系统: ${charName}更新了岗位 ${card.code} 的${card.fieldLabel}${card.valuePreview ? `：${card.valuePreview}` : ''}]`;
         case 'delete':
             return `[系统: ${charName}删除了岗位卡 ${card.code}]`;
         case 'note':
@@ -236,6 +277,7 @@ export function describeJobBatch(cards: JobCardPayload[], charName: string): str
     const parts = cards.map(c => {
         switch (c.jobKind) {
             case 'update': return `${c.created ? '建卡' : '更新'} ${c.code} → ${c.stageLabel}${c.nextStep ? `（下一步：${c.nextStep}）` : ''}`;
+            case 'set': return `改 ${c.code} 的${c.fieldLabel}${c.valuePreview ? `：${c.valuePreview}` : ''}`;
             case 'delete': return `删岗位卡 ${c.code}`;
             case 'note': return `记${c.noteKindLabel}《${c.title}》`;
             case 'note_edit': return `改笔记《${c.title}》`;

@@ -2115,7 +2115,7 @@ const MessageItem = React.memo(({
             const jCharName = String(meta.charName || charName || '—');
             const jCharAvatar = String(meta.charAvatar || charAvatar || '');
             const cards: any[] = Array.isArray(meta.jobCards) ? meta.jobCards : (meta.jobCard ? [meta.jobCard] : []);
-            const posCount = cards.filter(c => c.jobKind === 'update').length;
+            const posCount = cards.filter(c => c.jobKind === 'update' || c.jobKind === 'set').length;
             const noteCount = cards.filter(c => c.jobKind === 'note' || c.jobKind === 'note_edit').length;
             const delCount = cards.filter(c => c.jobKind === 'delete' || c.jobKind === 'note_del').length;
             const summaryParts: string[] = [];
@@ -2161,6 +2161,18 @@ const MessageItem = React.memo(({
                                                         {c.stageLabel && <span className="ml-auto shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-sky-500/10 text-sky-600 border border-sky-200/70">{c.stageLabel}</span>}
                                                     </div>
                                                     {c.nextStep && <div className="text-[11px] text-slate-500 mt-1 pl-3">下一步：{c.nextStep}</div>}
+                                                </div>
+                                            );
+                                        }
+                                        if (c.jobKind === 'set') {
+                                            return (
+                                                <div key={i} className="rounded-lg bg-white/70 border border-white/60 px-2.5 py-1.5">
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0 bg-emerald-400" />
+                                                        <span className="text-[10px] font-bold text-emerald-600">[改 {c.code}]</span>
+                                                        <span className="text-[12px] text-slate-600 truncate">{c.fieldLabel}</span>
+                                                    </div>
+                                                    {c.valuePreview && <div className="text-[11px] text-slate-500 mt-1 pl-3 line-clamp-2">{c.valuePreview}</div>}
                                                 </div>
                                             );
                                         }
