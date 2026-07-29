@@ -133,14 +133,7 @@ jobs:
             echo "CHANGELOG_EOF"
           } >> $GITHUB_OUTPUT
 
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: sullyos-apk-${{ steps.date.outputs.date }}
-          path: android/app/build/outputs/apk/debug/app-debug.apk
-          retention-days: 30
-
-      - name: Create GitHub Release with APK
+      - name: Create GitHub Release with APK (Draft — 不公开)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.date.outputs.date }}-${{ github.run_number }}
@@ -156,4 +149,5 @@ jobs:
 
             Built from commit: ${{ github.sha }}
           files: android/app/build/outputs/apk/debug/app-debug.apk
+          draft: true
           prerelease: false
