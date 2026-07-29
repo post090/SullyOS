@@ -12,7 +12,7 @@
 
 import { CharWalletProfile, WalletTransaction } from '../types';
 import { DB } from './db';
-import { buildWalletIntuition } from './assetGen';
+import { buildWalletIntuition, buildHomeIntuition } from './assetGen';
 
 /** 用户侧档案在 char_wallets 里的保留 charId */
 export const WALLET_USER_ID = '__user__';
@@ -166,7 +166,73 @@ async function doSettleCharExpense(opts: {
         await adjustCash(profile, delta);
         await writeTx(opts.charId, delta, opts.kind === 'spend' ? 'daily' : 'income', opts.note || (opts.kind === 'spend' ? '日常消费' : '一笔进账'));
         console.log(`💰 [Wallet] 日常${opts.kind === 'spend' ? '消费' : '收入'} ¥${n}（${opts.note || ''}）`);
+        // 钱包→栖居联动：买日用品时把家里对应补给补回充足档（角色说买了墨水，栖居的墨水库存也该同步）
+        if (opts.kind === 'spend' && opts.note) {
+            await restockHomeSupply(opts.charId, opts.note);
+        }
     } catch (err) {
         console.warn('[Wallet] 日常收支入账失败（不影响聊天）:', err);
     }
+}
+
+/**
+ * 消费 → 栖居补货联动：角色花钱买东西（SPEND 用途里写了品名）时，把栖居补给里
+ * 匹配的条目补回「充足」。只补已有条目不新增——咖啡外卖打车也都走 SPEND，
+ * 不是每笔消费都该进家里；最长公共子串 ≥ 2 个字才算同一样东西
+ * （「一瓶墨水」↔「钢笔墨水」命中，「拿铁」↔「冰箱食材」不命中）。
+ * 失败只 warn，绝不影响记账主流程。
+ */
+async function restockHomeSupply(charId: string, note: string): Promise<void> {
+    try {
+        const home = await DB.getHomeProfile(charId);
+        if (!home || !Array.isArray(home.supplies) || home.supplies.length === 0) return;
+        const target = home.supplies.find(s => supplyMatches(s.name || '', note));
+        if (!target || target.level === 'plenty') return;
+        const before = target.level;
+        target.level = 'plenty';
+        target.note = '刚补过货';
+        home.intuition = buildHomeIntuition(home);
+        await DB.saveHomeProfile(home);
+        console.log(`🏠 [Home] 补货感知：${target.name} ${before} → plenty（${note}）`);
+    } catch (err) {
+        console.warn('[Home] 消费补货联动失败（不影响记账）:', err);
+    }
+}
+
+/**
+ * 补给条目 ↔ 消费用途是否说的同一样东西：
+ * ① 最长公共子串 ≥ 2 字（「一瓶墨水」↔「钢笔墨水」）；
+ * ② 别名组兜底——采购口语和档案品名常常零重叠（「买菜和鸡蛋」↔「冰箱食材」），
+ *    两侧各自命中同一组关键词才算。
+ */
+const SUPPLY_ALIAS_GROUPS: string[][] = [
+    ['食材', '冰箱', '买菜', '蔬菜', '青菜', '鸡蛋', '水果', '猪肉', '牛肉', '鸡肉', '海鲜', '囤菜', '超市采购', '米面'],
+    ['纸巾', '卷纸', '抽纸', '卫生纸'],
+    ['洗发', '沐浴', '洗护'],
+];
+function supplyMatches(supplyName: string, note: string): boolean {
+    if (lcsLen(supplyName, note) >= 2) return true;
+    return SUPPLY_ALIAS_GROUPS.some(group =>
+        group.some(w => supplyName.includes(w)) && group.some(w => note.includes(w)));
+}
+
+/** 最长公共子串长度（品名都是短串，滚动数组 DP 足够） */
+function lcsLen(a: string, b: string): number {
+    if (!a || !b) return 0;
+    let best = 0;
+    const prev = new Array<number>(b.length + 1).fill(0);
+    for (let i = 1; i <= a.length; i++) {
+        let diag = 0;
+        for (let j = 1; j <= b.length; j++) {
+            const tmp = prev[j];
+            if (a[i - 1] === b[j - 1]) {
+                prev[j] = diag + 1;
+                if (prev[j] > best) best = prev[j];
+            } else {
+                prev[j] = 0;
+            }
+            diag = tmp;
+        }
+    }
+    return best;
 }
