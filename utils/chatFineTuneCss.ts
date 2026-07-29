@@ -2,7 +2,7 @@
  * 聊天细节微调 CSS 生成器（外观 → 聊天细节）。
  *
  * 收编自社区作者「毛豆腐和面机」（DC）的「神秘拼好码」美化 CSS（致谢见 README 鸣谢）：
- * 隐藏头像、头像对齐/微调、消息贴边、气泡缩进、正文字号/行距。
+ * 隐藏头像、头像位置/对齐/微调、消息贴边、气泡缩进、正文字号/行距。
  * 选择器沿用她的版本已在真实 DOM 上验证过的形态
  * （锚 .group.justify-* 与 .sully-bubble-* 结构），生成规则带 !important
  * 以压过 Tailwind 工具类。
@@ -18,7 +18,7 @@ import type { ChatFineTuneFields, ChatFineTuneOverride } from '../types';
 
 /** 微调字段清单（合并 / 重置 / 快照都以这份为准，加字段只改这里一处）。 */
 export const CHAT_FINE_TUNE_KEYS = [
-    'chatAvatarVisibility', 'chatAvatarAlign', 'chatAvatarOffsetY',
+    'chatAvatarVisibility', 'chatAvatarPlacement', 'chatAvatarAlign', 'chatAvatarOffsetY',
     'chatBubbleFontSize', 'chatBubbleLineHeight', 'chatBubbleIndent', 'chatSnapToEdge',
     // chatModuleAlign 不生成 CSS（HTML/心象卡片位置经 MessageItem 布局属性生效），
     // 但同属微调字段：合并/重置/角色覆盖/备份都跟这份清单走。
@@ -44,6 +44,12 @@ export function mergeChatFineTune(global: ChatFineTuneFields, override?: ChatFin
 
 const AI_AVATAR = '.sully-chat-root .group.justify-start > [class~="absolute"][class~="z-0"]';
 const USER_AVATAR = '.sully-chat-root .group.justify-end > [class~="absolute"][class~="z-0"]';
+const AI_BESIDE_AVATAR = '.sully-chat-root .sully-chat-message-ai > .sully-chat-message-avatar-slot';
+const USER_BESIDE_AVATAR = '.sully-chat-root .sully-chat-message-user > .sully-chat-message-avatar-slot';
+const TURN_AVATAR = '.sully-chat-root .sully-chat-turn-avatar-slot';
+const DEFAULT_AVATAR = '.sully-chat-root .sully-chat-message-avatar';
+const GROUP_FIRST = '.sully-chat-root .sully-chat-message-group-first:not(.sully-chat-message-module)';
+const MESSAGE_CONTENT = '.sully-chat-root .sully-chat-message-content:not(.sully-html-wrap)';
 const AI_BODY = '.sully-chat-root .sully-bubble-ai > div[class~="select-text"]';
 const USER_BODY = '.sully-chat-root .sully-bubble-user > div[class~="select-text"]';
 // 贴边/缩进只该动普通气泡：HTML 卡片（280px 定宽模块，包装层带 .sully-html-wrap）
@@ -64,9 +70,10 @@ export function buildChatFineTuneCss(theme: ChatFineTuneFields): string {
     const hideAi = vis === 'hide_ai' || vis === 'hide_both';
     const hideUser = vis === 'hide_user' || vis === 'hide_both';
 
-    // ── 隐藏头像 ──
-    if (hideAi) rules.push(hideRule(AI_AVATAR));
-    if (hideUser) rules.push(hideRule(USER_AVATAR));
+    // 隐藏规则最后追加：这样“每轮上方”的 display:block 不会意外把用户主动隐藏的一侧重新显示。
+    const hideRules: string[] = [];
+    if (hideAi) hideRules.push(hideRule(AI_AVATAR));
+    if (hideUser) hideRules.push(hideRule(USER_AVATAR));
 
     // ── 贴边（只对隐藏了头像的一侧收回空位）──
     if (theme.chatSnapToEdge) {
@@ -78,7 +85,7 @@ export function buildChatFineTuneCss(theme: ChatFineTuneFields): string {
     const align = theme.chatAvatarAlign || 'bottom';
     const offY = theme.chatAvatarOffsetY || 0;
     if (align !== 'bottom' || offY !== 0) {
-        const both = `${AI_AVATAR}, ${USER_AVATAR}`;
+        const both = `${AI_BESIDE_AVATAR}, ${USER_BESIDE_AVATAR}`;
         if (align === 'top') {
             rules.push(`${both} { bottom: auto !important; top: -0.5rem !important;${offY ? ` transform: translateY(${offY}px) !important;` : ''} }`);
         } else if (align === 'center') {
@@ -116,5 +123,14 @@ export function buildChatFineTuneCss(theme: ChatFineTuneFields): string {
         rules.push(`${AI_BODY} [class*="text-[13px]"], ${USER_BODY} [class*="text-[13px]"] {${decl} }`);
     }
 
+    // ── 每轮头像置于整组气泡上方 ──
+    if ((theme.chatAvatarPlacement || 'beside') === 'above_group') {
+        rules.push(`${TURN_AVATAR} { display: block !important; top: 0 !important; bottom: auto !important; transform: none !important; }`);
+        rules.push(`${DEFAULT_AVATAR} { display: none !important; }`);
+        rules.push(`${GROUP_FIRST} { padding-top: calc(var(--sully-chat-message-avatar-size, 36px) + 8px) !important; }`);
+        rules.push(`${MESSAGE_CONTENT} { margin-left: 0 !important; margin-right: 0 !important; }`);
+    }
+
+    rules.push(...hideRules);
     return rules.length ? `/* 聊天细节微调（外观 App 生成，用户自定义 CSS 可覆盖） */\n${rules.join('\n')}` : '';
 }

@@ -3,6 +3,7 @@ import { DB } from './db';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { APIConfig, CharacterProfile, CharPlaylistSong, TaskV2, UserProfile } from '../types';
 import { sanitizeForBubble } from './sanitize';
+import { extractTransferCommands } from './transferFormat';
 import { executeLifeDirectives } from './lifeRecords';
 import {
     createTask,
@@ -86,34 +87,10 @@ export interface TaskProposalMeta {
     taskId?: string;
 }
 
-const TRANSFER_AMOUNT = String.raw`([0-9][0-9,]*(?:\.[0-9]{1,2})?)`;
-const CANONICAL_TRANSFER_RE = new RegExp(
-    String.raw`\[\[\s*ACTION\s*[:：]\s*TRANSFER\s*[:：]\s*[¥￥]?\s*${TRANSFER_AMOUNT}\s*(?:元|credits?)?\s*\]\]`,
-    'gi',
-);
-// 部分模型会把动作错误地复述成聊天记录，例如「[系统: 你向小明转账 1999]」。
-// 这里只兜底完整的系统日志形态，并要求主语是模型视角的「你/我」，避免把提示词中
-// 「用户向你转账」的收款记录误判成角色主动转账。
-const SYSTEM_TRANSFER_RE = new RegExp(
-    String.raw`[\[【]\s*系统\s*[:：]\s*(?:你|我)\s*向\s*[^\]\】\r?\n]{0,40}?\s*转账\s*[:：]?\s*[¥￥]?\s*${TRANSFER_AMOUNT}\s*(?:元|credits?)?\s*[\]】]`,
-    'gi',
-);
-
-/** 将规范动作及常见的模型掉格式输出统一提取为转账卡片。 */
-export const extractAssistantTransfers = (input: string): { content: string; amounts: string[] } => {
-    const amounts: string[] = [];
-    const collect = (_whole: string, amount: string) => {
-        const normalized = amount.replace(/,/g, '');
-        if (Number(normalized) > 0) amounts.push(normalized);
-        return '';
-    };
-
-    const content = input
-        .replace(CANONICAL_TRANSFER_RE, collect)
-        .replace(SYSTEM_TRANSFER_RE, collect)
-        .trim();
-    return { content, amounts };
-};
+// 转账的提取（规范标签 + 模型掉格式的系统日志形态）统一在 utils/transferFormat.ts:
+// extractTransferCommands —— 与 worker classifier 共用一份源码。master 上曾有一版
+// 独立实现 extractAssistantTransfers, 合并时其能力（全角括号【】/ 主语「我」/ credits
+// 后缀）已并入 transferFormat, 测试见 utils/chatParser.transfer.test.ts。
 
 export const ChatParser = {
     // Return cleaned content and perform side effects
@@ -135,15 +112,13 @@ export const ChatParser = {
             content = content.replace('[[ACTION:POKE]]', '').trim();
         }
 
-        // TRANSFER：兼容全角标点、可选货币符号，以及模型误写出的「[系统: 你向…转账…]」。
-        const transfers = extractAssistantTransfers(content);
-        content = transfers.content;
-        for (const amount of transfers.amounts) {
-            await DB.saveMessage({ charId, role: 'assistant', type: 'transfer', content: '[转账]', metadata: { amount, status: 'pending' } });
-        }
-
         // TRANSFER_ACCEPT / TRANSFER_RETURN — char 收下 / 退回 user 最近一笔待处理的转账。
         // 找最近一条 user 发出、还没被收/退、且不是回执卡本身的转账，标记状态并补一张回执小卡。
+        //
+        // 找不到待处理转账时**不落回执**：老实现会照样落一张，渲染成「xx已收款」
+        // (MessageItem.tsx TransferCard)，等于角色能凭空声明自己收了一笔用户从没发过的钱。
+        // 老注释写的「至少 user 能看到反馈」意图是防静默失败，但代价是假账——角色那句话
+        // 照常显示，用户看到的最多是句废话，比看到一笔不存在的收款好。
         const resolveUserTransfer = async (action: 'accepted' | 'returned') => {
             let amount: string | number | undefined;
             let refId: number | undefined;
@@ -158,7 +133,14 @@ export const ChatParser = {
                     refId = pending.id;
                     await DB.updateMessageMetadata(pending.id, (prev) => ({ ...(prev || {}), status: action, resolvedAt: Date.now() }));
                 }
-            } catch { /* 找不到原转账也照样落回执，至少 user 能看到反馈 */ }
+            } catch (e) {
+                console.warn('[Transfer] 查待处理转账失败，跳过回执:', e);
+                return;
+            }
+            if (refId === undefined) {
+                console.warn(`[Transfer] 角色想${action === 'accepted' ? '收下' : '退回'}转账，但没有待处理的用户转账，已忽略`);
+                return;
+            }
             await DB.saveMessage({
                 charId, role: 'assistant', type: 'transfer',
                 content: action === 'accepted' ? '[已收款]' : '[已退回]',
@@ -170,13 +152,19 @@ export const ChatParser = {
                 await settleTransfer({ direction: 'user_to_char', charId, charName, amount });
             }
         };
-        if (content.includes('[[ACTION:TRANSFER_ACCEPT]]')) {
-            await resolveUserTransfer('accepted');
-            content = content.replace(/\[\[ACTION:TRANSFER_ACCEPT\]\]/g, '').trim();
-        }
-        if (content.includes('[[ACTION:TRANSFER_RETURN]]')) {
-            await resolveUserTransfer('returned');
-            content = content.replace(/\[\[ACTION:TRANSFER_RETURN\]\]/g, '').trim();
+
+        // TRANSFER — 规范标签 + 模仿历史日志的口语形态一起解析，见 utils/transferFormat.ts。
+        // 按出现顺序执行，保住角色「先转账再说谢谢」这类语序意图。
+        const { text: transferCleanedText, events: transferEvents, consumed: transferConsumed } = extractTransferCommands(content);
+        if (transferConsumed > 0) content = transferCleanedText;
+        for (const ev of transferEvents) {
+            if (ev.kind === 'send') {
+                // role 固定 'assistant' —— 方向不由文本决定，文本里的方向信息只在
+                // transferFormat 里做过校验（伪造的已被丢弃）。
+                await DB.saveMessage({ charId, role: 'assistant', type: 'transfer', content: '[转账]', metadata: { amount: ev.amount, status: 'pending' } });
+            } else {
+                await resolveUserTransfer(ev.kind === 'accept' ? 'accepted' : 'returned');
+            }
         }
 
         // SPEND / INCOME — 角色日常收支记账：[[ACTION:SPEND:32|一杯燕麦拿铁]] / [[ACTION:INCOME:800|稿费]]

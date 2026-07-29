@@ -20,6 +20,7 @@
  */
 
 import { sanitizeForNotification } from '../../../utils/sanitize';
+import { extractTransferCommands, parseTransferAmount } from '../../../utils/transferFormat';
 
 export type ToolCall = {
   id: string;
@@ -30,6 +31,10 @@ export type ToolCall = {
 export type Directive =
   | { type: 'poke' }
   | { type: 'transfer'; amount: number }
+  // 角色收下 / 退回用户那笔待处理转账。老实现没把这两个标签列进 SIDE_EFFECT_TAGS,
+  // 它们留在正文里被 sanitize 剥成空块然后整块丢掉 —— push 路径上收/退根本不生效。
+  | { type: 'transfer_accept' }
+  | { type: 'transfer_return' }
   | { type: 'add_event'; title: string; date: string }
   | { type: 'schedule_message'; time: string; text: string }
   | { type: 'music_action'; verb: string; args: string[] }
@@ -149,11 +154,8 @@ const SIDE_EFFECT_TAGS: SideEffectSpec[] = [
     re: /\[\[ACTION:POKE\]\]/g,
     toDirective: () => ({ type: 'poke' }),
   },
-  // [[ACTION:TRANSFER:123]]
-  {
-    re: /\[\[ACTION:TRANSFER:(\d+)\]\]/g,
-    toDirective: (m) => ({ type: 'transfer', amount: Number(m[1]) }),
-  },
+  // 转账 (TRANSFER / TRANSFER_ACCEPT / TRANSFER_RETURN) 不在这张表里 —— 见 classifyLLMOutput
+  // 里的 extractTransferCommands, 那份解析跟客户端共用一份源码, 且要认模仿历史日志的口语形态。
   // [[ACTION:ADD_EVENT|title|date]]
   {
     re: /\[\[ACTION:ADD_EVENT\s*\|\s*(.*?)\s*\|\s*(.*?)\]\]/g,
@@ -315,8 +317,29 @@ export function classifyLLMOutput(text: string): ClassificationResult {
 
   // 2. 没数据标签 → 扫副作用标签, 凑成 directives.
   const directives: Directive[] = [];
+
+  // 2.0 转账先走 utils/transferFormat —— 跟客户端 chatParser 共用同一份解析, 规范标签
+  // (`[[ACTION:TRANSFER:520元]]` 这类金额写法一并容错) 和模仿历史日志的口语形态
+  // (`[系统: 你向xx转账 1999]`) 一起认, 方向伪造的在那里就被丢掉了。
+  //
+  // 必须走 directive 通道而不是留在正文里让客户端扫: sanitizeIntoSegments 会把
+  // "banner 文本为空" 的整块丢掉 (index.ts 拿 segments 发 push), 独占一行的转账日志
+  // 到不了客户端。directives 挂在最后一条 push 上, 没有 segment 时还会单发一条
+  // directive-only push, 是这类纯副作用唯一可靠的通道。
+  const { text: textAfterTransfers, events: transferEvents } = extractTransferCommands(text);
+  for (const ev of transferEvents) {
+    if (ev.kind === 'send') {
+      const amount = parseTransferAmount(ev.amount);
+      if (amount !== null) directives.push({ type: 'transfer', amount });
+    } else if (ev.kind === 'accept') {
+      directives.push({ type: 'transfer_accept' });
+    } else {
+      directives.push({ type: 'transfer_return' });
+    }
+  }
+
   for (const spec of SIDE_EFFECT_TAGS) {
-    const matches = Array.from(text.matchAll(spec.re));
+    const matches = Array.from(textAfterTransfers.matchAll(spec.re));
     for (const m of matches) {
       const d = spec.toDirective(m);
       if (d) directives.push(d);
@@ -324,7 +347,7 @@ export function classifyLLMOutput(text: string): ClassificationResult {
   }
 
   // 3. 不管 directives 有没有, 都剥光所有标签 (数据 + 副作用) 出干净文本.
-  let cleanedText = text;
+  let cleanedText = textAfterTransfers;
   for (const spec of DATA_TAGS) cleanedText = cleanedText.replace(spec.re, '');
   for (const spec of SIDE_EFFECT_TAGS) cleanedText = cleanedText.replace(spec.re, '');
   cleanedText = cleanedText.trim();

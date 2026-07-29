@@ -6,7 +6,7 @@ import { buildChatFineTuneCss, mergeChatFineTune, CHAT_FINE_TUNE_KEYS } from './
 describe('buildChatFineTuneCss', () => {
     it('全默认 → 空串（不注入任何 style）', () => {
         expect(buildChatFineTuneCss({})).toBe('');
-        expect(buildChatFineTuneCss({ chatAvatarVisibility: 'both', chatAvatarAlign: 'bottom', chatAvatarOffsetY: 0, chatBubbleFontSize: 0, chatBubbleLineHeight: 0, chatBubbleIndent: 0 })).toBe('');
+        expect(buildChatFineTuneCss({ chatAvatarVisibility: 'both', chatAvatarPlacement: 'beside', chatAvatarAlign: 'bottom', chatAvatarOffsetY: 0, chatBubbleFontSize: 0, chatBubbleLineHeight: 0, chatBubbleIndent: 0 })).toBe('');
     });
 
     it('隐藏角色侧头像只影响 justify-start；贴边只收隐藏侧空位', () => {
@@ -15,6 +15,14 @@ describe('buildChatFineTuneCss', () => {
         expect(css).not.toContain('.group.justify-end > [class~="absolute"][class~="z-0"] { display: none');
         expect(css).toContain('.ml-12:not(.sully-html-wrap) { margin-left: 0 !important; }');
         expect(css).not.toContain('margin-right: 0');
+    });
+
+    it('每轮气泡上方：显示组首头像、隐藏默认头像、首条留高并收回气泡旁空位', () => {
+        const css = buildChatFineTuneCss({ chatAvatarPlacement: 'above_group' });
+        expect(css).toContain('.sully-chat-turn-avatar-slot { display: block !important;');
+        expect(css).toContain('.sully-chat-message-avatar { display: none !important;');
+        expect(css).toContain('padding-top: calc(var(--sully-chat-message-avatar-size, 36px) + 8px) !important;');
+        expect(css).toContain('.sully-chat-message-content:not(.sully-html-wrap) { margin-left: 0 !important; margin-right: 0 !important; }');
     });
 
     it('心象卡片钉回默认位置：贴边补 48px、缩进补 48-indent、没动不出规则', () => {

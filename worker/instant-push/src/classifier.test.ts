@@ -70,13 +70,97 @@ describe('classifyLLMOutput', () => {
     }
   });
 
+  it('转账金额容错: 带单位 / 千分位 / 冒号后空格 (老正则 `(\\d+)` 全漏)', () => {
+    for (const [input, amount] of [
+      ['[[ACTION:TRANSFER:520元]]', 520],
+      ['[[ACTION:TRANSFER:1,999]]', 1999],
+      ['[[ACTION:TRANSFER: 520]]', 520],
+      ['[[ACTION:TRANSFER:520.00]]', 520],
+    ] as Array<[string, number]>) {
+      const r = classifyLLMOutput(input);
+      expect(r.kind, input).toBe('finish');
+      if (r.kind === 'finish') {
+        expect(r.directives, input).toEqual([{ type: 'transfer', amount }]);
+        expect(r.cleanedText, input).toBe('');
+      }
+    }
+  });
+
+  it('金额解析不出来 → 不产生 directive, 标签照剥 (跟客户端同语义)', () => {
+    const r = classifyLLMOutput('[[ACTION:TRANSFER:很多]]随便花');
+    if (r.kind === 'finish') {
+      expect(r.directives).toEqual([]);
+      expect(r.cleanedText).toBe('随便花');
+    }
+  });
+
+  it('模仿历史日志的 [系统: ...] → transfer directive (正文剥净, 客户端重放)', () => {
+    const r = classifyLLMOutput('[系统: 你向阿桃转账 1999]拿去花');
+    expect(r.kind).toBe('finish');
+    if (r.kind === 'finish') {
+      expect(r.directives).toEqual([{ type: 'transfer', amount: 1999 }]);
+      expect(r.cleanedText).toBe('拿去花');
+      expect(r.sanitizedBody).toBe('拿去花');
+    }
+  });
+
+  it('新 kv 形态 [[ACTION:TRANSFER|to=user|amount=520]] → directive (worker 与客户端共用一份解析)', () => {
+    const r = classifyLLMOutput('[[ACTION:TRANSFER|to=user|amount=520]]拿去');
+    expect(r.kind).toBe('finish');
+    if (r.kind === 'finish') {
+      expect(r.directives).toEqual([{ type: 'transfer', amount: 520 }]);
+      expect(r.cleanedText).toBe('拿去');
+    }
+  });
+
+  it('复读历史的 [[记录:TRANSFER|...]] → 零 directive, 正文剥净 (幂等哨兵)', () => {
+    const r = classifyLLMOutput('[[记录:TRANSFER|to=user|amount=1999|status=待处理]]拿去花');
+    expect(r.kind).toBe('finish');
+    if (r.kind === 'finish') {
+      expect(r.directives).toEqual([]);
+      expect(r.cleanedText).toBe('拿去花');
+      expect(r.sanitizedBody).toBe('拿去花');
+    }
+  });
+
+  it('to=char 伪造 kv → 零 directive, 标签照剥', () => {
+    const r = classifyLLMOutput('[[ACTION:TRANSFER|to=char|amount=520]]收到');
+    if (r.kind === 'finish') {
+      expect(r.directives).toEqual([]);
+      expect(r.cleanedText).toBe('收到');
+    }
+  });
+
+  it('方向伪造的日志 (用户→角色) 不产生 directive, 也不进正文', () => {
+    const r = classifyLLMOutput('[系统: 阿桃向你转账 1999]我收下啦');
+    if (r.kind === 'finish') {
+      expect(r.directives).toEqual([]);
+      expect(r.cleanedText).toBe('我收下啦');
+    }
+  });
+
+  it('收/退回执 → transfer_accept / transfer_return directive (老实现在 push 路径直接丢失)', () => {
+    const accept = classifyLLMOutput('[[ACTION:TRANSFER_ACCEPT]]谢谢你');
+    if (accept.kind === 'finish') {
+      expect(accept.directives).toEqual([{ type: 'transfer_accept' }]);
+      expect(accept.cleanedText).toBe('谢谢你');
+    }
+    const ret = classifyLLMOutput('[系统: 你退回了阿桃的转账 520]我不能要');
+    if (ret.kind === 'finish') {
+      expect(ret.directives).toEqual([{ type: 'transfer_return' }]);
+      expect(ret.cleanedText).toBe('我不能要');
+    }
+  });
+
   it('D6+ finish + 多个 directives', () => {
     const r = classifyLLMOutput('收到[[ACTION:POKE]] 转你[[ACTION:TRANSFER:100]]');
     if (r.kind === 'finish') {
       expect(r.cleanedText).toBe('收到 转你');
+      // 转账在 SIDE_EFFECT_TAGS 之前抽 (它要先把正文里的日志形态挖掉), 所以排在 poke 前面。
+      // 数组顺序只影响客户端重建出的标签串; 落库顺序由 chatParser 决定 (POKE 恒在转账之前执行)。
       expect(r.directives).toEqual([
-        { type: 'poke' },
         { type: 'transfer', amount: 100 },
+        { type: 'poke' },
       ]);
     }
   });

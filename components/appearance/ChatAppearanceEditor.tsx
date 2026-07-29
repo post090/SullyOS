@@ -18,6 +18,7 @@ type Props = {
 // 其他预设时，隐藏头像/贴边等残留字段不会被清掉（旧预设没写这些键）——不留残留的既有惯例。
 const FINE_TUNE_DEFAULTS: Required<ChatFineTuneFields> = {
     chatAvatarVisibility: 'both',
+    chatAvatarPlacement: 'beside',
     chatAvatarAlign: 'bottom',
     chatAvatarOffsetY: 0,
     chatBubbleFontSize: 0,
@@ -201,6 +202,7 @@ const defaults = {
     chatAvatarShape: 'circle',
     chatAvatarSize: 'medium',
     chatAvatarMode: 'grouped',
+    chatAvatarPlacement: 'beside',
     chatBubbleStyle: 'modern',
     chatMessageSpacing: 'default',
     chatShowTimestamp: 'always',
@@ -395,6 +397,7 @@ export const ChatAppearanceEditor: React.FC<Props> = ({ theme, updateTheme, onRe
     const avatarShape = theme.chatAvatarShape || defaults.chatAvatarShape;
     const avatarSize = theme.chatAvatarSize || defaults.chatAvatarSize;
     const avatarMode = theme.chatAvatarMode || defaults.chatAvatarMode;
+    const avatarPlacement = theme.chatAvatarPlacement || defaults.chatAvatarPlacement;
     const bubbleStyle = theme.chatBubbleStyle || defaults.chatBubbleStyle;
     const messageSpacing = theme.chatMessageSpacing || defaults.chatMessageSpacing;
     const showTimestamp = theme.chatShowTimestamp || defaults.chatShowTimestamp;
@@ -540,18 +543,32 @@ export const ChatAppearanceEditor: React.FC<Props> = ({ theme, updateTheme, onRe
                     <div className={`flex min-h-[150px] flex-col p-3 ${previewGap}`}>
                         {previewMessages.map((message, index) => {
                             const isUser = message.role === 'user';
+                            const previousRole = index > 0 ? previewMessages[index - 1].role : null;
                             const nextRole = index < previewMessages.length - 1 ? previewMessages[index + 1].role : null;
+                            const isFirstInGroup = previousRole !== message.role;
                             const shouldShowAvatar = avatarMode === 'every_message' || nextRole !== message.role;
                             const avatarTone = isUser ? 'bg-primary/25' : 'bg-pink-200';
+                            const avatarHidden = isUser ? hidePreviewUserAvatar : hidePreviewAiAvatar;
+                            const bubbleNode = (
+                                <div style={{ ...previewBubbleStyle(bubbleStyle, isUser, theme), ...previewFineTextStyle }}>
+                                    {message.text}
+                                    {showTimestamp === 'always' && nextRole !== message.role && (
+                                        <div className={`mt-1 text-right text-[8px] ${isUser ? 'opacity-70' : 'opacity-55'}`}>{isUser ? '14:33' : '14:32'}</div>
+                                    )}
+                                </div>
+                            );
+                            if (avatarPlacement === 'above_group') {
+                                return (
+                                    <div key={message.id} className={`flex flex-col gap-2 ${isUser ? 'items-end' : 'items-start'}`}>
+                                        {isFirstInGroup && !avatarHidden && <div className={`${avatarClass(avatarShape, avatarSize)} shrink-0 ${avatarTone}`} />}
+                                        {bubbleNode}
+                                    </div>
+                                );
+                            }
                             return (
                                 <div key={message.id} className={`flex ${previewRowAlign} gap-2 ${isUser ? 'justify-end' : ''}`}>
                                     {!isUser && !hidePreviewAiAvatar && <div className={`${avatarClass(avatarShape, avatarSize)} shrink-0 ${avatarTone} ${shouldShowAvatar ? '' : 'opacity-0'}`} />}
-                                    <div style={{ ...previewBubbleStyle(bubbleStyle, isUser, theme), ...previewFineTextStyle }}>
-                                        {message.text}
-                                        {showTimestamp === 'always' && nextRole !== message.role && (
-                                            <div className={`mt-1 text-right text-[8px] ${isUser ? 'opacity-70' : 'opacity-55'}`}>{isUser ? '14:33' : '14:32'}</div>
-                                        )}
-                                    </div>
+                                    {bubbleNode}
                                     {isUser && !hidePreviewUserAvatar && <div className={`${avatarClass(avatarShape, avatarSize)} shrink-0 ${avatarTone} ${shouldShowAvatar ? '' : 'opacity-0'}`} />}
                                 </div>
                             );

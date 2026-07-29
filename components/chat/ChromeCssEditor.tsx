@@ -5,15 +5,13 @@ import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 
 // 聊天「白框」自定义 CSS 编辑器（Appearance 全局默认 与 单角色定制 共用）。
-// 选择器钩子：.sully-chat-header 顶栏 / -back 返回 / -avatar 头像 / -name 名字 / -status 状态 /
-//   -buffs 情绪栏(内含 button) / -token / -trigger 小闪电 / -inputbar 输入栏 /
-//   -panel 加号拉起的功能面板(内含 button) / -root 整屏。
+// 选择器钩子覆盖顶栏、输入栏、整屏背景与普通消息布局；完整清单见下方 AI_PROMPT。
 
 const PRESET_STORE_KEY = 'sully_chrome_css_presets_v1';
 
 // 丢给别的 AI 的提示词（让它按想要的风格生成整段 CSS）。
 const AI_PROMPT = `你是一个 CSS 设计师。我在用一个叫 SullyOS 的「浏览器里的虚拟手机」聊天 App，
-它允许我用一段自定义 CSS 来完全重新设计「聊天顶栏 + 输入栏」这块外壳。
+它允许我用一段自定义 CSS 来重新设计聊天外壳与消息布局。
 这段 CSS 会被注入到聊天界面里，通过下面这些固定类名生效。请帮我写一整段 CSS，
 实现我想要的风格——你有很高的自由度，不要只改颜色，可以大胆重构整个顶栏的视觉。
 
@@ -29,6 +27,12 @@ const AI_PROMPT = `你是一个 CSS 设计师。我在用一个叫 SullyOS 的�
 - .sully-chat-trigger   右侧「触发 AI」的小闪电按钮
 - .sully-chat-inputbar  底部输入栏整块
 - .sully-chat-panel     点「＋」拉起的功能面板（表情/动作菜单），其中按钮是 .sully-chat-panel button
+- .sully-chat-message   普通消息整行；同时带 -ai / -user 和 -group-first / -group-last 状态类
+- .sully-chat-message-content 该条消息的气泡列
+- .sully-chat-message-avatar  默认贴在组末气泡旁的头像
+- .sully-chat-turn-avatar-slot 每组首条的头像槽（默认 display:none，内部已有正确的双方头像）
+- .sully-chat-turn-avatar      上述头像槽里的头像容器；图片是 .sully-chat-message-avatar-img
+- .sully-bubble-ai / .sully-bubble-user 角色 / 用户气泡
 
 【必须遵守的规范】
 1. 覆盖默认样式必须加 !important（尤其 .sully-chat-buffs button 带内联样式，不加 !important 盖不掉）。
@@ -38,6 +42,8 @@ const AI_PROMPT = `你是一个 CSS 设计师。我在用一个叫 SullyOS 的�
 5. 不要 display:none 掉 .sully-chat-back（否则用户无法返回），除非我明确要求。
 6. 想让装饰溢出到顶栏外（如垂下的挂饰、超出的波浪），需给 .sully-chat-header 加 overflow: visible。
 7. 性能：可以用静态 backdrop-filter/blur，但不要对 blur/backdrop 做持续动画。
+8. 若要“每轮头像在气泡上方”：显示 .sully-chat-turn-avatar-slot、隐藏 .sully-chat-message-avatar，
+   给 .sully-chat-message-group-first 留出顶部空间，并清零 .sully-chat-message-content 的左右 margin。
 
 【可以自由发挥的部分】
 - 背景：纯色、渐变、重复图案、图片（background: url(图片直链)）、多层叠加，随意。

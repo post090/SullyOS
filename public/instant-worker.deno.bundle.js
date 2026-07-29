@@ -2338,9 +2338,10 @@ var stripSourceTags = (t) => t.replace(/\s*\[(?:聊天|通话|约会)\]\s*/g, "\
 var stripTimestamps = (t) => t.replace(/\[\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\]\s*/g, "").replace(/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s*/gm, "").replace(/（[上下]午\d{1,2}[：:]\d{2}）/g, "").replace(/\(\d{1,2}:\d{2}\s*[AP]M\)/gi, "");
 var stripChineseDate = (t) => t.replace(/\[\d{4}[-/年]\d{1,2}[-/月]\d{1,2}.*?\]/g, "");
 var stripRoleNamePrefix = (t) => t.replace(/^[\w一-龥]+:\s*/, "");
-var stripBusinessTagsForBubble = (t) => t.replace(/\[\[(?:ACTION|RECALL|SEARCH|READ_NEWS|DIARY|READ_DIARY|FS_DIARY|FS_READ_DIARY|DIARY_START|DIARY_END|FS_DIARY_START|FS_DIARY_END|MUSIC_ACTION)[:\s][\s\S]*?\]\]/g, "").replace(/\[schedule_message[^\]]*\]/g, "");
+var stripBusinessTagsForBubble = (t) => t.replace(/\[\[(?:ACTION|RECALL|SEARCH|READ_NEWS|DIARY|READ_DIARY|FS_DIARY|FS_READ_DIARY|DIARY_START|DIARY_END|FS_DIARY_START|FS_DIARY_END|MUSIC_ACTION)[:\s][\s\S]*?\]\]/g, "").replace(/\[\[\s*[记記][录錄]\s*[:：][\s\S]*?\]\]/g, "").replace(/\[schedule_message[^\]]*\]/g, "");
 var stripBusinessTagsForNotification = (t) => stripBusinessTagsForBubble(t).replace(/\[\[(?:READ_NOTE|XHS_[A-Z_]+)[:\s][\s\S]*?\]\]/g, "").replace(/\[\[XHS_[A-Z_]+\]\]/g, "");
 var stripQuotes = (t) => t.replace(/\[\[(?:QU[OA]TE|引用)[：:][\s\S]*?\]\]/g, "").replace(/\[(?:QU[OA]TE|引用)[：:][^\]]*\]/g, "").replace(/\[回复\s*[""“][^""”]*?[""”](?:\.{0,3})\]\s*[：:]?\s*/g, "").replace(/\[[^\[\]\n「」]{0,24}引用了[^\[\]\n「」]{0,24}「[^」\n]*?」[^\[\]\n]{0,24}\]\s*/g, "");
+var stripSystemLogLeak = (t) => t.replace(/[\[【]\s*(?:系统|系統|System)\s*(?:提示)?\s*[:：][^\[\]【】]*[\]】]\s*/gi, "").replace(/\[\s*(?:系统|系統)\s*\]\s*/g, "");
 var stripMarkdownHeaders = (t) => t.replace(/^#{1,6}\s+/gm, "");
 var stripMarkdownBold = (t) => t.replace(/\*{2,}/g, "");
 var stripMarkdownDividers = (t) => t.replace(/^\s*---\s*$/gm, "").replace(/^\s*[-*+]\s*$/gm, "");
@@ -2468,6 +2469,7 @@ function sanitizeForNotification(text) {
   result = stripTimestamps(result);
   result = stripChineseDate(result);
   result = stripRoleNamePrefix(result);
+  result = stripSystemLogLeak(result);
   result = stripSourceTags(result);
   result = stripInnerState(result);
   result = stripBusinessTagsForNotification(result);
@@ -2567,6 +2569,7 @@ function sanitizeTextForBanner(text) {
   result = replaceTranslationForBanner(result);
   result = replaceVoiceForBanner(result);
   result = stripQuotes(result);
+  result = stripSystemLogLeak(result);
   result = replaceEmojiReverseTag(result);
   result = replaceMarkdownLinks(result);
   result = stripMarkdownHeaders(result);
@@ -2606,6 +2609,114 @@ function splitOnSendEmoji(chunk) {
   }
   if (parts.length === 0 && chunk) parts.push({ kind: "text", text: chunk });
   return parts;
+}
+
+// utils/transferFormat.ts
+function parseTransferAmount(raw) {
+  if (typeof raw === "number") return Number.isFinite(raw) && raw > 0 ? raw : null;
+  if (typeof raw !== "string") return null;
+  let s = raw.replace(/[０-９．]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 65248));
+  s = s.replace(/[¥￥$＄]/g, "").replace(/(?:元|块钱|块|圆|RMB|CNY|credits?)/gi, "").replace(/[,，\s]/g, "");
+  if (!/^\d+(?:\.\d+)?$/.test(s)) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
+}
+function formatTransferAmount(n) {
+  return Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100);
+}
+var RECORD_TRANSFER_RE = /\[\[\s*[记記][录錄]\s*[:：]\s*TRANSFER[^\]]*\]\]/gi;
+var ACTION_SEND_KV_RE = /\[\[\s*ACTION\s*[:：]\s*TRANSFER\s*((?:\|[^\]]*)?)\s*\]\]/gi;
+var ACTION_SEND_RE = /\[\[\s*ACTION\s*[:：]\s*TRANSFER\s*[:：]\s*([^\]]*?)\s*\]\]/gi;
+var FORGED_TO_VALUES = /* @__PURE__ */ new Set(["char", "self", "me", "\u89D2\u8272", "\u81EA\u5DF1", "\u6211", "\u81EA\u5206", "\u672C\u4EBA"]);
+function parseKvArgs(argStr) {
+  const out = {};
+  for (const part of argStr.split(/[|｜]/)) {
+    const seg = part.trim();
+    if (!seg) continue;
+    const eq = seg.search(/[=＝]/);
+    if (eq < 0) {
+      if (!("amount" in out) && parseTransferAmount(seg) !== null) out.amount = seg;
+      continue;
+    }
+    const k = seg.slice(0, eq).trim().toLowerCase();
+    const v = seg.slice(eq + 1).trim();
+    if (k) out[k] = v;
+  }
+  return out;
+}
+function kvToSendEvent(argStr) {
+  const kv = parseKvArgs(argStr);
+  const to = (kv.to ?? kv["\u7ED9"] ?? "").toLowerCase();
+  if (to && FORGED_TO_VALUES.has(to)) return null;
+  const amount = parseTransferAmount(kv.amount ?? kv["\u91D1\u989D"]);
+  return amount === null ? null : { kind: "send", amount: formatTransferAmount(amount) };
+}
+var ACTION_ACCEPT_RE = /\[\[\s*ACTION\s*[:：]\s*TRANSFER_ACCEPT\s*\]\]/gi;
+var ACTION_RETURN_RE = /\[\[\s*ACTION\s*[:：]\s*TRANSFER_RETURN\s*\]\]/gi;
+var SYSTEM_LOG_RE = /[\[【]\s*(?:系统|系統|System)\s*(?:提示)?\s*[:：]\s*([^\[\]【】]*?)\s*[\]】]/gi;
+var BARE_TRANSFER_RE = /\[\s*转[账帐]\s*[:：]?\s*([^\[\]]{0,24}?)\s*\]/gi;
+var AMOUNT_FRAGMENT = String.raw`[¥￥$＄]?\s*([0-9０-９][0-9０-９.,，]*)\s*(?:元|块钱|块|圆)?`;
+var LOG_SEND_RE = new RegExp(String.raw`^(?:你|我)\s*(?:向|给).*?转(?:[账帐]了?|了)\s*${AMOUNT_FRAGMENT}`);
+var LOG_ACCEPT_RE = /^你(?:接收|接受|收下|领取)了.*?转[账帐]/;
+var LOG_RETURN_RE = /^你退回了.*?转[账帐]/;
+var LOG_FORGED_RE = /(?:向|给)你转[账帐]|(?:接收|接受|收下|领取|退回)了你的转[账帐]/;
+var LOG_IS_TRANSFER_RE = /转[账帐]|转了?\s*[¥￥$＄]?\s*[0-9０-９]/;
+function classifySystemLog(inner) {
+  const s = inner.trim();
+  if (!LOG_IS_TRANSFER_RE.test(s)) return void 0;
+  if (LOG_ACCEPT_RE.test(s)) return { kind: "accept" };
+  if (LOG_RETURN_RE.test(s)) return { kind: "return" };
+  const m = s.match(LOG_SEND_RE);
+  if (m) {
+    const amount = parseTransferAmount(m[1]);
+    return amount === null ? null : { kind: "send", amount: formatTransferAmount(amount) };
+  }
+  if (LOG_FORGED_RE.test(s)) return null;
+  return null;
+}
+function collect(text, re, toEvent, hits) {
+  re.lastIndex = 0;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const start = m.index;
+    const end = start + m[0].length;
+    if (hits.some((h) => start < h.end && end > h.start)) continue;
+    const event = toEvent(m);
+    if (event === void 0) continue;
+    hits.push({ start, end, event });
+  }
+}
+function extractTransferCommands(content) {
+  const src = String(content ?? "");
+  if (!src) return { text: "", events: [], consumed: 0 };
+  const hits = [];
+  collect(src, RECORD_TRANSFER_RE, () => null, hits);
+  collect(src, ACTION_SEND_KV_RE, (m) => kvToSendEvent(m[1] ?? ""), hits);
+  collect(src, ACTION_SEND_RE, (m) => {
+    const amount = parseTransferAmount(m[1]);
+    return amount === null ? null : { kind: "send", amount: formatTransferAmount(amount) };
+  }, hits);
+  collect(src, ACTION_ACCEPT_RE, () => ({ kind: "accept" }), hits);
+  collect(src, ACTION_RETURN_RE, () => ({ kind: "return" }), hits);
+  collect(src, SYSTEM_LOG_RE, (m) => classifySystemLog(m[1] ?? ""), hits);
+  collect(src, BARE_TRANSFER_RE, (m) => {
+    const amount = parseTransferAmount(m[1]);
+    return amount === null ? null : { kind: "send", amount: formatTransferAmount(amount) };
+  }, hits);
+  hits.sort((a, b) => a.start - b.start);
+  let text = "";
+  let cursor = 0;
+  for (const h of hits) {
+    text += src.slice(cursor, h.start);
+    cursor = h.end;
+  }
+  text += src.slice(cursor);
+  return {
+    text: text.trim(),
+    events: hits.map((h) => h.event).filter((e) => e !== null),
+    consumed: hits.length
+  };
 }
 
 // worker/instant-push/src/classifier.ts
@@ -2671,11 +2782,8 @@ var SIDE_EFFECT_TAGS = [
     re: /\[\[ACTION:POKE\]\]/g,
     toDirective: () => ({ type: "poke" })
   },
-  // [[ACTION:TRANSFER:123]]
-  {
-    re: /\[\[ACTION:TRANSFER:(\d+)\]\]/g,
-    toDirective: (m) => ({ type: "transfer", amount: Number(m[1]) })
-  },
+  // 转账 (TRANSFER / TRANSFER_ACCEPT / TRANSFER_RETURN) 不在这张表里 —— 见 classifyLLMOutput
+  // 里的 extractTransferCommands, 那份解析跟客户端共用一份源码, 且要认模仿历史日志的口语形态。
   // [[ACTION:ADD_EVENT|title|date]]
   {
     re: /\[\[ACTION:ADD_EVENT\s*\|\s*(.*?)\s*\|\s*(.*?)\]\]/g,
@@ -2808,14 +2916,25 @@ function classifyLLMOutput(text) {
     return { kind: "tool-request", prefix, sanitizedPrefix, toolCalls };
   }
   const directives = [];
+  const { text: textAfterTransfers, events: transferEvents } = extractTransferCommands(text);
+  for (const ev of transferEvents) {
+    if (ev.kind === "send") {
+      const amount = parseTransferAmount(ev.amount);
+      if (amount !== null) directives.push({ type: "transfer", amount });
+    } else if (ev.kind === "accept") {
+      directives.push({ type: "transfer_accept" });
+    } else {
+      directives.push({ type: "transfer_return" });
+    }
+  }
   for (const spec of SIDE_EFFECT_TAGS) {
-    const matches = Array.from(text.matchAll(spec.re));
+    const matches = Array.from(textAfterTransfers.matchAll(spec.re));
     for (const m of matches) {
       const d = spec.toDirective(m);
       if (d) directives.push(d);
     }
   }
-  let cleanedText = text;
+  let cleanedText = textAfterTransfers;
   for (const spec of DATA_TAGS) cleanedText = cleanedText.replace(spec.re, "");
   for (const spec of SIDE_EFFECT_TAGS) cleanedText = cleanedText.replace(spec.re, "");
   cleanedText = cleanedText.trim();

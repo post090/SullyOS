@@ -225,6 +225,45 @@ describe('bubble vs notification differences', () => {
       .toBe('[[INNER_STATE: x]]real');
   });
 
+  // ─── 系统日志 leak 终线 ──────────────────────────────────────────────────
+  // 能还原成动作的 (转账) 已在上游被 chatParser/transferFormat 认领走; 走到 sanitize
+  // 的一律不进气泡/通知。这是对原版 chatParser.sanitize 的**有意**分叉, 不是 refactor 漂移。
+
+  it('bubble + notification 都剥 [系统: ...] 残留', () => {
+    expect(sanitizeForBubble('[系统: 你向阿桃转账 1999]拿去花')).toBe('拿去花');
+    expect(sanitizeForNotification('[系统: 你向阿桃转账 1999]拿去花')).toBe('拿去花');
+  });
+
+  it('系统日志的各种形态: 全角冒号 / 系统提示 / 无冒号 / System', () => {
+    expect(sanitizeForBubble('[系统：用户戳了你一下]我在呢')).toBe('我在呢');
+    expect(sanitizeForBubble('[系统提示: 距离上一条消息: 3 小时]好久不见')).toBe('好久不见');
+    expect(sanitizeForBubble('[系统] 通话已结束')).toBe('通话已结束');
+    expect(sanitizeForBubble('[System: 你接收了阿桃的转账 520]谢谢')).toBe('谢谢');
+  });
+
+  it('不跨块吞正文: 内层禁方括号', () => {
+    expect(sanitizeForBubble('[系统: a]保留[[SEND_EMOJI: 笑]]')).toBe('保留[[SEND_EMOJI: 笑]]');
+  });
+
+  it('普通方括号不受影响', () => {
+    expect(sanitizeForBubble('[图片]和[表情]都留着')).toBe('[图片]和[表情]都留着');
+  });
+
+  it('幂等', () => {
+    const once = sanitizeForBubble('[系统: 你向阿桃转账 1999]拿去花');
+    expect(sanitizeForBubble(once)).toBe(once);
+  });
+
+  // [[记录:...]] 命名空间 —— 历史渲染形态 (transferFormat.formatTransferRecord)，
+  // 上游没认领的一律不进气泡/通知。同为对原版的有意分叉。
+  it('[[记录:...]] 整个命名空间在 bubble + notification 都剥', () => {
+    expect(sanitizeForBubble('[[记录:TRANSFER|to=user|amount=1999|status=待处理]]拿去花')).toBe('拿去花');
+    expect(sanitizeForNotification('[[记录:TRANSFER|to=user|amount=1999|status=已收下]]好耶')).toBe('好耶');
+    // 未来的记录类型自动受保护
+    expect(sanitizeForBubble('[[记录:POKE|by=user]]我在')).toBe('我在');
+    expect(sanitizeForBubble('[[記錄:TRANSFER|to=user]]繁体也剥')).toBe('繁体也剥');
+  });
+
   it('bubble 路径不剥 XHS_* / READ_NOTE (老行为)', () => {
     expect(sanitizeForBubble('[[XHS_LIKE: 1]] hi')).toBe('[[XHS_LIKE: 1]] hi');
     expect(sanitizeForBubble('[[READ_NOTE: key]] hi')).toBe('[[READ_NOTE: key]] hi');
@@ -289,6 +328,25 @@ describe('sanitizeIntoSegments', () => {
   it('整段只有业务标签 → 空数组', () => {
     const segs = sanitizeIntoSegments('[[ACTION:POKE]][[INNER_STATE: y]]');
     expect(segs).toEqual([]);
+  });
+
+  // 这两条钉住 worker 为什么必须走 directive 通道传转账 (classifier.ts extractTransferCommands):
+  // 独占一行的日志块 banner 为空 → 整块被 skip, 留在正文里就到不了客户端。
+  it('[系统: ...] 独占一行 → banner 为空, 整块 skip (所以副作用不能靠正文传)', () => {
+    const segs = sanitizeIntoSegments('[系统: 你向阿桃转账 1999]\n拿去花');
+    expect(segs).toEqual([{ raw: '拿去花', sanitized: '拿去花' }]);
+  });
+
+  it('[[记录:...]] 在 segments 里当业务标签整剥 (worker 已在 directive 通道认领转账, 残留即 leak)', () => {
+    const segs = sanitizeIntoSegments('[[记录:POKE|by=user]]你好\n再见');
+    expect(segs.map((s) => s.raw)).toEqual(['你好', '再见']);
+  });
+
+  it('[系统: ...] 与正文同行 → raw 保留日志, banner 剥掉', () => {
+    const segs = sanitizeIntoSegments('[系统: 你向阿桃转账 1999]拿去花');
+    expect(segs).toEqual([
+      { raw: '[系统: 你向阿桃转账 1999]拿去花', sanitized: '拿去花' },
+    ]);
   });
 
   it('markdown link 行内 → raw 保留 [text](url), sanitized 是 [链接：text]', () => {

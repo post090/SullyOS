@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useOS } from '../context/OSContext';
 import { useBackGuard } from '../hooks/useBackGuard';
 import { DB } from '../utils/db';
-import { CharacterProfile, PhoneEvidence, PhoneCustomApp, PhoneContact, ConvTopic, AiSession, AiServiceKind, TavernCard } from '../types';
+import { CharacterProfile, PhoneEvidence, PhoneCustomApp, PhoneContact, PhoneSimLog, ConvTopic, AiSession, AiServiceKind, TavernCard } from '../types';
 import { ContextBuilder } from '../utils/context';
 import Modal from '../components/os/Modal';
 import { safeResponseJson, extractContent, extractJson } from '../utils/safeApi';
@@ -1890,6 +1890,27 @@ ${olderText}
         }
     };
 
+    const requestDeleteSimLog = (log: PhoneSimLog) => {
+        if (!targetChar) return;
+        const charId = targetChar.id;
+        askConfirm({
+            title: `删除生活记录「${log.title}」？`,
+            desc: '这条记录和用于重播的演出脚本会一并删除，无法撤销。已经发送给 TA 的回忆不会被撤回。',
+            confirmLabel: '删除',
+            danger: true,
+            onConfirm: () => {
+                updateCharacter(charId, (cur) => ({
+                    phoneState: {
+                        ...cur.phoneState,
+                        records: cur.phoneState?.records || [],
+                        simLogs: (cur.phoneState?.simLogs || []).filter(item => item.id !== log.id),
+                    },
+                }));
+                addToast('已删除生活记录', 'success');
+            },
+        });
+    };
+
     // 全局指示条点击后请求深链：直接进入对应角色的演出
     useEffect(() => {
         if (sim.deepLink && sim.charId) {
@@ -3553,6 +3574,7 @@ ${olderText}
                     )}
                     {activeAppId === 'lifelog' && targetChar && (
                         <LifeLog targetChar={targetChar} onBack={() => setActiveAppId('home')}
+                            onRequestDelete={requestDeleteSimLog}
                             onReplay={(log) => {
                                 if (!log.script) return;
                                 // 用存下来的脚本快照原样回放——直接喂给全局 store 的 ready 态

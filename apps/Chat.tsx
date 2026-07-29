@@ -1342,7 +1342,7 @@ const Chat: React.FC = () => {
     };
 
     // 用户点开「收到的转账」卡（角色发来、待处理）选择接收 / 退回：
-    // 标记原转账状态 + 补一张回执小卡（role=user，角色侧 prompt 会看到「用户接收/退回了你的转账」）。
+    // 标记原转账状态 + 补一张回执小卡（role=user，角色侧 prompt 会看到 [[记录:TRANSFER|to=user|...|status=已收下/已退回]]）。
     const handleResolveTransfer = useCallback(async (msg: Message, action: 'accepted' | 'returned') => {
         if (!char) return;
         // 只处理仍待处理的转账，避免重复点击造成多张回执。

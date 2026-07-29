@@ -4,6 +4,7 @@ import { ContextBuilder } from './context';
 import { DB } from './db';
 import { formatLifeSimResetCardForContext } from './lifeSimChatCard';
 import { normalizeMessageContent, stickerNameFromUrl, theaterWhenPhrase } from './messageFormat';
+import { formatTransferRecord } from './transferFormat';
 import { computeCurrentListening, getCurrentSlot } from './charMusicSchedule';
 import { getCharLyricSnippet } from './charLyricCache';
 import { MusicCfg, loadMusicCfgStandalone } from '../context/MusicContext';
@@ -48,6 +49,9 @@ function summarizeGroupMsgContent(m: Message): string {
         case 'image': return '[图片]';
         case 'emoji': return '[表情]';
         case 'interaction': return '[戳了戳]';
+        // 转账保持轻占位符, 不迁 [[记录:TRANSFER]] —— 这里是别人对话的背景叙述, 整片都是
+        // [图片]/[表情] 式短占位, 混重型 tag 破坏局部一致; 对它的模仿 transferFormat 的
+        // BARE_TRANSFER_RE 兜得住。
         case 'transfer': return `[转账${meta.amount ?? ''}]`;
         case 'social_card': return `[分享帖子${meta.post?.title ? '：' + meta.post.title : ''}]`;
         case 'chat_forward': return '[转发的聊天记录]';
@@ -592,8 +596,9 @@ ${uname} 的化身正挂在《彼方》的【${roomName}】${act ? `，状态写
    - 如果用户发送了图片，请对图片内容进行评论。
 6. **可用动作**:
    - 回戳用户: \`[[ACTION:POKE]]\`
-   - 转账: 必须使用且只使用 \`[[ACTION:TRANSFER:100]]\`（把 100 换成金额）；不要写成 \`[系统: 你向某人转账 100]\` 等系统日志文本。
-   - **处理用户转账**: 当看到 \`[系统: 用户向你转账 X]\` 时，你可以决定收下或退回。收下: \`[[ACTION:TRANSFER_ACCEPT]]\`；退回: \`[[ACTION:TRANSFER_RETURN]]\`。请结合人设和情境自然选择（比如害羞地退回、开心地收下），并配上一句话。${walletHasProfile ? `
+   - 转账: 必须使用且只使用 \`[[ACTION:TRANSFER|to=user|amount=100]]\`（to 固定写 user，金额只写数字）；不要写成 \`[系统: 你向某人转账 100]\` 等系统日志文本。
+   - **处理用户转账**: 当历史里出现 \`[[记录:TRANSFER|to=char|...|status=待处理]]\`（用户转给你、还没处理）时，你可以决定收下或退回。收下: \`[[ACTION:TRANSFER_ACCEPT]]\`；退回: \`[[ACTION:TRANSFER_RETURN]]\`。请结合人设和情境自然选择（比如害羞地退回、开心地收下），并配上一句话。
+   - **【重要】\`[[记录:...]]\` 是系统日志**: 历史里以 \`[[记录:\` 开头的标签是已经发生的事实（谁转给谁、什么状态），只供你了解，**严禁**在回复里照抄输出。你要做动作时只能用 \`[[ACTION:...]]\`。${walletHasProfile ? `
    - **记账（你的钱包会真实变动）**: 当你在聊天里**真的发生了**一笔花销或进账时（比如你说自己买了咖啡、点了外卖、打车了，或收到稿费/兼职钱），在那句话的末尾附上: 花钱 \`[[ACTION:SPEND:金额|用途]]\`，进账 \`[[ACTION:INCOME:金额|来源]]\`（如 \`[[ACTION:SPEND:32|一杯燕麦拿铁]]\`）。规则: ①只记你**此刻实际发生**的收支，回忆过去/计划将来/打比方都不记；②金额按物价合理估，跟你的经济状况匹配；③工资、房租、月供这类固定收支系统会自动扣，**不要**用这个指令重复记；④转账走 TRANSFER，不要用 SPEND/INCOME 记转账。这个账本影响你的"钱的直觉"，记了钱就真的少了/多了。` : ''}
    - 调取记忆: \`[[RECALL: YYYY-MM]]\`，请注意，当用户提及具体某个月份时，或者当你想仔细想某个月份的事情时，欢迎你随时使该动作
    - **添加纪念日**: 如果你觉得今天是个值得纪念的日子（或者你们约定了某天），你可以**主动**将它添加到用户的日历中。单独起一行输出: \`[[ACTION:ADD_EVENT | 标题(Title) | YYYY-MM-DD]]\`。
@@ -1075,24 +1080,23 @@ ${userProfile.name} 给你反馈时，别当成约束，当成信任——ta 在
                 
                 if (index === historySlice.length - 1 && timeGapHint && m.role === 'user') content = `${content}\n\n${timeGapHint}`; 
                 
-                if (m.type === 'interaction') content = `${timeStr} [系统: 用户戳了你一下]`; 
+                // TODO(记录形态): 戳一戳 / 时间间隔提示等其他系统事件, 等转账的 [[记录:TRANSFER]]
+                // 观察一段时间后再迁 (transferFormat.ts 头注) —— 防线已按整个记录命名空间就位。
+                if (m.type === 'interaction') content = `${timeStr} [系统: 用户戳了你一下]`;
                 else if (m.type === 'transfer') {
+                    // 统一记录形态 [[记录:TRANSFER|to=|amount=|status=]] —— 跟输出语法
+                    // [[ACTION:TRANSFER|to=|amount=]] 共用词汇表 (见 transferFormat.ts 头注)。
+                    // 旧的 `[系统: 你向xx转账 N]` 第二人称句式会被模型照抄成正文;
+                    // 记录前缀即幂等哨兵, 抄了也被解析端消费丢弃。
+                    // 顺带修掉旧实现的不一致: 原始转账行现在读 live status (metadata.status),
+                    // 被收/退之后不再永远显示「待你处理」。
                     const tMeta = m.metadata || {};
-                    const amtStr = tMeta.amount !== undefined ? ` ${tMeta.amount}` : '';
-                    const uName = userProfile?.name || '用户';
-                    if (tMeta.receipt === 'accepted') {
-                        content = m.role === 'user'
-                            ? `${timeStr} [系统: ${uName}接收了你的转账${amtStr}]`
-                            : `${timeStr} [系统: 你接收了${uName}的转账${amtStr}]`;
-                    } else if (tMeta.receipt === 'returned') {
-                        content = m.role === 'user'
-                            ? `${timeStr} [系统: ${uName}退回了你的转账${amtStr}]`
-                            : `${timeStr} [系统: 你退回了${uName}的转账${amtStr}]`;
-                    } else {
-                        content = m.role === 'user'
-                            ? `${timeStr} [系统: ${uName}向你转账${amtStr}（待你处理，可收下或退回）]`
-                            : `${timeStr} [系统: 你向${uName}转账${amtStr}]`;
-                    }
+                    content = `${timeStr} ${formatTransferRecord({
+                        role: m.role as 'user' | 'assistant',
+                        amount: tMeta.amount,
+                        receipt: tMeta.receipt,
+                        status: tMeta.status,
+                    })}`;
                 }
                 else if (m.type === 'social_card') {
                     const post = m.metadata?.post || {};

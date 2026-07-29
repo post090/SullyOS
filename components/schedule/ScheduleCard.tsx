@@ -3,6 +3,9 @@ import React, { useState, useRef, useEffect } from 'react';
 import { DailySchedule, ScheduleSlot, ScheduleRevision, CharacterProfile } from '../../types';
 import { getCurrentScheduleSlotIndex, getScheduleWallClock } from '../../utils/scheduleTime';
 import { resolveCharTimeZone, tzShortLabel } from '../../utils/timezone';
+import { useOS } from '../../context/OSContext';
+import { resolveScheduleCardPalette } from '../../utils/scheduleAppearance';
+import ScheduleAppearanceButton, { ScheduleCustomCssStyle } from './ScheduleAppearanceButton';
 
 interface ScheduleCardProps {
     schedule: DailySchedule | null;
@@ -54,7 +57,7 @@ const useTickingNow = (): Date => {
 const ScheduleCard: React.FC<ScheduleCardProps> = ({
     schedule,
     character,
-    contentColor = '#ffffff',
+    contentColor: inheritedContentColor = '#ffffff',
     compact = false,
     onEdit,
     onDelete,
@@ -63,6 +66,7 @@ const ScheduleCard: React.FC<ScheduleCardProps> = ({
     onPlayTheater,
     isGenerating = false,
 }) => {
+    const { theme } = useOS();
     const [editingIdx, setEditingIdx] = useState<number | null>(null);
     const [editTime, setEditTime] = useState('');
     const [editActivity, setEditActivity] = useState('');
@@ -158,21 +162,37 @@ const ScheduleCard: React.FC<ScheduleCardProps> = ({
         e.target.value = '';
     };
 
-    // Accent color derived from theme
-    const accentHsl = `hsl(${character?.themeColor || 260}, 70%, 65%)`;
-    const accentBg = `hsl(${character?.themeColor || 260}, 50%, 20%)`;
-    const cardBg = `hsl(${character?.themeColor || 260}, 40%, 12%)`;
+    const palette = resolveScheduleCardPalette(
+        theme.scheduleCardAppearance,
+        character?.themeColor || theme.hue || 260,
+        inheritedContentColor,
+    );
+    const contentColor = palette.text;
+    const accentHsl = palette.accent;
+    const accentBg = palette.accentSoft;
+    const cardBg = palette.base;
+    const scheduleVars = {
+        '--schedule-bg': palette.background,
+        '--schedule-text': palette.text,
+        '--schedule-accent': palette.accent,
+        '--schedule-accent-soft': palette.accentSoft,
+        '--schedule-base': palette.base,
+        '--schedule-line': palette.line,
+    } as React.CSSProperties;
 
     return (
         <div
-            className="relative rounded-3xl overflow-hidden shadow-2xl border border-white/10"
+            className="sully-schedule-root sully-schedule-card relative rounded-3xl overflow-hidden shadow-2xl"
             style={{
-                background: `linear-gradient(145deg, ${cardBg}, hsl(${character?.themeColor || 260}, 35%, 8%))`,
+                ...scheduleVars,
+                background: palette.background,
                 color: contentColor,
+                border: `1px solid ${palette.line}`,
             }}
         >
+            <ScheduleCustomCssStyle />
             {/* Header */}
-            <div className="relative px-5 pt-5 pb-3 flex items-start justify-between">
+            <div className="sully-schedule-header relative px-5 pt-5 pb-3 flex items-start justify-between">
                 <div>
                     <div className="flex items-center gap-2 mb-1">
                         <span className="text-[10px] font-bold tracking-[0.2em] uppercase opacity-50">Daily</span>
@@ -191,9 +211,15 @@ const ScheduleCard: React.FC<ScheduleCardProps> = ({
                     </div>
                 </div>
                 <div className="flex flex-col items-end gap-1">
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-white/20" style={{ background: accentBg }}>
-                        {formatDate(wallClock)}
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                        <span
+                            className="text-[10px] font-bold px-2 py-0.5 rounded-full border"
+                            style={{ background: accentBg, borderColor: palette.line }}
+                        >
+                            {formatDate(wallClock)}
+                        </span>
+                        <ScheduleAppearanceButton compact />
+                    </div>
                     {charTzName && (
                         <span className="text-[9px] font-bold opacity-40 tracking-wide">
                             {charTzName}
@@ -203,8 +229,8 @@ const ScheduleCard: React.FC<ScheduleCardProps> = ({
                         <button
                             onClick={onReroll}
                             disabled={isGenerating}
-                            className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-white/20 hover:border-white/40 transition-all active:scale-95 disabled:opacity-30"
-                            style={{ background: accentBg }}
+                            className="text-[10px] font-bold px-2 py-0.5 rounded-full border transition-all active:scale-95 disabled:opacity-30"
+                            style={{ background: accentBg, borderColor: palette.line }}
                         >
                             {isGenerating ? '生成中...' : '↻ 重新生成'}
                         </button>
@@ -215,7 +241,7 @@ const ScheduleCard: React.FC<ScheduleCardProps> = ({
             {/* Content: Character Image Banner on top, Schedule List below */}
             <div className="flex flex-col">
                 {/* Character Image Banner */}
-                <div className="relative w-full h-32 overflow-hidden flex-shrink-0">
+                <div className="sully-schedule-cover relative w-full h-32 overflow-hidden flex-shrink-0">
                     {(coverImage || charAvatar) ? (
                         <img
                             src={coverImage || charAvatar}
@@ -251,7 +277,7 @@ const ScheduleCard: React.FC<ScheduleCardProps> = ({
                 </div>
 
                 {/* Schedule List */}
-                <div className="px-5 pb-5 pt-1 space-y-1 min-w-0">
+                <div className="sully-schedule-list px-5 pb-5 pt-1 space-y-1 min-w-0">
                     {isGenerating && !schedule ? (
                         <div className="py-12 text-center">
                             <div className="inline-block w-6 h-6 border-2 border-white/20 border-t-white/60 rounded-full animate-spin mb-3"></div>
@@ -268,7 +294,7 @@ const ScheduleCard: React.FC<ScheduleCardProps> = ({
 
                             if (isEditing && !compact) {
                                 return (
-                                    <div key={idx} className="p-3 rounded-xl border border-white/20" style={{ background: accentBg }}>
+                                    <div key={idx} className="sully-schedule-item p-3 rounded-xl border" style={{ background: accentBg, borderColor: palette.line }}>
                                         <div className="flex gap-2 mb-2">
                                             <input
                                                 type="time"
@@ -327,15 +353,15 @@ const ScheduleCard: React.FC<ScheduleCardProps> = ({
                             return (
                                 <React.Fragment key={idx}>
                                 <div
-                                    className={`relative flex items-start gap-3 py-2 px-3 rounded-xl transition-all ${
+                                    className={`sully-schedule-item ${isCurrent ? 'sully-schedule-item-current' : ''} relative flex items-start gap-3 py-2 px-3 rounded-xl transition-all ${
                                         isCurrent ? 'border border-white/20' : 'border border-transparent'
                                     } ${editable ? 'cursor-pointer hover:bg-white/5 select-none' : ''}`}
-                                    style={isCurrent ? { background: accentBg } : {}}
+                                    style={isCurrent ? { background: accentBg, borderColor: palette.line } : {}}
                                     {...pressHandlers}
                                 >
                                     {/* Time */}
                                     <div className="flex flex-col items-center w-12 flex-shrink-0">
-                                        <span className={`text-xs font-mono font-bold ${isPast ? 'opacity-30' : isCurrent ? 'opacity-100' : 'opacity-60'}`}>
+                                        <span className={`sully-schedule-time text-xs font-mono font-bold ${isPast ? 'opacity-30' : isCurrent ? 'opacity-100' : 'opacity-60'}`}>
                                             {slot.startTime}
                                         </span>
                                         {isCurrent && (
@@ -346,12 +372,12 @@ const ScheduleCard: React.FC<ScheduleCardProps> = ({
                                     </div>
 
                                     {/* Timeline dot + line */}
-                                    <div className="flex flex-col items-center pt-1.5 flex-shrink-0">
+                                    <div className="sully-schedule-timeline flex flex-col items-center pt-1.5 flex-shrink-0">
                                         <div
                                             className={`w-2.5 h-2.5 rounded-full border-2 ${isPast ? 'opacity-30' : ''}`}
                                             style={{
-                                                borderColor: isCurrent ? accentHsl : 'rgba(255,255,255,0.3)',
-                                                background: isCurrent ? accentHsl : (isPast ? 'rgba(255,255,255,0.15)' : 'transparent'),
+                                                borderColor: isCurrent ? accentHsl : palette.line,
+                                                background: isCurrent ? accentHsl : (isPast ? palette.line : 'transparent'),
                                             }}
                                         />
                                         {idx < schedule.slots.length - 1 && (
@@ -363,7 +389,7 @@ const ScheduleCard: React.FC<ScheduleCardProps> = ({
                                     <div className={`flex-1 min-w-0 ${isPast ? 'opacity-30' : ''}`}>
                                         <div className="flex items-center gap-1.5">
                                             {slot.emoji && <span className="text-sm flex-shrink-0">{slot.emoji}</span>}
-                                            <span className={`text-sm font-bold ${isCurrent ? '' : ''}`}>{slot.activity}</span>
+                                            <span className="sully-schedule-activity text-sm font-bold">{slot.activity}</span>
                                             {/* ⑦ 修订角标：点开展开改动前后对比 + 原因气泡 */}
                                             {slotRevs.length > 0 && (
                                                 <button
@@ -389,7 +415,7 @@ const ScheduleCard: React.FC<ScheduleCardProps> = ({
                                             )}
                                         </div>
                                         {slot.description && (
-                                            <p className="text-[11px] opacity-50 mt-0.5 leading-tight">{slot.description}</p>
+                                            <p className="sully-schedule-description text-[11px] opacity-50 mt-0.5 leading-tight">{slot.description}</p>
                                         )}
                                     </div>
 
@@ -400,8 +426,8 @@ const ScheduleCard: React.FC<ScheduleCardProps> = ({
                                             <button
                                                 className={`w-7 h-7 rounded-full flex items-center justify-center text-xs transition-all ${isFuture ? 'cursor-not-allowed' : 'active:scale-90'}`}
                                                 style={{
-                                                    background: isFuture ? 'rgba(255,255,255,0.06)' : (slot.theater ? accentHsl : 'rgba(255,255,255,0.12)'),
-                                                    color: isFuture ? 'rgba(255,255,255,0.28)' : (slot.theater ? cardBg : contentColor),
+                                                    background: isFuture ? 'color-mix(in srgb, var(--schedule-text) 6%, transparent)' : (slot.theater ? accentHsl : 'color-mix(in srgb, var(--schedule-text) 12%, transparent)'),
+                                                    color: isFuture ? 'color-mix(in srgb, var(--schedule-text) 28%, transparent)' : (slot.theater ? cardBg : contentColor),
                                                 }}
                                                 title={isFuture ? '还没到这个时间哦' : (slot.theater ? '重看小剧场' : '窥视这一刻')}
                                                 onPointerDown={(e) => { e.stopPropagation(); cancelLongPress(); }}

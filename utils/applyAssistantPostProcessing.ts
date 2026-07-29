@@ -161,6 +161,8 @@ async function xhsReplyComment(conf: { mcpUrl: string }, feedId: string, xsecTok
 export type PostProcessDirective =
     | { type: 'poke' }
     | { type: 'transfer'; amount: number }
+    | { type: 'transfer_accept' }
+    | { type: 'transfer_return' }
     | { type: 'add_event'; title: string; date: string }
     | { type: 'schedule_message'; time: string; text: string }
     | { type: 'music_action'; verb: string; args: string[] }
@@ -194,6 +196,15 @@ function reconstructDirectiveTags(directives: PostProcessDirective[] | undefined
                 break;
             case 'transfer':
                 parts.push(`[[ACTION:TRANSFER:${d.amount}]]`);
+                break;
+            // 收/退回执: worker 端已把口语形态 (`[系统: 你接收了xx的转账 520]`) 归一成
+            // 这两个 directive, 这里拼回规范标签交给 chatParser 执行 (找不到待处理转账时
+            // 它会跳过, 不会落一张假的"已收款")。
+            case 'transfer_accept':
+                parts.push('[[ACTION:TRANSFER_ACCEPT]]');
+                break;
+            case 'transfer_return':
+                parts.push('[[ACTION:TRANSFER_RETURN]]');
                 break;
             case 'add_event':
                 parts.push(`[[ACTION:ADD_EVENT|${d.title}|${d.date}]]`);

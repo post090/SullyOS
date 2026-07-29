@@ -50,6 +50,11 @@ const stripRoleNamePrefix = (t: string): string => t.replace(/^[\w一-龥]+:\s*/
 const stripBusinessTagsForBubble = (t: string): string =>
   t
     .replace(/\[\[(?:ACTION|RECALL|SEARCH|READ_NEWS|DIARY|READ_DIARY|FS_DIARY|FS_READ_DIARY|DIARY_START|DIARY_END|FS_DIARY_START|FS_DIARY_END|MUSIC_ACTION)[:\s][\s\S]*?\]\]/g, '')
+    // `[[记录:...]]` 整个命名空间 —— 历史渲染形态 (utils/transferFormat.ts:formatTransferRecord),
+    // 模型复读历史会抄出来。能还原成动作的 (记录:TRANSFER) 在上游 chatParser / worker classifier
+    // 已被消费; 走到这里的一律是纯 leak, 不进气泡。全角冒号一并容 (模型手写变体)。
+    // 对原版 chatParser.sanitize 是**有意**分叉 (C4 oracle 测的是 refactor 不漂移, 这条是新规则)。
+    .replace(/\[\[\s*[记記][录錄]\s*[:：][\s\S]*?\]\]/g, '')
     .replace(/\[schedule_message[^\]]*\]/g, '');
 
 /**
@@ -71,6 +76,22 @@ const stripQuotes = (t: string): string =>
     // buildMessageHistory 把引用渲染成 [xx引用了xx说的「…」，并回复了 ↓]，模型会学这个格式输出。
     // 解析端 (applyAssistantPostProcessing QUOTE_RE_NL) 已把它认作引用，这里保证残留不漏进气泡/通知。
     .replace(/\[[^\[\]\n「」]{0,24}引用了[^\[\]\n「」]{0,24}「[^」\n]*?」[^\[\]\n]{0,24}\]\s*/g, '');
+
+/**
+ * 历史里的系统日志 leak — `[系统: ...]` / `[系统提示: ...]` / `[系统] ...` / `[System: ...]`。
+ *
+ * buildMessageHistory 把 transfer / interaction / 时间间隔提示都渲染成这个形态喂给模型
+ * (`[系统: 你向xx转账 1999]`、`[系统: 用户戳了你一下]`、`[系统提示: 距离上一条消息: 3 小时]`),
+ * 模型会照抄。这是**终线**: 能还原成动作的已经在上游被 chatParser (转账见
+ * utils/transferFormat.ts) 认领走了, 走到这里的一律不该进气泡/通知。
+ *
+ * 加这条会让 sanitizeForBubble 跟 chatParser.sanitize 原版产生**有意的**行为分叉 ——
+ * C4 oracle 测的是 refactor 不漂移, 这条是明确的新规则, 不属于漂移。
+ */
+const stripSystemLogLeak = (t: string): string =>
+  t
+    .replace(/[\[【]\s*(?:系统|系統|System)\s*(?:提示)?\s*[:：][^\[\]【】]*[\]】]\s*/gi, '')
+    .replace(/\[\s*(?:系统|系統)\s*\]\s*/g, '');
 
 /** markdown 标题 `# heading` → `heading` (保留文字) */
 const stripMarkdownHeaders = (t: string): string => t.replace(/^#{1,6}\s+/gm, '');
@@ -337,10 +358,11 @@ export function sanitizeForNotification(text: string): string {
   // 5. 翻译块保留原文剥译文 (先自愈掉格式的标签, 严格提取正则才能命中)
   result = normalizeTranslationTags(result);
   result = extractTranslationOriginal(result);
-  // 6. LLM mimicking 历史的 leak: 时间戳 / 日期 / 角色名 prefix
+  // 6. LLM mimicking 历史的 leak: 时间戳 / 日期 / 角色名 prefix / 系统日志
   result = stripTimestamps(result);
   result = stripChineseDate(result);
   result = stripRoleNamePrefix(result);
+  result = stripSystemLogLeak(result);
   // 7. 源标签 [聊天] 等
   result = stripSourceTags(result);
   // 8. 内部状态 / 业务标签 / 引用
@@ -381,9 +403,10 @@ export function sanitizeForBubble(
   //      applyAssistantPostProcessing Step 8 双语拆泡都靠严格配对正则)
   result = normalizeVoiceTags(result);
   result = normalizeTranslationTags(result);
-  // 2. 源标签 / 时间戳 / 业务标签
+  // 2. 源标签 / 时间戳 / 系统日志 leak / 业务标签
   result = stripSourceTags(result);
   result = stripTimestamps(result);
+  result = stripSystemLogLeak(result);
   result = stripMarkdownHeaders(result);
   result = stripBusinessTagsForBubble(result);
   if (!options?.keepCitations) {
@@ -504,6 +527,11 @@ export function sanitizeIntoSegments(text: string): Segment[] {
   cleaned = stripSourceTags(cleaned);
   // 注意: 这里**不**剥 stripQuotes — 引用要带到客户端让 Step 7 配 aiReplyTarget.
   // sanitizeTextForBanner 单独剥引用给 notification.
+  //
+  // 同理**不**剥 stripSystemLogLeak: 模型抄出来的 `[系统: ...]` 原样留在 raw 里带给客户端。
+  // 转账那一类不靠这条路 (worker classifier 已在 directive 通道认领, 见 classifier.ts
+  // extractTransferCommands —— 因为独占一行的日志块 banner 为空会被下面的 skip 规则整块丢掉),
+  // 这里保留是为了让还没被认领的形态到得了客户端。banner 侧在 sanitizeTextForBanner 剥干净。
   cleaned = stripLegacyTrans(cleaned);
   cleaned = stripMarkdownDividers(cleaned);
 
@@ -561,6 +589,7 @@ function sanitizeTextForBanner(text: string): string {
   result = replaceTranslationForBanner(result);  // <翻译>...</翻译> → 原文
   result = replaceVoiceForBanner(result);        // <语音>...</语音> → 内部文字
   result = stripQuotes(result);                  // 引用 / 回复 → ''
+  result = stripSystemLogLeak(result);           // [系统: 你向xx转账 1999] 等历史日志 leak → ''
   result = replaceEmojiReverseTag(result);       // [xxx 发送了表情包: yyy] → [表情：yyy]
   result = replaceMarkdownLinks(result);         // [text](url) → [链接：text]
   result = stripMarkdownHeaders(result);

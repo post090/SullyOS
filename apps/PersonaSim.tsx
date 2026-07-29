@@ -223,7 +223,8 @@ const PersonaSim: React.FC<Props> = ({ targetChar, onExit, openLifeLog, sim, onS
                 dispatchBuffs ? { detail: { charId: targetChar.id, buffs: dispatchBuffs, buffInjection: '' } }
                               : { detail: { charId: targetChar.id } }));
         }
-    }, [script, mode, theme, beats.length, targetChar, updateCharacter]);
+        addToast('已存入生活记录', 'success');
+    }, [script, mode, theme, beats.length, targetChar, updateCharacter, addToast]);
 
     // ----- advance -----
     const advance = useCallback(() => {
@@ -240,12 +241,6 @@ const PersonaSim: React.FC<Props> = ({ targetChar, onExit, openLifeLog, sim, onS
             persist();
         }
     }, [idx, phase, beat, persist]);
-
-    // 中途退出（点「退出」/ 系统返回 / 切走 App）也要落库：组件卸载时补存这场演出。
-    // persist() 自带 savedRef + script 守卫——没开始播放或已存过都会自动跳过，不会误写。
-    const persistRef = useRef(persist);
-    persistRef.current = persist;
-    useEffect(() => () => { persistRef.current(); }, []);
 
     // ----- autoplay -----
     useEffect(() => {
@@ -942,11 +937,32 @@ const TopBar: React.FC<{ onBack: () => void; right?: React.ReactNode; title?: st
 // ============================================================
 //  LIFE LOG (生活记录) — sub-app
 // ============================================================
-export const LifeLog: React.FC<{ targetChar: CharacterProfile; onBack: () => void; onReplay?: (log: PhoneSimLog) => void }> = ({ targetChar, onBack, onReplay }) => {
+export const LifeLog: React.FC<{
+    targetChar: CharacterProfile;
+    onBack: () => void;
+    onReplay?: (log: PhoneSimLog) => void;
+    onRequestDelete?: (log: PhoneSimLog) => void;
+}> = ({ targetChar, onBack, onReplay, onRequestDelete }) => {
     const { addToast } = useOS();
     const logs = targetChar.phoneState?.simLogs || [];
     const [sent, setSent] = useState<Record<string, boolean>>({});
+    const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const fmt = (t: number) => new Date(t).toLocaleString('zh-CN', { month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+    const cancelLongPress = () => {
+        if (!longPressTimer.current) return;
+        clearTimeout(longPressTimer.current);
+        longPressTimer.current = null;
+    };
+    const startLongPress = (e: React.PointerEvent, log: PhoneSimLog) => {
+        if (!onRequestDelete || (e.target as HTMLElement).closest('button')) return;
+        cancelLongPress();
+        longPressTimer.current = setTimeout(() => {
+            longPressTimer.current = null;
+            onRequestDelete(log);
+        }, 520);
+    };
+    useEffect(() => () => cancelLongPress(), []);
 
     const sendLog = async (log: PhoneSimLog) => {
         if (sent[log.id]) return;
@@ -966,6 +982,7 @@ export const LifeLog: React.FC<{ targetChar: CharacterProfile; onBack: () => voi
             <TopBar onBack={onBack} title="生活记录" />
             <div className="px-6 pb-3 shrink-0">
                 <p className="text-[11px] text-white/40 leading-relaxed">那些你以 TA 的身份活过的片段。TA 不会记得，但你会。</p>
+                {logs.length > 0 && onRequestDelete && <p className="mt-1.5 text-[10px] text-white/25">长按记录可删除</p>}
             </div>
             <div className="flex-1 overflow-y-auto no-scrollbar px-5 pb-10 space-y-3">
                 {logs.length === 0 && (
@@ -975,7 +992,19 @@ export const LifeLog: React.FC<{ targetChar: CharacterProfile; onBack: () => voi
                     </div>
                 )}
                 {logs.map(log => (
-                    <div key={log.id} className="rounded-2xl p-4 bg-white/[0.035] border border-white/[0.06] animate-slide-up">
+                    <div key={log.id}
+                        onPointerDown={(e) => startLongPress(e, log)}
+                        onPointerUp={cancelLongPress}
+                        onPointerLeave={cancelLongPress}
+                        onPointerMove={cancelLongPress}
+                        onPointerCancel={cancelLongPress}
+                        onContextMenu={(e) => {
+                            if (!onRequestDelete || (e.target as HTMLElement).closest('button')) return;
+                            e.preventDefault();
+                            cancelLongPress();
+                            onRequestDelete(log);
+                        }}
+                        className="rounded-2xl p-4 bg-white/[0.035] border border-white/[0.06] animate-slide-up select-none">
                         <div className="flex items-center justify-between mb-1.5">
                             <span className="text-[9px] px-2 py-0.5 rounded-full tracking-wider" style={{ color: ACCENT, background: `${ACCENT}1f` }}>
                                 {log.mode === 'daily' ? '日常' : '事件'} · {log.theme}
