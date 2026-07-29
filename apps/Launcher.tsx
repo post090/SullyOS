@@ -84,7 +84,7 @@ const DesktopClock = React.memo(() => {
             {/* 主时钟 */}
             <div className="flex items-end gap-4">
                 <div className="relative">
-                    <div className={`${paper ? 'text-[clamp(4.5rem,15vw,5.65rem)] font-semibold tracking-[-0.055em] drop-shadow-[0_2px_0_rgba(255,255,255,0.34)]' : 'text-[clamp(5rem,16vw,6rem)] font-black tracking-tighter drop-shadow-2xl'} leading-[0.84]`}
+                    <div className={`${paper ? 'text-[clamp(4.5rem,15vw,5.65rem)] font-semibold tracking-[-0.055em] drop-shadow-[0_2px_0_rgba(255,255,255,0.34)]' : 'text-[clamp(5rem,16vw,6.2rem)] font-black tracking-tighter drop-shadow-2xl'} leading-[0.84]`}
                         style={{ fontFamily: paper ? `'Iowan Old Style', 'Baskerville', 'Times New Roman', serif` : `'Space Grotesk', 'SF Pro Display', sans-serif`, fontFeatureSettings: '"tnum"' }}>
                         <span>{virtualTime.hours.toString().padStart(2, '0')}</span>
                         <span className="opacity-35 font-thin mx-0.5 animate-pulse">:</span>
