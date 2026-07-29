@@ -15,6 +15,7 @@
 import { DB } from './db';
 import { JobNote, JobPosition, Message } from '../types';
 import { JobParseResult, JOB_COMMAND_GUIDE } from './jobHuntParser';
+import { redactPrivacy, codifyCompanies } from './privacyRedact';
 
 const STAGE_LABEL: Record<string, string> = {
     watching: '观望中', applied: '已投递', written: '笔试中', interview: '面试中', offer: 'Offer', rejected: '已结束',
@@ -24,6 +25,30 @@ const NOTE_KIND_LABEL: Record<string, string> = {
 };
 
 const genId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+/**
+ * JD 摘要（喂 LLM 专用）：用户粘贴的 JD 原文可能带邮箱/手机/真实公司名，
+ * 进 prompt 前先脱敏、再把真实公司名替换成岗位代号，最后截断、压成单行。
+ * hrName 不经过这里——它根本不进 prompt。
+ */
+export function jdDigestForPrompt(pos: JobPosition, allPositions: JobPosition[], maxLen = 200): string {
+    const raw = (pos.jd || '').trim();
+    if (!raw) return '';
+    let text = redactPrivacy(raw).text;
+    text = codifyCompanies(text, allPositions);
+    text = text.replace(/\s+/g, ' ').trim();
+    return text.length > maxLen ? `${text.slice(0, maxLen)}…` : text;
+}
+
+/** 岗位注入行（单聊 / 工作台两处共用，保证对齐）：代号·岗位·阶段·项目·下一步·JD 摘要 */
+export function buildPositionPromptLine(p: JobPosition, allPositions: JobPosition[]): string {
+    const parts = [`- ${p.code} · ${p.title} · ${STAGE_LABEL[p.stage] || p.stage}`];
+    if (p.projectName) parts.push(`项目：${p.projectName}`);
+    if (p.nextStep) parts.push(`下一步：${p.nextStep}`);
+    const jd = jdDigestForPrompt(p, allPositions);
+    if (jd) parts.push(`JD 摘要：${jd}`);
+    return parts.join(' · ');
+}
 
 /** 一张 job_card 消息的 metadata.jobCard 结构 */
 export interface JobCardPayload {
@@ -60,7 +85,7 @@ export async function buildJobHuntPromptBlock(): Promise<string> {
     if (active.length > 0) {
         lines.push('【在推进的岗位】');
         active.forEach(p => {
-            lines.push(`- ${p.code} · ${p.title} · ${STAGE_LABEL[p.stage] || p.stage}${p.nextStep ? ` · 下一步：${p.nextStep}` : ''}`);
+            lines.push(buildPositionPromptLine(p, positions));
         });
     } else {
         lines.push('【在推进的岗位】暂无建档岗位（用户聊到新投递时你可以用指令帮 ta 建卡）。');

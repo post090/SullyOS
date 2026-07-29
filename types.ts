@@ -2273,6 +2273,12 @@ export interface JobPosition {
     timeline: { ts: number; stage: JobStage; note?: string }[];
     /** 真实公司名 — 仅本地展示，任何 prompt / 导出给 LLM 的文本都不得包含此字段 */
     companyNameLocal?: string;
+    /** JD 正文 — 用户粘贴的原文可能含联系方式等，进 prompt 前必须截断 + 脱敏（jdDigestForPrompt） */
+    jd?: string;
+    /** HR 名 — 真实人名，仅本地展示，同 companyNameLocal 待遇，永不进任何 prompt */
+    hrName?: string;
+    /** 项目名/业务线 — 可进 prompt，面试出题与岗位分析素材 */
+    projectName?: string;
     charId: string;             // 负责该岗位的角色
     createdAt: number;
     updatedAt: number;

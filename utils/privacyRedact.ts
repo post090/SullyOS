@@ -20,6 +20,8 @@ interface RedactRule {
     label: string;
     re: RegExp;
     replacement: string;
+    /** 无 lookbehind 方案：组 1 = 前置字符（仅用于定位，不参与替换），组 2 = 真正要打码的主体 */
+    bodyGroup?: boolean;
 }
 
 // 注意：所有正则均不含换行字面量，纯单行匹配（跨行内容按行各自命中）。
@@ -32,19 +34,23 @@ const RULES: RedactRule[] = [
     },
     {
         label: '银行卡号',
-        // 13-19 位连续数字（先于手机号，避免长卡号被手机号规则截段）；容忍 4 位分组空格
-        re: /(?<!\d)(?:\d[ -]?){13,19}(?<!\s)(?!\d)/g,
+        // 13-19 位连续数字（先于手机号，避免长卡号被手机号规则截段）；容忍 4 位分组空格。
+        // 不用 lookbehind（旧 iOS Safari 不支持，模块加载即炸）：组 1 吃掉前置非数字，组 2 是卡号主体
+        re: /(^|\D)((?:\d[ -]?){12,18}\d)(?!\d)/g,
         replacement: '[银行卡已隐藏]',
+        bodyGroup: true,
     },
     {
         label: '手机号',
-        re: /(?<!\d)1[3-9]\d{9}(?!\d)/g,
+        re: /(^|\D)(1[3-9]\d{9})(?!\d)/g,
         replacement: '[手机号已隐藏]',
+        bodyGroup: true,
     },
     {
         label: '固定电话',
-        re: /(?<!\d)0\d{2,3}-\d{7,8}(?!\d)/g,
+        re: /(^|\D)(0\d{2,3}-\d{7,8})(?!\d)/g,
         replacement: '[电话已隐藏]',
+        bodyGroup: true,
     },
     {
         label: '邮箱',
@@ -70,7 +76,10 @@ export function redactPrivacy(raw: string, opts: { realNames?: string[] } = {}):
     const hits: RedactHit[] = [];
 
     for (const rule of RULES) {
-        const matches = text.match(rule.re);
+        // bodyGroup 规则只取主体组：前置定位字符不进替换集，split/join 语义与原 lookbehind 版一致
+        const matches = rule.bodyGroup
+            ? Array.from(text.matchAll(rule.re), mm => mm[2]).filter(Boolean)
+            : text.match(rule.re);
         if (matches && matches.length > 0) {
             // 银行卡规则会连带匹配纯空格分组，过滤掉数字不足 13 位的伪命中
             const real = rule.label === '银行卡号'
