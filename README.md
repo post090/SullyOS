@@ -11,7 +11,7 @@
 
 - **跟着原版走**：定期同步上游更新，原版有的我都留着，撞车时优先保原版体验。我只做加法，不拆原版的台。
 - **主打一个"活着"**：原版角色只在你打开网页时才醒着；这个版本打包成 APK 后，能在后台悄悄活着——该提醒的提醒、该主动找你的主动找你，不会你一锁屏它就集体昏迷。
-- APK 包需要你自己 build——本地 `npm run build` + Capacitor 打包（原版 README 下面有完整步骤），或者用仓库里的 GitHub Actions workflow（读 `build-apk.yml` 自己配）。
+- **APK 包依然需要你自己 build**——本地 `npm run build` + Capacitor 打包（原版 README 下面有完整步骤），或者用仓库里的 GitHub Actions workflow（读 `build-apk.yml` 自己配）。
 
 ## 装成 APK 之后，你能实际感觉到的变化
 
