@@ -39,6 +39,7 @@ import {
   NotePencil,
   Wallet,
   Lightbulb,
+  ReadCvLogo,
 } from '@phosphor-icons/react';
 
 // SVG 图标库 - Phosphor Icons
@@ -82,6 +83,7 @@ export const Icons: Record<string, React.FC<{ className?: string }>> = {
   Memo: ({ className }) => <NotePencil className={className} weight="regular" />,
   Wallet: ({ className }) => <Wallet className={className} weight="regular" />,
   SmartHome: ({ className }) => <Lightbulb className={className} weight="regular" />,
+  JobHunt: ({ className }) => <ReadCvLogo className={className} weight="regular" />,
 };
 
 export const INSTALLED_APPS: AppConfig[] = [
@@ -112,6 +114,7 @@ export const INSTALLED_APPS: AppConfig[] = [
   { id: AppID.Memo, name: '备忘录', icon: 'Memo', color: 'amber' },
     { id: AppID.Wallet, name: '钱包', icon: 'Wallet', color: 'violet' },
     { id: AppID.SmartHome, name: '栖居', icon: 'SmartHome', color: 'teal' },
+    { id: AppID.JobHunt, name: '上岸计划', icon: 'JobHunt', color: 'sky' },
   { id: AppID.FAQ, name: '使用帮助', icon: 'FAQ', color: 'indigo' },
   { id: AppID.Gallery, name: '相册', icon: 'Gallery', color: 'orange' },
   { id: AppID.XhsFreeRoam, name: '自由活动', icon: 'XhsFreeRoam', color: 'rose' },

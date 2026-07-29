@@ -12,6 +12,7 @@ import {
     WorldProfile, WorldEpisode,
     TaskV2,
     CharWalletProfile, WalletTransaction, CharHomeProfile,
+    JobSession, JobPosition, JobNote, JobResume,
 } from '../types';
 import { exportPostOfficeLocal, importPostOfficeLocal } from './vrWorld/postOffice';
 import { exportSignalLocal, importSignalLocal } from './vrWorld/signal';
@@ -26,7 +27,8 @@ const DB_NAME = 'AetherOS_Data';
 // 合并后统一推到 67——建表全部走幂等的 if(!contains)，任一侧的 v66 老库升级时都会补齐缺的那组表。
 // v68：character_groups 角色分组（神经链接"文件夹"，见 types.ts CharacterGroup）。
 // v69：资产系统三张表（char_wallets / wallet_transactions / char_homes，见 types.ts CharWalletProfile）。
-const DB_VERSION = 69;
+// v70：上岸计划四张表（job_sessions / job_positions / job_notes / job_resumes，见 types.ts JobSession）。
+const DB_VERSION = 70;
 
 const STORE_CHARACTERS = 'characters';
 const STORE_CHAR_GROUPS = 'character_groups'; // 角色分组定义（角色通过 groupId 指向；与群聊 groups 无关）
@@ -45,6 +47,10 @@ const STORE_TASKS_V2 = 'tasks_v2'; // 时光契约新任务模型（重复 / 一
 const STORE_CHAR_WALLETS = 'char_wallets'; // v69: 资产系统·钱包档案（keyPath=charId；'__user__' 为用户零钱档案）
 const STORE_WALLET_TX = 'wallet_transactions'; // v69: 资产系统·钱包流水（用户+角色共用，index charId）
 const STORE_CHAR_HOMES = 'char_homes'; // v69: 资产系统·智能家居档案（keyPath=charId）
+const STORE_JOB_SESSIONS = 'job_sessions';   // v70: 上岸计划·求职会话（keyPath=id）
+const STORE_JOB_POSITIONS = 'job_positions'; // v70: 上岸计划·岗位卡（keyPath=id；真实公司名只存 companyNameLocal，永不进 prompt）
+const STORE_JOB_NOTES = 'job_notes';         // v70: 上岸计划·笔记本（keyPath=id）
+const STORE_JOB_RESUMES = 'job_resumes';     // v70: 上岸计划·简历（keyPath=id，只存脱敏后文本）
 const STORE_ANNIVERSARIES = 'anniversaries';
 const STORE_ROOM_TODOS = 'room_todos'; 
 const STORE_ROOM_NOTES = 'room_notes'; 
@@ -277,6 +283,12 @@ export const openDB = (): Promise<IDBDatabase> => {
           const wtxStore = db.createObjectStore(STORE_WALLET_TX, { keyPath: 'id' });
           wtxStore.createIndex('charId', 'charId', { unique: false });
       }
+
+      // v70: 上岸计划（求职工作台）
+      createStore(STORE_JOB_SESSIONS, { keyPath: 'id' });
+      createStore(STORE_JOB_POSITIONS, { keyPath: 'id' });
+      createStore(STORE_JOB_NOTES, { keyPath: 'id' });
+      createStore(STORE_JOB_RESUMES, { keyPath: 'id' });
 
       if (!db.objectStoreNames.contains(STORE_ROOM_TODOS)) {
           db.createObjectStore(STORE_ROOM_TODOS, { keyPath: 'id' });
@@ -1602,6 +1614,92 @@ export const DB = {
       db.transaction(STORE_CHAR_HOMES, 'readwrite').objectStore(STORE_CHAR_HOMES).delete(charId);
   },
 
+  // --- 上岸计划（求职工作台）---
+
+  /** 全部会话，最近更新在前 */
+  getJobSessions: async (): Promise<JobSession[]> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_JOB_SESSIONS)) return [];
+      return new Promise((resolve, reject) => {
+          const req = db.transaction(STORE_JOB_SESSIONS, 'readonly').objectStore(STORE_JOB_SESSIONS).getAll();
+          req.onsuccess = () => resolve((req.result || []).sort((a: JobSession, b: JobSession) => b.updatedAt - a.updatedAt));
+          req.onerror = () => reject(req.error);
+      });
+  },
+
+  saveJobSession: async (session: JobSession): Promise<void> => {
+      const db = await openDB();
+      db.transaction(STORE_JOB_SESSIONS, 'readwrite').objectStore(STORE_JOB_SESSIONS).put(session);
+  },
+
+  deleteJobSession: async (id: string): Promise<void> => {
+      const db = await openDB();
+      db.transaction(STORE_JOB_SESSIONS, 'readwrite').objectStore(STORE_JOB_SESSIONS).delete(id);
+  },
+
+  /** 全部岗位卡，最近更新在前 */
+  getJobPositions: async (): Promise<JobPosition[]> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_JOB_POSITIONS)) return [];
+      return new Promise((resolve, reject) => {
+          const req = db.transaction(STORE_JOB_POSITIONS, 'readonly').objectStore(STORE_JOB_POSITIONS).getAll();
+          req.onsuccess = () => resolve((req.result || []).sort((a: JobPosition, b: JobPosition) => b.updatedAt - a.updatedAt));
+          req.onerror = () => reject(req.error);
+      });
+  },
+
+  saveJobPosition: async (position: JobPosition): Promise<void> => {
+      const db = await openDB();
+      db.transaction(STORE_JOB_POSITIONS, 'readwrite').objectStore(STORE_JOB_POSITIONS).put(position);
+  },
+
+  deleteJobPosition: async (id: string): Promise<void> => {
+      const db = await openDB();
+      db.transaction(STORE_JOB_POSITIONS, 'readwrite').objectStore(STORE_JOB_POSITIONS).delete(id);
+  },
+
+  /** 全部笔记，新的在前 */
+  getJobNotes: async (): Promise<JobNote[]> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_JOB_NOTES)) return [];
+      return new Promise((resolve, reject) => {
+          const req = db.transaction(STORE_JOB_NOTES, 'readonly').objectStore(STORE_JOB_NOTES).getAll();
+          req.onsuccess = () => resolve((req.result || []).sort((a: JobNote, b: JobNote) => b.createdAt - a.createdAt));
+          req.onerror = () => reject(req.error);
+      });
+  },
+
+  saveJobNote: async (note: JobNote): Promise<void> => {
+      const db = await openDB();
+      db.transaction(STORE_JOB_NOTES, 'readwrite').objectStore(STORE_JOB_NOTES).put(note);
+  },
+
+  deleteJobNote: async (id: string): Promise<void> => {
+      const db = await openDB();
+      db.transaction(STORE_JOB_NOTES, 'readwrite').objectStore(STORE_JOB_NOTES).delete(id);
+  },
+
+  /** 全部简历（已脱敏），新的在前 */
+  getJobResumes: async (): Promise<JobResume[]> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_JOB_RESUMES)) return [];
+      return new Promise((resolve, reject) => {
+          const req = db.transaction(STORE_JOB_RESUMES, 'readonly').objectStore(STORE_JOB_RESUMES).getAll();
+          req.onsuccess = () => resolve((req.result || []).sort((a: JobResume, b: JobResume) => b.createdAt - a.createdAt));
+          req.onerror = () => reject(req.error);
+      });
+  },
+
+  saveJobResume: async (resume: JobResume): Promise<void> => {
+      const db = await openDB();
+      db.transaction(STORE_JOB_RESUMES, 'readwrite').objectStore(STORE_JOB_RESUMES).put(resume);
+  },
+
+  deleteJobResume: async (id: string): Promise<void> => {
+      const db = await openDB();
+      db.transaction(STORE_JOB_RESUMES, 'readwrite').objectStore(STORE_JOB_RESUMES).delete(id);
+  },
+
   /**
    * 老任务（STORE_TASKS）→ 新任务（STORE_TASKS_V2）一次性迁移。
    * 规则：
@@ -2787,7 +2885,7 @@ export const DB = {
           });
       };
 
-      const [characters, characterGroups, messages, themes, emojis, emojiCategories, assets, galleryImages, userProfiles, diaries, tasks, anniversaries, roomTodos, roomNotes, groups, journalStickers, socialPosts, courses, games, worldbooks, novels, bankTx, bankData, xhsActivities, xhsStockImages, songs, quizzes, guidebookSessions, scheduledMessages, lifeSimStates, handbooks, trackers, trackerEntries, hotNewsSnapshots, vrNovels, vrAnnotations, customCreatorParts, vrMusic, vrGuestbook, vrScripts, vrStagedPlays, vrPresets, vrLetters, vrSettings, worlds, worldEpisodes, lifeRecords, medPlans, lifeRecordSettings, charWallets, walletTx, charHomes] = await Promise.all([
+      const [characters, characterGroups, messages, themes, emojis, emojiCategories, assets, galleryImages, userProfiles, diaries, tasks, anniversaries, roomTodos, roomNotes, groups, journalStickers, socialPosts, courses, games, worldbooks, novels, bankTx, bankData, xhsActivities, xhsStockImages, songs, quizzes, guidebookSessions, scheduledMessages, lifeSimStates, handbooks, trackers, trackerEntries, hotNewsSnapshots, vrNovels, vrAnnotations, customCreatorParts, vrMusic, vrGuestbook, vrScripts, vrStagedPlays, vrPresets, vrLetters, vrSettings, worlds, worldEpisodes, lifeRecords, medPlans, lifeRecordSettings, charWallets, walletTx, charHomes, jobSessions, jobPositions, jobNotes, jobResumes] = await Promise.all([
           getAllFromStore(STORE_CHARACTERS),
           getAllFromStore(STORE_CHAR_GROUPS),
           getAllFromStore(STORE_MESSAGES),
@@ -2840,6 +2938,10 @@ export const DB = {
           getAllFromStore(STORE_CHAR_WALLETS),
           getAllFromStore(STORE_WALLET_TX),
           getAllFromStore(STORE_CHAR_HOMES),
+          getAllFromStore(STORE_JOB_SESSIONS),
+          getAllFromStore(STORE_JOB_POSITIONS),
+          getAllFromStore(STORE_JOB_NOTES),
+          getAllFromStore(STORE_JOB_RESUMES),
       ]);
 
       const userProfile = userProfiles.length > 0 ? {
@@ -2859,6 +2961,10 @@ export const DB = {
           charWallets,
           walletTransactions: walletTx,
           charHomes,
+          jobSessions,
+          jobPositions,
+          jobNotes,
+          jobResumes,
           xhsActivities,
           xhsStockImages,
           songs,
@@ -2916,6 +3022,7 @@ export const DB = {
           STORE_ASSETS, STORE_GALLERY, STORE_USER, STORE_DIARIES,
           STORE_TASKS, STORE_TASKS_V2, STORE_ANNIVERSARIES, STORE_ROOM_TODOS, STORE_ROOM_NOTES,
           STORE_CHAR_WALLETS, STORE_WALLET_TX, STORE_CHAR_HOMES,
+          STORE_JOB_SESSIONS, STORE_JOB_POSITIONS, STORE_JOB_NOTES, STORE_JOB_RESUMES,
           STORE_GROUPS, STORE_JOURNAL_STICKERS, STORE_SOCIAL_POSTS, STORE_COURSES, STORE_GAMES, STORE_WORLDBOOKS, STORE_NOVELS, STORE_SONGS,
           STORE_BANK_TX, STORE_BANK_DATA,
           STORE_XHS_ACTIVITIES, STORE_XHS_STOCK,
@@ -3001,6 +3108,10 @@ export const DB = {
           data.charWallets !== undefined,
           data.walletTransactions !== undefined,
           data.charHomes !== undefined,
+                    data.jobSessions !== undefined,
+                    data.jobPositions !== undefined,
+                    data.jobNotes !== undefined,
+                    data.jobResumes !== undefined,
           data.xhsActivities !== undefined,
           data.xhsStockImages !== undefined,
           data.memoryNodes !== undefined,
@@ -3396,6 +3507,22 @@ export const DB = {
           await clearAndAdd(STORE_CHAR_HOMES, data.charHomes, '智能家居档案', false);
           data.charHomes = undefined as any;
       }, data.charHomes?.length || 0);
+      await runSection('求职会话', data.jobSessions !== undefined, async () => {
+          await clearAndAdd(STORE_JOB_SESSIONS, data.jobSessions, '求职会话', false);
+          data.jobSessions = undefined as any;
+      }, data.jobSessions?.length || 0);
+      await runSection('求职岗位卡', data.jobPositions !== undefined, async () => {
+          await clearAndAdd(STORE_JOB_POSITIONS, data.jobPositions, '求职岗位卡', false);
+          data.jobPositions = undefined as any;
+      }, data.jobPositions?.length || 0);
+      await runSection('求职笔记', data.jobNotes !== undefined, async () => {
+          await clearAndAdd(STORE_JOB_NOTES, data.jobNotes, '求职笔记', false);
+          data.jobNotes = undefined as any;
+      }, data.jobNotes?.length || 0);
+      await runSection('求职简历', data.jobResumes !== undefined, async () => {
+          await clearAndAdd(STORE_JOB_RESUMES, data.jobResumes, '求职简历', false);
+          data.jobResumes = undefined as any;
+      }, data.jobResumes?.length || 0);
       await runSection('小红书活动', data.xhsActivities !== undefined, async () => {
           await clearAndAdd(STORE_XHS_ACTIVITIES, data.xhsActivities, '小红书活动', false);
           data.xhsActivities = undefined as any;

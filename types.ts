@@ -41,6 +41,7 @@ export enum AppID {
   WorldHome = 'world_home', // 家园 — 同世界观多角色共同生活的大世界（观测驱动演绎，每角色独立 LLM 调用 + NPC 世界引擎）
   Wallet = 'wallet', // 钱包 — 角色资产系统（账户/房车/贷款/小物件/流水）+ 用户零钱；转账真扣钱
   SmartHome = 'smart_home', // 栖居 — 角色住所面板（房间/物品/库存档位/保质期钩子），世界观内解释为"她家装了统计 App 且共享了权限"。AppID 字符串保持 smart_home 不动：桌面布局/预加载等存量数据引用它
+  JobHunt = 'job_hunt', // 上岸计划 — 角色辅助求职工作台（岗位进展/模拟面试/简历建议沉淀成笔记，公司代号制 + 本地脱敏两道隐私闸）
 }
 
 export interface SystemLog {
@@ -2206,6 +2207,78 @@ export interface CharHomeProfile {
 }
 // ---------------------------------
 
+// --- JOB HUNT (上岸计划 · 角色辅助求职) ---
+
+/** 会话消息 — 不复用单聊 Message：文档流渲染（角色=整块 markdown，用户=引用条），不分泡 */
+export interface JobChatMessage {
+    role: 'user' | 'char';
+    content: string;
+    ts: number;
+    /** TTS 缓存 key（模拟面试读题/回放用）；有值表示这条产生过语音，可从 ttsCache 复取 */
+    voiceKey?: string;
+}
+
+/** 求职会话 — 自由咨询 / 围绕某岗位 / 模拟面试 */
+export interface JobSession {
+    id: string;                 // keyPath
+    charId: string;
+    topic: 'free' | 'position' | 'interview';
+    positionId?: string;        // topic=position/interview 时关联岗位卡
+    title: string;
+    messages: JobChatMessage[];
+    /** 模拟面试进度（仅 topic=interview）：题目列表与当前题号 */
+    interview?: {
+        questions: string[];
+        currentIndex: number;
+        finished: boolean;
+    };
+    /** 已喂入记忆宫殿的消息数（增量导入游标，避免重复入库） */
+    memorySyncedCount?: number;
+    createdAt: number;
+    updatedAt: number;
+}
+
+export type JobStage = 'applied' | 'written' | 'interview' | 'offer' | 'rejected';
+
+/** 岗位卡 — 公司一律用代号（A厂/B司）；真实公司名只存 companyNameLocal，永不进任何 prompt / 记忆宫殿 */
+export interface JobPosition {
+    id: string;                 // keyPath
+    code: string;               // 代号，如 "A厂"
+    title: string;              // 岗位名，如 "前端开发"
+    stage: JobStage;
+    nextStep?: string;          // 下一步行动，如 "周四二面"
+    timeline: { ts: number; stage: JobStage; note?: string }[];
+    /** 真实公司名 — 仅本地展示，任何 prompt / 导出给 LLM 的文本都不得包含此字段 */
+    companyNameLocal?: string;
+    charId: string;             // 负责该岗位的角色
+    createdAt: number;
+    updatedAt: number;
+}
+
+export type JobNoteKind = 'eval' | 'resume_advice' | 'analysis' | 'note';
+
+/** 笔记本条目 — 角色帮你记的东西（面试评价/简历建议/岗位分析/随手记）集中一处 */
+export interface JobNote {
+    id: string;                 // keyPath
+    kind: JobNoteKind;
+    title: string;
+    content: string;            // markdown
+    positionId?: string;
+    sessionId?: string;
+    charId: string;
+    createdAt: number;
+}
+
+/** 简历 — 只存脱敏后的文本（导入时本地打码，预览确认后才允许发 LLM） */
+export interface JobResume {
+    id: string;                 // keyPath
+    name: string;               // 文件名/自定义名
+    rawText: string;            // 脱敏后的纯文本
+    sourceFormat: 'pdf' | 'docx' | 'txt' | 'paste';
+    createdAt: number;
+}
+// ---------------------------------
+
 // --- CHAR MUSIC PROFILE (网易云风格 · 角色的音乐人格) ---
 
 /** 角色本地歌单里的轻量歌曲快照 — 字段与 MusicContext 的 Song 对齐（无运行时 url） */
@@ -3542,6 +3615,12 @@ export interface FullBackupData {
     charWallets?: CharWalletProfile[];
     walletTransactions?: WalletTransaction[];
     charHomes?: CharHomeProfile[];
+
+    // 上岸计划（求职工作台）
+    jobSessions?: JobSession[];
+    jobPositions?: JobPosition[];
+    jobNotes?: JobNote[];
+    jobResumes?: JobResume[];
 
     socialAppData?: {
         charHandles?: Record<string, SubAccount[]>;

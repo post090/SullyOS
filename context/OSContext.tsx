@@ -3742,7 +3742,11 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               'worlds', 'world_episodes',
               // 生活记录（档案 App：生理期/药盒/锻炼 + 药盒计划 + 设置；记账走 bank_transactions）
               // 导入端 importFullData 已支持恢复，这里必须同步登记，否则备份不含生活记录。
-              'life_records', 'med_plans', 'life_record_settings'
+              'life_records', 'med_plans', 'life_record_settings',
+              // v69 资产系统（钱包/智能家居）——建表时漏登记，导致备份不含钱包数据，这里补齐
+              'char_wallets', 'wallet_transactions', 'char_homes',
+              // v70 上岸计划（求职工作台）：会话/岗位卡/笔记/简历（已脱敏）
+              'job_sessions', 'job_positions', 'job_notes', 'job_resumes'
           ];
 
           if (mode === 'full') {

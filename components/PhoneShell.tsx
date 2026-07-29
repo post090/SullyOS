@@ -89,6 +89,7 @@ const HotNewsApp = lazyApp(() => import('../apps/HotNewsApp'));
 const MemoApp = lazyApp(() => import('../apps/MemoApp'));
 const WalletApp = lazyApp(() => import('../apps/WalletApp'));
 const SmartHomeApp = lazyApp(() => import('../apps/SmartHomeApp'));
+const JobHuntApp = lazyApp(() => import('../apps/JobHuntApp'));
 const VRWorldApp = lazyApp(() => import('../apps/VRWorldApp'));
 const WorldHomeApp = lazyApp(() => import('../apps/WorldHomeApp'));
 const CharCreatorDevApp = lazyApp(() => import('../apps/CharCreatorDevApp'));
@@ -101,7 +102,7 @@ const APP_PRELOAD_ORDER: PreloadableLazy[] = [
   StudyApp, GameApp, NovelApp, BankApp, WorldbookApp, MemoryPalaceApp, HandbookApp,
   VRWorldApp, WorldHomeApp, LifeSimApp, SongwritingApp, GuidebookApp, FAQApp, HotNewsApp,
   XhsStockApp, XhsFreeRoamApp, BrowserApp, VoiceDesignerApp, ThemeMaker, QQBridge,
-  SpecialMomentsApp, CharCreatorDevApp, MemoApp, WalletApp, SmartHomeApp,
+  SpecialMomentsApp, CharCreatorDevApp, MemoApp, WalletApp, SmartHomeApp, JobHuntApp,
 ];
 
 const ROLE_ENTRY_PRELOAD_ORDER: PreloadableLazy[] = [
@@ -126,7 +127,7 @@ const APP_BY_ID: Partial<Record<AppID, PreloadableLazy>> = {
   [AppID.Handbook]: HandbookApp, [AppID.QQBridge]: QQBridge, [AppID.HotNews]: HotNewsApp,
   [AppID.VRWorld]: VRWorldApp, [AppID.CharCreatorDev]: CharCreatorDevApp, [AppID.SpecialMoments]: SpecialMomentsApp,
   [AppID.WorldHome]: WorldHomeApp, [AppID.Memo]: MemoApp,
-  [AppID.Wallet]: WalletApp, [AppID.SmartHome]: SmartHomeApp,
+  [AppID.Wallet]: WalletApp, [AppID.SmartHome]: SmartHomeApp, [AppID.JobHunt]: JobHuntApp,
 };
 // 注入负载预热器：AppIcon 的 pointerdown → preloadApp(id) → 这里 warmLazy，连 React.lazy 负载一起解析。
 setAppPayloadWarmer((id: AppID) => { const c = APP_BY_ID[id]; if (c) warmLazy(c); });
@@ -840,6 +841,7 @@ const PhoneShell: React.FC = () => {
       case AppID.Memo: return <MemoApp />;
       case AppID.Wallet: return <WalletApp />;
       case AppID.SmartHome: return <SmartHomeApp />;
+      case AppID.JobHunt: return <JobHuntApp />;
       case AppID.SpecialMoments: return <SpecialMomentsApp />;
       case AppID.VRWorld: return <VRWorldApp />;
       case AppID.WorldHome: return <WorldHomeApp />;
