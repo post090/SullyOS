@@ -544,7 +544,11 @@ export async function safeFetchJson(
             // AbortError（含 timeout）：是否重试看上层策略，先按可重试处理（网络层面）
             const isAbort = e?.name === 'AbortError' || /aborted|timeout/i.test(e?.message || '');
 
-            const isNativeTransportError = /Native job|NativeRuntime|native.*timeout|Connection refused|Unable to resolve host|timeout/i.test(e?.message || '');
+            // 原生传输层错误也可重试。前半段是任务/解析类；后半段是「切后台再回来」最常见的
+            // 尸体连接系错误——okhttp/系统栈复用了一条服务器早已掐掉的 keep-alive 连接，
+            // 第一枪必炸（unexpected end of stream / SSL handshake / connection reset），
+            // 换条新连接重发几乎必成。不重试的话会直接晋级成 [回复处理失败] 弹给用户。
+            const isNativeTransportError = /Native job|NativeRuntime|native.*timeout|Connection refused|Unable to resolve host|timeout|unexpected end of stream|connection reset|connection abort|broken pipe|ssl|handshake|econnreset|epipe|stream.*reset/i.test(e?.message || '');
 
             // Network errors (fetch itself failed) are retryable
             if ((e?.name === 'TypeError' || isAbort || isNativeTransportError) && attempt < maxRetries) {

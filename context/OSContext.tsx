@@ -1411,14 +1411,19 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               if (urlStr.includes('/chat/completions')) {
                   recordApiCall({ url: urlStr, body: (sendArgs[1] as any)?.body, ok: false, meta: (config as any)?.__sullyMeta || ambientMetaAtStart, durationMs: Date.now() - fetchStartedAt });
               }
-              setSystemLogs(prev => [{
-                  id: `log-${Date.now()}`,
-                  timestamp: Date.now(),
-                  type: 'network',
-                  source: 'Network',
-                  message: err.message || 'Fetch Failed',
-                  detail: `URL: ${urlStr}`
-              }, ...prev.slice(0, 49)]);
+              // systemLogs 只记 API 请求（chat/completions、models）的网络失败。
+              // 诗歌邮局/天气/新闻这类后台轮询本来就有各自的降级路径，弱网/切后台时
+              // 每失败一次刷一条 "Failed to fetch" 红字只会吓用户，不提供任何行动价值。
+              if (urlStr.includes('/chat/completions') || urlStr.includes('/models')) {
+                  setSystemLogs(prev => [{
+                      id: `log-${Date.now()}`,
+                      timestamp: Date.now(),
+                      type: 'network',
+                      source: 'Network',
+                      message: err.message || 'Fetch Failed',
+                      detail: `URL: ${urlStr}`
+                  }, ...prev.slice(0, 49)]);
+              }
               throw err;
           }
       };

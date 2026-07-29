@@ -163,11 +163,25 @@ const WMO_WEATHER_CODES: Record<number, { description: string; icon: string }> =
 };
 
 /**
+ * 天气/地理编码专用的带超时 fetch：这些请求挂在聊天发送的 buildSystemPromptParts 链路上，
+ * 没超时的话弱网下会拖住整轮发送。10 秒拿不到就放弃（有陈旧缓存兜底，见 fetchWeather）。
+ */
+const fetchWithTimeout = async (url: string, timeoutMs = 10_000): Promise<Response> => {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(new Error(`weather fetch timeout ${timeoutMs}ms`)), timeoutMs);
+    try {
+        return await fetch(url, { signal: ac.signal });
+    } finally {
+        clearTimeout(timer);
+    }
+};
+
+/**
  * OpenWeatherMap 源（需要 API Key）。失败时抛错，由调用方决定是否回落。
  */
 export const fetchOwmWeather = async (city: string, apiKey: string): Promise<WeatherData> => {
     const url = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(city)}&appid=${apiKey}&units=metric&lang=zh_cn`;
-    const response = await fetch(url);
+    const response = await fetchWithTimeout(url);
     if (!response.ok) {
         throw new Error(`OpenWeatherMap HTTP ${response.status}`);
     }
@@ -189,7 +203,7 @@ export const fetchOpenMeteoWeather = async (city: string): Promise<WeatherData> 
     let geo = geocodeCache.get(city);
     if (!geo) {
         const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=zh&format=json`;
-        const geoRes = await fetch(geoUrl);
+        const geoRes = await fetchWithTimeout(geoUrl);
         if (!geoRes.ok) {
             throw new Error(`Open-Meteo geocoding HTTP ${geoRes.status}`);
         }
@@ -203,7 +217,7 @@ export const fetchOpenMeteoWeather = async (city: string): Promise<WeatherData> 
     }
 
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${geo.latitude}&longitude=${geo.longitude}&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code&timezone=auto`;
-    const response = await fetch(url);
+    const response = await fetchWithTimeout(url);
     if (!response.ok) {
         throw new Error(`Open-Meteo HTTP ${response.status}`);
     }
@@ -388,7 +402,14 @@ export const RealtimeContextManager = {
             try {
                 weather = await fetchOpenMeteoWeather(city);
             } catch (e) {
-                console.error('Failed to fetch weather:', e);
+                // 双源都失败（弱网/切后台的瞬断最常见）：有陈旧缓存就先用陈旧的——
+                // 一小时前的天气比没有天气强得多。console.warn 而非 error：
+                // 全局拦截器会把 console.error 抓进 systemLogs 红字吓用户，这属于预期内降级。
+                if (cached) {
+                    console.warn('Weather fetch failed, serving stale cache:', e);
+                    return cached.data;
+                }
+                console.warn('Failed to fetch weather (no cache to fall back):', e);
                 return null;
             }
         }

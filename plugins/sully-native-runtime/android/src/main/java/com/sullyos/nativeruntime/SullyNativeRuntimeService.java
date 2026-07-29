@@ -637,7 +637,7 @@ public class SullyNativeRuntimeService extends Service {
             updateJobStatus(job, "running", null);
             writeJob(this, jobId, job);
 
-            HttpResult result = executeRequest(jobId, request, job.optInt("timeoutMs", 120000));
+            HttpResult result = executeRequestWithRetry(jobId, request, job.optInt("timeoutMs", 120000));
             if (CANCELLED.contains(jobId)) {
                 markCancelled(this, jobId);
                 return;
@@ -671,6 +671,42 @@ public class SullyNativeRuntimeService extends Service {
             restoreMusicForegroundIfIdle();
             maybeStop();
         }
+    }
+
+    /**
+     * executeRequest + 瞬时传输错误自动重试（最多 2 次补枪，间隔 2s）。
+     * 背景：app 切后台再回来时，系统 HTTP 栈可能复用一条服务器已掐掉的 keep-alive 连接，
+     * 第一枪必炸 "unexpected end of stream" / SSL handshake / connection reset——
+     * 换条新连接几乎必成。后台 job 跑的时候 WebView 已冻结，JS 层的重试不在场，
+     * 不在这里补枪的话 job 直接落盘 failed，用户切回前台就看到 [回复处理失败]。
+     */
+    private HttpResult executeRequestWithRetry(String jobId, JSONObject request, int timeoutMs) throws Exception {
+        Exception last = null;
+        for (int attempt = 0; attempt <= 2; attempt++) {
+            if (CANCELLED.contains(jobId)) break;
+            try {
+                return executeRequest(jobId, request, timeoutMs);
+            } catch (Exception e) {
+                last = e;
+                String msg = e.getMessage() == null ? String.valueOf(e) : e.getMessage();
+                String lower = msg.toLowerCase();
+                boolean transient_ = lower.contains("unexpected end of stream")
+                        || lower.contains("connection reset")
+                        || lower.contains("connection abort")
+                        || lower.contains("broken pipe")
+                        || lower.contains("ssl")
+                        || lower.contains("handshake")
+                        || lower.contains("econnreset")
+                        || lower.contains("failed to connect")
+                        || lower.contains("unable to resolve host")
+                        || e instanceof java.net.SocketException
+                        || e instanceof java.net.SocketTimeoutException
+                        || e instanceof javax.net.ssl.SSLException;
+                if (!transient_ || attempt >= 2) throw e;
+                Thread.sleep(2000L * (attempt + 1));
+            }
+        }
+        throw last == null ? new IllegalStateException("request cancelled") : last;
     }
 
     private HttpResult executeRequest(String jobId, JSONObject request, int timeoutMs) throws Exception {
