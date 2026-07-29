@@ -20,7 +20,13 @@ import { startStt, isSttSupported, SttSession, SttProviderConfig } from '../util
 import {
     ReadCvLogo, PaperPlaneTilt, Microphone, Plus, CaretLeft, Notebook, Briefcase,
     ChatsCircle, FileText, Trash, SpeakerHigh, StopCircle, X, CircleNotch, UploadSimple,
+    GearSix, Plugs,
 } from '@phosphor-icons/react';
+import { RealtimeContextManager, defaultRealtimeConfig } from '../utils/realtimeContext';
+import { getDailyScheduleForChar } from '../utils/dailySchedule';
+import { isScheduleFeatureOn } from '../utils/scheduleGenerator';
+import { resolveCharTimeZone, nowInTimeZone } from '../utils/timezone';
+import CharApiHubModal from '../components/chat/CharApiHubModal';
 
 // ─── CDN 动态加载（照 StudyApp 先例，不进 bundle）─────────────────
 
@@ -168,6 +174,21 @@ const NOTE_KIND_STYLE: Record<JobNoteKind, string> = {
 };
 const INTERVIEW_QUESTION_COUNT = 5;
 
+// ─── 工作台本地设置（localStorage，全局生效不分角色）───
+interface JobHuntSettings {
+    zoom: number;                              // 文档流缩放挡位（0.9/1/1.1/1.2）
+    typewriter: boolean;                       // 打字机效果
+    autoSpeak: 'off' | 'interview' | 'all';    // 回复自动朗读范围
+    autoMemorySync: boolean;                   // 离开会话自动沉淀记忆
+    syncThreshold: number;                     // 自动沉淀的新消息条数阈值
+}
+const JH_SETTINGS_KEY = 'os_jobhunt_settings';
+const DEFAULT_JH_SETTINGS: JobHuntSettings = { zoom: 1, typewriter: true, autoSpeak: 'interview', autoMemorySync: true, syncThreshold: 6 };
+const loadJhSettings = (): JobHuntSettings => {
+    try { return { ...DEFAULT_JH_SETTINGS, ...JSON.parse(localStorage.getItem(JH_SETTINGS_KEY) || '{}') }; }
+    catch { return { ...DEFAULT_JH_SETTINGS }; }
+};
+
 const genId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
 type SttPhase = 'idle' | 'starting' | 'listening' | 'recognizing';
@@ -175,7 +196,7 @@ type SttPhase = 'idle' | 'starting' | 'listening' | 'recognizing';
 // ─── 主组件 ─────────────────────────────────────────────
 
 const JobHuntApp: React.FC = () => {
-    const { closeApp, characters, activeCharacterId, apiConfig, addToast, userProfile, memoryPalaceConfig } = useOS();
+    const { closeApp, characters, activeCharacterId, apiConfig, addToast, userProfile, memoryPalaceConfig, realtimeConfig, updateCharacter } = useOS();
 
     // 数据
     const [sessions, setSessions] = useState<JobSession[]>([]);
@@ -230,6 +251,21 @@ const JobHuntApp: React.FC = () => {
     // 记忆沉淀
     const [memorySyncBusy, setMemorySyncBusy] = useState(false);
 
+    // 工作台设置 / 角色级 API 配置
+    const [jhSettings, setJhSettings] = useState<JobHuntSettings>(loadJhSettings);
+    const [showJhSettings, setShowJhSettings] = useState(false);
+    const [showApiHub, setShowApiHub] = useState(false);
+    const patchJhSettings = useCallback((p: Partial<JobHuntSettings>) => {
+        setJhSettings(prev => {
+            const next = { ...prev, ...p };
+            try { localStorage.setItem(JH_SETTINGS_KEY, JSON.stringify(next)); } catch {}
+            return next;
+        });
+    }, []);
+    // latest-ref：sendMessage/bootstrapInterview 定义在 playMessageVoice 之前，
+    // 自动朗读经 ref 调用，避开 const TDZ 与陈旧闭包
+    const playVoiceRef = useRef<((msg: JobChatMessage, idx: number, opts?: { session?: JobSession; char?: CharacterProfile }) => void) | null>(null);
+
     const selectedChar = useMemo<CharacterProfile | null>(
         () => characters.find(c => c.id === selectedCharId) || characters[0] || null,
         [characters, selectedCharId],
@@ -249,6 +285,8 @@ const JobHuntApp: React.FC = () => {
 
     // 返回键：弹窗 → 聊天视图 → 关 App
     useBackGuard([
+        [showJhSettings, () => setShowJhSettings(false)],
+        [showApiHub, () => setShowApiHub(false)],
         [!!resumePreview, () => setResumePreview(null)],
         [showPasteImport, () => setShowPasteImport(false)],
         [!!viewingNote, () => setViewingNote(null)],
@@ -339,9 +377,41 @@ const JobHuntApp: React.FC = () => {
         }
     }, [reloadAll, addToast]);
 
-    // ─── system prompt 组装 ───
-    const buildSystemPrompt = useCallback((char: CharacterProfile, session: JobSession): string => {
-        let ctx = ContextBuilder.buildCoreContext(char, userProfile, true);
+    // ─── system prompt 组装（认知层对齐单聊：宫殿召回/世界书激活/日程/实时世界/钢印）───
+    const buildSystemPrompt = useCallback(async (char: CharacterProfile, session: JobSession): Promise<string> => {
+        // 伪 Message：给宫殿召回和世界书关键词扫描用（结构上满足 id/role/content/timestamp）
+        const pseudoMsgs: any[] = session.messages.slice(-60).map((m, i) => ({
+            id: i + 1, charId: char.id, role: m.role === 'user' ? 'user' : 'assistant',
+            content: m.content, type: 'text', timestamp: m.ts,
+        }));
+        // 记忆宫殿：与单聊同款，发送前现场召回（结果挂 char.memoryPalaceInjection，buildCoreContext 自动读）
+        try {
+            const { injectMemoryPalace } = await import('../utils/memoryPalace/pipeline');
+            await injectMemoryPalace(char, pseudoMsgs, undefined, userProfile?.name);
+        } catch (e) { console.warn('[JobHunt] 宫殿召回失败（非致命）', e); }
+
+        const lastMsg = session.messages[session.messages.length - 1];
+        let ctx = ContextBuilder.buildCoreContext(char, userProfile, true, undefined, undefined, {
+            lastInteractionTs: lastMsg?.ts,
+            userTimezone: userProfile?.timezone,
+            worldbookMessages: pseudoMsgs,
+        });
+
+        // 实时世界（天气/新闻/特殊日期）：与单聊同一份 realtimeConfig，开关跟随全局设置
+        const charTz = resolveCharTimeZone(char);
+        const rtCfg = realtimeConfig || defaultRealtimeConfig;
+        if (rtCfg.weatherEnabled || rtCfg.newsEnabled) {
+            try { ctx += `\n${await RealtimeContextManager.buildFullContext(rtCfg, charTz, char.regionConfig)}\n`; }
+            catch (e) { console.warn('[JobHunt] 实时上下文注入失败', e); }
+        }
+        // 日程 + 意识流：只读现成日程，不在求职 App 里触发生成
+        if (isScheduleFeatureOn(char)) {
+            try {
+                const schedule = await getDailyScheduleForChar(char);
+                const block = ContextBuilder.buildScheduleInjection(schedule, undefined, nowInTimeZone(charTz));
+                if (block) ctx += `\n### 你此刻的生活状态\n${block}`;
+            } catch (e) { console.warn('[JobHunt] 日程注入失败', e); }
+        }
         const posLines = positions
             .filter(p => p.stage !== 'rejected' || p.id === session.positionId)
             .map(p => `- ${p.code} · ${p.title} · ${STAGE_LABEL[p.stage]}${p.nextStep ? ` · 下一步：${p.nextStep}` : ''}`);
@@ -369,20 +439,31 @@ const JobHuntApp: React.FC = () => {
                 '- 不要一次抛出多道题。',
             ].join('\u000a');
         }
+        // recency 钢印（单聊同源的简版）：防止聊久了褪成没有名字的职业顾问
+        ctx += [
+            '',
+            '### 关于对方的表达（重要）',
+            `当 ${userProfile.name} 说话，先听，别急着分析或把 ta 的感受纠正成你觉得更合理的版本。求职期的焦虑和动摇都是真实的，ta 的反馈不是约束而是信任——让它真的改变你接下来怎么回。但听进去不等于磨平自己：你依然可以不同意、可以用你本来的方式回应。`,
+            '',
+            '### 最后，回到你自己',
+            `你就是 ${char.name}。建议要专业，但每一句话都该像从 ${char.name} 心里自然冒出来的——带着你的语气、你的节奏、你们的过去。不要变成一个没有名字的职业顾问。`,
+        ].join('\n');
         return ctx;
-    }, [userProfile, positions]);
+    }, [userProfile, positions, realtimeConfig]);
 
-    // ─── LLM 调用（resilientFetch：120s + 瞬断补枪）───
-    const callLLM = useCallback(async (systemPrompt: string, history: JobChatMessage[], extraUser?: string): Promise<string> => {
+    // ─── LLM 调用（resilientFetch：120s + 瞬断补枪；角色级 chatApiOverride 优先）───
+    const callLLM = useCallback(async (systemPrompt: string, history: JobChatMessage[], extraUser?: string, char?: CharacterProfile): Promise<string> => {
+        // 与单聊同款：角色配了专属主 API 就走角色的，否则跟随全局
+        const eff = char?.chatApiOverride?.baseUrl ? char.chatApiOverride : apiConfig;
         const messages: { role: string; content: string }[] = [{ role: 'system', content: systemPrompt }];
         for (const m of history.slice(-40)) {
             messages.push({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content });
         }
         if (extraUser) messages.push({ role: 'user', content: extraUser });
-        const res = await resilientFetch(`${apiConfig.baseUrl}/chat/completions`, {
+        const res = await resilientFetch(`${eff.baseUrl}/chat/completions`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiConfig.apiKey}` },
-            body: JSON.stringify({ model: apiConfig.model, messages, temperature: 0.7 }),
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${eff.apiKey}` },
+            body: JSON.stringify({ model: eff.model, messages, temperature: 0.7 }),
         }, { timeoutMs: 120_000, retries: 1 });
         if (!res.ok) throw new Error(`API ${res.status}`);
         const data = await res.json();
@@ -391,9 +472,10 @@ const JobHuntApp: React.FC = () => {
         return text;
     }, [apiConfig]);
 
-    // ─── 打字机 ───
+    // ─── 打字机（设置里可关：关了就直接上全文）───
     const typeOut = useCallback((full: string, onDone: () => void) => {
         if (typingTimerRef.current) clearInterval(typingTimerRef.current);
+        if (!jhSettings.typewriter) { setTypingText(''); onDone(); return; }
         let i = 0;
         const step = Math.max(2, Math.round(full.length / 120)); // 全长约 2.4s 播完
         typingTimerRef.current = setInterval(() => {
@@ -406,7 +488,7 @@ const JobHuntApp: React.FC = () => {
                 onDone();
             }
         }, 20);
-    }, []);
+    }, [jhSettings.typewriter]);
 
     // ─── 发送消息（自由/岗位/面试共用管线）───
     const sendMessage = useCallback(async (rawContent?: string) => {
@@ -423,7 +505,7 @@ const JobHuntApp: React.FC = () => {
         };
         await persistSession(session);
         try {
-            const raw = await callLLM(buildSystemPrompt(sessionChar, session), session.messages);
+            const raw = await callLLM(await buildSystemPrompt(sessionChar, session), session.messages, undefined, sessionChar);
             const parsed = parseJobHuntCommands(raw);
             const charMsg: JobChatMessage = { role: 'char', content: parsed.cleanText || raw, ts: Date.now() };
             // 面试模式：角色每回一轮 = 推进一题
@@ -442,13 +524,17 @@ const JobHuntApp: React.FC = () => {
             };
             typeOut(charMsg.content, () => { /* 打完字后由下方 persist 的渲染接管 */ });
             await persistSession(session);
+            // 自动朗读（按设置：仅面试 / 全部）
+            if (jhSettings.autoSpeak === 'all' || (jhSettings.autoSpeak === 'interview' && session.topic === 'interview')) {
+                playVoiceRef.current?.(charMsg, session.messages.length - 1, { session, char: sessionChar });
+            }
             await applyCommands(parsed, session);
         } catch (e: any) {
             addToast(`回复失败：${e?.message || '网络异常'}`, 'error');
         } finally {
             setIsSending(false);
         }
-    }, [input, isSending, activeSession, sessionChar, persistSession, callLLM, buildSystemPrompt, typeOut, applyCommands, addToast]);
+    }, [input, isSending, activeSession, sessionChar, persistSession, callLLM, buildSystemPrompt, typeOut, applyCommands, addToast, jhSettings.autoSpeak]);
 
     // ─── 新建会话 ───
     const createSession = useCallback(async (topic: JobSession['topic'], positionId?: string) => {
@@ -479,7 +565,7 @@ const JobHuntApp: React.FC = () => {
                 '要求：由浅入深，覆盖自我介绍/岗位匹配/项目深挖/软素质；公司只用代号；',
                 `严格输出 JSON 字符串数组（长度 ${INTERVIEW_QUESTION_COUNT}），不要输出其它任何内容。`,
             ].join('\u000a');
-            const raw = await callLLM(genPrompt, [], '请给出题目清单。');
+            const raw = await callLLM(genPrompt, [], '请给出题目清单。', char);
             let questions: string[] = [];
             try {
                 const jsonMatch = raw.match(/\[[\s\S]*\]/);
@@ -494,30 +580,34 @@ const JobHuntApp: React.FC = () => {
             };
             await persistSession(s);
             // 面试官开场 + 第一题
-            const raw2 = await callLLM(buildSystemPrompt(char, s), [],
-                '（系统：面试开始。请你以面试官身份简短开场，然后提出第 1 题。）');
+            const raw2 = await callLLM(await buildSystemPrompt(char, s), [],
+                '（系统：面试开始。请你以面试官身份简短开场，然后提出第 1 题。）', char);
             const parsed = parseJobHuntCommands(raw2);
             const charMsg: JobChatMessage = { role: 'char', content: parsed.cleanText || raw2, ts: Date.now() };
             s = { ...s, messages: [charMsg], updatedAt: Date.now() };
             typeOut(charMsg.content, () => {});
             await persistSession(s);
+            // 自动读题：面试模式下开场+第一题直接念出来
+            if (jhSettings.autoSpeak !== 'off') {
+                playVoiceRef.current?.(charMsg, 0, { session: s, char });
+            }
         } catch (e: any) {
             addToast(`面试启动失败：${e?.message || '网络异常'}`, 'error');
         } finally {
             setIsSending(false);
         }
-    }, [userProfile, callLLM, persistSession, buildSystemPrompt, typeOut, addToast]);
+    }, [userProfile, callLLM, persistSession, buildSystemPrompt, typeOut, addToast, jhSettings.autoSpeak]);
 
     // ─── 面试结束 → 结构化评价报告 → 自动归档笔记本 ───
     const generateInterviewEval = useCallback(async () => {
         if (!activeSession || !sessionChar || isSending) return;
         setIsSending(true);
         try {
-            const raw = await callLLM(buildSystemPrompt(sessionChar, activeSession), activeSession.messages, [
+            const raw = await callLLM(await buildSystemPrompt(sessionChar, activeSession), activeSession.messages, [
                 '（系统：面试结束。请以面试官身份生成结构化评价报告，markdown 排版，包含：',
                 '1. 维度打分（表达/岗位匹配/深度/临场，各 10 分制）；2. 逐题点评；3. 三条最优先的改进建议。',
                 '并把报告全文用 [[JOB_NOTE:eval|标题|正文]] 指令归档，标题带上岗位代号。）',
-            ].join('\u000a'));
+            ].join('\u000a'), sessionChar);
             const parsed = parseJobHuntCommands(raw);
             // 兜底：LLM 忘了打指令标记时，把正文直接落成 eval 笔记，评价不能丢
             if (!parsed.notes.length && parsed.cleanText) {
@@ -540,33 +630,36 @@ const JobHuntApp: React.FC = () => {
         }
     }, [activeSession, sessionChar, isSending, callLLM, buildSystemPrompt, typeOut, persistSession, applyCommands, addToast]);
 
-    // ─── TTS：读题/回放（走 ttsCache 全局持久缓存）───
-    const playMessageVoice = useCallback(async (msg: JobChatMessage, idx: number) => {
-        if (!sessionChar || ttsBusyIdx !== null) return;
+    // ─── TTS：读题/回放（走 ttsCache 全局持久缓存；opts 供自动朗读在 state 未刷新时直接传现场会话）───
+    const playMessageVoice = useCallback(async (msg: JobChatMessage, idx: number, opts?: { session?: JobSession; char?: CharacterProfile }) => {
+        const char = opts?.char || sessionChar;
+        const sess = opts?.session || activeSession;
+        if (!char || ttsBusyIdx !== null) return;
         if (playingIdx === idx) {
             audioRef.current?.pause();
             setPlayingIdx(null);
             return;
         }
-        if (!characterHasVoice(sessionChar, apiConfig)) {
-            addToast('这个角色还没配音色，去神经链接里配一个', 'info');
+        if (!characterHasVoice(char, apiConfig)) {
+            // 自动朗读路径静默跳过，手动点才提示
+            if (!opts) addToast('这个角色还没配音色，去神经链接里配一个', 'info');
             return;
         }
         setTtsBusyIdx(idx);
         try {
             const ttsText = msg.content.replace(/[#*`>\-]/g, '').slice(0, 600);
-            const key = msg.voiceKey || hashTtsParams({ app: 'jobhunt', charId: sessionChar.id, text: ttsText, vp: sessionChar.voiceProfile });
+            const key = msg.voiceKey || hashTtsParams({ app: 'jobhunt', charId: char.id, text: ttsText, vp: char.voiceProfile });
             let blob = await getCachedTts(key);
             if (!blob) {
-                const url = await synthesizeSpeech(ttsText, sessionChar, apiConfig, { groupId: apiConfig.minimaxGroupId || undefined });
+                const url = await synthesizeSpeech(ttsText, char, apiConfig, { groupId: apiConfig.minimaxGroupId || undefined });
                 blob = await (await fetch(url)).blob();
                 await saveCachedTts(key, blob);
             }
-            if (!msg.voiceKey && activeSession) {
+            if (!msg.voiceKey && sess) {
                 // 回写 voiceKey：笔记本/回放场景可复取
                 const s: JobSession = {
-                    ...activeSession,
-                    messages: activeSession.messages.map((m, i) => i === idx ? { ...m, voiceKey: key } : m),
+                    ...sess,
+                    messages: sess.messages.map((m, i) => i === idx ? { ...m, voiceKey: key } : m),
                 };
                 await persistSession(s);
             }
@@ -584,6 +677,7 @@ const JobHuntApp: React.FC = () => {
             setTtsBusyIdx(null);
         }
     }, [sessionChar, apiConfig, playingIdx, ttsBusyIdx, activeSession, persistSession, addToast]);
+    useEffect(() => { playVoiceRef.current = playMessageVoice; }, [playMessageVoice]);
 
     // ─── 语音输入（云端优先 + 状态全外显，吸取通话 STT 教训）───
     const toggleStt = useCallback(async () => {
@@ -670,16 +764,17 @@ const JobHuntApp: React.FC = () => {
         }
     }, [characters, memoryPalaceConfig, memorySyncBusy, positions, userProfile, persistSession, addToast]);
 
-    // 离开聊天：新增消息够多就静默沉淀一把（前置校验不满足会自动跳过）
+    // 离开聊天：按设置自动沉淀（开关+阈值都在工作台设置里；前置校验不满足会自动跳过）
     const handleLeaveChat = useCallback(() => {
         if (audioRef.current) { audioRef.current.pause(); setPlayingIdx(null); }
         sttSessionRef.current?.stop();
-        if (activeSession && activeSession.messages.length - (activeSession.memorySyncedCount || 0) >= 6) {
+        if (jhSettings.autoMemorySync && activeSession
+            && activeSession.messages.length - (activeSession.memorySyncedCount || 0) >= jhSettings.syncThreshold) {
             syncSessionToMemory(activeSession, true);
         }
         setActiveSession(null);
         setView('home');
-    }, [activeSession, syncSessionToMemory]);
+    }, [activeSession, syncSessionToMemory, jhSettings.autoMemorySync, jhSettings.syncThreshold]);
 
     // ─── 简历导入：PDF / DOCX / TXT / 粘贴 → 本地脱敏 → 预览确认 ───
     const handleResumeFile = useCallback(async (file: File) => {
@@ -846,6 +941,75 @@ const JobHuntApp: React.FC = () => {
         );
     };
 
+    // ─── 渲染：工作台设置（阅读体验/自动朗读/记忆沉淀）───
+
+    const renderSettingsModal = () => (
+        <div className="absolute inset-0 z-50 bg-black/30 flex items-end" onClick={() => setShowJhSettings(false)}>
+            <div className="w-full bg-white rounded-t-3xl p-5 max-h-[80%] overflow-y-auto" onClick={e => e.stopPropagation()} style={{ paddingBottom: 'max(1.25rem, var(--safe-bottom))' }}>
+                <div className="font-bold text-slate-800 mb-4">工作台设置</div>
+                <div className="space-y-5">
+                    <div>
+                        <div className="text-xs font-bold text-slate-500 mb-2">文档流字号</div>
+                        <div className="flex gap-2">
+                            {([[0.9, '小'], [1, '标准'], [1.1, '大'], [1.2, '特大']] as const).map(([v, label]) => (
+                                <button key={v} onClick={() => patchJhSettings({ zoom: v })}
+                                    className={`px-3.5 py-2 text-xs font-bold rounded-xl border transition-all active:scale-95 ${jhSettings.zoom === v ? 'bg-sky-50 text-sky-600 border-sky-200 ring-1 ring-sky-100' : 'bg-white text-slate-500 border-slate-200'}`}>
+                                    {label}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                    <button onClick={() => patchJhSettings({ typewriter: !jhSettings.typewriter })}
+                        className="w-full flex items-center justify-between bg-slate-50 rounded-2xl px-4 py-3 active:scale-[0.98] transition-transform">
+                        <div className="text-left">
+                            <div className="text-xs font-bold text-slate-700">打字机效果</div>
+                            <div className="text-[10px] text-slate-400 mt-0.5">关掉后长回复直接整段呈现</div>
+                        </div>
+                        <div className={`w-11 h-6 rounded-full p-0.5 transition-colors shrink-0 ${jhSettings.typewriter ? 'bg-sky-500' : 'bg-slate-300'}`}>
+                            <div className={`w-5 h-5 bg-white rounded-full shadow transition-transform ${jhSettings.typewriter ? 'translate-x-5' : ''}`} />
+                        </div>
+                    </button>
+                    <div>
+                        <div className="text-xs font-bold text-slate-500 mb-1">回复自动朗读</div>
+                        <div className="text-[10px] text-slate-400 mb-2">需要角色已配音色；没配音色会静默跳过</div>
+                        <div className="flex gap-2">
+                            {([['off', '关闭'], ['interview', '仅面试读题'], ['all', '所有回复']] as const).map(([v, label]) => (
+                                <button key={v} onClick={() => patchJhSettings({ autoSpeak: v })}
+                                    className={`px-3.5 py-2 text-xs font-bold rounded-xl border transition-all active:scale-95 ${jhSettings.autoSpeak === v ? 'bg-sky-50 text-sky-600 border-sky-200 ring-1 ring-sky-100' : 'bg-white text-slate-500 border-slate-200'}`}>
+                                    {label}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                    <div>
+                        <button onClick={() => patchJhSettings({ autoMemorySync: !jhSettings.autoMemorySync })}
+                            className="w-full flex items-center justify-between bg-slate-50 rounded-2xl px-4 py-3 active:scale-[0.98] transition-transform">
+                            <div className="text-left">
+                                <div className="text-xs font-bold text-slate-700">离开会话自动沉淀记忆</div>
+                                <div className="text-[10px] text-slate-400 mt-0.5">退出聊天时静默把新内容喂进记忆宫殿（先代号化+脱敏）</div>
+                            </div>
+                            <div className={`w-11 h-6 rounded-full p-0.5 transition-colors shrink-0 ${jhSettings.autoMemorySync ? 'bg-violet-500' : 'bg-slate-300'}`}>
+                                <div className={`w-5 h-5 bg-white rounded-full shadow transition-transform ${jhSettings.autoMemorySync ? 'translate-x-5' : ''}`} />
+                            </div>
+                        </button>
+                        {jhSettings.autoMemorySync && (
+                            <div className="flex items-center gap-2 mt-2 px-1">
+                                <span className="text-[11px] text-slate-500 shrink-0">新消息满</span>
+                                {[4, 6, 10, 16].map(v => (
+                                    <button key={v} onClick={() => patchJhSettings({ syncThreshold: v })}
+                                        className={`px-2.5 py-1 text-[11px] font-bold rounded-lg border transition-all active:scale-95 ${jhSettings.syncThreshold === v ? 'bg-violet-50 text-violet-600 border-violet-200' : 'bg-white text-slate-400 border-slate-200'}`}>
+                                        {v} 条
+                                    </button>
+                                ))}
+                                <span className="text-[11px] text-slate-500">才沉淀</span>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+
     // ─── 渲染：聊天视图（文档流）───────────────────────────
 
     if (view === 'chat' && activeSession) {
@@ -894,7 +1058,8 @@ const JobHuntApp: React.FC = () => {
                 </div>
 
                 {/* 文档流消息区 */}
-                <div ref={scrollRef} className="flex-1 overflow-y-auto no-scrollbar px-4 py-4 space-y-4">
+                <div ref={scrollRef} className="flex-1 overflow-y-auto no-scrollbar px-4 py-4 space-y-4"
+                    style={{ fontSize: `${jhSettings.zoom}em` }}>
                     {msgs.length === 0 && !isSending && (
                         <div className="text-center text-slate-400 text-sm mt-16 px-8 leading-relaxed">
                             {activeSession.topic === 'interview'
@@ -961,7 +1126,7 @@ const JobHuntApp: React.FC = () => {
                 {/* 输入区 */}
                 <div className="bg-white/95 backdrop-blur-xl border-t border-slate-200/80 px-3 py-2.5" style={{ paddingBottom: 'max(0.625rem, var(--safe-bottom))' }}>
                     {showPlusMenu && (
-                        <div className="flex gap-2 pb-2.5">
+                        <div className="flex gap-2 pb-2.5 flex-wrap">
                             <button onClick={() => { setShowPlusMenu(false); setShowResumePicker(true); }}
                                 className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-slate-600 active:scale-95 transition-transform">
                                 <FileText className="w-4 h-4" /> 引用简历
@@ -969,6 +1134,14 @@ const JobHuntApp: React.FC = () => {
                             <button onClick={() => { setShowPlusMenu(false); fileInputRef.current?.click(); }}
                                 className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-slate-600 active:scale-95 transition-transform">
                                 <UploadSimple className="w-4 h-4" /> 导入新简历
+                            </button>
+                            <button onClick={() => { setShowPlusMenu(false); setShowApiHub(true); }}
+                                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-slate-600 active:scale-95 transition-transform">
+                                <Plugs className="w-4 h-4" /> API 配置
+                            </button>
+                            <button onClick={() => { setShowPlusMenu(false); setShowJhSettings(true); }}
+                                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-slate-600 active:scale-95 transition-transform">
+                                <GearSix className="w-4 h-4" /> 设置
                             </button>
                         </div>
                     )}
@@ -1020,6 +1193,12 @@ const JobHuntApp: React.FC = () => {
                 <input ref={fileInputRef} type="file" accept=".pdf,.docx,.txt,.md" className="hidden"
                     onChange={e => { const f = e.target.files?.[0]; if (f) handleResumeFile(f); }} />
                 {resumePreview && renderRedactPreview()}
+                {sessionChar && (
+                    <CharApiHubModal isOpen={showApiHub} onClose={() => setShowApiHub(false)} char={sessionChar}
+                        apiConfig={apiConfig}
+                        onSave={(patch) => { updateCharacter(sessionChar.id, patch); addToast('API 配置已保存', 'success'); }} />
+                )}
+                {showJhSettings && renderSettingsModal()}
             </div>
         );
     }
@@ -1040,6 +1219,9 @@ const JobHuntApp: React.FC = () => {
                         <ReadCvLogo className="w-5 h-5 text-sky-500" weight="fill" />
                         <span className="font-bold text-slate-800">上岸计划</span>
                     </div>
+                    <button onClick={() => setShowJhSettings(true)} className="p-2 ml-1 rounded-full hover:bg-slate-100 active:scale-90 transition-transform">
+                        <GearSix className="w-[18px] h-[18px] text-slate-400" />
+                    </button>
                     <div className="ml-auto flex items-center gap-1 overflow-x-auto no-scrollbar max-w-[55%]">
                         {characters.slice(0, 8).map(c => (
                             <button key={c.id} onClick={() => setSelectedCharId(c.id)}
@@ -1286,10 +1468,11 @@ const JobHuntApp: React.FC = () => {
                 </div>
             )}
 
-            {/* 隐藏文件输入 + 脱敏预览 */}
+            {/* 隐藏文件输入 + 脱敏预览 + 工作台设置 */}
             <input ref={fileInputRef} type="file" accept=".pdf,.docx,.txt,.md" className="hidden"
                 onChange={e => { const f = e.target.files?.[0]; if (f) handleResumeFile(f); }} />
             {resumePreview && renderRedactPreview()}
+            {showJhSettings && renderSettingsModal()}
         </div>
     );
 };

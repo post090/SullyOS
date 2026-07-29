@@ -1479,12 +1479,27 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       ];
       const isExpectedPluginNoise = (msg: string): boolean =>
           EXPECTED_PLUGIN_NOISE.some(re => re.test(msg.trim()));
+      // 瞬断类传输错误降噪：Android 切后台再回前台时，系统 HTTP 栈复用尸体 keep-alive
+      // 连接，第一枪必炸 SSLHandshakeException / connection closed / connection reset。
+      // 这类错误已由 JS（safeFetchJson/resilientFetch）+ 原生（executeRequestWithRetry）
+      // 双层重试兜底；但 Capacitor 插件的 call.reject 不论 JS 怎么 catch 都会无条件
+      // 冒泡到 console.error，重试已救回的中间失败也会变成红色 SYSTEM ERROR 吓用户
+      //（尸检报告被当成死亡证明）。真正的最终失败另有两层用户可见兜底：
+      // patchedFetch 的 network 日志 + 聊天内的 [回复处理失败] 消息，信息不丢。
+      // 仍走 originalConsoleError，开发者远程调试时看得到。
+      const TRANSIENT_TRANSPORT_NOISE = /connection closed|SSLHandshakeException|SSLException|unexpected end of stream|connection reset|connection abort|broken pipe|econnreset|Software caused connection abort/i;
       console.error = (...args) => {
           originalConsoleError(...args);
           const msg = args.map(toStringSafe).join(' ');
           // 预期内"伪错误"白名单：业务已正确处理，不进用户可见的 systemLogs。
           // 仍然调用 originalConsoleError（上面那行）让开发者在远程调试时能看到。
           if (isExpectedPluginNoise(msg)) return;
+          // 瞬断传输错误（含对象参数里的 code 字段，如 Capacitor reject 的
+          // {message:'connection closed', code:'SSLHandshakeException'}）同样降噪。
+          const codeDump = args
+              .map(a => { try { return typeof a === 'object' && a !== null ? String((a as any).code || '') : ''; } catch { return ''; } })
+              .join(' ');
+          if (TRANSIENT_TRANSPORT_NOISE.test(msg) || TRANSIENT_TRANSPORT_NOISE.test(codeDump)) return;
           // detail 只有真拿到堆栈才用堆栈，否则回退完整 msg。
           // 旧写法 `args.map(a => a instanceof Error ? a.stack : '').join('\n')`
           // 对「多个非 Error 参数」会产出 "\n"（truthy），把回退短路掉——
