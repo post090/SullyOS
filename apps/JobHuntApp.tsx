@@ -8,7 +8,7 @@ import { useBackGuard } from '../hooks/useBackGuard';
 import { DB } from '../utils/db';
 import {
     CharacterProfile, JobSession, JobPosition, JobNote, JobResume,
-    JobChatMessage, JobStage, JobNoteKind,
+    JobChatMessage, JobStage, JobNoteKind, AppID,
 } from '../types';
 import { ContextBuilder } from '../utils/context';
 import { resilientFetch } from '../utils/resilientFetch';
@@ -154,9 +154,10 @@ const MarkdownBlock: React.FC<{ text: string }> = ({ text }) => {
 // ─── 展示常量 ───────────────────────────────────────────
 
 const STAGE_LABEL: Record<JobStage, string> = {
-    applied: '已投递', written: '笔试中', interview: '面试中', offer: 'Offer', rejected: '已结束',
+    watching: '观望中', applied: '已投递', written: '笔试中', interview: '面试中', offer: 'Offer', rejected: '已结束',
 };
 const STAGE_STYLE: Record<JobStage, string> = {
+    watching: 'bg-violet-100 text-violet-600',
     applied: 'bg-slate-100 text-slate-600',
     written: 'bg-amber-100 text-amber-700',
     interview: 'bg-sky-100 text-sky-700',
@@ -196,7 +197,7 @@ type SttPhase = 'idle' | 'starting' | 'listening' | 'recognizing';
 // ─── 主组件 ─────────────────────────────────────────────
 
 const JobHuntApp: React.FC = () => {
-    const { closeApp, characters, activeCharacterId, apiConfig, addToast, userProfile, memoryPalaceConfig, realtimeConfig, updateCharacter } = useOS();
+    const { closeApp, characters, activeCharacterId, setActiveCharacterId, openApp, apiConfig, addToast, userProfile, memoryPalaceConfig, realtimeConfig, updateCharacter } = useOS();
 
     // 数据
     const [sessions, setSessions] = useState<JobSession[]>([]);
@@ -217,6 +218,7 @@ const JobHuntApp: React.FC = () => {
     const [showPlusMenu, setShowPlusMenu] = useState(false);
     const scrollRef = useRef<HTMLDivElement>(null);
     const typingTimerRef = useRef<any>(null);
+    const chatInputRef = useRef<HTMLTextAreaElement>(null);
 
     // 弹窗
     const [showNewSession, setShowNewSession] = useState(false);
@@ -307,6 +309,48 @@ const JobHuntApp: React.FC = () => {
         }
     }, []);
     useEffect(() => { reloadAll(); }, [reloadAll]);
+
+    // ── 2.0 一次性迁移：日常求职会话（自由聊/聊岗位）合入对应角色的单聊消息流。
+    // 求职能力已并入单聊（jobHuntEnabled + JOB 指令），工作台只留模拟面试。
+    // 单聊消息流按主键 id 排序而非 timestamp，所以走 insertMessagesByTimestamp：
+    // 按原时间戳定位到历史中的正确位置插入（小数 id），信息流/时间线严丝合缝，
+    // 且不会被记忆宫殿水位线当成新消息灌进 AI 上下文。localStorage 标记防重跑。
+    useEffect(() => {
+        (async () => {
+            try {
+                if (localStorage.getItem('os_jobhunt_migrated_v2')) return;
+                const all = await DB.getJobSessions();
+                const daily = all.filter(s => s.topic !== 'interview');
+                if (daily.length === 0) { localStorage.setItem('os_jobhunt_migrated_v2', '1'); return; }
+                let moved = 0;
+                // 按角色分组：同角色的所有旧会话一次性插入（同一事务，区间定位也更准）
+                const byChar = new Map<string, { role: 'user' | 'assistant'; content: string; ts: number }[]>();
+                for (const s of daily) {
+                    const arr = byChar.get(s.charId) || [];
+                    for (const m of s.messages) {
+                        if (!m.content?.trim()) continue;
+                        arr.push({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content, ts: m.ts });
+                    }
+                    byChar.set(s.charId, arr);
+                }
+                for (const [charId, msgs] of byChar) {
+                    if (msgs.length === 0) continue;
+                    moved += await DB.insertMessagesByTimestamp(charId, msgs.map(m => ({
+                        charId,
+                        role: m.role,
+                        type: 'text' as const,
+                        content: m.content,
+                        timestamp: m.ts,
+                    })) as any);
+                }
+                for (const s of daily) await DB.deleteJobSession(s.id);
+                localStorage.setItem('os_jobhunt_migrated_v2', '1');
+                if (moved > 0) addToast(`已把 ${daily.length} 场求职对话按原时间线合入单聊记录（${moved} 条）`, 'success');
+                reloadAll();
+            } catch (e) { console.warn('[JobHunt] 旧会话迁移失败', e); }
+        })();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     useEffect(() => () => {
         // 卸载兜底：停音频/识别器/打字机
@@ -495,6 +539,8 @@ const JobHuntApp: React.FC = () => {
         const content = (rawContent ?? input).trim();
         if (!content || isSending || !activeSession || !sessionChar) return;
         setInput('');
+        // 发送后把被撑大的输入框缩回一行（onInput 只在用户输入时触发，程序清空不会）
+        if (chatInputRef.current) chatInputRef.current.style.height = '42px';
         setShowPlusMenu(false);
         setIsSending(true);
         const userMsg: JobChatMessage = { role: 'user', content, ts: Date.now() };
@@ -1032,6 +1078,8 @@ const JobHuntApp: React.FC = () => {
                                 {sessionChar?.name || '角色已删除'}{activeSession.topic === 'interview' ? ' · 面试官模式' : ' · 求职工作台'}
                             </div>
                         </div>
+                        {/* 记忆沉淀仅面试会话保留：日常对话已进单聊，由现有记忆体系覆盖 */}
+                        {activeSession.topic === 'interview' && (
                         <button
                             onClick={() => syncSessionToMemory(activeSession, false)}
                             disabled={memorySyncBusy}
@@ -1039,6 +1087,7 @@ const JobHuntApp: React.FC = () => {
                         >
                             {memorySyncBusy ? '沉淀中…' : '沉淀记忆'}
                         </button>
+                        )}
                     </div>
                     {/* 面试进度条 */}
                     {interview && (
@@ -1150,6 +1199,7 @@ const JobHuntApp: React.FC = () => {
                             <Plus className={`w-5 h-5 transition-transform ${showPlusMenu ? 'rotate-45' : ''}`} />
                         </button>
                         <textarea
+                            ref={chatInputRef}
                             value={input}
                             onChange={e => setInput(e.target.value)}
                             placeholder={activeSession.topic === 'interview' ? '回答面试官的问题…' : '说说你的求职情况…'}
@@ -1245,15 +1295,23 @@ const JobHuntApp: React.FC = () => {
             </div>
 
             <div className="flex-1 overflow-y-auto no-scrollbar px-4 py-4 pb-28">
-                {/* Tab 1：工作台 = 会话列表 */}
+                {/* Tab 1：工作台 = 模拟面试记录（日常求职对话已并入单聊） */}
                 {homeTab === 'sessions' && (
                     <div className="space-y-2.5">
-                        {sessions.length === 0 && (
-                            <div className="text-center text-slate-400 text-sm mt-16 px-8 leading-relaxed">
-                                这里是你和{selectedChar?.name || '角色'}的求职工作台。<br />点右下角「＋」开一场对话：聊岗位、盘进展、模拟面试、改简历。
+                        {/* 和角色聊求职 → 跳单聊（求职能力已并入，在加号菜单第 2 页开求职模式） */}
+                        <button
+                            onClick={() => { if (selectedCharId) setActiveCharacterId(selectedCharId); openApp(AppID.Chat); }}
+                            className="w-full text-left px-4 py-3.5 rounded-2xl bg-gradient-to-r from-sky-500 to-cyan-500 text-white shadow-sm active:scale-[0.98] transition-transform"
+                        >
+                            <div className="text-sm font-bold">和{selectedChar?.name || '角色'}聊求职 → 去单聊</div>
+                            <div className="text-[11px] text-white/80 mt-0.5">日常求职对话已并入单聊：开启求职模式后，TA 能看到岗位/笔记还能帮你记录</div>
+                        </button>
+                        {sessions.filter(s => s.topic === 'interview').length === 0 && (
+                            <div className="text-center text-slate-400 text-sm mt-12 px-8 leading-relaxed">
+                                这里只存模拟面试记录。<br />到「岗位」tab 的岗位卡上发起模拟面试；日常聊求职直接去单聊。
                             </div>
                         )}
-                        {sessions.map(s => (
+                        {sessions.filter(s => s.topic === 'interview').map(s => (
                             <div key={s.id} onClick={() => { setActiveSession(s); setView('chat'); }}
                                 className="bg-white rounded-2xl border border-slate-200/70 shadow-sm p-4 active:scale-[0.99] transition-transform cursor-pointer">
                                 <div className="flex items-center gap-2">
@@ -1298,8 +1356,8 @@ const JobHuntApp: React.FC = () => {
                                 <div className="flex items-center gap-2 mt-3 flex-wrap">
                                     <button onClick={() => { setSelectedCharId(p.charId || selectedCharId); createSession('interview', p.id); }}
                                         className="text-xs px-3 py-1.5 rounded-lg bg-sky-500 text-white font-semibold active:scale-95 transition-transform">模拟面试</button>
-                                    <button onClick={() => { setSelectedCharId(p.charId || selectedCharId); createSession('position', p.id); }}
-                                        className="text-xs px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 font-semibold active:scale-95 transition-transform">聊这个岗位</button>
+                                    <button onClick={() => { if (p.charId || selectedCharId) setActiveCharacterId(p.charId || selectedCharId); openApp(AppID.Chat); }}
+                                        className="text-xs px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 font-semibold active:scale-95 transition-transform">聊这个岗位 → 单聊</button>
                                     <select value={p.stage} onChange={e => advanceStage(p, e.target.value as JobStage)}
                                         className="text-xs bg-slate-50 border border-slate-200 rounded-lg px-1.5 py-1.5 text-slate-500 outline-none ml-auto">
                                         {(Object.keys(STAGE_LABEL) as JobStage[]).map(st => <option key={st} value={st}>{STAGE_LABEL[st]}</option>)}
@@ -1374,23 +1432,18 @@ const JobHuntApp: React.FC = () => {
                 </button>
             </div>
 
-            {/* 新建会话弹窗 */}
+            {/* 新建会话弹窗：日常求职对话已并入单聊，这里只留去单聊 + 面试指引 */}
             {showNewSession && (
                 <div className="absolute inset-0 z-40 bg-black/30 flex items-end" onClick={() => setShowNewSession(false)}>
                     <div className="w-full bg-white rounded-t-3xl p-5" onClick={e => e.stopPropagation()} style={{ paddingBottom: 'max(1.25rem, var(--safe-bottom))' }}>
-                        <div className="font-bold text-slate-800 mb-1">和{selectedChar?.name || '角色'}开一场对话</div>
-                        <div className="text-xs text-slate-400 mb-4">顶栏可以换角色；模拟面试请到「岗位」tab 从岗位卡发起</div>
-                        <div className="space-y-2 max-h-[50vh] overflow-y-auto">
-                            <button onClick={() => createSession('free')} className="w-full text-left px-4 py-3.5 rounded-2xl bg-slate-50 border border-slate-200 active:scale-[0.98] transition-transform">
-                                <div className="text-sm font-semibold text-slate-700">自由聊聊求职</div>
-                                <div className="text-[11px] text-slate-400 mt-0.5">焦虑/选 offer/方向纠结，什么都能聊</div>
+                        <div className="font-bold text-slate-800 mb-1">和{selectedChar?.name || '角色'}聊求职</div>
+                        <div className="text-xs text-slate-400 mb-4">日常求职对话已并入单聊；模拟面试请到「岗位」tab 从岗位卡发起</div>
+                        <div className="space-y-2">
+                            <button onClick={() => { setShowNewSession(false); if (selectedCharId) setActiveCharacterId(selectedCharId); openApp(AppID.Chat); }}
+                                className="w-full text-left px-4 py-3.5 rounded-2xl bg-sky-50 border border-sky-200 active:scale-[0.98] transition-transform">
+                                <div className="text-sm font-semibold text-sky-700">去单聊聊求职 →</div>
+                                <div className="text-[11px] text-slate-400 mt-0.5">焦虑/选 offer/盘进展都在单聊里聊，开启求职模式后 TA 还能帮你建卡记笔记</div>
                             </button>
-                            {positions.filter(p => p.stage !== 'rejected').slice(0, 6).map(p => (
-                                <button key={p.id} onClick={() => createSession('position', p.id)} className="w-full text-left px-4 py-3.5 rounded-2xl bg-slate-50 border border-slate-200 active:scale-[0.98] transition-transform">
-                                    <div className="text-sm font-semibold text-slate-700">聊聊 {p.code} · {p.title}</div>
-                                    <div className="text-[11px] text-slate-400 mt-0.5">{STAGE_LABEL[p.stage]}{p.nextStep ? ` · 下一步：${p.nextStep}` : ''}</div>
-                                </button>
-                            ))}
                         </div>
                     </div>
                 </div>

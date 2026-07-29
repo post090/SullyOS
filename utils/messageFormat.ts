@@ -328,6 +328,12 @@ export function normalizeMessageContent(
         return head;
     }
 
+    // 求职工作台卡片（上岸计划）：content 已由 describeJobCard 写成一行转述文本
+    // （如 "[系统: xx更新了岗位进展 A厂 → 面试中]"），这里显式兜底防空。
+    if (type === 'job_card') {
+        return msg.content || '[求职工作台操作]';
+    }
+
     // 默认：text / 未知类型 → 用 content
     return msg.content || '';
 }

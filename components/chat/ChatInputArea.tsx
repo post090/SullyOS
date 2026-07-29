@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { ShareNetwork, Trash, Plus, Smiley, PaperPlaneTilt, Money, BookOpenText, GearSix, Image, Lock, ArrowsClockwise, ChatCircleDots, CalendarBlank, ForkKnife, Coffee, Code, Brain, PencilSimple, BellSimpleRinging, Sparkle, CaretDown, FadersHorizontal, Plugs, MagnifyingGlass, LinkSimple } from '@phosphor-icons/react';
+import { ShareNetwork, Trash, Plus, Smiley, PaperPlaneTilt, Money, BookOpenText, GearSix, Image, Lock, ArrowsClockwise, ChatCircleDots, CalendarBlank, ForkKnife, Coffee, Code, Brain, PencilSimple, BellSimpleRinging, Sparkle, CaretDown, FadersHorizontal, Plugs, MagnifyingGlass, LinkSimple, Briefcase } from '@phosphor-icons/react';
 import { CharacterProfile, ChatTheme, EmojiCategory, Emoji } from '../../types';
 import { PRESET_THEMES } from './ChatConstants';
 import { AcnhActionTile } from '../os/acnhIcons';
@@ -48,6 +48,8 @@ interface ChatInputAreaProps {
     // 瑞幸 MCP
     luckinConfigured?: boolean;
     luckinActivated?: boolean;
+    /** 上岸计划：求职模式是否已开启（控制激活角标） */
+    jobHuntEnabled?: boolean;
     // HTML 模块模式
     htmlModeEnabled?: boolean;
     // 思考过程展示（会话级）
@@ -75,6 +77,7 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
     mcdActivated = false,
     luckinConfigured = false,
     luckinActivated = false,
+    jobHuntEnabled = false,
     htmlModeEnabled = false,
     showThinkingChain = false,
     inputStyle = 'default',
@@ -751,6 +754,22 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                                 {isProactiveActive && <span className={`absolute top-0 right-1 w-2.5 h-2.5 rounded-full border-2 ${isDiscordStyle ? 'bg-violet-400 border-slate-900' : 'bg-violet-500 border-white'}`} />}
                             </button>
 
+                            {/* 上岸计划：求职快捷面板（岗位/笔记/简历 + 求职模式开关），占 HTML 模式原位，后续按钮顺延 */}
+                            <button
+                              onClick={() => onPanelAction('jobhunt-panel')}
+                              className={`flex flex-col items-center gap-2 active:scale-95 transition-transform relative ${acnh ? 'text-[#725d42]' : isDiscordStyle ? 'text-slate-200' : 'text-slate-600'}`}
+                            >
+                              <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border relative ${
+                                  jobHuntEnabled
+                                    ? (isDiscordStyle ? 'bg-sky-500/20 text-sky-300 border-sky-400/40' : 'bg-sky-100 text-sky-600 border-sky-300')
+                                    : (isDiscordStyle ? 'bg-slate-800 text-sky-300 border-sky-400/20' : 'bg-sky-50 text-sky-500 border-sky-100')
+                              }`}>
+                                  <Briefcase className="w-6 h-6" weight="bold" />
+                                  {jobHuntEnabled && <span className={`absolute -top-1 -right-1 w-3 h-3 rounded-full border-2 ${isDiscordStyle ? 'bg-sky-300 border-slate-900' : 'bg-sky-500 border-white'}`} />}
+                              </div>
+                              <span className="text-xs font-bold">上岸计划</span>
+                            </button>
+
                             {/* HTML 模块模式：tap = 切换开关 (注入提示词); 长按打开自定义提示词设置 */}
                             <button
                               onClick={() => onPanelAction('html-mode-toggle')}
@@ -808,7 +827,11 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                               <span className="text-xs font-bold">白框</span>
                             </button>
 
-                            {/* 提示音：打开该角色专属的「白框提示音」弹窗（挨着白框，独立于白框可绑定/解绑） */}
+                          </div>
+
+                          {/* Page 2: 提示音（第二页溢出顺延）+ 外部服务（麦当劳 / 瑞幸 MCP） */}
+                          <div className={`p-6 grid grid-cols-4 gap-8 ${actionsPage === 2 ? '' : 'hidden'}`}>
+                            {/* 提示音：打开该角色专属的「白框提示音」弹窗（独立于白框可绑定/解绑） */}
                             <button
                               onClick={() => onPanelAction('chrome-sound')}
                               className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${acnh ? 'text-[#725d42]' : isDiscordStyle ? 'text-slate-200' : 'text-slate-600'}`}
@@ -818,10 +841,6 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                               </div>
                               <span className="text-xs font-bold">提示音</span>
                             </button>
-                          </div>
-
-                          {/* Page 2: 外部服务（麦当劳 / 瑞幸 MCP） */}
-                          <div className={`p-6 grid grid-cols-4 gap-8 ${actionsPage === 2 ? '' : 'hidden'}`}>
                             <button
                               onClick={() => {
                                 if (!mcdConfigured) { onPanelAction('mcd-not-configured'); return; }

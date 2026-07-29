@@ -2238,7 +2238,7 @@ export interface JobSession {
     updatedAt: number;
 }
 
-export type JobStage = 'applied' | 'written' | 'interview' | 'offer' | 'rejected';
+export type JobStage = 'watching' | 'applied' | 'written' | 'interview' | 'offer' | 'rejected';
 
 /** 岗位卡 — 公司一律用代号（A厂/B司）；真实公司名只存 companyNameLocal，永不进任何 prompt / 记忆宫殿 */
 export interface JobPosition {
@@ -2435,6 +2435,9 @@ export interface CharacterProfile {
 
   // 小红书 per-character toggle
   xhsEnabled?: boolean;
+
+  /** 上岸计划 · 求职模式 per-char 开关：开启后单聊注入岗位状态+JOB 指令教学，角色可增删改岗位卡/笔记 */
+  jobHuntEnabled?: boolean;
 
   socialProfile?: {
       handle: string;
@@ -3517,7 +3520,7 @@ export interface GameSession {
     lastPlayedAt: number;
 }
 
-export type MessageType = 'text' | 'image' | 'emoji' | 'voice' | 'interaction' | 'transfer' | 'system' | 'social_card' | 'chat_forward' | 'xhs_card' | 'score_card' | 'music_card' | 'mcd_card' | 'luckin_card' | 'html_card' | 'news_card' | 'vr_card' | 'trpg_card' | 'novel_card' | 'world_card' | 'sim_card' | 'phone_card' | 'webpage_card' | 'theater_card' | 'room_card' | 'life_card' | 'group_topic_card' | 'task_proposal';
+export type MessageType = 'text' | 'image' | 'emoji' | 'voice' | 'interaction' | 'transfer' | 'system' | 'social_card' | 'chat_forward' | 'xhs_card' | 'score_card' | 'music_card' | 'mcd_card' | 'luckin_card' | 'html_card' | 'news_card' | 'vr_card' | 'trpg_card' | 'novel_card' | 'world_card' | 'sim_card' | 'phone_card' | 'webpage_card' | 'theater_card' | 'room_card' | 'life_card' | 'group_topic_card' | 'task_proposal' | 'job_card';
 
 export interface Message {
     id: number;

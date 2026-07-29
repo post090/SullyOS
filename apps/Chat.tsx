@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useOS } from '../context/OSContext';
 import { useBackGuard } from '../hooks/useBackGuard';
 import { DB } from '../utils/db';
-import { Message, MessageType, MemoryFragment, Emoji, EmojiCategory, DailySchedule, ScheduleSlot, TaskV2 } from '../types';
+import { Message, MessageType, MemoryFragment, Emoji, EmojiCategory, DailySchedule, ScheduleSlot, TaskV2, AppID } from '../types';
 import { processImage } from '../utils/file';
 import { safeResponseJson, extractContent } from '../utils/safeApi';
 import { resilientFetch } from '../utils/resilientFetch';
@@ -48,6 +48,7 @@ import Modal from '../components/os/Modal';
 import ProactiveSettingsModal from '../components/chat/ProactiveSettingsModal';
 import ThinkingChainSettingsModal from '../components/chat/ThinkingChainSettingsModal';
 import CharApiHubModal from '../components/chat/CharApiHubModal';
+import JobHuntPanelModal from '../components/chat/JobHuntPanelModal';
 import ChatSearchModal from '../components/chat/ChatSearchModal';
 import { useChatAI } from '../hooks/useChatAI';
 import { cleanTextForTts, parseVoiceOutput } from '../utils/minimaxTts';
@@ -82,7 +83,7 @@ type InstantToolUiStatus = {
 };
 
 const Chat: React.FC = () => {
-    const { characters, activeCharacterId, setActiveCharacterId, updateCharacter, apiConfig, apiPresets, addApiPreset, closeApp, customThemes, removeCustomTheme, addToast, showError, userProfile, lastMsgTimestamp, groups, characterGroups, clearUnread, unreadMessages, realtimeConfig, memoryPalaceConfig, remoteVectorConfig, syncEmotionApiToAllCharacters, theme: osTheme, proactiveComposingChars, openDateWithChar } = useOS();
+    const { characters, activeCharacterId, setActiveCharacterId, updateCharacter, apiConfig, apiPresets, addApiPreset, closeApp, customThemes, removeCustomTheme, addToast, showError, userProfile, lastMsgTimestamp, groups, characterGroups, clearUnread, unreadMessages, realtimeConfig, memoryPalaceConfig, remoteVectorConfig, syncEmotionApiToAllCharacters, theme: osTheme, proactiveComposingChars, openDateWithChar, openApp } = useOS();
     const isProactiveComposing = !!(activeCharacterId && proactiveComposingChars[activeCharacterId]);
     const localDateKey = useLocalDateKey();
 
@@ -177,11 +178,14 @@ const Chat: React.FC = () => {
     // 加号菜单第二页：角色级 API 配置聚合 / 聊天记录搜索
     const [showApiHubModal, setShowApiHubModal] = useState(false);
     const [showChatSearch, setShowChatSearch] = useState(false);
+    // 上岸计划：求职快捷面板（加号菜单第 2 页「上岸计划」）
+    const [jobHuntPanelOpen, setJobHuntPanelOpen] = useState(false);
 
     // 系统返回手势：先关各弹窗/输入面板/消息长按菜单，都没开才关 App 回桌面
     useBackGuard([
         [showChatSearch, () => setShowChatSearch(false)],
         [showApiHubModal, () => setShowApiHubModal(false)],
+        [jobHuntPanelOpen, () => setJobHuntPanelOpen(false)],
         [showProactiveModal, () => setShowProactiveModal(false)],
         [showThinkingChainModal, () => setShowThinkingChainModal(false)],
         [!!selectedMessage, () => setSelectedMessage(null)],
@@ -1513,6 +1517,10 @@ const Chat: React.FC = () => {
                 break;
             case 'luckin-end':
                 deactivateLuckin();
+                break;
+            case 'jobhunt-panel':
+                setShowPanel('none');
+                setJobHuntPanelOpen(true);
                 break;
             case 'html-mode-toggle': {
                 if (!char) break;
@@ -3659,6 +3667,7 @@ const Chat: React.FC = () => {
                     mcdActivated={mcdActivated}
                     luckinConfigured={luckinConfiguredFlag}
                     luckinActivated={luckinActivated}
+                    jobHuntEnabled={!!char?.jobHuntEnabled}
                     htmlModeEnabled={!!(char as any).htmlModeEnabled}
                     showThinkingChain={!!(char as any).showThinkingChain}
                     inputStyle={osTheme.chatInputStyle}
@@ -3705,6 +3714,23 @@ const Chat: React.FC = () => {
                         updateCharacter(char.id, patch);
                         addToast('API 配置已保存', 'success');
                     }}
+                />
+            )}
+
+            {/* 上岸计划求职快捷面板 — 加号菜单第 2 页「上岸计划」 */}
+            {char && (
+                <JobHuntPanelModal
+                    isOpen={jobHuntPanelOpen}
+                    onClose={() => setJobHuntPanelOpen(false)}
+                    char={char}
+                    onToggleJobHunt={(enabled) => {
+                        updateCharacter(char.id, { jobHuntEnabled: enabled });
+                        addToast(enabled ? `求职模式已开启，${char.name} 能看到你的求职工作台了` : '求职模式已关闭', enabled ? 'success' : 'info');
+                    }}
+                    onSendResume={(resume) => {
+                        handleSendText(`【我的简历 · ${resume.name}】（已脱敏）\n${resume.rawText}`, 'text');
+                    }}
+                    onOpenApp={() => openApp(AppID.JobHunt)}
                 />
             )}
 

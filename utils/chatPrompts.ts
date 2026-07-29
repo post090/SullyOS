@@ -498,6 +498,18 @@ ${groupLogStr}\n`;
             console.error('Failed to inject task supervision context:', e);
         }
 
+        // 求职工作台（上岸计划）：per-char 开关驱动，开了才注入岗位状态+笔记清单+指令教学。
+        // 岗位阶段/笔记随对话实时变 → 易变段（与时光契约同一待遇）。
+        if (char.jobHuntEnabled) {
+            try {
+                const { buildJobHuntPromptBlock } = await import('./jobDirectives');
+                const jobBlock = await buildJobHuntPromptBlock();
+                if (jobBlock) volatileState += `\n${jobBlock}\n`;
+            } catch (e) {
+                console.error('Failed to inject job hunt context:', e);
+            }
+        }
+
         baseSystemPrompt += notionDiaryText;
         baseSystemPrompt += feishuDiaryText;
         baseSystemPrompt += notionNotesText;

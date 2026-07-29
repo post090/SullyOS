@@ -772,6 +772,82 @@ export const DB = {
     });
   },
 
+  /**
+   * 上岸计划 2.0 迁移专用：把旧求职会话消息按时间戳插进单聊历史的正确位置。
+   *
+   * 单聊消息流的顺序 = 主键 id 的游标序（不是 timestamp），普通 saveMessage 自增 id
+   * 会把带旧时间戳的迁移消息全堆到聊天最底部。IndexedDB 数字主键允许小数：
+   * 为每条旧消息找到按时间戳应落入的相邻两条现有消息，取两者 id 之间的小数显式
+   * add，排序天然正确。附带收益：插进历史区间的 id 落在记忆宫殿水位线之下，
+   * 旧对话不会被 getRecentMessagesByCharId 的 hwm 过滤当成新消息灌进 AI 上下文。
+   * 比现有最新消息还新的条目走普通自增追加（它们本来就该在最底部）。
+   */
+  insertMessagesByTimestamp: async (
+    charId: string,
+    items: (Omit<Message, 'id' | 'timestamp'> & { timestamp: number })[],
+  ): Promise<number> => {
+    if (items.length === 0) return 0;
+    const db = await openDB();
+    // 1. 读出该角色现有单聊消息的 (id, timestamp) 序列（游标序 = 显示序，排除群聊）
+    const existing: { id: number; timestamp: number }[] = await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_MESSAGES, 'readonly');
+      const idx = tx.objectStore(STORE_MESSAGES).index('charId');
+      const acc: { id: number; timestamp: number }[] = [];
+      const req = idx.openCursor(IDBKeyRange.only(charId));
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (cursor) {
+          const m = cursor.value as Message;
+          if (!m.groupId) acc.push({ id: m.id, timestamp: m.timestamp });
+          cursor.continue();
+        } else resolve(acc);
+      };
+      req.onerror = () => reject(req.error);
+    });
+
+    // 2. 按时间戳升序，为每条定位插入区间；同一区间多条均分小数段，保证互不碰撞且有序
+    const sorted = [...items].sort((a, b) => a.timestamp - b.timestamp);
+    type Pending = { payload: any; explicitId?: number };
+    const pendings: Pending[] = [];
+    // 区间分组：key = 插入点下标（existing 中第一条 timestamp > 消息时间戳的位置）
+    const groups = new Map<number, typeof sorted>();
+    for (const it of sorted) {
+      let i = existing.findIndex(e => e.timestamp > it.timestamp);
+      if (i < 0) i = existing.length;
+      const arr = groups.get(i) || [];
+      arr.push(it);
+      groups.set(i, arr);
+    }
+    for (const [i, arr] of groups) {
+      if (i >= existing.length) {
+        // 比现有最新消息还新 → 普通自增追加（按升序 add，尾部顺序正确）
+        for (const it of arr) pendings.push({ payload: it });
+      } else {
+        const lower = i > 0 ? existing[i - 1].id : 0;
+        const upper = existing[i].id;
+        arr.forEach((it, k) => {
+          const id = lower + ((upper - lower) * (k + 1)) / (arr.length + 1);
+          pendings.push({ payload: it, explicitId: id });
+        });
+      }
+    }
+
+    // 3. 单事务写入：小数 id 显式 add，追加项交给自增
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_MESSAGES, 'readwrite');
+      const store = tx.objectStore(STORE_MESSAGES);
+      let written = 0;
+      for (const p of pendings) {
+        const record = p.explicitId !== undefined ? { ...p.payload, id: p.explicitId } : { ...p.payload };
+        const req = store.add(record);
+        req.onsuccess = () => { written++; };
+      }
+      tx.oncomplete = () => resolve(written);
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('insertMessagesByTimestamp aborted'));
+    });
+  },
+
   updateMessage: async (id: number, content: string): Promise<void> => {
     const db = await openDB();
     const transaction = db.transaction(STORE_MESSAGES, 'readwrite');

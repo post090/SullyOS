@@ -1431,6 +1431,43 @@ ${lines.join(String.fromCharCode(10))}
     }
     aiContent = stripMemoTags(aiContent);
 
+    // 5.9d Handle Job Hunt directives (上岸计划：岗位卡/求职笔记增删改)
+    // 仅 jobHuntEnabled 角色才会被教这套标签；但与备忘录同款保险：检测到就执行。
+    // 每条成功指令落一张 job_card 消息（用户可见的操作回执，MessageItem 渲染）。
+    if (/\[\[JOB_(?:UPDATE|DEL|NOTE|NOTE_EDIT|NOTE_DEL):/.test(aiContent)) {
+        try {
+            const { parseJobHuntCommands } = await import('./jobHuntParser');
+            const { applyJobDirectives, describeJobCard } = await import('./jobDirectives');
+            const parsedJob = parseJobHuntCommands(aiContent);
+            aiContent = parsedJob.cleanText;
+            const { cards, rejected } = await applyJobDirectives(parsedJob, char.id);
+            for (const card of cards) {
+                try {
+                    await DB.saveMessage({
+                        charId: char.id,
+                        role: 'system',
+                        type: 'job_card',
+                        content: describeJobCard(card, char.name),
+                        metadata: { source: 'job-event', charName: char.name, charAvatar: char.avatar, jobCard: card },
+                    });
+                } catch (msgErr) {
+                    console.warn('💼 [JobHunt] saveMessage for job_card failed:', msgErr);
+                }
+            }
+            if (cards.length > 0) {
+                addToast(`💼 ${char.name} 更新了求职工作台（${cards.length} 项）`, 'success');
+                // 刷新消息列表让卡片马上可见（与备忘录不同：job_card 不是隐藏系统日志）
+                try {
+                    const latest = await DB.getRecentMessagesByCharId(char.id, 200);
+                    setMessages(latest);
+                } catch { /* 刷新失败不影响落库，下次重进聊天可见 */ }
+            }
+            rejected.forEach(r => console.warn('💼 [JobHunt] 拒绝指令:', r));
+        } catch (e) {
+            console.error('💼 [JobHunt] 指令处理失败:', e);
+        }
+    }
+
     // 5.10 Handle XHS (小红书) Actions
     const xhsConf = resolveXhsConfig(char, realtimeConfig);
 

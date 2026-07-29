@@ -2812,6 +2812,81 @@ const MessageItem = React.memo(({
         return commonLayout(card);
     }
 
+    if (m.type === 'job_card') {
+        const jc: any = m.metadata?.jobCard || {};
+        // 删除类回执：灰调一行式，不喧宾夺主
+        if (jc.jobKind === 'delete' || jc.jobKind === 'note_del') {
+            const receipt = (
+                <div className="w-72 rounded-xl border border-slate-200/80 bg-slate-50/90 px-3.5 py-2.5 flex items-center gap-2.5">
+                    <span className="w-6 h-6 rounded-lg bg-slate-200/70 text-slate-400 flex items-center justify-center text-[11px] shrink-0">🗑</span>
+                    <p className="text-[11.5px] leading-5 text-slate-500 min-w-0 truncate">
+                        {jc.jobKind === 'delete'
+                            ? <>已删除岗位卡 <span className="font-semibold text-slate-600">{jc.code}</span>{jc.stageLabel ? <span className="text-slate-400">（{jc.stageLabel}）</span> : null}</>
+                            : <>已删除笔记 <span className="font-semibold text-slate-600">《{jc.title}》</span></>}
+                    </p>
+                </div>
+            );
+            return commonLayout(receipt);
+        }
+        // 岗位进展卡
+        if (jc.jobKind === 'update') {
+            const card = (
+                <div className="w-72 rounded-2xl overflow-hidden border border-sky-200/70 bg-gradient-to-br from-sky-50 via-white to-cyan-50 shadow-sm">
+                    <div className="px-4 pt-3 pb-2 border-b border-sky-100 flex items-center gap-2">
+                        <span className="w-8 h-8 rounded-xl bg-sky-100 text-sky-600 flex items-center justify-center">💼</span>
+                        <div className="min-w-0 flex-1">
+                            <div className="text-[9px] font-bold tracking-[0.18em] text-sky-400 uppercase">上岸计划 · {jc.created ? '新岗位建档' : '岗位进展'}</div>
+                            <div className="text-[13px] font-bold text-slate-700 truncate">{jc.code || '未命名岗位'}</div>
+                        </div>
+                        {jc.stageLabel && (
+                            <span className="shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-600 border border-sky-200/70">{jc.stageLabel}</span>
+                        )}
+                    </div>
+                    <div className="px-4 py-3">
+                        {jc.nextStep ? (
+                            <p className="text-[12px] leading-6 text-slate-600"><span className="text-[10px] font-bold text-sky-500 mr-1.5">下一步</span>{jc.nextStep}</p>
+                        ) : (
+                            <p className="text-[12px] leading-6 text-slate-400">{jc.created ? '新卡已建，进展随聊随更' : '阶段已更新'}</p>
+                        )}
+                    </div>
+                    <div className="px-4 py-2 border-t border-sky-100 text-[9px] text-sky-400 flex justify-between">
+                        <span>求职工作台已同步</span>
+                        <span>{new Date(m.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
+                    </div>
+                </div>
+            );
+            return commonLayout(card);
+        }
+        // 笔记卡（note / note_edit）：默认收起摘要，<details> 展开看全预览（同 phone_card 折叠先例，分支里不碰 hook）
+        const card = (
+            <div className="w-72 rounded-2xl overflow-hidden border border-sky-200/70 bg-gradient-to-br from-sky-50 via-white to-indigo-50 shadow-sm">
+                <div className="px-4 pt-3 pb-2 border-b border-sky-100 flex items-center gap-2">
+                    <span className="w-8 h-8 rounded-xl bg-sky-100 text-sky-600 flex items-center justify-center">📝</span>
+                    <div className="min-w-0 flex-1">
+                        <div className="text-[9px] font-bold tracking-[0.18em] text-sky-400 uppercase">求职笔记 · {jc.jobKind === 'note_edit' ? '已修改' : '新记一篇'}</div>
+                        <div className="text-[13px] font-bold text-slate-700 truncate">{jc.title || '未命名笔记'}</div>
+                    </div>
+                    {jc.noteKindLabel && (
+                        <span className="shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-500 border border-indigo-200/70">{jc.noteKindLabel}</span>
+                    )}
+                </div>
+                {jc.preview && (
+                    <details className="group">
+                        <summary className="list-none cursor-pointer px-4 py-3 select-none">
+                            <p className="text-[12px] leading-6 text-slate-600 line-clamp-2 group-open:hidden">{jc.preview}</p>
+                            <p className="text-[12px] leading-6 text-slate-600 whitespace-pre-wrap hidden group-open:block max-h-48 overflow-y-auto no-scrollbar">{jc.preview}</p>
+                        </summary>
+                    </details>
+                )}
+                <div className="px-4 py-2 border-t border-sky-100 text-[9px] text-sky-400 flex justify-between">
+                    <span>已写入求职笔记本</span>
+                    <span>点摘要展开 · 全文见上岸计划</span>
+                </div>
+            </div>
+        );
+        return commonLayout(card);
+    }
+
     if (m.type === 'phone_card') {
         const pc: any = m.metadata?.phoneCard || {};
         const timeStr = new Date(m.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
