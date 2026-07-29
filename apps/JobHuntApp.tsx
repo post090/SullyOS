@@ -204,6 +204,8 @@ const JobHuntApp: React.FC = () => {
     const [viewingNote, setViewingNote] = useState<JobNote | null>(null);
     const [showResumePicker, setShowResumePicker] = useState(false);
     const [resumePreview, setResumePreview] = useState<{ name: string; format: JobResume['sourceFormat']; result: RedactResult } | null>(null);
+    const [showPasteImport, setShowPasteImport] = useState(false);
+    const [pasteText, setPasteText] = useState('');
     const [importBusy, setImportBusy] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -248,6 +250,7 @@ const JobHuntApp: React.FC = () => {
     // 返回键：弹窗 → 聊天视图 → 关 App
     useBackGuard([
         [!!resumePreview, () => setResumePreview(null)],
+        [showPasteImport, () => setShowPasteImport(false)],
         [!!viewingNote, () => setViewingNote(null)],
         [showNewPosition || !!editingPosition, () => { setShowNewPosition(false); setEditingPosition(null); }],
         [showNewSession, () => setShowNewSession(false)],
@@ -734,6 +737,16 @@ const JobHuntApp: React.FC = () => {
         addToast('简历已导入（存的是脱敏版）', 'success');
     }, [resumePreview, reloadAll, addToast]);
 
+    // 粘贴导入：同样过脱敏预览闸
+    const handlePasteImport = useCallback(() => {
+        const text = pasteText.trim();
+        if (!text) { addToast('先粘贴简历文本', 'info'); return; }
+        const result = redactPrivacy(text, { realNames: [userProfile.name] });
+        setShowPasteImport(false);
+        setPasteText('');
+        setResumePreview({ name: `粘贴的简历 ${new Date().toLocaleDateString('zh-CN')}`, format: 'paste', result });
+    }, [pasteText, userProfile, addToast]);
+
     // 对话里引用简历 → 让角色改
     const sendResumeToChat = useCallback((resume: JobResume) => {
         setShowResumePicker(false);
@@ -1142,11 +1155,15 @@ const JobHuntApp: React.FC = () => {
                         <div className="mt-6">
                             <div className="flex items-center justify-between mb-2">
                                 <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">简历库（已脱敏）</span>
+                            <div className="flex items-center gap-3">
+                                <button onClick={() => setShowPasteImport(true)}
+                                    className="text-xs text-slate-500 font-semibold">粘贴导入</button>
                                 <button onClick={() => fileInputRef.current?.click()} disabled={importBusy}
                                     className="flex items-center gap-1 text-xs text-sky-600 font-semibold disabled:opacity-50">
                                     {importBusy ? <CircleNotch className="w-3.5 h-3.5 animate-spin" /> : <UploadSimple className="w-3.5 h-3.5" />}
                                     导入 PDF/DOCX/TXT
                                 </button>
+                            </div>
                             </div>
                             {resumes.length === 0 && <div className="text-xs text-slate-400 bg-white rounded-2xl border border-dashed border-slate-200 p-4 text-center">还没导入简历。导入时会本地打码手机号/邮箱/身份证等，确认后才保存。</div>}
                             <div className="space-y-2">
@@ -1251,6 +1268,20 @@ const JobHuntApp: React.FC = () => {
                                 </button>
                             )}
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {/* 粘贴导入弹窗 */}
+            {showPasteImport && (
+                <div className="absolute inset-0 z-40 bg-black/30 flex items-end" onClick={() => setShowPasteImport(false)}>
+                    <div className="w-full bg-white rounded-t-3xl p-5" onClick={e => e.stopPropagation()} style={{ paddingBottom: 'max(1.25rem, var(--safe-bottom))' }}>
+                        <div className="font-bold text-slate-800 mb-1">粘贴简历文本</div>
+                        <div className="text-xs text-slate-400 mb-3">确认前会先本地打码手机号/邮箱/身份证等敏感信息</div>
+                        <textarea value={pasteText} onChange={e => setPasteText(e.target.value)} rows={8}
+                            placeholder="把简历文本粘到这里…"
+                            className="w-full bg-slate-100 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-sky-200 resize-none" />
+                        <button onClick={handlePasteImport} className="w-full mt-3 py-3 rounded-xl bg-sky-500 text-white text-sm font-bold active:scale-[0.98] transition-transform">脱敏预览</button>
                     </div>
                 </div>
             )}
