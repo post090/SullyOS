@@ -190,7 +190,7 @@ describe('AI roll NPC', () => {
         });
         const out = parseRolledNpcs(raw, ['老板娘']);
         expect(out).toHaveLength(2);
-        expect(out[0]).toEqual({ name: '面包店老板娘', persona: '热心肠', emoji: '🥖' });
+        expect(out[0]).toEqual({ name: '面包店老板娘', persona: '热心肠', emoji: '🥖', tier: 'major' });
         expect(out[1].emoji).toBe('🙂');
     });
 

@@ -169,7 +169,7 @@ const WMO_WEATHER_CODES: Record<number, { description: string; icon: string }> =
  * 新闻各源失败各自返回 []）。瞬断补枪 1 次由 resilientFetch 统一提供。
  */
 const fetchWithTimeout = (url: string, timeoutMs = 10_000, init: RequestInit = {}): Promise<Response> =>
-    resilientFetch(url, init, { timeoutMs, retries: 1 });
+    resilientFetch(url, init, { timeoutMs, retries: 1, retryOn5xx: false });
 
 /**
  * OpenWeatherMap 源（需要 API Key）。失败时抛错，由调用方决定是否回落。

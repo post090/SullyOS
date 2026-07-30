@@ -12,7 +12,7 @@ import {
     WorldProfile, WorldEpisode,
     TaskV2,
     CharWalletProfile, WalletTransaction, CharHomeProfile,
-    JobSession, JobPosition, JobNote, JobResume,
+    JobSession, JobPosition, JobNote, JobResume, JobProfile,
 } from '../types';
 import { exportPostOfficeLocal, importPostOfficeLocal } from './vrWorld/postOffice';
 import { exportSignalLocal, importSignalLocal } from './vrWorld/signal';
@@ -28,7 +28,8 @@ const DB_NAME = 'AetherOS_Data';
 // v68：character_groups 角色分组（神经链接"文件夹"，见 types.ts CharacterGroup）。
 // v69：资产系统三张表（char_wallets / wallet_transactions / char_homes，见 types.ts CharWalletProfile）。
 // v70：上岸计划四张表（job_sessions / job_positions / job_notes / job_resumes，见 types.ts JobSession）。
-const DB_VERSION = 70;
+// v71：上岸计划·竞争力档案（job_profile，用户级单份 id='main'，见 types.ts JobProfile）。
+const DB_VERSION = 71;
 
 const STORE_CHARACTERS = 'characters';
 const STORE_CHAR_GROUPS = 'character_groups'; // 角色分组定义（角色通过 groupId 指向；与群聊 groups 无关）
@@ -51,6 +52,7 @@ const STORE_JOB_SESSIONS = 'job_sessions';   // v70: 上岸计划·求职会话�
 const STORE_JOB_POSITIONS = 'job_positions'; // v70: 上岸计划·岗位卡（keyPath=id；真实公司名只存 companyNameLocal，永不进 prompt）
 const STORE_JOB_NOTES = 'job_notes';         // v70: 上岸计划·笔记本（keyPath=id）
 const STORE_JOB_RESUMES = 'job_resumes';     // v70: 上岸计划·简历（keyPath=id，只存脱敏后文本）
+const STORE_JOB_PROFILE = 'job_profile';     // v71: 上岸计划·竞争力档案（keyPath=id，用户级单份 id='main'）
 const STORE_ANNIVERSARIES = 'anniversaries';
 const STORE_ROOM_TODOS = 'room_todos'; 
 const STORE_ROOM_NOTES = 'room_notes'; 
@@ -289,6 +291,7 @@ export const openDB = (): Promise<IDBDatabase> => {
       createStore(STORE_JOB_POSITIONS, { keyPath: 'id' });
       createStore(STORE_JOB_NOTES, { keyPath: 'id' });
       createStore(STORE_JOB_RESUMES, { keyPath: 'id' });
+      createStore(STORE_JOB_PROFILE, { keyPath: 'id' });
 
       if (!db.objectStoreNames.contains(STORE_ROOM_TODOS)) {
           db.createObjectStore(STORE_ROOM_TODOS, { keyPath: 'id' });
@@ -1781,6 +1784,22 @@ export const DB = {
       db.transaction(STORE_JOB_RESUMES, 'readwrite').objectStore(STORE_JOB_RESUMES).delete(id);
   },
 
+  /** 竞争力档案（用户级单份 id='main'）；表未建/未写过返回 null */
+  getJobProfile: async (): Promise<JobProfile | null> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_JOB_PROFILE)) return null;
+      return new Promise((resolve, reject) => {
+          const req = db.transaction(STORE_JOB_PROFILE, 'readonly').objectStore(STORE_JOB_PROFILE).get('main');
+          req.onsuccess = () => resolve(req.result || null);
+          req.onerror = () => reject(req.error);
+      });
+  },
+
+  saveJobProfile: async (profile: JobProfile): Promise<void> => {
+      const db = await openDB();
+      db.transaction(STORE_JOB_PROFILE, 'readwrite').objectStore(STORE_JOB_PROFILE).put({ ...profile, id: 'main' });
+  },
+
   /**
    * 老任务（STORE_TASKS）→ 新任务（STORE_TASKS_V2）一次性迁移。
    * 规则：
@@ -2990,7 +3009,7 @@ export const DB = {
           });
       };
 
-      const [characters, characterGroups, messages, themes, emojis, emojiCategories, assets, galleryImages, userProfiles, diaries, tasks, anniversaries, roomTodos, roomNotes, groups, journalStickers, socialPosts, courses, games, worldbooks, novels, bankTx, bankData, xhsActivities, xhsStockImages, songs, quizzes, guidebookSessions, scheduledMessages, lifeSimStates, handbooks, trackers, trackerEntries, hotNewsSnapshots, vrNovels, vrAnnotations, customCreatorParts, vrMusic, vrGuestbook, vrScripts, vrStagedPlays, vrPresets, vrLetters, vrSettings, worlds, worldEpisodes, lifeRecords, medPlans, lifeRecordSettings, charWallets, walletTx, charHomes, jobSessions, jobPositions, jobNotes, jobResumes] = await Promise.all([
+      const [characters, characterGroups, messages, themes, emojis, emojiCategories, assets, galleryImages, userProfiles, diaries, tasks, anniversaries, roomTodos, roomNotes, groups, journalStickers, socialPosts, courses, games, worldbooks, novels, bankTx, bankData, xhsActivities, xhsStockImages, songs, quizzes, guidebookSessions, scheduledMessages, lifeSimStates, handbooks, trackers, trackerEntries, hotNewsSnapshots, vrNovels, vrAnnotations, customCreatorParts, vrMusic, vrGuestbook, vrScripts, vrStagedPlays, vrPresets, vrLetters, vrSettings, worlds, worldEpisodes, lifeRecords, medPlans, lifeRecordSettings, charWallets, walletTx, charHomes, jobSessions, jobPositions, jobNotes, jobResumes, jobProfiles] = await Promise.all([
           getAllFromStore(STORE_CHARACTERS),
           getAllFromStore(STORE_CHAR_GROUPS),
           getAllFromStore(STORE_MESSAGES),
@@ -3047,6 +3066,7 @@ export const DB = {
           getAllFromStore(STORE_JOB_POSITIONS),
           getAllFromStore(STORE_JOB_NOTES),
           getAllFromStore(STORE_JOB_RESUMES),
+          getAllFromStore(STORE_JOB_PROFILE),
       ]);
 
       const userProfile = userProfiles.length > 0 ? {
@@ -3070,6 +3090,7 @@ export const DB = {
           jobPositions,
           jobNotes,
           jobResumes,
+          jobProfiles,
           xhsActivities,
           xhsStockImages,
           songs,
@@ -3217,6 +3238,7 @@ export const DB = {
                     data.jobPositions !== undefined,
                     data.jobNotes !== undefined,
                     data.jobResumes !== undefined,
+          data.jobProfiles !== undefined,
           data.xhsActivities !== undefined,
           data.xhsStockImages !== undefined,
           data.memoryNodes !== undefined,
@@ -3628,6 +3650,10 @@ export const DB = {
           await clearAndAdd(STORE_JOB_RESUMES, data.jobResumes, '求职简历', false);
           data.jobResumes = undefined as any;
       }, data.jobResumes?.length || 0);
+      await runSection('求职档案', data.jobProfiles !== undefined, async () => {
+          await clearAndAdd(STORE_JOB_PROFILE, data.jobProfiles, '求职档案', false);
+          data.jobProfiles = undefined as any;
+      }, data.jobProfiles?.length || 0);
       await runSection('小红书活动', data.xhsActivities !== undefined, async () => {
           await clearAndAdd(STORE_XHS_ACTIVITIES, data.xhsActivities, '小红书活动', false);
           data.xhsActivities = undefined as any;

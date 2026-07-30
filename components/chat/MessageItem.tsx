@@ -2116,7 +2116,7 @@ const MessageItem = React.memo(({
             const jCharName = String(meta.charName || charName || '—');
             const jCharAvatar = String(meta.charAvatar || charAvatar || '');
             const cards: any[] = Array.isArray(meta.jobCards) ? meta.jobCards : (meta.jobCard ? [meta.jobCard] : []);
-            const posCount = cards.filter(c => c.jobKind === 'update' || c.jobKind === 'set').length;
+            const posCount = cards.filter(c => c.jobKind === 'update' || c.jobKind === 'set' || c.jobKind === 'round' || c.jobKind === 'interview_time' || c.jobKind === 'waiting').length;
             const noteCount = cards.filter(c => c.jobKind === 'note' || c.jobKind === 'note_edit').length;
             const delCount = cards.filter(c => c.jobKind === 'delete' || c.jobKind === 'note_del').length;
             const summaryParts: string[] = [];
@@ -2150,53 +2150,100 @@ const MessageItem = React.memo(({
                                 </div>
                             </div>
                             {cards.length > 0 && (
-                                <div className="mt-2 space-y-1">
-                                    {cards.map((c, i) => {
-                                        if (c.jobKind === 'update') {
-                                            return (
-                                                <div key={i} className="rounded-lg bg-white/70 border border-white/60 px-2.5 py-1.5">
-                                                    <div className="flex items-center gap-1.5">
-                                                        <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0 bg-sky-400" />
-                                                        <span className="text-[10px] font-bold text-sky-600">[{c.created ? '建卡' : '进展'}]</span>
-                                                        <span className="text-[12px] font-semibold text-slate-700 truncate">{c.code}</span>
-                                                        {c.stageLabel && <span className="ml-auto shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-sky-500/10 text-sky-600 border border-sky-200/70">{c.stageLabel}</span>}
+                                <div className="mt-2 space-y-1.5">
+                                    {(() => {
+                                        // 同岗位归拢：有代号的条目按代号分组（组头显代号，组内不重复）；笔记类无代号，单独成组排尾
+                                        const byCode = new Map<string, any[]>();
+                                        const tail: any[] = [];
+                                        cards.forEach(c => {
+                                            if (c.code) {
+                                                if (!byCode.has(c.code)) byCode.set(c.code, []);
+                                                byCode.get(c.code)!.push(c);
+                                            } else tail.push(c);
+                                        });
+                                        const groups: { key: string; code?: string; items: any[] }[] = [];
+                                        byCode.forEach((items, code) => groups.push({ key: `p_${code}`, code, items }));
+                                        if (tail.length) groups.push({ key: 'notes_tail', items: tail });
+                                        // 类型分色：建卡蓝 / 阶段紫 / 改字段翠绿 / 环节青 / 时间青 / 等反馈琥珀 / 笔记靖蓝 / 删除红
+                                        const line = (c: any, i: number) => {
+                                            if (c.jobKind === 'update') {
+                                                return (
+                                                    <div key={i} className="flex items-center gap-1.5">
+                                                        <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${c.created ? 'bg-sky-400' : 'bg-violet-400'}`} />
+                                                        <span className={`text-[10px] font-bold ${c.created ? 'text-sky-600' : 'text-violet-500'}`}>[{c.created ? '建卡' : '进展'}]</span>
+                                                        {c.stageLabel && <span className="shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-violet-500/10 text-violet-600 border border-violet-200/70">{c.stageLabel}</span>}
+                                                        {c.nextStep && <span className="text-[11px] text-slate-500 truncate">下一步：{c.nextStep}</span>}
                                                     </div>
-                                                    {c.nextStep && <div className="text-[11px] text-slate-500 mt-1 pl-3">下一步：{c.nextStep}</div>}
+                                                );
+                                            }
+                                            if (c.jobKind === 'set') {
+                                                return (
+                                                    <div key={i}>
+                                                        <div className="flex items-center gap-1.5">
+                                                            <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0 bg-emerald-400" />
+                                                            <span className="text-[10px] font-bold text-emerald-600">[改字段]</span>
+                                                            <span className="text-[12px] text-slate-600 truncate">{c.fieldLabel}</span>
+                                                        </div>
+                                                        {c.valuePreview && <div className="text-[11px] text-slate-500 mt-0.5 pl-3 line-clamp-2">{c.valuePreview}</div>}
+                                                    </div>
+                                                );
+                                            }
+                                            if (c.jobKind === 'round') {
+                                                return (
+                                                    <div key={i} className="flex items-center gap-1.5">
+                                                        <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0 bg-cyan-400" />
+                                                        <span className="text-[10px] font-bold text-cyan-600">[环节]</span>
+                                                        <span className="text-[12px] text-slate-600">{c.roundKindLabel}第{c.roundIndex}轮</span>
+                                                        {c.roundStatusLabel && <span className="shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-cyan-500/10 text-cyan-600 border border-cyan-200/70">{c.roundStatusLabel}</span>}
+                                                        {c.timeText && <span className="text-[11px] text-slate-500 truncate">{c.timeText}</span>}
+                                                    </div>
+                                                );
+                                            }
+                                            if (c.jobKind === 'interview_time') {
+                                                return (
+                                                    <div key={i} className="flex items-center gap-1.5">
+                                                        <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0 bg-cyan-400" />
+                                                        <span className="text-[10px] font-bold text-cyan-600">[面试时间]</span>
+                                                        <span className="text-[12px] text-slate-600 truncate">{c.timeText}</span>
+                                                    </div>
+                                                );
+                                            }
+                                            if (c.jobKind === 'waiting') {
+                                                return (
+                                                    <div key={i} className="flex items-center gap-1.5">
+                                                        <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0 bg-amber-400" />
+                                                        <span className="text-[10px] font-bold text-amber-600">[等反馈]</span>
+                                                        <span className="text-[12px] text-slate-600 truncate">{c.valuePreview}</span>
+                                                    </div>
+                                                );
+                                            }
+                                            if (c.jobKind === 'note' || c.jobKind === 'note_edit') {
+                                                return (
+                                                    <div key={i}>
+                                                        <div className="flex items-center gap-1.5">
+                                                            <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0 bg-indigo-400" />
+                                                            <span className="text-[10px] font-bold text-indigo-500">[{c.jobKind === 'note_edit' ? '改笔记' : c.noteKindLabel || '笔记'}]</span>
+                                                            <span className="text-[12px] text-slate-600 truncate">《{c.title}》</span>
+                                                        </div>
+                                                        {c.preview && c.jobKind === 'note' && <div className="text-[11px] text-slate-400 mt-0.5 pl-3 line-clamp-2">{c.preview}</div>}
+                                                    </div>
+                                                );
+                                            }
+                                            return (
+                                                <div key={i} className="flex items-center gap-1.5">
+                                                    <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0 bg-rose-400" />
+                                                    <span className="text-[10px] font-bold text-rose-500">[删除]</span>
+                                                    <span className="text-[12px] text-slate-500 truncate">{c.jobKind === 'delete' ? `岗位卡 ${c.code}` : `笔记《${c.title}》`}</span>
                                                 </div>
                                             );
-                                        }
-                                        if (c.jobKind === 'set') {
-                                            return (
-                                                <div key={i} className="rounded-lg bg-white/70 border border-white/60 px-2.5 py-1.5">
-                                                    <div className="flex items-center gap-1.5">
-                                                        <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0 bg-emerald-400" />
-                                                        <span className="text-[10px] font-bold text-emerald-600">[改 {c.code}]</span>
-                                                        <span className="text-[12px] text-slate-600 truncate">{c.fieldLabel}</span>
-                                                    </div>
-                                                    {c.valuePreview && <div className="text-[11px] text-slate-500 mt-1 pl-3 line-clamp-2">{c.valuePreview}</div>}
-                                                </div>
-                                            );
-                                        }
-                                        if (c.jobKind === 'note' || c.jobKind === 'note_edit') {
-                                            return (
-                                                <div key={i} className="rounded-lg bg-white/70 border border-white/60 px-2.5 py-1.5">
-                                                    <div className="flex items-center gap-1.5">
-                                                        <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0 bg-indigo-400" />
-                                                        <span className="text-[10px] font-bold text-indigo-500">[{c.jobKind === 'note_edit' ? '改笔记' : c.noteKindLabel || '笔记'}]</span>
-                                                        <span className="text-[12px] text-slate-600 truncate">《{c.title}》</span>
-                                                    </div>
-                                                    {c.preview && c.jobKind === 'note' && <div className="text-[11px] text-slate-400 mt-1 pl-3 line-clamp-2">{c.preview}</div>}
-                                                </div>
-                                            );
-                                        }
-                                        return (
-                                            <div key={i} className="flex items-center gap-1.5 rounded-lg bg-white/70 border border-white/60 px-2.5 py-1.5">
-                                                <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0 bg-rose-400" />
-                                                <span className="text-[10px] font-bold text-rose-500">[删除]</span>
-                                                <span className="text-[12px] text-slate-500 truncate">{c.jobKind === 'delete' ? `岗位卡 ${c.code}` : `笔记《${c.title}》`}</span>
+                                        };
+                                        return groups.map(g => (
+                                            <div key={g.key} className="rounded-lg bg-white/70 border border-white/60 px-2.5 py-1.5">
+                                                {g.code && <div className="text-[11px] font-bold text-slate-700 mb-1">{g.code}</div>}
+                                                <div className="space-y-1">{g.items.map((c, i) => line(c, i))}</div>
                                             </div>
-                                        );
-                                    })}
+                                        ));
+                                    })()}
                                 </div>
                             )}
                             <div className="mt-2 text-[10px] text-slate-400 text-right">点卡片打开上岸计划 →</div>

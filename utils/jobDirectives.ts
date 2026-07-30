@@ -13,16 +13,46 @@
  */
 
 import { DB } from './db';
-import { JobNote, JobPosition, Message } from '../types';
+import { JobNote, JobPosition, JobRound, Message } from '../types';
 import { JobParseResult, JOB_COMMAND_GUIDE, normalizeJobStage, JobSettableField } from './jobHuntParser';
 import { redactPrivacy, codifyCompanies } from './privacyRedact';
 
 const STAGE_LABEL: Record<string, string> = {
-    watching: '观望中', applied: '已投递', written: '笔试中', interview: '面试中', offer: 'Offer', rejected: '已结束',
+    watching: '观望中', applied: '已投递', written: '笔试中', interview: '面试中', offer_talk: '沟通Offer', offer: '已接受Offer', rejected: '已结束',
 };
 const NOTE_KIND_LABEL: Record<string, string> = {
     eval: '面试评价', resume_advice: '简历建议', analysis: '岗位分析', note: '随手记',
 };
+/** 环节展示文案（UI/转述/注入共用） */
+export const ROUND_KIND_LABEL: Record<string, string> = { written: '笔试', interview: '面试' };
+export const ROUND_STATUS_LABEL: Record<string, string> = {
+    pending: '待安排', scheduled: '待进行', awaiting: '等结果', passed: '通过', failed: '挂了',
+};
+
+/** 时间戳 → 「M月D日 HH:mm」（本机时区，卡片/注入/转述共用） */
+export const fmtJobTime = (ts: number): string => {
+    const d = new Date(ts);
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    return `${d.getMonth() + 1}月${d.getDate()}日 ${hh}:${mm}`;
+};
+
+/** 下一场面试时间：rounds 里未完成 interview 环节的最近 at，其次 interviewAt（兼容读）；过期超 1 小时不算 */
+export function nextInterviewTs(p: JobPosition, now: number = Date.now()): number | null {
+    const floor = now - 3600 * 1000;
+    const cands: number[] = [];
+    (p.rounds || []).forEach(r => {
+        if (r.kind === 'interview' && (r.status === 'scheduled' || r.status === 'pending') && r.at && r.at > floor) cands.push(r.at);
+    });
+    if (p.interviewAt && p.interviewAt > floor) cands.push(p.interviewAt);
+    return cands.length ? Math.min(...cands) : null;
+}
+
+/** 等反馈天数（第 1 天起）；未在等返回 null */
+export function waitingDays(p: JobPosition, now: number = Date.now()): number | null {
+    if (!p.waitingSince) return null;
+    return Math.max(1, Math.floor((now - p.waitingSince) / (24 * 3600 * 1000)) + 1);
+}
 
 const genId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
@@ -40,29 +70,57 @@ export function jdDigestForPrompt(pos: JobPosition, allPositions: JobPosition[],
     return text.length > maxLen ? `${text.slice(0, maxLen)}…` : text;
 }
 
-/** 岗位注入行（单聊 / 工作台两处共用，保证对齐）：代号·岗位·阶段·项目·下一步·JD 摘要 */
+/** 岗位注入行（单聊 / 工作台两处共用，保证对齐）：代号·岗位·阶段·环节·时间·项目·下一步·JD/笔记摘要 */
 export function buildPositionPromptLine(p: JobPosition, allPositions: JobPosition[]): string {
     const parts = [`- ${p.code} · ${p.title} · ${STAGE_LABEL[p.stage] || p.stage}`];
+    const rounds = p.rounds || [];
+    if (rounds.length > 0) {
+        const seg = rounds.map(r => {
+            const base = `${ROUND_KIND_LABEL[r.kind]}${r.index}${ROUND_STATUS_LABEL[r.status] || r.status}`;
+            return r.at ? `${base}(${fmtJobTime(r.at)})` : base;
+        }).join('、');
+        parts.push(`环节：${seg}`);
+    }
+    const nextTs = nextInterviewTs(p);
+    if (nextTs) {
+        const days = Math.ceil((nextTs - Date.now()) / (24 * 3600 * 1000));
+        const hint = days <= 0 ? '就在今天' : days === 1 ? '就在明天' : `还有 ${days} 天`;
+        parts.push(`下一场面试：${fmtJobTime(nextTs)}（${hint}）`);
+    }
+    const wd = waitingDays(p);
+    if (wd) parts.push(`等反馈第 ${wd} 天`);
     if (p.projectName) parts.push(`项目：${p.projectName}`);
     if (p.nextStep) parts.push(`下一步：${p.nextStep}`);
     const jd = jdDigestForPrompt(p, allPositions);
     if (jd) parts.push(`JD 摘要：${jd}`);
+    const notes = (p.notes || '').trim();
+    if (notes) {
+        let t = redactPrivacy(notes).text;
+        t = codifyCompanies(t, allPositions).replace(/\s+/g, ' ').trim();
+        parts.push(`岗位笔记：${t.length > 120 ? `${t.slice(0, 120)}…` : t}`);
+    }
     return parts.join(' · ');
 }
 
 /** 一张 job_card 消息的 metadata.jobCard 结构 */
 export interface JobCardPayload {
-    jobKind: 'update' | 'set' | 'delete' | 'note' | 'note_edit' | 'note_del';
-    /** update/set/delete：岗位代号 */
+    jobKind: 'update' | 'set' | 'round' | 'interview_time' | 'waiting' | 'delete' | 'note' | 'note_edit' | 'note_del';
+    /** update/set/round/interview_time/waiting/delete：岗位代号 */
     code?: string;
     stage?: string;
     stageLabel?: string;
     nextStep?: string;
     /** update 时是否为新建卡 */
     created?: boolean;
-    /** set：被改的字段中文标签 + 值摘要 */
+    /** set：被改的字段中文标签 + 值摘要；waiting 也用 valuePreview 写状态文案 */
     fieldLabel?: string;
     valuePreview?: string;
+    /** round：环节展示（面试/笔试 · 第几轮 · 状态） */
+    roundKindLabel?: string;
+    roundIndex?: number;
+    roundStatusLabel?: string;
+    /** round/interview_time：时间文案（如「8月6日 14:00」/「已清除」） */
+    timeText?: string;
     /** note 系列 */
     noteId?: string;
     noteKind?: string;
@@ -73,7 +131,7 @@ export interface JobCardPayload {
 }
 
 const FIELD_LABEL: Record<JobSettableField, string> = {
-    title: '岗位名', projectName: '项目名', jd: 'JD', nextStep: '下一步', stage: '阶段',
+    title: '岗位名', projectName: '项目名', jd: 'JD', nextStep: '下一步', stage: '阶段', notes: '岗位笔记',
 };
 
 /**
@@ -168,6 +226,9 @@ export async function applyJobDirectives(
             } else if (s.field === 'jd') {
                 next.jd = s.value || undefined;
                 valuePreview = s.value.replace(/\s+/g, ' ').slice(0, 40);
+            } else if (s.field === 'notes') {
+                next.notes = s.value || undefined;
+                valuePreview = s.value.replace(/\s+/g, ' ').slice(0, 40);
             }
             await DB.saveJobPosition(next);
             cards.push({
@@ -176,6 +237,55 @@ export async function applyJobDirectives(
                 valuePreview: valuePreview.length > 60 ? `${valuePreview.slice(0, 60)}…` : valuePreview,
             });
         } catch (e: any) { rejected.push(`JOB_SET ${s.code}: ${e?.message || e}`); }
+    }
+
+    // ── 环节轮次（同代号同类型同轮次 = 更新，否则新建） ──
+    for (const r of parsed.rounds) {
+        try {
+            const all = await DB.getJobPositions();
+            const target = all.find(p => p.code === r.code);
+            if (!target) { rejected.push(`JOB_ROUND: 找不到代号「${r.code}」`); continue; }
+            const rounds: JobRound[] = [...(target.rounds || [])];
+            const idx = rounds.findIndex(x => x.kind === r.kind && x.index === r.index);
+            if (idx >= 0) {
+                const prev = rounds[idx];
+                rounds[idx] = { ...prev, status: r.status, at: r.clearAt ? undefined : (r.at ?? prev.at) };
+            } else {
+                rounds.push({ id: genId('jround'), kind: r.kind, index: r.index, status: r.status, at: r.clearAt ? undefined : r.at });
+            }
+            rounds.sort((a, b) => (a.kind === b.kind ? a.index - b.index : a.kind === 'written' ? -1 : 1));
+            await DB.saveJobPosition({ ...target, rounds, updatedAt: now });
+            const saved = idx >= 0 ? rounds[idx] : rounds.find(x => x.kind === r.kind && x.index === r.index)!;
+            cards.push({
+                jobKind: 'round', code: r.code,
+                roundKindLabel: ROUND_KIND_LABEL[r.kind], roundIndex: r.index,
+                roundStatusLabel: ROUND_STATUS_LABEL[r.status],
+                timeText: r.clearAt ? '已清除' : (saved.at ? fmtJobTime(saved.at) : undefined),
+            });
+        } catch (e: any) { rejected.push(`JOB_ROUND ${r.code}: ${e?.message || e}`); }
+    }
+
+    // ── 面试时间快捷（interviewAt） ──
+    for (const iv of parsed.interviews) {
+        try {
+            const all = await DB.getJobPositions();
+            const target = all.find(p => p.code === iv.code);
+            if (!target) { rejected.push(`JOB_INTERVIEW: 找不到代号「${iv.code}」`); continue; }
+            await DB.saveJobPosition({ ...target, interviewAt: iv.clear ? undefined : iv.at, updatedAt: now });
+            cards.push({ jobKind: 'interview_time', code: iv.code, timeText: iv.clear ? '已清除' : fmtJobTime(iv.at!) });
+        } catch (e: any) { rejected.push(`JOB_INTERVIEW ${iv.code}: ${e?.message || e}`); }
+    }
+
+    // ── 等反馈开关（waitingSince；已在等则保留原起点，天数不重置） ──
+    for (const w of parsed.waitings) {
+        try {
+            const all = await DB.getJobPositions();
+            const target = all.find(p => p.code === w.code);
+            if (!target) { rejected.push(`JOB_WAITING: 找不到代号「${w.code}」`); continue; }
+            const waitingSince = w.clear ? undefined : (target.waitingSince || now);
+            await DB.saveJobPosition({ ...target, waitingSince, updatedAt: now });
+            cards.push({ jobKind: 'waiting', code: w.code, valuePreview: w.clear ? '结束等反馈' : '开始等反馈' });
+        } catch (e: any) { rejected.push(`JOB_WAITING ${w.code}: ${e?.message || e}`); }
     }
 
     // ── 岗位删除 ──
@@ -243,6 +353,11 @@ export async function applyJobDirectives(
         } catch (err: any) { rejected.push(`JOB_NOTE_DEL ${key}: ${err?.message || err}`); }
     }
 
+    // 落库成功后广播刷新（桌面日历等常驻组件监听此事件即时更新）
+    if (cards.length > 0 && typeof window !== 'undefined') {
+        try { window.dispatchEvent(new CustomEvent('sully-job-updated')); } catch { /* 非浏览器环境忽略 */ }
+    }
+
     return { cards, rejected };
 }
 
@@ -254,6 +369,12 @@ export function describeJobCard(card: JobCardPayload | undefined, charName: stri
             return `[系统: ${charName}${card.created ? '为你建了岗位卡' : '更新了岗位进展'} ${card.code} → ${card.stageLabel}${card.nextStep ? `，下一步：${card.nextStep}` : ''}]`;
         case 'set':
             return `[系统: ${charName}更新了岗位 ${card.code} 的${card.fieldLabel}${card.valuePreview ? `：${card.valuePreview}` : ''}]`;
+        case 'round':
+            return `[系统: ${charName}更新了岗位 ${card.code} 的${card.roundKindLabel}第${card.roundIndex}轮 → ${card.roundStatusLabel}${card.timeText ? `，时间：${card.timeText}` : ''}]`;
+        case 'interview_time':
+            return `[系统: ${charName}记下了岗位 ${card.code} 的面试时间：${card.timeText}]`;
+        case 'waiting':
+            return `[系统: ${charName}把岗位 ${card.code} 标记为${card.valuePreview}]`;
         case 'delete':
             return `[系统: ${charName}删除了岗位卡 ${card.code}]`;
         case 'note':
@@ -278,6 +399,9 @@ export function describeJobBatch(cards: JobCardPayload[], charName: string): str
         switch (c.jobKind) {
             case 'update': return `${c.created ? '建卡' : '更新'} ${c.code} → ${c.stageLabel}${c.nextStep ? `（下一步：${c.nextStep}）` : ''}`;
             case 'set': return `改 ${c.code} 的${c.fieldLabel}${c.valuePreview ? `：${c.valuePreview}` : ''}`;
+            case 'round': return `${c.code} ${c.roundKindLabel}第${c.roundIndex}轮 → ${c.roundStatusLabel}${c.timeText ? `（${c.timeText}）` : ''}`;
+            case 'interview_time': return `${c.code} 面试时间：${c.timeText}`;
+            case 'waiting': return `${c.code} ${c.valuePreview}`;
             case 'delete': return `删岗位卡 ${c.code}`;
             case 'note': return `记${c.noteKindLabel}《${c.title}》`;
             case 'note_edit': return `改笔记《${c.title}》`;

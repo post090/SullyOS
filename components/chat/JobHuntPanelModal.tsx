@@ -17,13 +17,14 @@ import { DB } from '../../utils/db';
 import { CharacterProfile, JobPosition, JobNote, JobResume, JobStage } from '../../types';
 
 const STAGE_LABEL: Record<JobStage, string> = {
-    watching: '观望中', applied: '已投递', written: '笔试中', interview: '面试中', offer: 'Offer', rejected: '已结束',
+    watching: '观望中', applied: '已投递', written: '笔试中', interview: '面试中', offer_talk: '沟通Offer', offer: '已接受Offer', rejected: '已结束',
 };
 const STAGE_STYLE: Record<JobStage, string> = {
     watching: 'bg-violet-100 text-violet-600',
     applied: 'bg-slate-100 text-slate-600',
     written: 'bg-amber-100 text-amber-700',
     interview: 'bg-sky-100 text-sky-700',
+    offer_talk: 'bg-teal-100 text-teal-700',
     offer: 'bg-emerald-100 text-emerald-700',
     rejected: 'bg-slate-100 text-slate-400',
 };

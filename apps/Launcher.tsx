@@ -365,13 +365,49 @@ const WidgetsPage = React.memo(({ contentColor, openApp, anniversaries, characte
     const calendarDays = Array.from({ length: totalDays }, (_, i) => i + 1);
     const paddingDays = Array.from({ length: startOffset }, () => null);
 
+    // --- 求职面试/笔试环节 → 日历事件源（琥珀点）；只取未过期，零侵入纪念日数据 ---
+    const [jobEvents, setJobEvents] = useState<{ id: string; date: string; title: string; ts: number }[]>([]);
+    useEffect(() => {
+        let alive = true;
+        const toDateStr = (ts: number) => {
+            const d = new Date(ts);
+            return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        };
+        const load = async () => {
+            try {
+                const positions = await DB.getJobPositions();
+                const floor = Date.now() - 3600 * 1000;
+                const evs: { id: string; date: string; title: string; ts: number }[] = [];
+                positions.forEach(p => {
+                    (p.rounds || []).forEach(r => {
+                        if (r.at && r.at > floor && (r.status === 'scheduled' || r.status === 'pending')) {
+                            evs.push({ id: `${p.id}_${r.id}`, ts: r.at, date: toDateStr(r.at), title: `${r.kind === 'written' ? '笔试' : '面试'}·${p.code} ${p.title}` });
+                        }
+                    });
+                    // interviewAt 兼容读：rounds 里已有同时刻环节则不重复
+                    if (p.interviewAt && p.interviewAt > floor && !(p.rounds || []).some(r => r.at === p.interviewAt)) {
+                        evs.push({ id: `${p.id}_iv`, ts: p.interviewAt, date: toDateStr(p.interviewAt), title: `面试·${p.code} ${p.title}` });
+                    }
+                });
+                evs.sort((a, b) => a.ts - b.ts);
+                if (alive) setJobEvents(evs);
+            } catch { /* 表未建等场景静默 */ }
+        };
+        load();
+        const onUpd = () => load();
+        window.addEventListener('sully-job-updated', onUpd);
+        const iv = window.setInterval(load, 60000); // Launcher 常驻不卸载，定时刷新防陈旧
+        return () => { alive = false; window.removeEventListener('sully-job-updated', onUpd); window.clearInterval(iv); };
+    }, []);
+
     // --- Upcoming events: only today + future, soonest first (non-mutating), paginated ---
     const todayStr = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     const upcomingEvents = useMemo(
-        () => [...(anniversaries as any[])]
-            .filter((a: any) => a.date >= todayStr)
-            .sort((a: any, b: any) => a.date.localeCompare(b.date)),
-        [anniversaries, todayStr]
+        () => [
+            ...[...(anniversaries as any[])].filter((a: any) => a.date >= todayStr).map((a: any) => ({ ...a, _kind: 'anni' })),
+            ...jobEvents.filter(e => e.date >= todayStr).map(e => ({ ...e, _kind: 'job' })),
+        ].sort((a: any, b: any) => a.date.localeCompare(b.date)),
+        [anniversaries, jobEvents, todayStr]
     );
     const EVENTS_PER_PAGE = 4;
     const eventPageCount = Math.max(1, Math.ceil(upcomingEvents.length / EVENTS_PER_PAGE));
@@ -402,6 +438,7 @@ const WidgetsPage = React.memo(({ contentColor, openApp, anniversaries, characte
                           const dateStr = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                           const isToday = day === now.getDate();
                           const hasEvent = anniversaries.some((a: any) => a.date === dateStr);
+                          const hasJobEvent = jobEvents.some(e => e.date === dateStr);
                           
                           return (
                               <div key={day} className="flex flex-col items-center justify-center h-8 relative">
@@ -411,7 +448,12 @@ const WidgetsPage = React.memo(({ contentColor, openApp, anniversaries, characte
                                   >
                                       {day}
                                   </div>
-                                  {hasEvent && <div className="w-1.5 h-1.5 rounded-full absolute bottom-0 shadow-sm border border-black/10" style={{ background: acDot || (paper ? '#a66f52' : '#c084fc') }}></div>}
+                                  {(hasEvent || hasJobEvent) && (
+                                      <div className="absolute bottom-0 flex gap-0.5">
+                                          {hasEvent && <div className="w-1.5 h-1.5 rounded-full shadow-sm border border-black/10" style={{ background: acDot || (paper ? '#a66f52' : '#c084fc') }}></div>}
+                                          {hasJobEvent && <div className="w-1.5 h-1.5 rounded-full shadow-sm border border-black/10" style={{ background: '#f59e0b' }}></div>}
+                                      </div>
+                                  )}
                               </div>
                           );
                       })}
@@ -446,15 +488,26 @@ const WidgetsPage = React.memo(({ contentColor, openApp, anniversaries, characte
                       )}
                   </div>
                   <div className="space-y-3">
-                      {upcomingEvents.length > 0 ? pagedEvents.map((anni: any) => (
-                          <div key={anni.id} className={`flex items-center gap-3 p-3 rounded-xl ${acnh ? 'bg-[#efe7d4] border border-[#e0d6c0]' : paper ? 'bg-[#f3ecdf]/70 border border-[#5b4833]/10' : 'bg-white/5 border border-white/10'}`}>
-                              <div className={`w-10 h-10 shrink-0 rounded-lg flex flex-col items-center justify-center ${acnh ? 'bg-[#82D5BB] text-white border border-[#6cc0a6]' : paper ? 'bg-[#a66f52]/12 text-[#8c5d46] border border-[#a66f52]/15' : 'bg-purple-500/20 text-purple-200 border border-purple-500/30'}`}>
-                                  <span className="text-[9px] opacity-70">{anni.date.split('-')[1]}</span>
-                                  <span className="text-sm font-bold leading-none">{anni.date.split('-')[2]}</span>
+                      {upcomingEvents.length > 0 ? pagedEvents.map((ev: any) => ev._kind === 'job' ? (
+                          <div key={ev.id} onClick={() => openApp(AppID.JobHunt)} className={`flex items-center gap-3 p-3 rounded-xl cursor-pointer active:scale-[0.98] transition-transform ${acnh ? 'bg-[#f7edd6] border border-[#e8d9b4]' : paper ? 'bg-[#f3ecdf]/70 border border-[#5b4833]/10' : 'bg-amber-400/10 border border-amber-300/20'}`}>
+                              <div className={`w-10 h-10 shrink-0 rounded-lg flex flex-col items-center justify-center ${acnh ? 'bg-[#e8b04b] text-white border border-[#d69f3c]' : paper ? 'bg-[#a66f52]/12 text-[#8c5d46] border border-[#a66f52]/15' : 'bg-amber-500/20 text-amber-200 border border-amber-500/30'}`}>
+                                  <span className="text-[9px] opacity-70">{ev.date.split('-')[1]}</span>
+                                  <span className="text-sm font-bold leading-none">{ev.date.split('-')[2]}</span>
                               </div>
                               <div className="flex-1 min-w-0">
-                                  <div className="text-sm font-bold truncate" style={{ color: contentColor }}>{anni.title}</div>
-                                  <div className="text-[10px] opacity-50 truncate" style={{ color: contentColor }}>{characters.find((c: any) => c.id === anni.charId)?.name || 'Unknown'}</div>
+                                  <div className="text-sm font-bold truncate" style={{ color: contentColor }}>📋 {ev.title}</div>
+                                  <div className="text-[10px] opacity-50 truncate" style={{ color: contentColor }}>{new Date(ev.ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} · 上岸计划</div>
+                              </div>
+                          </div>
+                      ) : (
+                          <div key={ev.id} className={`flex items-center gap-3 p-3 rounded-xl ${acnh ? 'bg-[#efe7d4] border border-[#e0d6c0]' : paper ? 'bg-[#f3ecdf]/70 border border-[#5b4833]/10' : 'bg-white/5 border border-white/10'}`}>
+                              <div className={`w-10 h-10 shrink-0 rounded-lg flex flex-col items-center justify-center ${acnh ? 'bg-[#82D5BB] text-white border border-[#6cc0a6]' : paper ? 'bg-[#a66f52]/12 text-[#8c5d46] border border-[#a66f52]/15' : 'bg-purple-500/20 text-purple-200 border border-purple-500/30'}`}>
+                                  <span className="text-[9px] opacity-70">{ev.date.split('-')[1]}</span>
+                                  <span className="text-sm font-bold leading-none">{ev.date.split('-')[2]}</span>
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                  <div className="text-sm font-bold truncate" style={{ color: contentColor }}>{ev.title}</div>
+                                  <div className="text-[10px] opacity-50 truncate" style={{ color: contentColor }}>{characters.find((c: any) => c.id === ev.charId)?.name || 'Unknown'}</div>
                               </div>
                           </div>
                       )) : (

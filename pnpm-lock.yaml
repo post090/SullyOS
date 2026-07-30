@@ -83,6 +83,9 @@ importers:
       pg:
         specifier: ^8.20.0
         version: 8.21.0
+      pinyin-pro:
+        specifier: ^3.28.2
+        version: 3.28.2
       qrcode:
         specifier: ^1.5.4
         version: 1.5.4
@@ -1776,6 +1779,9 @@ packages:
 
   picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
+
+  pinyin-pro@3.28.2:
+    resolution: {integrity: sha512-jV38yxXHLfidirMC4hrXasLDozLCSq/4DfX88GnHcSEJ2+GpSedG6I9VOiEXJu6iQ5dbJC/RjmzyMuS5h/wH5A==}
 
   plist@3.1.1:
     resolution: {integrity: sha512-ZIfcLJC+7E7FBFnDxm9MPmt7D+DidyQ26lewieO75AdhA2ayMtsJSES0iWzqJQbcVRSrTufQoy0DR94xHue0oA==}
@@ -3719,6 +3725,8 @@ snapshots:
       split2: 4.2.0
 
   picocolors@1.1.1: {}
+
+  pinyin-pro@3.28.2: {}
 
   plist@3.1.1:
     dependencies:

@@ -1,7 +1,9 @@
 // 上岸计划 · 本地隐私脱敏
-// 全程本地正则打码，不经任何网络。简历/对话文本发 LLM 前必须先过这里，
+// 全程本地正则打码 + 离线拼音库（pinyin-pro 打包进 APK），不经任何网络。简历/对话文本发 LLM 前必须先过这里，
 // 脱敏预览由 UI 侧负责（用户确认后才允许发送）。
 // 规则顺序有讲究：长数字（身份证/银行卡）先于手机号，否则 18 位号码会被手机号规则拦腰截断。
+
+import { pinyin } from 'pinyin-pro';
 
 export interface RedactHit {
     /** 命中类型（中文标签，直接用于预览提示） */
@@ -69,9 +71,10 @@ const RULES: RedactRule[] = [
 /**
  * 本地脱敏主入口。
  * @param raw 原始文本（简历正文 / 待入记忆宫殿的会话文本）
- * @param opts.realNames 需要替换成「候选人」的真实姓名列表（如用户姓名）；空串/单字忽略，防止误伤
+ * @param opts.realNames 需要替换的真实姓名列表（如用户姓名）；空串/单字忽略，防止误伤
+ * @param opts.nameMode 姓名档位：fixed=固定「候选人」（默认）/ pinyin=拼音缩写 / off=真名不替换
  */
-export function redactPrivacy(raw: string, opts: { realNames?: string[] } = {}): RedactResult {
+export function redactPrivacy(raw: string, opts: { realNames?: string[]; nameMode?: NameRedactMode } = {}): RedactResult {
     let text = raw;
     const hits: RedactHit[] = [];
 
@@ -91,12 +94,14 @@ export function redactPrivacy(raw: string, opts: { realNames?: string[] } = {}):
         }
     }
 
-    // 姓名可选替换：只处理 ≥2 字的名字，逐个全文替换为「候选人」
-    const names = (opts.realNames || []).map(n => (n || '').trim()).filter(n => n.length >= 2);
+    // 姓名可选替换：只处理 ≥2 字的名字，按档位逐个全文替换（off 档不动）
+    const nameMode: NameRedactMode = opts.nameMode || 'fixed';
+    const names = nameMode === 'off' ? [] : (opts.realNames || []).map(n => (n || '').trim()).filter(n => n.length >= 2);
     for (const name of names) {
         if (!text.includes(name)) continue;
         const count = text.split(name).length - 1;
-        text = text.split(name).join('候选人');
+        const replacement = nameMode === 'pinyin' ? (pinyinAbbr(name, false) || '候选人') : '候选人';
+        text = text.split(name).join(replacement);
         hits.push({ label: `姓名「${name.slice(0, 1)}**」`, count });
     }
 
@@ -113,4 +118,53 @@ export function codifyCompanies(raw: string, positions: { code: string; companyN
         }
     }
     return text;
+}
+
+// ─── 四档公司代号生成（离线拼音库，幂等去重）───
+
+export type CompanyRedactMode = 'initial' | 'pinyin' | 'custom' | 'off';
+export type NameRedactMode = 'fixed' | 'pinyin' | 'off';
+
+/** 中英混合取首字母缩写：中文走离线拼音库，字母/数字原样保留；firstOnly=只取第一个字符 */
+export function pinyinAbbr(text: string, firstOnly: boolean): string {
+    const clean = (text || '').trim().replace(/[（(].*?[)）]/g, ''); // 去括号备注
+    if (!clean) return '';
+    const letters: string[] = [];
+    for (const ch of Array.from(clean)) {
+        if (/[\u4e00-\u9fa5]/.test(ch)) {
+            const p = pinyin(ch, { pattern: 'first', toneType: 'none', type: 'array' })[0] || '';
+            if (p) letters.push(p.toUpperCase());
+        } else if (/[A-Za-z0-9]/.test(ch)) {
+            letters.push(ch.toUpperCase());
+        }
+        if (firstOnly && letters.length >= 1) break;
+    }
+    return letters.join('');
+}
+
+/**
+ * 公司代号生成（全离线、幂等）：
+ * - 同一真名已有岗位 → 直接复用其代号（稳定映射）
+ * - initial：拼音单个首字母（字节→Z）；撞车加数字后缀（招商→Z2）
+ * - pinyin：完整拼音缩写（字节跳动→ZJTD）；同样去重
+ * - custom：不自动生成（用户自填，手改即 codeLocked）；off：直接用真名
+ */
+export function genCompanyCode(
+    realName: string,
+    mode: CompanyRedactMode,
+    existing: { code: string; companyNameLocal?: string }[],
+): string {
+    const real = (realName || '').trim();
+    if (!real) return '';
+    if (mode === 'off') return real;
+    if (mode === 'custom') return '';
+    const reuse = existing.find(p => (p.companyNameLocal || '').trim() === real);
+    if (reuse) return reuse.code;
+    const base = pinyinAbbr(real, mode === 'initial') || 'X';
+    const taken = new Set(existing.map(p => p.code));
+    if (!taken.has(base)) return base;
+    for (let i = 2; i < 100; i++) {
+        if (!taken.has(`${base}${i}`)) return `${base}${i}`;
+    }
+    return `${base}_${Date.now() % 1000}`; // 99 个同名公司？兆个不重复的兑底
 }

@@ -13,8 +13,9 @@ import {
 import { ContextBuilder } from '../utils/context';
 import { resilientFetch } from '../utils/resilientFetch';
 import { parseJobHuntCommands, JOB_COMMAND_GUIDE, normalizeJobStage } from '../utils/jobHuntParser';
-import { buildPositionPromptLine } from '../utils/jobDirectives';
-import { redactPrivacy, codifyCompanies, RedactResult } from '../utils/privacyRedact';
+import { buildPositionPromptLine, fmtJobTime, nextInterviewTs, waitingDays, ROUND_KIND_LABEL, ROUND_STATUS_LABEL } from '../utils/jobDirectives';
+import { JobHuntSettings, JH_SETTINGS_KEY, loadJhSettings } from '../utils/jobHuntSettings';
+import { redactPrivacy, codifyCompanies, genCompanyCode, RedactResult } from '../utils/privacyRedact';
 import { synthesizeSpeech, characterHasVoice } from '../utils/ttsRouter';
 import { hashTtsParams, getCachedTts, saveCachedTts } from '../utils/ttsCache';
 import { startStt, isSttSupported, SttSession, SttProviderConfig } from '../utils/speechToText';
@@ -155,13 +156,14 @@ const MarkdownBlock: React.FC<{ text: string }> = ({ text }) => {
 // ─── 展示常量 ───────────────────────────────────────────
 
 const STAGE_LABEL: Record<JobStage, string> = {
-    watching: '观望中', applied: '已投递', written: '笔试中', interview: '面试中', offer: 'Offer', rejected: '已结束',
+    watching: '观望中', applied: '已投递', written: '笔试中', interview: '面试中', offer_talk: '沟通Offer', offer: '已接受Offer', rejected: '已结束',
 };
 const STAGE_STYLE: Record<JobStage, string> = {
     watching: 'bg-violet-100 text-violet-600',
     applied: 'bg-slate-100 text-slate-600',
     written: 'bg-amber-100 text-amber-700',
     interview: 'bg-sky-100 text-sky-700',
+    offer_talk: 'bg-teal-100 text-teal-700',
     offer: 'bg-emerald-100 text-emerald-700',
     rejected: 'bg-rose-100 text-rose-500',
 };
@@ -176,20 +178,36 @@ const NOTE_KIND_STYLE: Record<JobNoteKind, string> = {
 };
 const INTERVIEW_QUESTION_COUNT = 5;
 
-// ─── 工作台本地设置（localStorage，全局生效不分角色）───
-interface JobHuntSettings {
-    zoom: number;                              // 文档流缩放挡位（0.9/1/1.1/1.2）
-    typewriter: boolean;                       // 打字机效果
-    autoSpeak: 'off' | 'interview' | 'all';    // 回复自动朗读范围
-    autoMemorySync: boolean;                   // 离开会话自动沉淀记忆
-    syncThreshold: number;                     // 自动沉淀的新消息条数阈值
-}
-const JH_SETTINGS_KEY = 'os_jobhunt_settings';
-const DEFAULT_JH_SETTINGS: JobHuntSettings = { zoom: 1, typewriter: true, autoSpeak: 'interview', autoMemorySync: true, syncThreshold: 6 };
-const loadJhSettings = (): JobHuntSettings => {
-    try { return { ...DEFAULT_JH_SETTINGS, ...JSON.parse(localStorage.getItem(JH_SETTINGS_KEY) || '{}') }; }
-    catch { return { ...DEFAULT_JH_SETTINGS }; }
+// 环节状态胶囊配色（与聊天聚合卡同色系）
+const ROUND_STATUS_STYLE: Record<string, string> = {
+    pending: 'bg-slate-100 text-slate-500',
+    scheduled: 'bg-cyan-100 text-cyan-700',
+    awaiting: 'bg-amber-100 text-amber-700',
+    passed: 'bg-emerald-100 text-emerald-700',
+    failed: 'bg-rose-100 text-rose-500',
 };
+
+// datetime-local 输入值 ⇄ 时间戳
+const tsToLocalInput = (ts?: number): string => {
+    if (!ts) return '';
+    const d = new Date(ts);
+    const p = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+const localInputToTs = (v: string): number | undefined => {
+    if (!v.trim()) return undefined;
+    const ts = new Date(v).getTime();
+    return Number.isFinite(ts) ? ts : undefined;
+};
+// 面试倒计时文案（按自然日算）
+const ivCountdownLabel = (ts: number): string => {
+    const now = new Date();
+    const d = new Date(ts);
+    const dayDiff = Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() - new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()) / 86400000);
+    return dayDiff <= 0 ? '就在今天' : dayDiff === 1 ? '就在明天' : `还有 ${dayDiff} 天`;
+};
+
+// ─── 工作台本地设置（提取至 utils/jobHuntSettings.ts，单聊注入/通话多方共读）───
 
 const genId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
@@ -245,6 +263,10 @@ const JobHuntApp: React.FC = () => {
     const [posJd, setPosJd] = useState('');
     const [posHrName, setPosHrName] = useState('');
     const [posProjectName, setPosProjectName] = useState('');
+    const [posInterviewAt, setPosInterviewAt] = useState(''); // datetime-local 值，空=未定/清除
+    const [posWaiting, setPosWaiting] = useState(false);
+    // 代号是否被用户手改过：手改即锁（codeLocked），自动生成与 AI 都不再覆盖
+    const [posCodeDirty, setPosCodeDirty] = useState(false);
     // 岗位卡上展开查看 JD 的卡片 id（同时只展开一张）
     const [jdOpenId, setJdOpenId] = useState<string | null>(null);
 
@@ -878,7 +900,7 @@ const JobHuntApp: React.FC = () => {
                 text = await file.text();
             }
             if (!text.trim()) throw new Error('没提取到内容');
-            const result = redactPrivacy(text, { realNames: [userProfile.name] });
+            const result = redactPrivacy(text, { realNames: [userProfile.name], nameMode: jhSettings.redactMode.name });
             setResumePreview({ name, format, result });
         } catch (e: any) {
             addToast(`简历导入失败：${e?.message || '未知错误'}`, 'error');
@@ -886,7 +908,7 @@ const JobHuntApp: React.FC = () => {
             setImportBusy(false);
             if (fileInputRef.current) fileInputRef.current.value = '';
         }
-    }, [userProfile, addToast]);
+    }, [userProfile, jhSettings.redactMode.name, addToast]);
 
     const confirmResumeImport = useCallback(async () => {
         if (!resumePreview) return;
@@ -905,11 +927,11 @@ const JobHuntApp: React.FC = () => {
     const handlePasteImport = useCallback(() => {
         const text = pasteText.trim();
         if (!text) { addToast('先粘贴简历文本', 'info'); return; }
-        const result = redactPrivacy(text, { realNames: [userProfile.name] });
+        const result = redactPrivacy(text, { realNames: [userProfile.name], nameMode: jhSettings.redactMode.name });
         setShowPasteImport(false);
         setPasteText('');
         setResumePreview({ name: `粘贴的简历 ${new Date().toLocaleDateString('zh-CN')}`, format: 'paste', result });
-    }, [pasteText, userProfile, addToast]);
+    }, [pasteText, userProfile, jhSettings.redactMode.name, addToast]);
 
     // 对话里引用简历 → 让角色改
     const sendResumeToChat = useCallback((resume: JobResume) => {
@@ -931,6 +953,11 @@ const JobHuntApp: React.FC = () => {
                 jd: posJd.trim() || undefined,
                 hrName: posHrName.trim() || undefined,
                 projectName: posProjectName.trim() || undefined,
+                interviewAt: localInputToTs(posInterviewAt),
+                // 已在等保留原起点不重置；关掉开关才清空
+                waitingSince: posWaiting ? (editingPosition.waitingSince || now) : undefined,
+                // 手改过代号即锁（已锁的不回退）
+                codeLocked: editingPosition.codeLocked || (posCodeDirty && code !== editingPosition.code) || undefined,
                 updatedAt: now,
             });
         } else {
@@ -942,14 +969,18 @@ const JobHuntApp: React.FC = () => {
                 jd: posJd.trim() || undefined,
                 hrName: posHrName.trim() || undefined,
                 projectName: posProjectName.trim() || undefined,
+                interviewAt: localInputToTs(posInterviewAt),
+                waitingSince: posWaiting ? now : undefined,
+                codeLocked: posCodeDirty || undefined,
                 charId: selectedChar?.id || '', createdAt: now, updatedAt: now,
             });
         }
         setShowNewPosition(false); setEditingPosition(null);
         setPosCode(''); setPosTitle(''); setPosCompanyLocal(''); setPosNextStep('');
         setPosJd(''); setPosHrName(''); setPosProjectName('');
+        setPosInterviewAt(''); setPosWaiting(false); setPosCodeDirty(false);
         await reloadAll();
-    }, [posCode, posTitle, posCompanyLocal, posNextStep, posJd, posHrName, posProjectName, editingPosition, selectedChar, reloadAll, addToast]);
+    }, [posCode, posTitle, posCompanyLocal, posNextStep, posJd, posHrName, posProjectName, posInterviewAt, posWaiting, posCodeDirty, editingPosition, selectedChar, reloadAll, addToast]);
 
     const advanceStage = useCallback(async (pos: JobPosition, stage: JobStage) => {
         const now = Date.now();
@@ -989,6 +1020,8 @@ const JobHuntApp: React.FC = () => {
         setPosCode(pos.code); setPosTitle(pos.title);
         setPosCompanyLocal(pos.companyNameLocal || ''); setPosNextStep(pos.nextStep || '');
         setPosJd(pos.jd || ''); setPosHrName(pos.hrName || ''); setPosProjectName(pos.projectName || '');
+        setPosInterviewAt(tsToLocalInput(pos.interviewAt)); setPosWaiting(!!pos.waitingSince);
+        setPosCodeDirty(!!pos.codeLocked);
         setShowNewPosition(true);
     }, []);
 
@@ -1082,6 +1115,36 @@ const JobHuntApp: React.FC = () => {
                                 <span className="text-[11px] text-slate-500">才沉淀</span>
                             </div>
                         )}
+                    </div>
+                    <div>
+                        <div className="text-xs font-bold text-slate-500 mb-1">公司名模糊化（全程离线拼音库，不联网）</div>
+                        <div className="text-[10px] text-slate-400 mb-2">决定填真实公司名时自动生成什么样的代号；只有代号会发给 AI</div>
+                        <div className="space-y-1.5">
+                            {([
+                                ['initial', '拼音首字母 + 去重', '字节→Z、招商→Z2；辨识度优先，隐私中等（推荐）'],
+                                ['pinyin', '完整拼音缩写', '字节跳动→ZJTD；好认，但云端可能反推真名'],
+                                ['custom', '我自己定', '不自动生成；你填的代号自动钉住，AI 也不会改'],
+                                ['off', '不脱敏', '直接用真名当代号（不建议，真名会进提示词）'],
+                            ] as const).map(([v, label, desc]) => (
+                                <button key={v} onClick={() => patchJhSettings({ redactMode: { ...jhSettings.redactMode, company: v } })}
+                                    className={`w-full text-left px-3 py-2 rounded-xl border transition-all active:scale-[0.99] ${jhSettings.redactMode.company === v ? 'bg-sky-50 border-sky-200 ring-1 ring-sky-100' : 'bg-white border-slate-200'}`}>
+                                    <div className={`text-xs font-bold ${jhSettings.redactMode.company === v ? 'text-sky-600' : 'text-slate-600'}`}>{label}</div>
+                                    <div className="text-[10px] text-slate-400 mt-0.5">{desc}</div>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                    <div>
+                        <div className="text-xs font-bold text-slate-500 mb-1">姓名模糊化（简历导入时生效）</div>
+                        <div className="flex gap-2">
+                            {([['fixed', '固定「候选人」'], ['pinyin', '拼音缩写'], ['off', '真名不替换']] as const).map(([v, label]) => (
+                                <button key={v} onClick={() => patchJhSettings({ redactMode: { ...jhSettings.redactMode, name: v } })}
+                                    className={`px-3.5 py-2 text-xs font-bold rounded-xl border transition-all active:scale-95 ${jhSettings.redactMode.name === v ? 'bg-sky-50 text-sky-600 border-sky-200 ring-1 ring-sky-100' : 'bg-white text-slate-500 border-slate-200'}`}>
+                                    {label}
+                                </button>
+                            ))}
+                        </div>
+                        {jhSettings.redactMode.name === 'off' && <div className="text-[10px] text-rose-400 mt-1.5">真名会随简历进入提示词，确定吗？</div>}
                     </div>
                 </div>
             </div>
@@ -1392,6 +1455,35 @@ const JobHuntApp: React.FC = () => {
                                 {p.nextStep && (
                                     <div className="text-xs text-sky-600 bg-sky-50 rounded-lg px-2.5 py-1.5 mt-2">下一步：{p.nextStep}</div>
                                 )}
+                                {(p.rounds || []).length > 0 && (
+                                    <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                                        {(p.rounds || []).map(r => (
+                                            <span key={r.id} className={`text-[10px] px-1.5 py-0.5 rounded-md font-semibold ${ROUND_STATUS_STYLE[r.status] || ROUND_STATUS_STYLE.pending}`}>
+                                                {ROUND_KIND_LABEL[r.kind]}{r.index}·{ROUND_STATUS_LABEL[r.status] || r.status}{r.at && (r.status === 'scheduled' || r.status === 'pending') ? ` ${fmtJobTime(r.at)}` : ''}
+                                            </span>
+                                        ))}
+                                    </div>
+                                )}
+                                {(() => {
+                                    const ivTs = nextInterviewTs(p);
+                                    if (ivTs) {
+                                        const today = ivCountdownLabel(ivTs) === '就在今天';
+                                        return (
+                                            <div className={`text-xs rounded-lg px-2.5 py-1.5 mt-2 font-semibold ${today ? 'text-rose-600 bg-rose-50' : 'text-cyan-700 bg-cyan-50'}`}>
+                                                下一场面试：{fmtJobTime(ivTs)} · {ivCountdownLabel(ivTs)}
+                                            </div>
+                                        );
+                                    }
+                                    // 只剩过期时间时淡显，提醒去改状态
+                                    if (p.interviewAt && p.interviewAt <= Date.now() - 3600 * 1000) {
+                                        return <div className="text-[11px] text-slate-300 mt-2">面试已过：{fmtJobTime(p.interviewAt)}</div>;
+                                    }
+                                    return null;
+                                })()}
+                                {(() => {
+                                    const wd = waitingDays(p);
+                                    return wd ? <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-2.5 py-1.5 mt-2">⏳ 等反馈中 · 第 {wd} 天</div> : null;
+                                })()}
                                 {p.jd && (
                                     <div className="mt-2">
                                         <button onClick={() => setJdOpenId(jdOpenId === p.id ? null : p.id)}
@@ -1506,8 +1598,8 @@ const JobHuntApp: React.FC = () => {
                         <div className="font-bold text-slate-800 mb-4">{editingPosition ? '编辑岗位卡' : '新建岗位卡'}</div>
                         <div className="space-y-3">
                             <div>
-                                <label className="text-xs text-slate-500 font-semibold">公司代号 *（发给 AI 的只有代号）</label>
-                                <input value={posCode} onChange={e => setPosCode(e.target.value)} placeholder="如：A厂、B司"
+                                <label className="text-xs text-slate-500 font-semibold">公司代号 *（发给 AI 的只有代号）{(posCodeDirty || editingPosition?.codeLocked) && <span className="text-amber-500"> · 🔒已钉住，自动生成不再覆盖</span>}</label>
+                                <input value={posCode} onChange={e => { setPosCode(e.target.value); setPosCodeDirty(true); }} placeholder="如：A厂、B司；填真实公司名会自动生成"
                                     className="w-full mt-1 bg-slate-100 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-sky-200" />
                             </div>
                             <div>
@@ -1517,7 +1609,17 @@ const JobHuntApp: React.FC = () => {
                             </div>
                             <div>
                                 <label className="text-xs text-slate-500 font-semibold">真实公司名（选填，仅本机，永不发给 AI）</label>
-                                <input value={posCompanyLocal} onChange={e => setPosCompanyLocal(e.target.value)} placeholder="只是给你自己看的备注"
+                                <input value={posCompanyLocal}
+                                    onChange={e => {
+                                        const v = e.target.value;
+                                        setPosCompanyLocal(v);
+                                        // 自动档下顺手生成代号（离线拼音库，幂等去重）；用户手改过/已锁定的不碰
+                                        if (!posCodeDirty && !editingPosition?.codeLocked) {
+                                            const auto = genCompanyCode(v, jhSettings.redactMode.company, positions.filter(p => p.id !== editingPosition?.id));
+                                            if (auto) setPosCode(auto);
+                                        }
+                                    }}
+                                    placeholder="只是给你自己看的备注，填了会自动生成代号"
                                     className="w-full mt-1 bg-slate-100 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-sky-200" />
                             </div>
                             <div>
@@ -1540,6 +1642,30 @@ const JobHuntApp: React.FC = () => {
                                 <label className="text-xs text-slate-500 font-semibold">下一步（选填）</label>
                                 <input value={posNextStep} onChange={e => setPosNextStep(e.target.value)} placeholder="如：周四二面"
                                     className="w-full mt-1 bg-slate-100 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-sky-200" />
+                            </div>
+                            <div>
+                                <label className="text-xs text-slate-500 font-semibold">面试时间（选填，桌面日历会显示琥珀点）</label>
+                                <div className="flex items-center gap-2 mt-1">
+                                    <input type="datetime-local" value={posInterviewAt} onChange={e => setPosInterviewAt(e.target.value)}
+                                        className="flex-1 bg-slate-100 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-sky-200" />
+                                    {posInterviewAt && (
+                                        <button onClick={() => setPosInterviewAt('')} className="text-xs text-slate-400 px-2 py-2 shrink-0 active:scale-95 transition-transform">清除</button>
+                                    )}
+                                </div>
+                            </div>
+                            <div className="flex items-center justify-between bg-slate-50 rounded-xl px-3 py-2.5">
+                                <div>
+                                    <div className="text-xs text-slate-600 font-semibold">等反馈中</div>
+                                    <div className="text-[10px] text-slate-400 mt-0.5">
+                                        {posWaiting
+                                            ? (editingPosition?.waitingSince ? `从 ${fmtJobTime(editingPosition.waitingSince)} 算起，已等 ${waitingDays(editingPosition) || 1} 天` : '保存后从今天算第 1 天')
+                                            : '投完/面完在等消息时打开，AI 会知道你等了几天'}
+                                    </div>
+                                </div>
+                                <button onClick={() => setPosWaiting(v => !v)}
+                                    className={`w-11 h-6 rounded-full transition-colors relative shrink-0 ${posWaiting ? 'bg-amber-400' : 'bg-slate-200'}`}>
+                                    <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${posWaiting ? 'left-[22px]' : 'left-0.5'}`} />
+                                </button>
                             </div>
                         </div>
                         <button onClick={savePosition} className="w-full mt-4 py-3 rounded-xl bg-sky-500 text-white text-sm font-bold active:scale-[0.98] transition-transform">保存</button>

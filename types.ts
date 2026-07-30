@@ -2261,7 +2261,29 @@ export interface JobSession {
     updatedAt: number;
 }
 
-export type JobStage = 'watching' | 'applied' | 'written' | 'interview' | 'offer' | 'rejected';
+/**
+ * 求职粗漏斗阶段。'offer_talk' = 沟通 Offer（初步通过，聊薪资待遇/入职细节）；
+ * 'offer' 语义为「已接受 Offer」（历史值直接沿用，旧数据零迁移，仅展示文案改名）。
+ * 细粒度的面试/笔试进展不在此枚举里，见 JobRound（两层解耦）。
+ */
+export type JobStage = 'watching' | 'applied' | 'written' | 'interview' | 'offer_talk' | 'offer' | 'rejected';
+
+/** 环节类型：笔试也是一种环节，不强制线性（可穿插在任意面试轮次之间） */
+export type JobRoundKind = 'written' | 'interview';
+
+/** 环节状态：待安排 / 待进行 / 等结果 / 通过 / 挂了（展示文案见 jobDirectives ROUND_STATUS_LABEL） */
+export type JobRoundStatus = 'pending' | 'scheduled' | 'awaiting' | 'passed' | 'failed';
+
+/** 环节轮次 — 面试/笔试统一成「环节」，每岗位可配多轮（上限 10），每环节独立状态 */
+export interface JobRound {
+    id: string;
+    kind: JobRoundKind;
+    /** 第几轮（同 kind 内计数，1~10） */
+    index: number;
+    status: JobRoundStatus;
+    /** 环节时间（时间戳，精确到分）；有值且未过期的环节会汇入桌面日历组件 */
+    at?: number;
+}
 
 /** 岗位卡 — 公司一律用代号（A厂/B司）；真实公司名只存 companyNameLocal，永不进任何 prompt / 记忆宫殿 */
 export interface JobPosition {
@@ -2279,6 +2301,16 @@ export interface JobPosition {
     hrName?: string;
     /** 项目名/业务线 — 可进 prompt，面试出题与岗位分析素材 */
     projectName?: string;
+    /** 岗位笔记 — 自由展开内容（面经细节/灵感/待查事项）；nextStep 保持一句话策略位。进 prompt 同 JD 待遇（脱敏+截断） */
+    notes?: string;
+    /** 环节轮次（面试/笔试统一）；旧数据无此字段按空数组处理 */
+    rounds?: JobRound[];
+    /** 下一场面试时间（时间戳）。rounds 落地后优先取「下一场未完成 interview 环节的 at」，此字段作兼容读/手动快捷写 */
+    interviewAt?: number;
+    /** 开始等反馈的时间戳（岗位卡显示「等反馈第 N 天」；无未来日期，不上日历） */
+    waitingSince?: number;
+    /** 代号锁定 — 用户手填/手改过的代号，自动代号生成与去重不覆盖（AI 本就不可写 code） */
+    codeLocked?: boolean;
     charId: string;             // 负责该岗位的角色
     createdAt: number;
     updatedAt: number;
@@ -2305,6 +2337,20 @@ export interface JobResume {
     rawText: string;            // 脱敏后的纯文本
     sourceFormat: 'pdf' | 'docx' | 'txt' | 'paste';
     createdAt: number;
+}
+
+/** 竞争力档案 — 用户级单份（id 固定 'main'）：方向/竞争点/可改进点/简历结构化摘要 */
+export interface JobProfile {
+    id: 'main';
+    /** 求职方向一句话 */
+    direction: string;
+    /** 竞争点；source 标注来源（AI 解析/用户手改/角色指令），AI 重新解析不覆盖 user/char 条目 */
+    strengths: { id: string; text: string; source: 'ai' | 'user' | 'char' }[];
+    /** 可改进点，分求职策略层/简历写法层 */
+    gaps: { id: string; text: string; kind: 'strategy' | 'resume'; source: 'ai' | 'user' | 'char' }[];
+    /** 简历结构化摘要 markdown（教育/经历/项目/技能），由解析生成，可注入 */
+    resumeDigest: string;
+    updatedAt: number;
 }
 // ---------------------------------
 
@@ -2620,6 +2666,15 @@ export interface CharacterProfile {
    * 入口：聊天加号菜单「API 配置」（CharApiHubModal）。分享角色卡时剥离（含 apiKey）。
    */
   chatApiOverride?: {
+    baseUrl: string;
+    apiKey: string;
+    model: string;
+  };
+  /**
+   * 角色级：该角色在上岸计划 App 内对话用的模型（优先于 chatApiOverride 与全局；不设 = 跟随聊天主 API）。
+   * 入口：角色 API 中枢（CharApiHubModal）「上岸计划对话」块。分享角色卡时剥离（含 apiKey）。
+   */
+  jobHuntApiOverride?: {
     baseUrl: string;
     apiKey: string;
     model: string;
@@ -3653,6 +3708,7 @@ export interface FullBackupData {
     jobPositions?: JobPosition[];
     jobNotes?: JobNote[];
     jobResumes?: JobResume[];
+    jobProfiles?: JobProfile[];
 
     socialAppData?: {
         charHandles?: Record<string, SubAccount[]>;

@@ -36,7 +36,7 @@ import { deriveStations, findActiveStation, stationKey, presetNameFor, renameSta
  const AUTO_BACKUP_STEPS = [6, 12, 24, 48, 72, 168];
  const autoBackupLabel = (h: number) => h < 24 ? `${h} 小时` : `${Math.round(h / 24)} 天`;
 import { getBackupReminderState, setBackupReminderIntervalDays, daysSinceLastBackup, BACKUP_REMINDER_MIN_DAYS, BACKUP_REMINDER_MAX_DAYS } from '../utils/backupReminder';
-import { getNativeChatRuntimeUserEnabled, setNativeChatRuntimeUserEnabled, getNativeRuntimeUserEnabled, setNativeRuntimeUserEnabled, getPersistentNativeRuntimeUserEnabled, setPersistentNativeRuntimeUserEnabled, startPersistentNativeRuntime, stopPersistentNativeRuntime, requestNativeNotificationPermission, getNativeSystemStatus, requestBatteryOptimizationExemption, openNativeNotificationSettings, openBatterySettings, type NativeSystemStatus } from '../utils/runtime/nativeRuntime';
+import { getNativeChatRuntimeUserEnabled, setNativeChatRuntimeUserEnabled, getNativeRuntimeUserEnabled, setNativeRuntimeUserEnabled, getPersistentNativeRuntimeUserEnabled, setPersistentNativeRuntimeUserEnabled, startPersistentNativeRuntime, stopPersistentNativeRuntime, requestNativeNotificationPermission, getNativeSystemStatus, requestBatteryOptimizationExemption, openNativeNotificationSettings, openBatterySettings, isNativeRuntimeAvailable, type NativeSystemStatus } from '../utils/runtime/nativeRuntime';
 
 // hot_news（orz.ai）可选热榜平台。key 必须与 API 的 ?platform= 完全一致。
 const HOTNEWS_PLATFORM_OPTIONS: { key: string; label: string }[] = [
@@ -376,6 +376,8 @@ const Settings: React.FC = () => {
   const [nativeChatEnabled, setNativeChatEnabledState] = useState<boolean>(() => getNativeChatRuntimeUserEnabled());
   const [nativeSystemStatus, setNativeSystemStatus] = useState<NativeSystemStatus | null>(null);
   const [nativeStatusLoading, setNativeStatusLoading] = useState(false);
+  // 原生插件可用性（ping SullyNativeRuntime）：null=未检测 / true=已连接 / false=未生效（回落 WebView）
+  const [nativePluginAvailable, setNativePluginAvailable] = useState<boolean | null>(null);
   const [localMiniMaxKey, setLocalMiniMaxKey] = useState(apiConfig.minimaxApiKey || '');
   const [localMiniMaxGroupId, setLocalMiniMaxGroupId] = useState(apiConfig.minimaxGroupId || '');
   const [localMiniMaxRegion, setLocalMiniMaxRegion] = useState<'domestic' | 'overseas'>(
@@ -695,6 +697,8 @@ const Settings: React.FC = () => {
           try {
               const s = await getNativeSystemStatus();
               if (s) setNativeSystemStatus(s);
+              // 进面板自动探测一次原生插件可用性，不用手点刷新
+              try { setNativePluginAvailable(await isNativeRuntimeAvailable()); } catch { setNativePluginAvailable(false); }
           } catch { /* ignore */ }
           finally { setNativeStatusLoading(false); }
       })();
@@ -1912,6 +1916,8 @@ const Settings: React.FC = () => {
                                     try {
                                         const s = await getNativeSystemStatus();
                                         setNativeSystemStatus(s);
+                                        // 同时探测原生插件是否真的接得上（ping），区分“打包带了插件”与“回落 WebView”
+                                        try { setNativePluginAvailable(await isNativeRuntimeAvailable()); } catch { setNativePluginAvailable(false); }
                                         addToast(s ? '已刷新状态' : '无法获取系统状态', s ? 'success' : 'error');
                                     } catch (e) {
                                         addToast('刷新失败: ' + String((e as any)?.message || e), 'error');
@@ -1926,6 +1932,12 @@ const Settings: React.FC = () => {
                         </div>
 
                         <div className="space-y-1.5 text-[11px]">
+                            <div className="flex items-center justify-between">
+                                <span className="text-slate-500">原生通道（无感收消息的地基）</span>
+                                <span className={`font-bold ${nativePluginAvailable == null ? 'text-slate-400' : (nativePluginAvailable ? 'text-emerald-600' : 'text-rose-600')}`}>
+                                    {nativePluginAvailable == null ? '未检测 (点刷新)' : (nativePluginAvailable ? '已连接' : '未生效 (回落WebView)')}
+                                </span>
+                            </div>
                             <div className="flex items-center justify-between">
                                 <span className="text-slate-500">通知总开关</span>
                                 <span className={`font-bold ${nativeSystemStatus ? (nativeSystemStatus.notificationsEnabled ? 'text-emerald-600' : 'text-rose-600') : 'text-slate-400'}`}>

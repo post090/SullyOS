@@ -12,6 +12,7 @@
 // 后者的 meta 通过下面 safeFetchJson 的第 5 个参数挂到 __sullyMeta 上传出去。
 import { appendDevDebugApiLog, makeDebugLogger } from './devDebug';
 import { getApiCallAmbientContext, recordApiCall, type ApiCallMeta } from './apiCallLog';
+import { msSinceForeground } from './runtime/runtimeState';
 import {
     canUseNativeChatRuntime,
     isNativeSamplingError,
@@ -390,6 +391,7 @@ export async function safeFetchJson(
     let lastError: Error | null = null;
     const urlStr = String(url);
     let lastStatus: number | undefined;
+    let graceRetryUsed = false; // 回前台恢复窗口额外补枪：只允许一次，防止无限循环
 
     // 显式 meta 挂到 RequestInit 给全局 fetch 兜底；同时快照环境标签，避免长响应期间
     // 用户切 App 后被错标。safeFetchJson 与全局拦截器以 requestId 原子去重。
@@ -575,6 +577,21 @@ export async function safeFetchJson(
                 log.warn(isAbort ? 'Timeout/Abort retry' : 'Network error retry', { attempt: attempt + 1, maxRetries, delay, message: e?.message });
                 try { streamHooks?.onRetry?.({ attempt: attempt + 1, maxRetries, reason: isAbort ? 'timeout' : 'network', message: e?.message || '', delayMs: delay }); } catch { /* 回调异常不拦截重试 */ }
                 await new Promise(r => setTimeout(r, delay));
+                continue;
+            }
+
+            // 「切后台再回来」的恢复窗口特判：APK 回前台的头几秒，系统 HTTP 栈尚未恢复、
+            // keep-alive 连接是尸体，普通重试的 2 枪会连着落在这个死亡窗口里一起炸
+            // （用户侧表现＝疯狂 Failed to fetch）。这里在常规 maxRetries 用尽后，若
+            // 距上次回前台很近（<8s），再补最后一枪并拉长退避，把它推到网络恢复之后。
+            const isNetworkish = e?.name === 'TypeError' || isAbort || isNativeTransportError;
+            if (isNetworkish && !graceRetryUsed && attempt === maxRetries && msSinceForeground() < 8_000) {
+                graceRetryUsed = true;
+                const graceDelay = 2_500;
+                log.warn('Foreground-recovery grace retry', { attempt: attempt + 1, delay: graceDelay, message: e?.message });
+                try { streamHooks?.onRetry?.({ attempt: attempt + 1, maxRetries: maxRetries + 1, reason: 'network', message: '切回前台网络恢复中，正在重试', delayMs: graceDelay }); } catch { /* 回调异常不拦截重试 */ }
+                await new Promise(r => setTimeout(r, graceDelay));
+                maxRetries += 1; // 只加这一枪（graceRetryUsed 已锁，不会再进本块）
                 continue;
             }
 

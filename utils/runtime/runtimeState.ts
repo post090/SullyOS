@@ -69,3 +69,13 @@ export function getRestorableSuspendedCall(): SuspendedCallSnapshot | null {
   if (!call?.charId || !call.charName || !call.startedAt) return null;
   return call;
 }
+
+/**
+ * 距上次“回到前台/变可见”的毫秒数。lastVisibleAt 由 visibilitychange / appStateChange 写入；
+ * 未记录时返回 Infinity（视为“不在回前台恢复窗口”，走常规逻辑）。
+ * 用于区分“切后台再回来”的前几秒（系统网络栈尚未恢复，连接尸体导致必炸）。
+ */
+export function msSinceForeground(now: number = Date.now()): number {
+  const t = loadRuntimeSnapshot().lastVisibleAt;
+  return typeof t === 'number' && t > 0 ? Math.max(0, now - t) : Infinity;
+}

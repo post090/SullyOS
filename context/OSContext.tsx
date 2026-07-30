@@ -1208,6 +1208,8 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           // 透明流式升级状态（utils/streamUpgrade.ts）：请求侧改写 → 响应侧拼回 JSON
           let streamUpgraded = false;
           let bodyBeforeStreamUpgrade: string | null = null;
+          // 冷启动/回前台通用补枪标志：只补一枪，防循环
+          let genericRetried = false;
           if (urlStr.includes('/chat/completions')) {
               const rawBody = (config as RequestInit | undefined)?.body;
               if (typeof rawBody === 'string') {
@@ -1371,6 +1373,23 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               }
               return response;
           } catch (err: any) {
+              // 通用冷启动/回前台补枪：APK 大退重开或切回前台的头几秒，WebView 网络栈尚未就绪，
+              // 任何裸 fetch 第一枪都可能招 TypeError（Failed to fetch）——音乐/新闻/天气这些旁路
+              // 没有 safeFetchJson 的重试，一炸就直接报错给用户。fetch 本身抛 TypeError 意味着请求
+              // 根本没到服务器（非幂等写也重发安全），短延迟后补一枪跨过就绪窗口。不接管 chat
+              // （它有专属的 native fallback + safeFetchJson 重试），只接测其它裸 fetch。
+              const isNetworkErr0 = err?.name === 'TypeError' || /Failed to fetch|Load failed|NetworkError/i.test(err?.message || '');
+              if (isNetworkErr0 && !genericRetried && !urlStr.includes('/chat/completions')) {
+                  genericRetried = true;
+                  console.warn('🔁 [ColdStartRetry] 裸 fetch 网络失败，短延迟后补一枪', { url: urlStr.slice(0, 80), error: err?.message });
+                  await new Promise(r => setTimeout(r, 1200));
+                  try {
+                      return await originalFetch(...sendArgs);
+                  } catch (retryErr) {
+                      // 补枪也失败：落到下面的 native fallback / 常规错误处理（用重试后的错误）
+                      err = retryErr;
+                  }
+              }
               // 网络层失败兜底：APK/原生平台走 WebView fetch 受 CORS 约束，部分中转没配
               // CORS 头会被浏览器 block 成 "Failed to fetch"（TypeError）。这里在原生平台
               // 上自动 fallback 到 CapacitorHttp（系统 HTTP 栈，无 CORS），整包响应一次拿回。

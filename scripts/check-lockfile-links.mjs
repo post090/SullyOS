@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * 检查 pnpm-lock.yaml 里有没有指向仓库外的本地依赖（link:../xxx）。
  *
