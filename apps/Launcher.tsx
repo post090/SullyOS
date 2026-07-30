@@ -1256,7 +1256,7 @@ const Launcher: React.FC = () => {
           {allPages.map((page, idx) => (
               <div
                 key={idx}
-                className={`relative w-full flex-shrink-0 snap-center snap-always h-full ${page.type === 'widgets' ? '' : 'flex flex-col px-6 pt-12 pb-8'}`}
+                className={`w-full flex-shrink-0 snap-center snap-always h-full ${page.type === 'widgets' ? '' : 'flex flex-col px-6 pt-12 pb-8'}`}
                 style={{ contentVisibility: 'auto', contain: 'layout paint', transform: 'translateZ(0)' }}
               >
                   {page.type === 'widgets' ? (
@@ -1411,7 +1411,7 @@ const Launcher: React.FC = () => {
            style={{ paddingBottom: launcherBottomInset }}
       >
            <div
-             className={`rounded-[1.75rem] px-4 py-3 flex gap-3 sm:gap-6 items-center mx-auto w-fit max-w-full justify-center no-scrollbar transition-all duration-300 ease-out ${acnh || paper ? '' : 'bg-white/30 border border-white/25 shadow-[0_8px_40px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.08)]'}`}
+             className={`rounded-[1.75rem] px-4 py-3 flex gap-3 sm:gap-6 items-center mx-auto max-w-full justify-between overflow-x-auto no-scrollbar transform-gpu ${acnh || paper ? '' : 'bg-white/30 border border-white/25 shadow-[0_8px_40px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.08)]'}`}
              style={acnh ? { background: 'transparent' } : paper ? {
                background: 'rgba(224,221,215,0.42)',
                border: '1px solid rgba(91,72,51,0.07)',

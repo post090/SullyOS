@@ -318,6 +318,13 @@ const JobHuntApp: React.FC = () => {
     const [noteEditing, setNoteEditing] = useState(false);
     const [noteEditTitle, setNoteEditTitle] = useState('');
     const [noteEditContent, setNoteEditContent] = useState('');
+    const [noteTagInput, setNoteTagInput] = useState(''); // 笔记详情里新增标签的输入
+    // 笔记本 tab 工具条：搜索 / 类型筛选 / 标签筛选 / 排序 / 分组
+    const [noteSearch, setNoteSearch] = useState('');
+    const [noteKindFilter, setNoteKindFilter] = useState<Set<JobNoteKind>>(new Set());
+    const [noteTagFilter, setNoteTagFilter] = useState<Set<string>>(new Set());
+    const [noteSort, setNoteSort] = useState<'updated' | 'created' | 'title' | 'kind'>('updated');
+    const [noteGroupBy, setNoteGroupBy] = useState<'none' | 'kind' | 'tag'>('none');
 
     // 语音输入（状态机全外显）
     const [sttPhase, setSttPhase] = useState<SttPhase>('idle');
@@ -1183,6 +1190,67 @@ const JobHuntApp: React.FC = () => {
         await reloadAll();
         addToast('笔记已保存', 'success');
     }, [viewingNote, noteEditTitle, noteEditContent, addToast, reloadAll]);
+
+    // 标签 / 绑定岗位：直接改、立即落库（不必进“编辑”态，方便随手管理；纯人类，AI 不碰）
+    const patchViewingNote = useCallback(async (p: Partial<JobNote>) => {
+        if (!viewingNote) return;
+        const next: JobNote = { ...viewingNote, ...p, updatedAt: Date.now() };
+        await DB.saveJobNote(next);
+        setViewingNote(next);
+        await reloadAll();
+    }, [viewingNote, reloadAll]);
+
+    const addNoteTag = useCallback(() => {
+        if (!viewingNote) return;
+        const t = noteTagInput.trim();
+        if (!t) return;
+        const cur = viewingNote.tags || [];
+        if (!cur.includes(t)) patchViewingNote({ tags: [...cur, t] });
+        setNoteTagInput('');
+    }, [viewingNote, noteTagInput, patchViewingNote]);
+
+    // 笔记本全部标签（去重排序），供筛选 chips 与详情标签建议
+    const allNoteTags = useMemo(() => {
+        const s = new Set<string>();
+        notes.forEach(n => (n.tags || []).forEach(t => s.add(t)));
+        return Array.from(s).sort((a, b) => a.localeCompare(b, 'zh'));
+    }, [notes]);
+
+    // 笔记本 tab：筛选(类型+标签+搜索) → 排序 → 分组
+    const noteGroups = useMemo<{ key: string; label: string; notes: JobNote[] }[]>(() => {
+        const q = noteSearch.trim().toLowerCase();
+        const filtered = notes.filter(n => {
+            if (noteKindFilter.size && !noteKindFilter.has(n.kind)) return false;
+            if (noteTagFilter.size && !(n.tags || []).some(t => noteTagFilter.has(t))) return false;
+            if (q) {
+                const hay = `${n.title}\n${n.content}\n${(n.tags || []).join(' ')}`.toLowerCase();
+                if (!hay.includes(q)) return false;
+            }
+            return true;
+        });
+        const cmp: Record<'updated' | 'created' | 'title' | 'kind', (a: JobNote, b: JobNote) => number> = {
+            updated: (a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt),
+            created: (a, b) => b.createdAt - a.createdAt,
+            title: (a, b) => a.title.localeCompare(b.title, 'zh'),
+            kind: (a, b) => a.kind.localeCompare(b.kind),
+        };
+        const list = [...filtered].sort(cmp[noteSort]);
+        if (noteGroupBy === 'kind') {
+            const order: JobNoteKind[] = ['eval', 'resume_advice', 'analysis', 'note'];
+            return order.map(k => ({ key: k, label: NOTE_KIND_LABEL[k], notes: list.filter(n => n.kind === k) })).filter(g => g.notes.length);
+        }
+        if (noteGroupBy === 'tag') {
+            const groups: { key: string; label: string; notes: JobNote[] }[] = [];
+            allNoteTags.forEach(t => {
+                const ns = list.filter(n => (n.tags || []).includes(t));
+                if (ns.length) groups.push({ key: t, label: `#${t}`, notes: ns });
+            });
+            const untagged = list.filter(n => !(n.tags || []).length);
+            if (untagged.length) groups.push({ key: '__none', label: '无标签', notes: untagged });
+            return groups;
+        }
+        return [{ key: '', label: '', notes: list }];
+    }, [notes, noteSearch, noteKindFilter, noteTagFilter, noteSort, noteGroupBy, allNoteTags]);
 
     const deleteResume = useCallback(async (resume: JobResume) => {
         if (!window.confirm(`删除简历「${resume.name}」？`)) return;
@@ -2110,19 +2178,95 @@ const JobHuntApp: React.FC = () => {
                     <div>
                         {notes.length === 0 && (
                             <div className="text-center text-slate-400 text-sm mt-10 mb-6 px-8 leading-relaxed">
-                                角色帮你记的面试评价、简历建议、岗位分析都会集中在这里，方便回看。
+                                角色帮你记的面试评价、简历建议、岗位分析都会集中在这里，方便回看。你还能给笔记打自定义标签、绑定岗位、搜索筛选。
                             </div>
                         )}
-                        <div className="space-y-2.5">
-                            {notes.map(n => (
-                                <div key={n.id} onClick={() => setViewingNote(n)}
-                                    className="bg-white rounded-2xl border border-slate-200/70 shadow-sm p-4 active:scale-[0.99] transition-transform cursor-pointer">
-                                    <div className="flex items-center gap-2">
-                                        <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-semibold ${NOTE_KIND_STYLE[n.kind]}`}>{NOTE_KIND_LABEL[n.kind]}</span>
-                                        <span className="text-sm font-semibold text-slate-800 truncate flex-1">{n.title}</span>
+                        {notes.length > 0 && (
+                            <div className="space-y-2 mb-3">
+                                <input value={noteSearch} onChange={e => setNoteSearch(e.target.value)}
+                                    placeholder="搜索标题 / 正文 / 标签"
+                                    className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-sky-200" />
+                                <div className="flex flex-wrap gap-1.5">
+                                    {(['eval', 'resume_advice', 'analysis', 'note'] as JobNoteKind[]).map(k => {
+                                        const on = noteKindFilter.has(k);
+                                        return (
+                                            <button key={k} onClick={() => setNoteKindFilter(prev => { const s = new Set(prev); if (s.has(k)) s.delete(k); else s.add(k); return s; })}
+                                                className={`text-[11px] px-2 py-0.5 rounded-full font-semibold transition-colors ${on ? NOTE_KIND_STYLE[k] : 'bg-slate-100 text-slate-400'}`}>
+                                                {NOTE_KIND_LABEL[k]}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                                {allNoteTags.length > 0 && (
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {allNoteTags.map(t => {
+                                            const on = noteTagFilter.has(t);
+                                            return (
+                                                <button key={t} onClick={() => setNoteTagFilter(prev => { const s = new Set(prev); if (s.has(t)) s.delete(t); else s.add(t); return s; })}
+                                                    className={`text-[11px] px-2 py-0.5 rounded-full font-medium transition-colors ${on ? 'bg-sky-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                                                    #{t}
+                                                </button>
+                                            );
+                                        })}
                                     </div>
-                                    <div className="text-xs text-slate-400 mt-1.5">{n.content.replace(/[#*`>]/g, '').slice(0, 80)}</div>
-                                    <div className="text-[10px] text-slate-300 mt-1">{characters.find(c => c.id === n.charId)?.name || ''} · 最后更新 {relTimeLabel(n.updatedAt ?? n.createdAt)}</div>
+                                )}
+                                <div className="flex items-center gap-2 text-[11px]">
+                                    <span className="text-slate-400">排序</span>
+                                    <select value={noteSort} onChange={e => setNoteSort(e.target.value as 'updated' | 'created' | 'title' | 'kind')}
+                                        className="bg-white border border-slate-200 rounded-lg px-2 py-1 outline-none">
+                                        <option value="updated">最近更新</option>
+                                        <option value="created">创建时间</option>
+                                        <option value="title">标题</option>
+                                        <option value="kind">类型</option>
+                                    </select>
+                                    <span className="text-slate-400 ml-1">分组</span>
+                                    <select value={noteGroupBy} onChange={e => setNoteGroupBy(e.target.value as 'none' | 'kind' | 'tag')}
+                                        className="bg-white border border-slate-200 rounded-lg px-2 py-1 outline-none">
+                                        <option value="none">不分组</option>
+                                        <option value="kind">按类型</option>
+                                        <option value="tag">按标签</option>
+                                    </select>
+                                    {(noteSearch || noteKindFilter.size > 0 || noteTagFilter.size > 0) && (
+                                        <button onClick={() => { setNoteSearch(''); setNoteKindFilter(new Set()); setNoteTagFilter(new Set()); }}
+                                            className="ml-auto text-slate-400 underline">清除筛选</button>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                        {notes.length > 0 && noteGroups.every(g => g.notes.length === 0) && (
+                            <div className="text-center text-slate-300 text-xs py-6">没有符合条件的笔记</div>
+                        )}
+                        <div className="space-y-3">
+                            {noteGroups.map(group => (
+                                <div key={group.key} className="space-y-2.5">
+                                    {group.label && (
+                                        <div className="text-[11px] font-bold text-slate-400 px-1 pt-1">{group.label} · {group.notes.length}</div>
+                                    )}
+                                    {group.notes.map(n => {
+                                        const boundIds = n.positionIds ? n.positionIds : (n.positionId ? [n.positionId] : []);
+                                        const boundCodes = boundIds.map(id => positions.find(p => p.id === id)?.code).filter(Boolean) as string[];
+                                        return (
+                                            <div key={n.id} onClick={() => setViewingNote(n)}
+                                                className="bg-white rounded-2xl border border-slate-200/70 shadow-sm p-4 active:scale-[0.99] transition-transform cursor-pointer">
+                                                <div className="flex items-center gap-2">
+                                                    <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-semibold ${NOTE_KIND_STYLE[n.kind]}`}>{NOTE_KIND_LABEL[n.kind]}</span>
+                                                    <span className="text-sm font-semibold text-slate-800 truncate flex-1">{n.title}</span>
+                                                </div>
+                                                <div className="text-xs text-slate-400 mt-1.5">{n.content.replace(/[#*`>]/g, '').slice(0, 80)}</div>
+                                                {(n.tags?.length || boundCodes.length) ? (
+                                                    <div className="flex flex-wrap items-center gap-1 mt-1.5">
+                                                        {boundCodes.map(c => (
+                                                            <span key={c} className="text-[10px] px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-500 font-medium">🔗{c}</span>
+                                                        ))}
+                                                        {(n.tags || []).map(t => (
+                                                            <span key={t} className="text-[10px] px-1.5 py-0.5 rounded-md bg-sky-50 text-sky-600 font-medium">#{t}</span>
+                                                        ))}
+                                                    </div>
+                                                ) : null}
+                                                <div className="text-[10px] text-slate-300 mt-1">{characters.find(c => c.id === n.charId)?.name || ''} · 最后更新 {relTimeLabel(n.updatedAt ?? n.createdAt)}</div>
+                                            </div>
+                                        );
+                                    })}
                                 </div>
                             ))}
                         </div>
@@ -2431,7 +2575,61 @@ const JobHuntApp: React.FC = () => {
                             {noteEditing
                                 ? <textarea value={noteEditContent} onChange={e => setNoteEditContent(e.target.value)} rows={12}
                                     className="w-full h-full min-h-[240px] bg-slate-100 rounded-xl px-3 py-2.5 text-sm text-slate-700 outline-none focus:ring-2 focus:ring-sky-200 resize-none leading-relaxed" />
-                                : <MarkdownBlock text={viewingNote.content} />}
+                                : (
+                                    <>
+                                        <MarkdownBlock text={viewingNote.content} />
+                                        {/* 标签 + 绑定岗位：纯人类手动管理，即改即存，AI 不读不写 */}
+                                        <div className="mt-4 pt-3 border-t border-slate-100 space-y-3">
+                                            <div>
+                                                <div className="text-[11px] font-bold text-slate-400 mb-1.5">标签</div>
+                                                <div className="flex flex-wrap items-center gap-1.5">
+                                                    {(viewingNote.tags || []).map(t => (
+                                                        <span key={t} className="flex items-center gap-1 text-[11px] pl-2 pr-1 py-0.5 rounded-full bg-sky-50 text-sky-600 font-medium">
+                                                            #{t}
+                                                            <button onClick={() => patchViewingNote({ tags: (viewingNote.tags || []).filter(x => x !== t) })}
+                                                                className="w-3.5 h-3.5 flex items-center justify-center rounded-full text-sky-400 hover:bg-rose-100 hover:text-rose-500">×</button>
+                                                        </span>
+                                                    ))}
+                                                    {!(viewingNote.tags || []).length && <span className="text-[11px] text-slate-300">还没有标签</span>}
+                                                </div>
+                                                <div className="flex items-center gap-1.5 mt-1.5">
+                                                    <input value={noteTagInput} onChange={e => setNoteTagInput(e.target.value)}
+                                                        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addNoteTag(); } }}
+                                                        placeholder="输入标签后回车"
+                                                        className="flex-1 bg-slate-100 rounded-lg px-2.5 py-1.5 text-xs outline-none focus:ring-2 focus:ring-sky-200" />
+                                                    <button onClick={addNoteTag} className="text-xs font-semibold text-sky-600 px-2 py-1.5 active:scale-95 transition-transform">添加</button>
+                                                </div>
+                                                {allNoteTags.filter(t => !(viewingNote.tags || []).includes(t)).length > 0 && (
+                                                    <div className="flex flex-wrap gap-1 mt-1.5">
+                                                        {allNoteTags.filter(t => !(viewingNote.tags || []).includes(t)).map(t => (
+                                                            <button key={t} onClick={() => patchViewingNote({ tags: [...(viewingNote.tags || []), t] })}
+                                                                className="text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-400 hover:text-sky-600 transition-colors">+ #{t}</button>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div>
+                                                <div className="text-[11px] font-bold text-slate-400 mb-1.5">绑定岗位<span className="font-normal text-slate-300 ml-1">（可多选，仅你可见）</span></div>
+                                                {positions.length === 0 ? (
+                                                    <div className="text-[11px] text-slate-300">还没有岗位卡</div>
+                                                ) : (
+                                                    <div className="flex flex-wrap gap-1.5">
+                                                        {positions.map(p => {
+                                                            const bound = viewingNote.positionIds ? viewingNote.positionIds : (viewingNote.positionId ? [viewingNote.positionId] : []);
+                                                            const on = bound.includes(p.id);
+                                                            return (
+                                                                <button key={p.id} onClick={() => patchViewingNote({ positionIds: on ? bound.filter(x => x !== p.id) : [...bound, p.id] })}
+                                                                    className={`text-[11px] px-2 py-0.5 rounded-full font-medium transition-colors ${on ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                                                                    🔗{p.code}
+                                                                </button>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </>
+                                )}
                         </div>
                         {noteEditing ? (
                             <div className="flex items-center gap-2 mt-3">

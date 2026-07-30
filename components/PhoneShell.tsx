@@ -497,15 +497,6 @@ const PhoneShell: React.FC = () => {
   // 冷启动「世界入场」是否已结束。结束前由 BootSequence 接管整屏（同时取代旧的黑屏 spinner）。
   const [bootDone, setBootDone] = useState(false);
 
-  // 从 App 回桌面时的一次性淡入（播完即清，让 Launcher wrapper 回到无样式直通层，
-  // 保住小组件 backdrop-filter 对壁纸的采样）；开机首挂不淡入。
-  const [launcherFadingIn, setLauncherFadingIn] = useState(false);
-  const prevAppRef = React.useRef(activeApp);
-  useEffect(() => {
-    if (prevAppRef.current !== AppID.Launcher && activeApp === AppID.Launcher) setLauncherFadingIn(true);
-    prevAppRef.current = activeApp;
-  }, [activeApp]);
-
   // 从根本上消除「每次进 App 都要加载」：数据一就绪就在后台按优先级逐个预热各 App 的代码块。
   // 关键：不等开机动画（bootDone）结束就开始 —— 否则用户在开机那 ~2 秒内点开 Chat 时 chunk 还没热，
   // 会现下载+解析 300KB+，首次进聊天卡好几秒。预热与开机动画并行（只下载/解析负载、不挂载、无副作用）。
@@ -872,7 +863,7 @@ const PhoneShell: React.FC = () => {
        {/* 壁纸底层：进 App 时只柔和虚化/压暗作背景，不再做缩放「过场」——
           进 App 的过渡感统一交给 App 容器的淡入（见下方 animate-fade-in 包裹层）。 */}
        <div
-         className="absolute inset-0 bg-cover bg-center transition-opacity duration-500 ease-[cubic-bezier(0.25,0.1,0.25,1)]"
+         className="absolute inset-0 bg-cover bg-center transition-all duration-500 ease-[cubic-bezier(0.25,0.1,0.25,1)]"
          style={{
              backgroundImage: bgImageValue,
              filter: activeApp !== AppID.Launcher ? 'blur(10px)' : 'none',
@@ -882,9 +873,7 @@ const PhoneShell: React.FC = () => {
          }}
        />
        
-       {/* 进 App 背景压暗+糊化：不再用 transition animate 全屏 backdrop-filter（移动端 GPU 灾难），
-           瞬间切换；App 本体 200ms 淡入盖在上面，糊化瞬切基本不可见，但省掉了每帧重算。 */}
-       <div className={`absolute inset-0 ${activeApp === AppID.Launcher ? 'bg-transparent' : 'bg-white/50 backdrop-blur-3xl'}`} />
+       <div className={`absolute inset-0 transition-all duration-500 ${activeApp === AppID.Launcher ? 'bg-transparent' : 'bg-white/50 backdrop-blur-3xl'}`} />
        
        {/* 外壳安全区两种策略：
           - 未迁移 App：外壳铺满 body（含 --app-height 多出的 +safe-bottom 溢出区），用 padding 让位安全区，
@@ -901,23 +890,14 @@ const PhoneShell: React.FC = () => {
       >
           {/* App Container */}
           <div className="flex-1 relative overflow-hidden" style={{ contain: useIOSStandaloneLayout ? undefined : 'layout style paint' }}>
-            {/* Launcher 永远保留在底层：进 App 时只隐藏不卸载，回桌面瞬间到位，
+            {/* Launcher 永远保留在底层：进 App 时只隐藏（visibility）不卸载，回桌面瞬间到位，
                 避免每次回桌面 WidgetsPage 重新 mount 导致小组件加载跳动。
-                ⚠ 显隐用 visibility + 一次性淡入动画，绝不能用常驻 opacity/transition：
-                那会让这层变成 backdrop root，桌面小组件的 backdrop-filter 采样不到外层壁纸，
-                透明柔光玻璃会糊成白底毛玻璃（玻璃回归 bug）。淡入播完立即清空内联样式，
-                闲置在桌面时这层是无样式直通层。 */}
+                ⚠ 显隐只能用 visibility，绝不能用常驻 opacity/transition：那会让这层变成
+                backdrop root，桌面小组件的 backdrop-filter 采样不到外层壁纸，透明柔光玻璃会糊成白底毛玻璃。 */}
             <div
               className="absolute inset-0"
-              style={{
-                ...(activeApp !== AppID.Launcher ? { visibility: 'hidden' as const } : {}),
-                ...(launcherFadingIn ? { animation: 'launcherBackFade 300ms ease-out both' } : {}),
-              }}
-              onAnimationEnd={(e) => {
-                if (e.target === e.currentTarget && e.animationName === 'launcherBackFade') setLauncherFadingIn(false);
-              }}
+              style={activeApp !== AppID.Launcher ? { visibility: 'hidden' as const } : undefined}
             >
-              <style>{`@keyframes launcherBackFade{from{opacity:0}to{opacity:1}}`}</style>
               <Launcher />
             </div>
             {/* 非 Launcher App 叠在上层 */}

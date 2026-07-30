@@ -2354,6 +2354,10 @@ export interface JobNote {
     title: string;
     content: string;            // markdown
     positionId?: string;
+    /** 人工绑定的岗位（可多条）——纯人类手动管理，AI 指令不读不写；positionId 保留作旧数据/会话自动带的兼容 */
+    positionIds?: string[];
+    /** 自定义标签（可多个）——纯人类手动管理，AI 指令不读不写 */
+    tags?: string[];
     sessionId?: string;
     charId: string;
     createdAt: number;
