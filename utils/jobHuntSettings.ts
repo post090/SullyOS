@@ -17,7 +17,7 @@ export interface JobHuntSettings {
     autoMemorySync: boolean;                   // 离开会话自动沉淀记忆
     syncThreshold: number;                     // 自动沉淀的新消息条数阈值
     /** 单聊上下文注入（编辑入口在单聊设置，全局生效）：简历三态 / 竞争力档案 / 岗位摘要 */
-    inject: { resume: 'none' | 'raw' | 'digest'; profile: boolean; positions: boolean };
+    inject: { resume: 'none' | 'raw' | 'digest'; profile: boolean; positions: boolean; notes: boolean };
     /** 模拟面试出题素材注入（编辑入口在 App 设置中心） */
     interviewInject: { profile: boolean; resumeDigest: boolean };
     /** 练习附加提示词命名模板（练习设置弹窗「存为模板」） */
@@ -46,7 +46,7 @@ export const JH_SETTINGS_KEY = 'os_jobhunt_settings';
 
 export const DEFAULT_JH_SETTINGS: JobHuntSettings = {
     zoom: 1, typewriter: true, autoSpeak: 'interview', autoMemorySync: true, syncThreshold: 6,
-    inject: { resume: 'digest', profile: true, positions: true },
+    inject: { resume: 'digest', profile: true, positions: true, notes: true },
     interviewInject: { profile: true, resumeDigest: true },
     practiceTemplates: [],
     api: { chat: null, stt: null, ttsProvider: 'follow', audio: null, audioAnalysis: false, transcribeMode: 'stt' },

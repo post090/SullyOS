@@ -102,7 +102,6 @@ function renderMemoInstructions(): string {
         `- 编辑：[[MEMO_EDIT:编号|content:新内容|status:active或done|type:note或todo|tags:新标签]] —— 任意字段组合，编号就是上面的序号；status=done 表示划掉，划掉即完成，会直接从备忘录里删除`,
         `- 删除：[[MEMO_DEL:编号]]`,
         '编号是上面列表里的序号（从 1 开始）。备忘录随手记短句、要记长内容也可以，单条上限 5000 字。',
-        '只有当前的【单聊】场景才能用这些标签；其他场景（主动消息/通话/小小窝）你只能看不能改。',
     ].join('\n');
 }
 

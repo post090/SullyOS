@@ -92,6 +92,15 @@ export interface PromptBlockStat {
      * 旧记录没有这个字段，点开显示"无预览"。
      */
     preview?: string;
+    /**
+     * 该块归属的功能模块（构建侧按「块头结构」锚定，不用关键词 contains，
+     * 所以用户核心提示词绝不会因为字面含「记忆」被误判成记忆模块）。
+     * 展示层按 module 把同模块的块合并成一条。旧记录没有这个字段，展示层
+     * 回退用 classifyPromptBlock(label) 兜底。
+     */
+    module?: PromptModule;
+    /** 该模块提示词的生成位置（回答"哪来的"），如 'context.ts · 角色设定'。 */
+    source?: string;
 }
 
 const PRESETS_STORAGE_KEY = 'os_api_presets';
@@ -320,10 +329,13 @@ function splitSystemBlocks(text: string): PromptBlockStat[] {
     let buffer = ''; // 累积当前块原文，结束时存全文进 preview
     let sawHeader = false;
     let inFence = false;
+    // 模块：开头部分（人设）默认 character；未知块头继承上一块——这样用户在
+    // 自己核心提示词里写的小标题会归到 character，不会散成 other。
+    let mod: PromptModule = 'character';
     const lines = text.split('\n');
     const fenceAt = fenceToggleLines(lines);
     const flush = () => {
-        if (chars > 0) out.push({ label, chars, preview: buffer.slice(0, PREVIEW_MAX_CHARS) || undefined });
+        if (chars > 0) out.push({ label, chars, preview: buffer.slice(0, PREVIEW_MAX_CHARS) || undefined, module: mod, source: PROMPT_MODULE_INFO[mod].source });
         chars = 0;
         buffer = '';
     };
@@ -334,6 +346,7 @@ function splitSystemBlocks(text: string): PromptBlockStat[] {
         if (header) {
             flush();
             label = header.slice(0, BLOCK_LABEL_MAX);
+            mod = matchModuleForHeader(header) ?? mod;
             chars = line.length + 1;
             buffer = line + '\n';
             sawHeader = true;
@@ -348,7 +361,9 @@ function splitSystemBlocks(text: string): PromptBlockStat[] {
     flush();
     if (!sawHeader && out.length === 1) {
         const firstLine = text.trimStart().split('\n', 1)[0] || '(空 system)';
-        out[0] = { ...out[0], label: firstLine.slice(0, BLOCK_LABEL_MAX) };
+        // 无块头的短消息（MCP 尾部提醒等）：用首行当名字，并据此重新归属模块。
+        const m = matchModuleForHeader(firstLine);
+        out[0] = { ...out[0], label: firstLine.slice(0, BLOCK_LABEL_MAX), module: m ?? out[0].module, source: PROMPT_MODULE_INFO[m ?? out[0].module!].source };
     }
     return out;
 }
@@ -402,6 +417,80 @@ const THINKING_CHAIN_LABEL_PREFIXES = [
 export const isThinkingChainBlockLabel = (label: string): boolean =>
     THINKING_CHAIN_LABEL_PREFIXES.some(prefix => label.startsWith(prefix));
 
+// ── 模块归属（按「块头结构」锚定，不用关键词 contains） ─────────────────────
+
+/**
+ * 提示词功能模块。每一块 system prompt 都有个结构化块头（### 标题 / [System:]），
+ * 根据块头就能精确归属到哪个功能——这比“标签里含不含记忆二字”可靠得多（人设
+ * 里写了“我记性很好”不会被当成记忆模块）。
+ */
+export type PromptModule =
+    | 'character' | 'worldbook' | 'memory' | 'memo' | 'realtime' | 'schedule'
+    | 'music' | 'group' | 'diary' | 'asset' | 'task' | 'jobhunt' | 'vr'
+    | 'rules' | 'voice' | 'thinking' | 'recency' | 'mcp' | 'bilingual'
+    | 'history_user' | 'history_assistant' | 'history_tool' | 'solo_prompt' | 'other';
+
+/** 模块元数据：展示名 + 来源（回答"哪来的"）。 */
+export const PROMPT_MODULE_INFO: Record<PromptModule, { name: string; source: string }> = {
+    character:         { name: '角色人设',   source: 'context.ts · 角色设定' },
+    worldbook:         { name: '世界书',     source: 'worldbook.ts' },
+    memory:            { name: '记忆系统',   source: 'context.ts / memoryPalace' },
+    memo:              { name: '备忘录',     source: 'memos.ts' },
+    realtime:          { name: '实时状态',   source: 'RealtimeContext' },
+    schedule:          { name: '日程',       source: 'context.ts · 日程' },
+    music:             { name: '音乐氛围',   source: 'context.ts · 音乐' },
+    group:             { name: '群聊背景',   source: 'chatPrompts · 群聊' },
+    diary:             { name: '日记/笔记',  source: 'chatPrompts · 日记笔记' },
+    asset:             { name: '经济直觉',   source: 'chatPrompts · 资产' },
+    task:              { name: '时光契约',   source: 'taskPrompts' },
+    jobhunt:           { name: '上岸计划',   source: 'jobDirectives' },
+    vr:                { name: '彼方',       source: 'chatPrompts · 彼方' },
+    rules:             { name: '规则/格式',  source: 'chatPrompts · 行为规范' },
+    voice:             { name: '语音功能',   source: 'chatPrompts · 语音' },
+    thinking:          { name: '思考链',     source: 'thinkingChainPrompt' },
+    recency:           { name: '结尾钢印',   source: 'chatPrompts · 钢印' },
+    mcp:               { name: 'MCP 工具',    source: 'MCP' },
+    bilingual:         { name: '双语指令',   source: 'chatPrompts · 双语' },
+    history_user:      { name: '历史·用户',  source: '消息历史' },
+    history_assistant: { name: '历史·角色',  source: '消息历史' },
+    history_tool:      { name: '历史·工具',  source: '消息历史' },
+    solo_prompt:       { name: '任务提示词', source: '单条任务请求' },
+    other:             { name: '其他',       source: '未归类' },
+};
+
+/**
+ * 块头关键词 → 模块。注意：这里只匿配「块头」（结构化标题），不匿配正文，
+ * 所以不会把正文里提到的词当成模块信号。顺序：更具体的在前。
+ */
+const HEADER_MODULE_TABLE: [PromptModule, string[]][] = [
+    ['memory',    ['记忆宫殿', '记忆系统', '记忆摘要', '长期核心记忆', '当前激活的详细回忆', 'Memory Bank', 'Memory Palace', 'Memory Reference']],
+    ['memo',      ['你的备忘录', '备忘录']],
+    ['worldbook', ['世界书', '扩展设定集', 'Worldbook']],
+    ['recency',   ['关于对方的表达', '最后，回到你自己']],
+    ['voice',     ['语音消息功能']],
+    ['vr',        ['关于《彼方》', '在《彼方》里', '彼方']],
+    ['jobhunt',   ['求职工作台', '上岸计划']],
+    ['task',      ['时光契约', '任务监督']],
+    ['group',     ['群聊背景']],
+    ['diary',     ['最近写的日记', '最近写的笔记']],
+    ['asset',     ['经济与生活直觉']],
+    ['music',     ['音乐互动工具', '正在听', '此刻在听']],
+    ['schedule',  ['今日行程', '当前日程', '意识流']],
+    ['realtime',  ['当前时间', '实时状态', 'Live Context', '今日特殊', 'Background Context']],
+    ['mcp',       ['MCP 工具', 'MCP']],
+    ['rules',     ['聊天 App 行为规范', '表达底线', 'Chat App Rules', 'Anti-Filler']],
+    ['character', ['你的身份', '角色名', '核心指令', '内在认知', '世界观与设定', 'World Settings', 'Self Insights', '互动对象', '私密档案', 'Private Impression', 'Character', '底色认知', 'Resident Knowledge']],
+];
+
+/** 根据块头文本判定模块；认不出返回 null（由调用方决定继承/兜底）。 */
+export function matchModuleForHeader(header: string): PromptModule | null {
+    if (isThinkingChainBlockLabel(header)) return 'thinking';
+    for (const [mod, keys] of HEADER_MODULE_TABLE) {
+        if (keys.some(k => header.includes(k))) return mod;
+    }
+    return null;
+}
+
 /**
  * 输入构成块的分类 key（展示层用 CATEGORY_META 映射成胶囊标签 + 颜色）。
  * 判断顺序很关键：越具体的前缀匹配越要先判，contains 类（记忆/世界书/角色）放最后，
@@ -429,8 +518,6 @@ export function classifyPromptBlock(label: string): PromptBlockCategory {
     if (/角色|档案|人设|设定/.test(label)) return 'character';
     return 'other';
 }
-
-const MAX_BREAKDOWN_BLOCKS = 48;
 
 /**
  * 从 chat/completions 请求体算输入构成。解析不了 / 没有 messages 时返回 undefined。
@@ -494,27 +581,13 @@ export function buildPromptBreakdown(body: unknown): PromptBlockStat[] | undefin
                 ? (contentToText(messages[0]?.content).trimStart().split('\n', 1)[0] || '').slice(0, BLOCK_LABEL_MAX)
                 : '';
             out.push(soloPrompt
-                ? { label: `提示词整体「${firstLine}」`, chars: userChars, preview: userPreview.trim() || undefined }
-                : { label: `聊天历史·用户消息 ×${userCount}`, chars: userChars, preview: userPreview.trim() || undefined });
+                ? { label: `提示词整体「${firstLine}」`, chars: userChars, preview: userPreview.trim() || undefined, module: 'solo_prompt', source: PROMPT_MODULE_INFO.solo_prompt.source }
+                : { label: `聊天历史·用户消息 ×${userCount}`, chars: userChars, preview: userPreview.trim() || undefined, module: 'history_user', source: PROMPT_MODULE_INFO.history_user.source });
         }
-        if (asstCount) out.push({ label: `聊天历史·角色消息 ×${asstCount}`, chars: asstChars, preview: asstPreview.trim() || undefined });
-        if (otherCount) out.push({ label: `其他消息（tool 等）×${otherCount}`, chars: otherChars, preview: otherPreview.trim() || undefined });
+        if (asstCount) out.push({ label: `聊天历史·角色消息 ×${asstCount}`, chars: asstChars, preview: asstPreview.trim() || undefined, module: 'history_assistant', source: PROMPT_MODULE_INFO.history_assistant.source });
+        if (otherCount) out.push({ label: `其他消息（tool 等）×${otherCount}`, chars: otherChars, preview: otherPreview.trim() || undefined, module: 'history_tool', source: PROMPT_MODULE_INFO.history_tool.source });
         if (out.length === 0) return undefined;
-
-        // 限容：病态多块时合并尾巴，保证单条记录体积可控
-        if (out.length > MAX_BREAKDOWN_BLOCKS) {
-            const head = out.slice(0, MAX_BREAKDOWN_BLOCKS - 1);
-            const rest = out.slice(MAX_BREAKDOWN_BLOCKS - 1);
-            const restChars = rest.reduce((sum, b) => sum + b.chars, 0);
-            // preview 也合并：存全文（展示层控制可视高度）
-            let restPreview = '';
-            for (const b of rest) {
-                if (restPreview.length >= PREVIEW_MAX_CHARS) break;
-                restPreview += (b.preview || '').slice(0, PREVIEW_MAX_CHARS - restPreview.length);
-            }
-            head.push({ label: `（其余 ${rest.length} 块合计）`, chars: restChars, preview: restPreview || undefined });
-            return head;
-        }
+        // 不再按块数截断成「其余 N 块合计」——展示层按模块合并成一条，块数自然收敛。
         return out;
     } catch {
         return undefined;

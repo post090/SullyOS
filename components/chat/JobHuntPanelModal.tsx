@@ -128,6 +128,7 @@ const JobHuntPanelModal: React.FC<JobHuntPanelModalProps> = ({
                             {([
                                 ['profile', '竞争力档案', inject.profile] as const,
                                 ['positions', '岗位摘要', inject.positions] as const,
+                                ['notes', '笔记本条目', inject.notes] as const,
                             ]).map(([key, label, on]) => (
                                 <button key={key} onClick={() => patchInject({ [key]: !on } as Partial<JobHuntSettings['inject']>)}
                                     className="w-full flex items-center justify-between px-1 active:scale-[0.99] transition-transform">

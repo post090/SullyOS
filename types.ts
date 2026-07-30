@@ -2668,6 +2668,7 @@ export interface CharacterProfile {
 
   // Chat & Date voice TTS settings
   chatVoiceEnabled?: boolean;
+  memoEnabled?: boolean;                 // 单聊备忘录：本角色是否启用（默认关，避免给所有角色注入备忘录教学/列表）
   chatVoiceLang?: string;
   dateVoiceEnabled?: boolean;
   dateVoiceLang?: string;

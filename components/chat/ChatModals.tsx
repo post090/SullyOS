@@ -101,6 +101,8 @@ interface ChatModalsProps {
     // Voice TTS
     chatVoiceEnabled?: boolean;
     onToggleChatVoice?: () => void;
+    memoEnabled?: boolean;
+    onToggleMemo?: () => void;
     chatVoiceLang?: string;
     onSetChatVoiceLang?: (lang: string) => void;
     // Voice generation from long-press
@@ -243,6 +245,7 @@ const ChatModals: React.FC<ChatModalsProps> = ({
     xhsEnabled, onToggleXhs,
     htmlModeEnabled, onToggleHtmlMode, htmlModeCustomPrompt, setHtmlModeCustomPrompt,
     chatVoiceEnabled, onToggleChatVoice, chatVoiceLang, onSetChatVoiceLang,
+    memoEnabled, onToggleMemo,
     onGenerateVoice, voiceAvailable, onDownloadVoice, voiceDownloadable,
     scheduleData, isScheduleGenerating, onScheduleEdit, onScheduleDelete, onScheduleReroll, onScheduleCoverChange,
     onScheduleStyleChange, onPlayTheater,
@@ -548,6 +551,19 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                          )}
                      </div>
 
+                     {/* 备忘录 */}
+                     <div className="pt-2 border-t border-slate-100">
+                         <div className="flex justify-between items-center cursor-pointer" onClick={onToggleMemo}>
+                             <label className="text-xs font-bold text-slate-400 uppercase pointer-events-none">备忘录</label>
+                             <div className={`w-10 h-6 rounded-full p-1 transition-colors flex items-center ${memoEnabled ? 'bg-emerald-400' : 'bg-slate-200'}`}>
+                                 <div className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${memoEnabled ? 'translate-x-4' : ''}`}></div>
+                             </div>
+                         </div>
+                         <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">
+                             开启后，TA 能在单聊里自己记录、翻阅、增删改备忘录（玩法提示会注入提示词）；关闭则不注入任何备忘录内容。
+                         </p>
+                     </div>
+                     
                      {/* Voice TTS */}
                      <div className="pt-2 border-t border-slate-100">
                          <div className="flex justify-between items-center cursor-pointer" onClick={onToggleChatVoice}>

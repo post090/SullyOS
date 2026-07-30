@@ -149,11 +149,32 @@ describe('buildPromptBreakdown', () => {
         expect(buildPromptBreakdown(undefined)).toBeUndefined();
     });
 
-    it('病态多块时合并尾巴限容', () => {
+    it('多块时不再截断成「其余 N 块合计」（展示层按模块合并）', () => {
         const sys = Array.from({ length: 80 }, (_, i) => `### 块${i}\n内容${i}`).join('\n');
         const blocks = buildPromptBreakdown({ messages: [{ role: 'system', content: sys }] })!;
-        expect(blocks.length).toBeLessThanOrEqual(48);
-        expect(blocks[blocks.length - 1].label).toContain('其余');
+        expect(blocks.length).toBe(80);
+        expect(blocks.some(b => b.label.includes('其余'))).toBe(false);
+    });
+});
+
+// 模块归属：按「块头结构」锚定，不用关键词 contains。人设里写了“记性好”不会被
+// 误判成记忆模块；用户自己写的未知子标题继承父模块，不散成 other。
+describe('buildPromptBreakdown · 模块归属', () => {
+    it('人设不因含「记忆」被误判，未知子标题继承父模块', () => {
+        const sys = [
+            '### 你的身份 (Character)',
+            '我记性特别好，什么都记得',
+            '### 我的背景故事',
+            '出生在……',
+            '### 记忆系统 (Memory Bank)',
+            '- 一条记忆',
+        ].join('\n');
+        const blocks = buildPromptBreakdown({ messages: [{ role: 'system', content: sys }, { role: 'user', content: 'hi' }] })!;
+        const mod = (label: string) => blocks.find(b => b.label === label)?.module;
+        expect(mod('你的身份 (Character)')).toBe('character');
+        expect(mod('我的背景故事')).toBe('character'); // 未知块头继承上一块（character）
+        expect(mod('记忆系统 (Memory Bank)')).toBe('memory');
+        expect(blocks.find(b => b.label.startsWith('聊天历史·用户消息'))?.module).toBe('history_user');
     });
 });
 

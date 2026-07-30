@@ -11,6 +11,9 @@ const makeChar = () => ({
     name: '测试角色',
     systemPrompt: '你是测试角色。',
     timeAwarenessEnabled: true,
+    // 有实际长期记忆 → 「记忆系统 (Memory Bank)」节才会注入（P1：空记忆整节跳过）；
+    // 这节属稳定内容，用来验证 deferVolatile 下它仍留在 core。
+    refinedMemories: { '2024-01': '第一次见面的记忆' },
     memoryPalaceEnabled: true,
     memoryPalaceInjection: '### 记忆宫殿召回\n- 【召回片段】上周一起看了流星雨',
     scheduleFeatureEnabled: true,

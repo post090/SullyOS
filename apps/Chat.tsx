@@ -3185,6 +3185,8 @@ const Chat: React.FC = () => {
                 setHtmlModeCustomPrompt={setSettingsHtmlModeCustomPrompt}
                 chatVoiceEnabled={!!char.chatVoiceEnabled}
                 onToggleChatVoice={() => updateCharacter(char.id, { chatVoiceEnabled: !char.chatVoiceEnabled })}
+                memoEnabled={!!char.memoEnabled}
+                onToggleMemo={() => updateCharacter(char.id, { memoEnabled: !char.memoEnabled })}
                 chatVoiceLang={char.chatVoiceLang || ''}
                 onSetChatVoiceLang={(lang: string) => updateCharacter(char.id, { chatVoiceLang: lang })}
                 voiceAvailable={characterHasVoice(char, apiConfig)}

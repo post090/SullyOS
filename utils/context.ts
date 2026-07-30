@@ -217,7 +217,9 @@ export const ContextBuilder = {
         }
 
         // 5. 记忆库 (Memory Bank)
-        context += `### 记忆系统 (Memory Bank)\n`;
+        // 有实际记忆内容（月度总结 / 当月详细回忆）才注入整节；都没有就整节跳过——
+        // 不再无条件打印「记忆系统」标题 + 「暂无特定记忆」占位，避免给没启用记忆系统的
+        // 角色白塞占位、也省 token（P1）。
         let memoryContent = "";
 
         // 5a. 长期核心记忆 (Refined Memories)
@@ -265,10 +267,10 @@ export const ContextBuilder = {
             }
         }
 
-        if (!memoryContent) {
-            memoryContent = "(暂无特定记忆，请基于当前对话互动)";
+        if (memoryContent) {
+            context += `### 记忆系统 (Memory Bank)\n`;
+            context += `${memoryContent}\n\n`;
         }
-        context += `${memoryContent}\n\n`;
 
         // 5b. 记忆宫殿 (Memory Palace) — 向量检索结果
         // 仅在 includeDetailedMemories 时注入，与详细日志同级
@@ -311,7 +313,8 @@ export const ContextBuilder = {
         // 单聊场景的「标签使用说明」（教 AI 怎么增删改）由 chatPrompts.buildSystemPromptParts
         // 额外注入，避免主动消息/通话/小小窝场景污染 prompt、也避免 AI 在不能写的场景输出标签。
         // includeDetailedMemories=false 的轻量调用（情绪评估等）跳过，省 token。
-        if (includeDetailedMemories && char.memos && char.memos.length > 0) {
+        // char.memoEnabled=false（默认）：本角色未启用备忘录功能，列表也不注入（功能关即零注入）。
+        if (includeDetailedMemories && char.memoEnabled && char.memos && char.memos.length > 0) {
             const memoBlock = renderMemosForPrompt(char.memos, 'proactive');
             if (memoBlock) context += `${memoBlock}\n\n`;
         }

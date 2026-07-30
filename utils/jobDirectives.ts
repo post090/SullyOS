@@ -168,7 +168,7 @@ export async function buildJobHuntPromptBlock(): Promise<string> {
     try { resumes = await DB.getJobResumes(); } catch { /* 同上 */ }
 
     // 单聊注入档位（用户级全局设置；读失败用默认：档案开、简历摘要、岗位开）
-    let inject: { resume: 'none' | 'raw' | 'digest'; profile: boolean; positions: boolean } = { resume: 'digest', profile: true, positions: true };
+    let inject: { resume: 'none' | 'raw' | 'digest'; profile: boolean; positions: boolean; notes: boolean } = { resume: 'digest', profile: true, positions: true, notes: true };
     try { inject = loadJhSettings().inject; } catch { /* 用默认 */ }
 
     const lines: string[] = ['### 【求职工作台 · 上岸计划】'];
@@ -205,10 +205,12 @@ export async function buildJobHuntPromptBlock(): Promise<string> {
             lines.push('【在推进的岗位】暂无建档岗位（用户聊到新投递时你可以用指令帮 ta 建卡）。');
         }
     }
-    const recentNotes = notes.slice(0, 8);
-    if (recentNotes.length > 0) {
-        lines.push('【笔记本近期条目】（可用 JOB_NOTE_EDIT / JOB_NOTE_DEL 按标题操作）');
-        recentNotes.forEach(n => {
+    if (inject.notes && notes.length > 0) {
+        // 只注入标题 + 类型 + 更新时间（不含正文，成本极低），按最近更新排序，全部塞过去，
+        // 让 AI 知道笔记本里有哪些条目、能按标题 JOB_NOTE_EDIT / JOB_NOTE_DEL 精准操作。
+        const sorted = [...notes].sort((a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt));
+        lines.push('【笔记本条目】（可用 JOB_NOTE_EDIT / JOB_NOTE_DEL 按标题操作）');
+        sorted.forEach(n => {
             const upd = n.updatedAt ?? n.createdAt;
             lines.push(`- [${NOTE_KIND_LABEL[n.kind] || n.kind}] ${n.title}（最后更新：${relTimeLabel(upd)}）`);
         });

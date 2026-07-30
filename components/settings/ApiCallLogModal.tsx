@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import Modal from '../os/Modal';
 import { DB } from '../../utils/db';
-import { isSameCoreModel, isFixedPromptBlockLabel, isThinkingChainBlockLabel, classifyPromptBlock } from '../../utils/apiCallLog';
-import type { ApiCallLogEntry, PromptBlockStat, PromptBlockCategory, RecalledMemorySnapshot } from '../../utils/apiCallLog';
+import { isSameCoreModel, classifyPromptBlock, PROMPT_MODULE_INFO } from '../../utils/apiCallLog';
+import type { ApiCallLogEntry, PromptBlockStat, PromptBlockCategory, PromptModule, RecalledMemorySnapshot } from '../../utils/apiCallLog';
 
 interface ApiCallLogModalProps {
     isOpen: boolean;
@@ -32,8 +32,13 @@ const ApiCallLogModal: React.FC<ApiCallLogModalProps> = ({ isOpen, onClose }) =>
     const [showHelp, setShowHelp] = useState(false);
     const [expandedId, setExpandedId] = useState<string | null>(null);
     // 输入构成排序：全局共用，所有展开的记录用同一种排序。token 降序=看哪块肥；
-    // 自然顺序=按 prompt 里实际出现顺序，定位"这块在第几位"。
-    const [breakdownSort, setBreakdownSort] = useState<'natural' | 'tokDesc'>('tokDesc');
+    // 自然顺序=按 prompt 里实际出现顺序，定位"这块在第几位"。选择持久化（记住上次按的）。
+    const [breakdownSort, setBreakdownSort] = useState<'natural' | 'tokDesc'>(() => {
+        try { return localStorage.getItem('os_apilog_breakdown_sort') === 'natural' ? 'natural' : 'tokDesc'; } catch { return 'tokDesc'; }
+    });
+    useEffect(() => {
+        try { localStorage.setItem('os_apilog_breakdown_sort', breakdownSort); } catch { /* 存不上不炸 */ }
+    }, [breakdownSort]);
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -237,10 +242,7 @@ const ApiCallLogModal: React.FC<ApiCallLogModalProps> = ({ isOpen, onClose }) =>
                                     </div>
                                 )}
                                 {expanded && e.promptBreakdown && (
-                                    <PromptBreakdownView blocks={e.promptBreakdown} promptTokens={e.promptTokens} sort={breakdownSort} />
-                                )}
-                                {expanded && e.recalledMemories && e.recalledMemories.length > 0 && (
-                                    <RecalledMemoriesView items={e.recalledMemories} />
+                                    <PromptBreakdownView blocks={e.promptBreakdown} promptTokens={e.promptTokens} sort={breakdownSort} recalled={e.recalledMemories} />
                                 )}
                             </div>
                         );
@@ -252,97 +254,121 @@ const ApiCallLogModal: React.FC<ApiCallLogModalProps> = ({ isOpen, onClose }) =>
 };
 
 /**
- * 输入构成块的分类 → 胶囊标签 + 颜色映射。
- * key 来自 classifyPromptBlock（utils/apiCallLog.ts），颜色按"性质"分：
- * 规则类灰、引导类紫、用户数据类暖色、历史类青、任务类粉。
+ * 模块 → 胶囊标签颜色。按“性质”分色：角色/记忆/数据类暖色，规则/思考链类冷色，
+ * 历史类青色。同性质的模块共用一个颜色家族，避免颜色太花。
  */
-const CATEGORY_META: Record<PromptBlockCategory, { label: string; bg: string; text: string }> = {
-    thinking:          { label: '思考链',    bg: 'bg-violet-100',  text: 'text-violet-600' },
-    rule:              { label: '规则',      bg: 'bg-slate-200',   text: 'text-slate-500' },
-    memory:            { label: '记忆',      bg: 'bg-amber-100',   text: 'text-amber-600' },
-    worldbook:         { label: '世界书',    bg: 'bg-emerald-100', text: 'text-emerald-600' },
-    character:         { label: '角色',      bg: 'bg-sky-100',     text: 'text-sky-600' },
-    history_user:      { label: '历史·用户', bg: 'bg-cyan-100',    text: 'text-cyan-600' },
-    history_assistant: { label: '历史·角色', bg: 'bg-cyan-100',    text: 'text-cyan-600' },
-    history_tool:      { label: '历史·工具', bg: 'bg-cyan-100',    text: 'text-cyan-600' },
-    task:              { label: '任务',      bg: 'bg-rose-100',    text: 'text-rose-600' },
-    other:             { label: '其他',      bg: 'bg-slate-100',   text: 'text-slate-400' },
+const MODULE_COLOR: Record<PromptModule, { bg: string; text: string }> = {
+    character:         { bg: 'bg-sky-100',     text: 'text-sky-600' },
+    worldbook:         { bg: 'bg-emerald-100', text: 'text-emerald-600' },
+    memory:            { bg: 'bg-amber-100',   text: 'text-amber-600' },
+    memo:              { bg: 'bg-amber-100',   text: 'text-amber-600' },
+    realtime:          { bg: 'bg-teal-100',    text: 'text-teal-600' },
+    schedule:          { bg: 'bg-teal-100',    text: 'text-teal-600' },
+    music:             { bg: 'bg-teal-100',    text: 'text-teal-600' },
+    group:             { bg: 'bg-cyan-100',    text: 'text-cyan-600' },
+    diary:             { bg: 'bg-lime-100',    text: 'text-lime-600' },
+    asset:             { bg: 'bg-lime-100',    text: 'text-lime-600' },
+    task:              { bg: 'bg-rose-100',    text: 'text-rose-600' },
+    jobhunt:           { bg: 'bg-rose-100',    text: 'text-rose-600' },
+    vr:                { bg: 'bg-fuchsia-100', text: 'text-fuchsia-600' },
+    rules:             { bg: 'bg-slate-200',   text: 'text-slate-500' },
+    voice:             { bg: 'bg-slate-200',   text: 'text-slate-500' },
+    thinking:          { bg: 'bg-violet-100',  text: 'text-violet-600' },
+    recency:           { bg: 'bg-slate-200',   text: 'text-slate-500' },
+    mcp:               { bg: 'bg-slate-200',   text: 'text-slate-500' },
+    bilingual:         { bg: 'bg-slate-200',   text: 'text-slate-500' },
+    history_user:      { bg: 'bg-cyan-100',    text: 'text-cyan-600' },
+    history_assistant: { bg: 'bg-cyan-100',    text: 'text-cyan-600' },
+    history_tool:      { bg: 'bg-cyan-100',    text: 'text-cyan-600' },
+    solo_prompt:       { bg: 'bg-rose-100',    text: 'text-rose-600' },
+    other:             { bg: 'bg-slate-100',   text: 'text-slate-400' },
 };
 
+/** 旧记录（无 module 字段）兜底：把旧的 category 映射到模块。 */
+const CAT_TO_MODULE: Record<PromptBlockCategory, PromptModule> = {
+    thinking: 'thinking', rule: 'rules', memory: 'memory', worldbook: 'worldbook',
+    character: 'character', history_user: 'history_user', history_assistant: 'history_assistant',
+    history_tool: 'history_tool', task: 'solo_prompt', other: 'other',
+};
+
+const moduleOf = (b: PromptBlockStat): PromptModule => b.module || CAT_TO_MODULE[classifyPromptBlock(b.label)];
+
+/** 按模块合并后的一行。 */
+interface ModuleRow {
+    module: PromptModule;
+    chars: number;
+    count: number;      // 该模块由几个原始块合成
+    preview?: string;
+    source: string;
+}
+
 /**
- * 输入构成面板：按字数降序列出每块（system 的 ### 段落 / 聚合的聊天历史），
- * 附占比条 + 按字符占比折算的 token 估算（分词器差异下只是量级参考，不是精确值）。
- *
- * 每条前面有胶囊标签分类（classifyPromptBlock）；点有 preview 的条目可展开看
- * 原文（存全文，展示层 max-h 控制高度）；同时只展开一条（互斥），避免长内容撑爆页面。
+ * 输入构成面板：按「功能模块」把同一模块的所有块合成一条（不再一个模块散成多行，
+ * 也没有“其余 N 块合计”），每条标模块名 + 来源 + 占比条 + token 估算。
+ * 点一条展开：记忆模块且有向量召回时，展开看召回的记忆（按得分排序、可再展全文）；
+ * 其余模块展开看拼好的原文。
  */
-const PromptBreakdownView: React.FC<{ blocks: PromptBlockStat[]; promptTokens?: number; sort: 'natural' | 'tokDesc' }> = ({ blocks, promptTokens, sort }) => {
-    const [expandedBlockIdx, setExpandedBlockIdx] = useState<number | null>(null);
+const PromptBreakdownView: React.FC<{ blocks: PromptBlockStat[]; promptTokens?: number; sort: 'natural' | 'tokDesc'; recalled?: RecalledMemorySnapshot[] }> = ({ blocks, promptTokens, sort, recalled }) => {
+    const [expandedMod, setExpandedMod] = useState<PromptModule | null>(null);
     const totalChars = blocks.reduce((sum, b) => sum + b.chars, 0) || 1;
-    // 思考链块单独保留（不合并），让人看出思考链占多少；其余 fixed 块
-    // （行为规范/表达底线/钢印）合并成一行——它们不随用户数据变化、散开只会淹没有信息量的块。
-    const thinking = blocks.filter(b => isThinkingChainBlockLabel(b.label));
-    const fixedNonThinking = blocks.filter(b => isFixedPromptBlockLabel(b.label) && !isThinkingChainBlockLabel(b.label));
-    const nonFixed = blocks.filter(b => !isFixedPromptBlockLabel(b.label));
-    let merged: PromptBlockStat[];
-    if (fixedNonThinking.length >= 2) {
-        // 合并块的 preview 也拼一下（存全文），点开能看到规则具体内容
-        let mergedPreview = '';
-        for (const b of fixedNonThinking) {
-            mergedPreview += (b.preview || '') + '\n';
+    // 按模块合并，保留首次出现顺序。
+    const map = new Map<PromptModule, ModuleRow>();
+    const order: PromptModule[] = [];
+    for (const b of blocks) {
+        const mod = moduleOf(b);
+        let row = map.get(mod);
+        if (!row) {
+            row = { module: mod, chars: 0, count: 0, preview: '', source: b.source || PROMPT_MODULE_INFO[mod].source };
+            map.set(mod, row);
+            order.push(mod);
         }
-        merged = [
-            ...nonFixed,
-            ...thinking,
-            { label: `固定提示词（规则/格式，共 ${fixedNonThinking.length} 块）`, chars: fixedNonThinking.reduce((s, b) => s + b.chars, 0), preview: mergedPreview.trim() || undefined },
-        ];
-    } else {
-        merged = [...nonFixed, ...thinking, ...fixedNonThinking];
+        row.chars += b.chars;
+        row.count += 1;
+        if (b.preview) row.preview = (row.preview ? row.preview + '\n\n' : '') + b.preview;
     }
-    // tokDesc：按字符数降序（≈ token 降序，没真 token 时字符数是唯一依据）
-    // natural：保持 prompt 里实际出现顺序（merged 的原始顺序就是出现顺序）
-    const rows = sort === 'tokDesc' ? [...merged].sort((a, b) => b.chars - a.chars) : [...merged];
+    const merged: ModuleRow[] = order.map(m => map.get(m)!);
+    // tokDesc：按字符数降序（≈ token 降序）；natural：保持 prompt 里实际出现顺序
+    const rows = sort === 'tokDesc' ? [...merged].sort((a, b) => b.chars - a.chars) : merged;
     const fmt = (n: number) => n.toLocaleString('en-US');
     return (
         <div className="mt-2 pt-2 border-t border-slate-100 space-y-1.5" onClick={(ev) => ev.stopPropagation()}>
             <div className="flex items-baseline justify-between">
-                <span className="text-[10px] font-bold text-slate-400">输入构成 · 共 {fmt(totalChars)} 字符</span>
+                <span className="text-[10px] font-bold text-slate-400">输入构成 · 共 {fmt(totalChars)} 字符 · {rows.length} 个模块</span>
                 {promptTokens != null && (
                     <span className="text-[9px] text-slate-300">token 为按字符占比的估算</span>
                 )}
             </div>
-            {rows.map((b, i) => {
-                const pct = (b.chars / totalChars) * 100;
-                const estTok = promptTokens != null ? Math.round(promptTokens * b.chars / totalChars) : null;
-                const cat = classifyPromptBlock(b.label);
-                const catMeta = CATEGORY_META[cat];
-                const hasPreview = !!b.preview;
-                const blockExpanded = expandedBlockIdx === i;
+            {rows.map((r) => {
+                const pct = (r.chars / totalChars) * 100;
+                const estTok = promptTokens != null ? Math.round(promptTokens * r.chars / totalChars) : null;
+                const color = MODULE_COLOR[r.module];
+                const name = PROMPT_MODULE_INFO[r.module].name;
+                const isMemoryWithRecall = r.module === 'memory' && !!recalled && recalled.length > 0;
+                const hasDetail = !!r.preview || isMemoryWithRecall;
+                const open = expandedMod === r.module;
                 return (
-                    <div key={i} className="min-w-0">
+                    <div key={r.module} className="min-w-0">
                         <div
-                            className={`flex items-baseline justify-between gap-2 min-w-0 ${hasPreview ? 'cursor-pointer' : ''}`}
-                            onClick={hasPreview ? (ev) => {
-                                ev.stopPropagation();
-                                setExpandedBlockIdx(blockExpanded ? null : i);
-                            } : undefined}
+                            className={`flex items-baseline justify-between gap-2 min-w-0 ${hasDetail ? 'cursor-pointer' : ''}`}
+                            onClick={hasDetail ? (ev) => { ev.stopPropagation(); setExpandedMod(open ? null : r.module); } : undefined}
                         >
                             <div className="flex items-baseline gap-1.5 min-w-0">
-                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${catMeta.bg} ${catMeta.text}`}>{catMeta.label}</span>
-                                <span className="text-[10px] text-slate-500 truncate" title={b.label}>{b.label}</span>
-                                {hasPreview && (
-                                    <span className="text-[9px] text-slate-300 shrink-0">{blockExpanded ? '▲' : '▼'}</span>
+                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${color.bg} ${color.text}`}>{name}</span>
+                                <span className="text-[9px] text-slate-300 truncate" title={r.source}>{r.source}{r.count > 1 ? ` · ${r.count} 块` : ''}</span>
+                                {hasDetail && (
+                                    <span className="text-[9px] text-slate-300 shrink-0">{open ? '▲' : '▼'}</span>
                                 )}
                             </div>
                             <span className="text-[10px] font-mono text-slate-400 shrink-0">
-                                {estTok != null ? `~${fmt(estTok)} tok · ${pct < 1 ? '<1' : Math.round(pct)}%` : `${fmt(b.chars)} 字 · ${pct < 1 ? '<1' : Math.round(pct)}%`}
+                                {estTok != null ? `~${fmt(estTok)} tok · ${pct < 1 ? '<1' : Math.round(pct)}%` : `${fmt(r.chars)} 字 · ${pct < 1 ? '<1' : Math.round(pct)}%`}
                             </span>
                         </div>
                         <div className="h-1 rounded-full bg-slate-100 overflow-hidden">
-                            <div className="h-full rounded-full bg-primary/50" style={{ width: `${Math.max(pct, 1.5)}%` }} />
+                            <div className={`h-full rounded-full ${color.bg}`} style={{ width: `${Math.max(pct, 1.5)}%` }} />
                         </div>
-                        {blockExpanded && hasPreview && (
-                            <pre className="mt-1 mb-1 p-2 rounded-lg bg-slate-50 border border-slate-100 text-[10px] text-slate-600 whitespace-pre-wrap break-all max-h-72 overflow-auto leading-relaxed">{b.preview}</pre>
+                        {open && isMemoryWithRecall && <RecalledMemoriesView items={recalled!} />}
+                        {open && !isMemoryWithRecall && r.preview && (
+                            <pre className="mt-1 mb-1 p-2 rounded-lg bg-slate-50 border border-slate-100 text-[10px] text-slate-600 whitespace-pre-wrap break-all max-h-72 overflow-auto leading-relaxed">{r.preview}</pre>
                         )}
                     </div>
                 );
@@ -382,30 +408,31 @@ const ROOM_LABELS: Record<string, string> = {
     kitchen: '厨房',
 };
 
-/** 记忆召回列表：展开后展示本次请求向量化召回了哪些条目，不进 prompt、仅供排查。 */
+/** 记忆召回列表：展开后展示本次请求向量化召回了哪些条目（按得分排序，点每条展全文）。 */
 const RecalledMemoriesView: React.FC<{ items: RecalledMemorySnapshot[] }> = ({ items }) => {
+    const [openId, setOpenId] = useState<string | null>(null);
     const sorted = [...items].sort((a, b) => {
         // 便利贴置顶最前，其余按 score 降序
         if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
         return b.score - a.score;
     });
     return (
-        <div className="mt-2 pt-2 border-t border-slate-100 space-y-1" onClick={(ev) => ev.stopPropagation()}>
+        <div className="mt-1.5 mb-1 rounded-lg bg-slate-50/70 border border-slate-100 p-2 space-y-1" onClick={(ev) => ev.stopPropagation()}>
             <div className="flex items-baseline justify-between">
-                <span className="text-[10px] font-bold text-slate-400">
-                    🏰 向量记忆召回 · 共 {items.length} 条
-                </span>
-                <span className="text-[9px] text-slate-300">按综合得分排序</span>
+                <span className="text-[10px] font-bold text-slate-400">🏰 向量记忆召回 · 共 {items.length} 条</span>
+                <span className="text-[9px] text-slate-300">按综合得分排序 · 点展全文</span>
             </div>
             {sorted.map((m, i) => {
                 const roomLabel = ROOM_LABELS[m.room] || m.room;
-                // 类型胶囊：置顶=琥珀、事件盒=紫、普通记忆=青；房间胶囊统一灰，避免颜色太花
                 const typeLabel = m.isPinned ? '置顶' : m.isBox ? '事件盒' : '记忆';
                 const typeClass = m.isPinned
                     ? 'bg-amber-100 text-amber-600'
                     : m.isBox ? 'bg-violet-100 text-violet-600' : 'bg-cyan-100 text-cyan-600';
+                const rowKey = `${m.id}-${i}`;
+                const open = openId === rowKey;
                 return (
-                    <div key={`${m.id}-${i}`} className="min-w-0 rounded-lg bg-slate-50/80 px-2 py-1.5">
+                    <div key={rowKey} className="min-w-0 rounded-lg bg-white/80 px-2 py-1.5 cursor-pointer active:scale-[0.99] transition-transform"
+                        onClick={() => setOpenId(open ? null : rowKey)}>
                         <div className="flex items-center justify-between gap-2 min-w-0 mb-0.5">
                             <div className="flex items-center gap-1 min-w-0">
                                 <span className="text-[9px] font-mono text-slate-400 shrink-0">#{i + 1}</span>
@@ -416,7 +443,7 @@ const RecalledMemoriesView: React.FC<{ items: RecalledMemorySnapshot[] }> = ({ i
                                 {m.isPinned ? '—' : `分 ${m.score}`} · 重要 {m.importance}
                             </span>
                         </div>
-                        <p className="text-[10px] text-slate-600 leading-relaxed line-clamp-2">{m.preview}</p>
+                        <p className={`text-[10px] text-slate-600 leading-relaxed whitespace-pre-wrap break-words ${open ? '' : 'line-clamp-2'}`}>{m.preview}</p>
                     </div>
                 );
             })}
