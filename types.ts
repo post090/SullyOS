@@ -2328,6 +2328,8 @@ export interface JobNote {
     sessionId?: string;
     charId: string;
     createdAt: number;
+    /** 最后更新时间（编辑正文时刷新）；旧数据无此字段时回落 createdAt */
+    updatedAt?: number;
 }
 
 /** 简历 — 只存脱敏后的文本（导入时本地打码，预览确认后才允许发 LLM） */

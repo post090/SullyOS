@@ -13,7 +13,7 @@ import {
 import { ContextBuilder } from '../utils/context';
 import { resilientFetch } from '../utils/resilientFetch';
 import { parseJobHuntCommands, JOB_COMMAND_GUIDE, normalizeJobStage } from '../utils/jobHuntParser';
-import { buildPositionPromptLine, fmtJobTime, nextInterviewTs, waitingDays, ROUND_KIND_LABEL, ROUND_STATUS_LABEL } from '../utils/jobDirectives';
+import { buildPositionPromptLine, fmtJobTime, nextInterviewTs, waitingDays, ROUND_KIND_LABEL, ROUND_STATUS_LABEL, relTimeLabel } from '../utils/jobDirectives';
 import { JobHuntSettings, JH_SETTINGS_KEY, loadJhSettings } from '../utils/jobHuntSettings';
 import { redactPrivacy, codifyCompanies, genCompanyCode, RedactResult } from '../utils/privacyRedact';
 import { synthesizeSpeech, characterHasVoice } from '../utils/ttsRouter';
@@ -22,7 +22,7 @@ import { startStt, isSttSupported, SttSession, SttProviderConfig } from '../util
 import {
     ReadCvLogo, PaperPlaneTilt, Microphone, Plus, CaretLeft, Notebook, Briefcase,
     ChatsCircle, FileText, Trash, SpeakerHigh, StopCircle, X, CircleNotch, UploadSimple,
-    GearSix, Plugs,
+    GearSix, Plugs, Question, ShieldCheck,
 } from '@phosphor-icons/react';
 import { RealtimeContextManager, defaultRealtimeConfig } from '../utils/realtimeContext';
 import { getDailyScheduleForChar } from '../utils/dailySchedule';
@@ -178,6 +178,11 @@ const NOTE_KIND_STYLE: Record<JobNoteKind, string> = {
 };
 const INTERVIEW_QUESTION_COUNT = 5;
 
+// 阶段进度权重（排序用）：观望→投递→笔试→面试→沟通Offer→上岸；已结束排最后
+const STAGE_ORDER: Record<JobStage, number> = {
+    watching: 0, applied: 1, written: 2, interview: 3, offer_talk: 4, offer: 5, rejected: 6,
+};
+
 // 环节状态胶囊配色（与聊天聚合卡同色系）
 const ROUND_STATUS_STYLE: Record<string, string> = {
     pending: 'bg-slate-100 text-slate-500',
@@ -263,12 +268,20 @@ const JobHuntApp: React.FC = () => {
     const [posJd, setPosJd] = useState('');
     const [posHrName, setPosHrName] = useState('');
     const [posProjectName, setPosProjectName] = useState('');
+    const [posNotes, setPosNotes] = useState(''); // 岗位笔记（多行，注入时同 JD 脱敏+截断）
     const [posInterviewAt, setPosInterviewAt] = useState(''); // datetime-local 值，空=未定/清除
     const [posWaiting, setPosWaiting] = useState(false);
     // 代号是否被用户手改过：手改即锁（codeLocked），自动生成与 AI 都不再覆盖
     const [posCodeDirty, setPosCodeDirty] = useState(false);
     // 岗位卡上展开查看 JD 的卡片 id（同时只展开一张）
     const [jdOpenId, setJdOpenId] = useState<string | null>(null);
+    // 岗位卡上展开查看笔记的卡片 id（与 JD 展开互不影响）
+    const [notesOpenId, setNotesOpenId] = useState<string | null>(null);
+    // 岗位浏览工具条（纯前端过滤排序）
+    const [posSearch, setPosSearch] = useState('');
+    const [posStageFilter, setPosStageFilter] = useState<Set<JobStage>>(new Set());
+    const [posSort, setPosSort] = useState<'updated' | 'stage' | 'company'>('updated');
+    const [posGroupByStage, setPosGroupByStage] = useState(false);
 
     // 语音输入（状态机全外显）
     const [sttPhase, setSttPhase] = useState<SttPhase>('idle');
@@ -288,6 +301,7 @@ const JobHuntApp: React.FC = () => {
     // 工作台设置 / 角色级 API 配置
     const [jhSettings, setJhSettings] = useState<JobHuntSettings>(loadJhSettings);
     const [showJhSettings, setShowJhSettings] = useState(false);
+    const [showPrivacyInfo, setShowPrivacyInfo] = useState(false); // 隐私说明弹层（顶栏问号）
     const [showApiHub, setShowApiHub] = useState(false);
     const patchJhSettings = useCallback((p: Partial<JobHuntSettings>) => {
         setJhSettings(prev => {
@@ -953,6 +967,7 @@ const JobHuntApp: React.FC = () => {
                 jd: posJd.trim() || undefined,
                 hrName: posHrName.trim() || undefined,
                 projectName: posProjectName.trim() || undefined,
+                notes: posNotes.trim() || undefined,
                 interviewAt: localInputToTs(posInterviewAt),
                 // 已在等保留原起点不重置；关掉开关才清空
                 waitingSince: posWaiting ? (editingPosition.waitingSince || now) : undefined,
@@ -969,6 +984,7 @@ const JobHuntApp: React.FC = () => {
                 jd: posJd.trim() || undefined,
                 hrName: posHrName.trim() || undefined,
                 projectName: posProjectName.trim() || undefined,
+                notes: posNotes.trim() || undefined,
                 interviewAt: localInputToTs(posInterviewAt),
                 waitingSince: posWaiting ? now : undefined,
                 codeLocked: posCodeDirty || undefined,
@@ -977,10 +993,10 @@ const JobHuntApp: React.FC = () => {
         }
         setShowNewPosition(false); setEditingPosition(null);
         setPosCode(''); setPosTitle(''); setPosCompanyLocal(''); setPosNextStep('');
-        setPosJd(''); setPosHrName(''); setPosProjectName('');
+        setPosJd(''); setPosHrName(''); setPosProjectName(''); setPosNotes('');
         setPosInterviewAt(''); setPosWaiting(false); setPosCodeDirty(false);
         await reloadAll();
-    }, [posCode, posTitle, posCompanyLocal, posNextStep, posJd, posHrName, posProjectName, posInterviewAt, posWaiting, posCodeDirty, editingPosition, selectedChar, reloadAll, addToast]);
+    }, [posCode, posTitle, posCompanyLocal, posNextStep, posJd, posHrName, posProjectName, posNotes, posInterviewAt, posWaiting, posCodeDirty, editingPosition, selectedChar, reloadAll, addToast]);
 
     const advanceStage = useCallback(async (pos: JobPosition, stage: JobStage) => {
         const now = Date.now();
@@ -1020,6 +1036,7 @@ const JobHuntApp: React.FC = () => {
         setPosCode(pos.code); setPosTitle(pos.title);
         setPosCompanyLocal(pos.companyNameLocal || ''); setPosNextStep(pos.nextStep || '');
         setPosJd(pos.jd || ''); setPosHrName(pos.hrName || ''); setPosProjectName(pos.projectName || '');
+        setPosNotes(pos.notes || '');
         setPosInterviewAt(tsToLocalInput(pos.interviewAt)); setPosWaiting(!!pos.waitingSince);
         setPosCodeDirty(!!pos.codeLocked);
         setShowNewPosition(true);
@@ -1352,6 +1369,32 @@ const JobHuntApp: React.FC = () => {
 
     const sessionCharName = (s: JobSession) => characters.find(c => c.id === s.charId)?.name || '角色已删除';
 
+    // 岗位浏览：搜索（code/title/公司/项目名/jd/notes）+ 阶段多选筛选 + 排序（纯前端）
+    const filteredPositions = useMemo(() => {
+        const q = posSearch.trim().toLowerCase();
+        let list = positions.filter(p => {
+            if (posStageFilter.size > 0 && !posStageFilter.has(p.stage)) return false;
+            if (!q) return true;
+            return [p.code, p.title, p.companyNameLocal, p.projectName, p.jd, p.notes]
+                .some(f => (f || '').toLowerCase().includes(q));
+        });
+        list = [...list].sort((a, b) => {
+            if (posSort === 'stage') return (STAGE_ORDER[a.stage] - STAGE_ORDER[b.stage]) || (b.updatedAt - a.updatedAt);
+            if (posSort === 'company') return (a.companyNameLocal || a.code).localeCompare(b.companyNameLocal || b.code, 'zh');
+            return b.updatedAt - a.updatedAt; // updated
+        });
+        return list;
+    }, [positions, posSearch, posStageFilter, posSort]);
+
+    // 按阶段分组（折叠面板带计数）；关闭时返回单组
+    const positionGroups = useMemo<{ stage: JobStage | null; label: string; items: JobPosition[] }[]>(() => {
+        if (!posGroupByStage) return [{ stage: null, label: '', items: filteredPositions }];
+        const order = (Object.keys(STAGE_ORDER) as JobStage[]).sort((a, b) => STAGE_ORDER[a] - STAGE_ORDER[b]);
+        return order
+            .map(st => ({ stage: st, label: STAGE_LABEL[st], items: filteredPositions.filter(p => p.stage === st) }))
+            .filter(g => g.items.length > 0);
+    }, [filteredPositions, posGroupByStage]);
+
     return (
         <div className="h-full w-full bg-[#f6f8fa] flex flex-col font-sans relative">
             {/* 顶栏 */}
@@ -1366,6 +1409,9 @@ const JobHuntApp: React.FC = () => {
                     </div>
                     <button onClick={() => setShowJhSettings(true)} className="p-2 ml-1 rounded-full hover:bg-slate-100 active:scale-90 transition-transform">
                         <GearSix className="w-[18px] h-[18px] text-slate-400" />
+                    </button>
+                    <button onClick={() => setShowPrivacyInfo(true)} className="p-2 rounded-full hover:bg-slate-100 active:scale-90 transition-transform" aria-label="隐私说明">
+                        <Question className="w-[18px] h-[18px] text-slate-400" />
                     </button>
                     <div className="ml-auto flex items-center gap-1 overflow-x-auto no-scrollbar max-w-[55%]">
                         {characters.slice(0, 8).map(c => (
@@ -1429,27 +1475,92 @@ const JobHuntApp: React.FC = () => {
 
                 {/* Tab 2：岗位看板 */}
                 {homeTab === 'positions' && (
-                    <div className="space-y-2.5">
+                    <div className="space-y-3">
+                        {/* 浏览工具条：搜索 + 阶段多选 chips + 排序 + 分组开关（纯前端） */}
+                        {positions.length > 0 && (
+                            <div className="space-y-2">
+                                <input value={posSearch} onChange={e => setPosSearch(e.target.value)}
+                                    placeholder="搜索代号 / 岗位 / 公司 / 项目 / JD / 笔记"
+                                    className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-sky-200" />
+                                <div className="flex flex-wrap gap-1.5">
+                                    {(Object.keys(STAGE_ORDER) as JobStage[]).map(st => {
+                                        const on = posStageFilter.has(st);
+                                        return (
+                                            <button key={st} onClick={() => setPosStageFilter(prev => { const n = new Set(prev); n.has(st) ? n.delete(st) : n.add(st); return n; })}
+                                                className={`text-[11px] px-2 py-0.5 rounded-full font-semibold border transition-all active:scale-95 ${on ? STAGE_STYLE[st] + ' border-transparent ring-1 ring-sky-200' : 'bg-white text-slate-400 border-slate-200'}`}>
+                                                {STAGE_LABEL[st]}
+                                            </button>
+                                        );
+                                    })}
+                                    {posStageFilter.size > 0 && (
+                                        <button onClick={() => setPosStageFilter(new Set())} className="text-[11px] px-2 py-0.5 text-slate-400 underline">清除</button>
+                                    )}
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <select value={posSort} onChange={e => setPosSort(e.target.value as typeof posSort)}
+                                        className="text-xs bg-white border border-slate-200 rounded-lg px-2 py-1.5 text-slate-500 outline-none">
+                                        <option value="updated">最近更新</option>
+                                        <option value="stage">阶段进度</option>
+                                        <option value="company">公司名</option>
+                                    </select>
+                                    <button onClick={() => setPosGroupByStage(v => !v)}
+                                        className={`text-xs px-2.5 py-1.5 rounded-lg font-semibold border transition-all active:scale-95 ${posGroupByStage ? 'bg-sky-50 text-sky-600 border-sky-200' : 'bg-white text-slate-400 border-slate-200'}`}>
+                                        {posGroupByStage ? '✓ 按阶段分组' : '按阶段分组'}
+                                    </button>
+                                    <span className="text-[11px] text-slate-400 ml-auto">{filteredPositions.length} 个</span>
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                    <span className="text-[11px] text-slate-400">视图</span>
+                                    {([['compact', '简略'], ['detailed', '详细'], ['masonry', '双列']] as const).map(([v, label]) => (
+                                        <button key={v} onClick={() => patchJhSettings({ positionView: v })}
+                                            className={`text-[11px] px-2.5 py-1 rounded-lg font-semibold border transition-all active:scale-95 ${jhSettings.positionView === v ? 'bg-sky-50 text-sky-600 border-sky-200' : 'bg-white text-slate-400 border-slate-200'}`}>
+                                            {label}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                         {positions.length === 0 && (
                             <div className="text-center text-slate-400 text-sm mt-16 px-8 leading-relaxed">
                                 还没有在推进的岗位。<br />建卡时公司用代号（A厂/B司），真实公司名只存在本机、永远不会发给 AI。
                             </div>
                         )}
-                        {positions.map(p => (
-                            <div key={p.id} className="bg-white rounded-2xl border border-slate-200/70 shadow-sm p-4">
+                        {positions.length > 0 && filteredPositions.length === 0 && (
+                            <div className="text-center text-slate-400 text-sm mt-12 px-8">没找到匹配的岗位，换个关键词或清除筛选试试。</div>
+                        )}
+                        {positionGroups.map(group => (
+                            <div key={group.stage || 'all'} className="space-y-2.5">
+                                {group.stage && (
+                                    <div className="flex items-center gap-2 pt-1">
+                                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${STAGE_STYLE[group.stage]}`}>{group.label}</span>
+                                        <span className="text-[10px] text-slate-400">{group.items.length}</span>
+                                    </div>
+                                )}
+                                <div className={jhSettings.positionView === 'masonry' ? 'columns-2 gap-2.5' : 'space-y-2.5'}>
+                                {group.items.map(p => (
+                            jhSettings.positionView === 'compact' ? (
+                                <button key={p.id} onClick={() => openEditPosition(p)}
+                                    className="w-full text-left bg-white rounded-xl border border-slate-200/70 shadow-sm px-3 py-2.5 flex items-center gap-2 active:scale-[0.99] transition-transform">
+                                    <span className="text-sm font-bold text-slate-800 shrink-0">{p.code}</span>
+                                    <span className="text-xs text-slate-500 truncate flex-1">{p.title}</span>
+                                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold shrink-0 ${STAGE_STYLE[p.stage]}`}>{STAGE_LABEL[p.stage]}</span>
+                                    {p.updatedAt && <span className="text-[10px] text-slate-300 shrink-0">{relTimeLabel(p.updatedAt)}</span>}
+                                </button>
+                            ) : (
+                            <div key={p.id} className={`bg-white rounded-2xl border border-slate-200/70 shadow-sm p-4 ${jhSettings.positionView === 'masonry' ? 'break-inside-avoid mb-2.5' : ''}`}>
                                 <div className="flex items-center gap-2">
                                     <span className="text-sm font-bold text-slate-800">{p.code}</span>
                                     <span className="text-sm text-slate-500 truncate flex-1">{p.title}</span>
                                     <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${STAGE_STYLE[p.stage]}`}>{STAGE_LABEL[p.stage]}</span>
                                 </div>
                                 {p.companyNameLocal && (
-                                    <div className="text-[11px] text-slate-400 mt-1">备注（仅本机可见）：{p.companyNameLocal}</div>
+                                    <div className="text-[11px] text-slate-400 mt-1">备注：{p.companyNameLocal}</div>
                                 )}
                                 {(p.projectName || p.hrName) && (
                                     <div className="text-[11px] text-slate-400 mt-1">
                                         {p.projectName && <span>项目：{p.projectName}</span>}
                                         {p.projectName && p.hrName && <span> · </span>}
-                                        {p.hrName && <span>HR：{p.hrName}（仅本机）</span>}
+                                        {p.hrName && <span>HR：{p.hrName}</span>}
                                     </div>
                                 )}
                                 {p.nextStep && (
@@ -1495,6 +1606,17 @@ const JobHuntApp: React.FC = () => {
                                         )}
                                     </div>
                                 )}
+                                {p.notes && (
+                                    <div className="mt-2">
+                                        <button onClick={() => setNotesOpenId(notesOpenId === p.id ? null : p.id)}
+                                            className="text-xs text-indigo-500 font-semibold flex items-center gap-1 active:scale-95 transition-transform">
+                                            <Notebook className="w-3.5 h-3.5" /> {notesOpenId === p.id ? '收起笔记' : '查看笔记'}
+                                        </button>
+                                        {notesOpenId === p.id && (
+                                            <div className="mt-1.5 text-xs text-slate-600 bg-indigo-50/60 rounded-xl px-3 py-2.5 whitespace-pre-wrap leading-relaxed max-h-48 overflow-y-auto">{p.notes}</div>
+                                        )}
+                                    </div>
+                                )}
                                 <div className="flex items-center gap-2 mt-3 flex-wrap">
                                     <button onClick={() => { setSelectedCharId(p.charId || selectedCharId); createSession('interview', p.id); }}
                                         className="text-xs px-3 py-1.5 rounded-lg bg-sky-500 text-white font-semibold active:scale-95 transition-transform">模拟面试</button>
@@ -1506,6 +1628,13 @@ const JobHuntApp: React.FC = () => {
                                     </select>
                                     <button onClick={() => openEditPosition(p)} className="text-xs text-slate-400 px-1">编辑</button>
                                     <button onClick={() => deletePosition(p)} className="p-1 text-slate-300 hover:text-rose-400"><Trash className="w-4 h-4" /></button>
+                                </div>
+                                {p.updatedAt && (
+                                    <div className="text-[10px] text-slate-300 mt-2">最后更新 {relTimeLabel(p.updatedAt)}</div>
+                                )}
+                            </div>
+                            )
+                                ))}
                                 </div>
                             </div>
                         ))}
@@ -1529,7 +1658,7 @@ const JobHuntApp: React.FC = () => {
                                         <span className="text-sm font-semibold text-slate-800 truncate flex-1">{n.title}</span>
                                     </div>
                                     <div className="text-xs text-slate-400 mt-1.5">{n.content.replace(/[#*`>]/g, '').slice(0, 80)}</div>
-                                    <div className="text-[10px] text-slate-300 mt-1">{characters.find(c => c.id === n.charId)?.name || ''} · {new Date(n.createdAt).toLocaleDateString('zh-CN')}</div>
+                                    <div className="text-[10px] text-slate-300 mt-1">{characters.find(c => c.id === n.charId)?.name || ''} · 最后更新 {relTimeLabel(n.updatedAt ?? n.createdAt)}</div>
                                 </div>
                             ))}
                         </div>
@@ -1568,7 +1697,7 @@ const JobHuntApp: React.FC = () => {
             {/* 悬浮新建按钮 */}
             <div className="absolute right-5 z-30" style={{ bottom: 'max(1.5rem, calc(var(--safe-bottom) + 1rem))' }}>
                 <button
-                    onClick={() => { if (homeTab === 'positions') { setEditingPosition(null); setPosCode(''); setPosTitle(''); setPosCompanyLocal(''); setPosNextStep(''); setPosJd(''); setPosHrName(''); setPosProjectName(''); setShowNewPosition(true); } else setShowNewSession(true); }}
+                    onClick={() => { if (homeTab === 'positions') { setEditingPosition(null); setPosCode(''); setPosTitle(''); setPosCompanyLocal(''); setPosNextStep(''); setPosJd(''); setPosHrName(''); setPosProjectName(''); setPosNotes(''); setPosInterviewAt(''); setPosWaiting(false); setPosCodeDirty(false); setShowNewPosition(true); } else setShowNewSession(true); }}
                     className="p-4 rounded-2xl bg-sky-500 text-white shadow-lg shadow-sky-200 active:scale-90 transition-transform">
                     <Plus className="w-6 h-6" weight="bold" />
                 </button>
@@ -1644,6 +1773,12 @@ const JobHuntApp: React.FC = () => {
                                     className="w-full mt-1 bg-slate-100 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-sky-200" />
                             </div>
                             <div>
+                                <label className="text-xs text-slate-500 font-semibold">岗位笔记（选填，面经/待遇/谈话要点都可以记）</label>
+                                <textarea value={posNotes} onChange={e => setPosNotes(e.target.value)} rows={4}
+                                    placeholder="比如：一面聊了项目难点、HR 说薪资 25-30k、二面会考系统设计……发给 AI 前会自动脱敏+截取摘要"
+                                    className="w-full mt-1 bg-slate-100 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-sky-200 resize-none leading-relaxed" />
+                            </div>
+                            <div>
                                 <label className="text-xs text-slate-500 font-semibold">面试时间（选填，桌面日历会显示琥珀点）</label>
                                 <div className="flex items-center gap-2 mt-1">
                                     <input type="datetime-local" value={posInterviewAt} onChange={e => setPosInterviewAt(e.target.value)}
@@ -1687,7 +1822,7 @@ const JobHuntApp: React.FC = () => {
                             <MarkdownBlock text={viewingNote.content} />
                         </div>
                         <div className="text-[10px] text-slate-300 mt-3">
-                            {characters.find(c => c.id === viewingNote.charId)?.name || ''} · {new Date(viewingNote.createdAt).toLocaleString('zh-CN')}
+                            {characters.find(c => c.id === viewingNote.charId)?.name || ''} · 最后更新 {relTimeLabel(viewingNote.updatedAt ?? viewingNote.createdAt)}
                             {viewingNote.sessionId && sessions.some(s => s.id === viewingNote.sessionId) && (
                                 <button className="text-sky-500 font-semibold ml-2"
                                     onClick={() => { const src = sessions.find(x => x.id === viewingNote.sessionId); if (src) { setViewingNote(null); setActiveSession(src); setView('chat'); } }}>
@@ -1718,6 +1853,42 @@ const JobHuntApp: React.FC = () => {
                 onChange={e => { const f = e.target.files?.[0]; if (f) handleResumeFile(f); }} />
             {resumePreview && renderRedactPreview()}
             {showJhSettings && renderSettingsModal()}
+
+            {/* 隐私说明弹层（顶栏问号）：代号制 / 本地脱敏管线 / hrName 永不上云 / JD 脱敏截断 / 四档强度 */}
+            {showPrivacyInfo && (
+                <div className="absolute inset-0 z-50 flex items-center justify-center p-4"
+                    style={{ background: 'rgba(15,23,42,0.35)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)' }}
+                    onClick={() => setShowPrivacyInfo(false)}>
+                    <div className="w-full max-w-md bg-white/90 rounded-3xl p-5 max-h-[85%] overflow-y-auto shadow-xl border border-white/60" onClick={e => e.stopPropagation()}>
+                        <div className="flex items-center gap-2 mb-3">
+                            <ShieldCheck className="w-5 h-5 text-emerald-500" weight="fill" />
+                            <span className="font-bold text-slate-800">你的隐私怎么保护</span>
+                            <button onClick={() => setShowPrivacyInfo(false)} className="ml-auto p-1 text-slate-400"><X className="w-4 h-4" /></button>
+                        </div>
+                        <div className="space-y-3 text-[12px] leading-relaxed text-slate-600">
+                            <div>
+                                <div className="font-bold text-slate-700 mb-0.5">① 代号制：真实公司名永不发给 AI</div>
+                                发给 AI 的只有你设的代号（A厂/Z2 这种）。真实公司名、HR 名只存在本机数据库，从不进任何提示词。
+                            </div>
+                            <div>
+                                <div className="font-bold text-slate-700 mb-0.5">② 本地脱敏管线（全离线）</div>
+                                简历/对话/笔记发出前，手机号、邮箱、身份证、银行卡、住址都会在本机打码；公司名拼音化用的是打包进 APK 的离线拼音库，不联网。
+                            </div>
+                            <div>
+                                <div className="font-bold text-slate-700 mb-0.5">③ JD / 笔记：脱敏 + 截断后才注入</div>
+                                岗位 JD 和笔记发给 AI 前会先过脱敏（手机/邮箱/真实公司名）并只取摘要，不会整段原文上云。
+                            </div>
+                            <div>
+                                <div className="font-bold text-slate-700 mb-0.5">④ 四档模糊强度（设置里可选）</div>
+                                拼音首字母（隐私高、辨识中）→ 完整拼音缩写（辨识高、但可能被反推）→ 自定义 → 不脱敏。默认用拼音首字母+去重。
+                            </div>
+                            <div className="text-[11px] text-slate-400 pt-1 border-t border-slate-100">
+                                简而言之：真实公司名/HR名/真实姓名永远不会离开你的手机。
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

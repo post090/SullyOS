@@ -37,6 +37,22 @@ export const fmtJobTime = (ts: number): string => {
     return `${d.getMonth() + 1}月${d.getDate()}日 ${hh}:${mm}`;
 };
 
+/** 相对时间文案（最后更新展示/注入共用）：刚刚/N分钟前/N小时前/昨天/N天前/M月D日 */
+export const relTimeLabel = (ts: number, now: number = Date.now()): string => {
+    const diff = now - ts;
+    if (diff < 0) return fmtJobTime(ts);
+    const min = Math.floor(diff / 60000);
+    if (min < 1) return '刚刚';
+    if (min < 60) return `${min}分钟前`;
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return `${hr}小时前`;
+    const day = Math.floor(hr / 24);
+    if (day === 1) return '昨天';
+    if (day < 7) return `${day}天前`;
+    const d = new Date(ts);
+    return `${d.getMonth() + 1}月${d.getDate()}日`;
+};
+
 /** 下一场面试时间：rounds 里未完成 interview 环节的最近 at，其次 interviewAt（兼容读）；过期超 1 小时不算 */
 export function nextInterviewTs(p: JobPosition, now: number = Date.now()): number | null {
     const floor = now - 3600 * 1000;
@@ -99,6 +115,7 @@ export function buildPositionPromptLine(p: JobPosition, allPositions: JobPositio
         t = codifyCompanies(t, allPositions).replace(/\s+/g, ' ').trim();
         parts.push(`岗位笔记：${t.length > 120 ? `${t.slice(0, 120)}…` : t}`);
     }
+    if (p.updatedAt) parts.push(`最后更新：${relTimeLabel(p.updatedAt)}`);
     return parts.join(' · ');
 }
 
@@ -159,7 +176,8 @@ export async function buildJobHuntPromptBlock(): Promise<string> {
     if (recentNotes.length > 0) {
         lines.push('【笔记本近期条目】（可用 JOB_NOTE_EDIT / JOB_NOTE_DEL 按标题操作）');
         recentNotes.forEach(n => {
-            lines.push(`- [${NOTE_KIND_LABEL[n.kind] || n.kind}] ${n.title}`);
+            const upd = n.updatedAt ?? n.createdAt;
+            lines.push(`- [${NOTE_KIND_LABEL[n.kind] || n.kind}] ${n.title}（最后更新：${relTimeLabel(upd)}）`);
         });
     }
     lines.push('');
@@ -304,7 +322,7 @@ export async function applyJobDirectives(
         try {
             const note: JobNote = {
                 id: genId('jnote'), kind: n.kind, title: n.title, content: n.content,
-                charId, createdAt: now,
+                charId, createdAt: now, updatedAt: now,
             };
             await DB.saveJobNote(note);
             cards.push({
@@ -329,7 +347,7 @@ export async function applyJobDirectives(
             const all = await DB.getJobNotes();
             const target = findNote(all, e2.titleKey);
             if (!target) { rejected.push(`JOB_NOTE_EDIT: 找不到标题含「${e2.titleKey}」的笔记`); continue; }
-            await DB.saveJobNote({ ...target, content: e2.content });
+            await DB.saveJobNote({ ...target, content: e2.content, updatedAt: now });
             cards.push({
                 jobKind: 'note_edit', noteId: target.id, noteKind: target.kind,
                 noteKindLabel: NOTE_KIND_LABEL[target.kind] || target.kind,

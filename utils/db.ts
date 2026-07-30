@@ -1748,7 +1748,7 @@ export const DB = {
       if (!db.objectStoreNames.contains(STORE_JOB_NOTES)) return [];
       return new Promise((resolve, reject) => {
           const req = db.transaction(STORE_JOB_NOTES, 'readonly').objectStore(STORE_JOB_NOTES).getAll();
-          req.onsuccess = () => resolve((req.result || []).sort((a: JobNote, b: JobNote) => b.createdAt - a.createdAt));
+          req.onsuccess = () => resolve((req.result || []).sort((a: JobNote, b: JobNote) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt)));
           req.onerror = () => reject(req.error);
       });
   },
