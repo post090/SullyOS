@@ -2119,10 +2119,12 @@ const MessageItem = React.memo(({
             const posCount = cards.filter(c => c.jobKind === 'update' || c.jobKind === 'set' || c.jobKind === 'round' || c.jobKind === 'interview_time' || c.jobKind === 'waiting').length;
             const noteCount = cards.filter(c => c.jobKind === 'note' || c.jobKind === 'note_edit').length;
             const delCount = cards.filter(c => c.jobKind === 'delete' || c.jobKind === 'note_del').length;
+            const profileCount = cards.filter(c => c.jobKind === 'edge_add' || c.jobKind === 'edge_del' || c.jobKind === 'gap_add' || c.jobKind === 'gap_del' || c.jobKind === 'direction').length;
             const summaryParts: string[] = [];
             if (posCount) summaryParts.push(`岗位 ${posCount}`);
             if (noteCount) summaryParts.push(`笔记 ${noteCount}`);
             if (delCount) summaryParts.push(`删除 ${delCount}`);
+            if (profileCount) summaryParts.push('档案 ' + profileCount);
             return (
                 <div className={`flex items-center w-full ${selectionMode ? 'pl-8' : ''} animate-fade-in relative transition-[padding] duration-300`}>
                     {selectionMode && (
@@ -2226,6 +2228,21 @@ const MessageItem = React.memo(({
                                                             <span className="text-[12px] text-slate-600 truncate">《{c.title}》</span>
                                                         </div>
                                                         {c.preview && c.jobKind === 'note' && <div className="text-[11px] text-slate-400 mt-0.5 pl-3 line-clamp-2">{c.preview}</div>}
+                                                    </div>
+                                                );
+                                            }
+                                            if (c.jobKind === 'edge_add' || c.jobKind === 'edge_del' || c.jobKind === 'gap_add' || c.jobKind === 'gap_del' || c.jobKind === 'direction') {
+                                                const isDel = c.jobKind === 'edge_del' || c.jobKind === 'gap_del';
+                                                const label = c.jobKind === 'edge_add' ? '竞争点'
+                                                    : c.jobKind === 'edge_del' ? '删竞争点'
+                                                    : c.jobKind === 'gap_add' ? ('改进点' + (c.fieldLabel ? '·' + c.fieldLabel : ''))
+                                                    : c.jobKind === 'gap_del' ? '删改进点'
+                                                    : '方向';
+                                                return (
+                                                    <div key={i} className="flex items-center gap-1.5">
+                                                        <span className={'inline-block w-1.5 h-1.5 rounded-full shrink-0 ' + (isDel ? 'bg-rose-400' : 'bg-teal-400')} />
+                                                        <span className={'text-[10px] font-bold ' + (isDel ? 'text-rose-500' : 'text-teal-600')}>[{label}]</span>
+                                                        {c.valuePreview && <span className="text-[12px] text-slate-600 truncate">{c.valuePreview}</span>}
                                                     </div>
                                                 );
                                             }

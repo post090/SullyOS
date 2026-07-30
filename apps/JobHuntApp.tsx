@@ -7,13 +7,14 @@ import { useOS } from '../context/OSContext';
 import { useBackGuard } from '../hooks/useBackGuard';
 import { DB } from '../utils/db';
 import {
-    CharacterProfile, JobSession, JobPosition, JobNote, JobResume,
+    CharacterProfile, JobSession, JobPosition, JobNote, JobResume, JobProfile,
     JobChatMessage, JobStage, JobNoteKind, AppID,
 } from '../types';
 import { ContextBuilder } from '../utils/context';
 import { resilientFetch } from '../utils/resilientFetch';
 import { parseJobHuntCommands, JOB_COMMAND_GUIDE, normalizeJobStage } from '../utils/jobHuntParser';
 import { buildPositionPromptLine, fmtJobTime, nextInterviewTs, waitingDays, ROUND_KIND_LABEL, ROUND_STATUS_LABEL, relTimeLabel } from '../utils/jobDirectives';
+import { parseResumeIntoProfile } from '../utils/jobProfileGen';
 import { JobHuntSettings, JH_SETTINGS_KEY, loadJhSettings } from '../utils/jobHuntSettings';
 import { redactPrivacy, codifyCompanies, genCompanyCode, RedactResult } from '../utils/privacyRedact';
 import { synthesizeSpeech, characterHasVoice } from '../utils/ttsRouter';
@@ -22,7 +23,7 @@ import { startStt, isSttSupported, SttSession, SttProviderConfig } from '../util
 import {
     ReadCvLogo, PaperPlaneTilt, Microphone, Plus, CaretLeft, Notebook, Briefcase,
     ChatsCircle, FileText, Trash, SpeakerHigh, StopCircle, X, CircleNotch, UploadSimple,
-    GearSix, Plugs, Question, ShieldCheck,
+    GearSix, Plugs, Question, ShieldCheck, PencilSimple,
 } from '@phosphor-icons/react';
 import { RealtimeContextManager, defaultRealtimeConfig } from '../utils/realtimeContext';
 import { getDailyScheduleForChar } from '../utils/dailySchedule';
@@ -167,6 +168,16 @@ const STAGE_STYLE: Record<JobStage, string> = {
     offer: 'bg-emerald-100 text-emerald-700',
     rejected: 'bg-rose-100 text-rose-500',
 };
+// 阶段左侧强调色条（卡片色彩层次：一眼分清进展）
+const STAGE_ACCENT: Record<JobStage, string> = {
+    watching: 'border-l-violet-300',
+    applied: 'border-l-slate-300',
+    written: 'border-l-amber-400',
+    interview: 'border-l-sky-400',
+    offer_talk: 'border-l-teal-400',
+    offer: 'border-l-emerald-400',
+    rejected: 'border-l-rose-300',
+};
 const NOTE_KIND_LABEL: Record<JobNoteKind, string> = {
     eval: '面试评价', resume_advice: '简历建议', analysis: '岗位分析', note: '随手记',
 };
@@ -232,6 +243,8 @@ const JobHuntApp: React.FC = () => {
     const [positions, setPositions] = useState<JobPosition[]>([]);
     const [notes, setNotes] = useState<JobNote[]>([]);
     const [resumes, setResumes] = useState<JobResume[]>([]);
+    const [jobProfile, setJobProfile] = useState<JobProfile | null>(null);
+    const [parsingResumeId, setParsingResumeId] = useState<string | null>(null);
 
     // 视图
     const [view, setView] = useState<'home' | 'chat'>('home');
@@ -281,7 +294,28 @@ const JobHuntApp: React.FC = () => {
     const [posSearch, setPosSearch] = useState('');
     const [posStageFilter, setPosStageFilter] = useState<Set<JobStage>>(new Set());
     const [posSort, setPosSort] = useState<'updated' | 'stage' | 'company'>('updated');
-    const [posGroupByStage, setPosGroupByStage] = useState(false);
+    const [posGroupBy, setPosGroupBy] = useState<'none' | 'stage' | 'title'>('none');
+    // 多选批量操作
+    const [posSelectMode, setPosSelectMode] = useState(false);
+    const [selectedPosIds, setSelectedPosIds] = useState<Set<string>>(new Set());
+    // 顶栏角色切换下拉
+    const [showCharPicker, setShowCharPicker] = useState(false);
+    // C3 驾驶舱：竞争力档案编辑 + 模拟练习入口
+    const [showProfileEdit, setShowProfileEdit] = useState(false);
+    const [showPracticeSetup, setShowPracticeSetup] = useState(false);
+    const [profDirection, setProfDirection] = useState('');
+    const [profNewEdge, setProfNewEdge] = useState('');
+    const [profNewGap, setProfNewGap] = useState('');
+    const [profNewGapKind, setProfNewGapKind] = useState<'strategy' | 'resume'>('strategy');
+    const [practiceTargetId, setPracticeTargetId] = useState<string>(''); // '' = 综合面试
+    const [practiceForm, setPracticeForm] = useState<'text' | 'voice' | 'video'>('text');
+    const [practiceMode, setPracticeMode] = useState<'strict' | 'coach'>('strict');
+    const [practiceExtra, setPracticeExtra] = useState('');
+    const [practiceTplName, setPracticeTplName] = useState('');
+    // C5 笔记人工编辑态
+    const [noteEditing, setNoteEditing] = useState(false);
+    const [noteEditTitle, setNoteEditTitle] = useState('');
+    const [noteEditContent, setNoteEditContent] = useState('');
 
     // 语音输入（状态机全外显）
     const [sttPhase, setSttPhase] = useState<SttPhase>('idle');
@@ -350,6 +384,7 @@ const JobHuntApp: React.FC = () => {
                 DB.getJobSessions(), DB.getJobPositions(), DB.getJobNotes(), DB.getJobResumes(),
             ]);
             setSessions(s); setPositions(p); setNotes(n); setResumes(r);
+            try { setJobProfile(await DB.getJobProfile()); } catch { /* 档案缺失不阻塞 */ }
         } catch (e) {
             console.warn('[JobHunt] 数据加载失败', e);
         }
@@ -530,17 +565,22 @@ const JobHuntApp: React.FC = () => {
         ].join('\u000a');
         if (session.topic === 'interview' && session.interview) {
             const pos = positions.find(p => p.id === session.positionId);
+            const pt = session.practiceTarget;
+            const posDesc = pos ? `「${pos.code} 的 ${pos.title}」` : '综合面试（不限定具体岗位）';
+            const toneLine = pt?.mode === 'coach' ? '- 你是轻松陪练：语气鼓励、可以适当给提示和引导。' : '- 你是严肃面试官：正式、简洁、有压力感。';
             ctx += [
                 '',
                 '### [System: 模拟面试模式]',
-                `你现在是「${pos ? `${pos.code} 的 ${pos.title}` : '目标岗位'}」的面试官，一次只问一道题。`,
+                `你现在是${posDesc}的面试官，一次只问一道题。`,
+                toneLine,
+                pt?.extraPrompt ? `- 额外要求：${pt.extraPrompt}` : '',
                 `题目清单（共 ${session.interview.questions.length} 题，按序进行）：`,
                 ...session.interview.questions.map((q, i) => `${i + 1}. ${q}`),
                 `当前进行到第 ${Math.min(session.interview.currentIndex + 1, session.interview.questions.length)} 题。`,
                 '- 用户回答后：先给一两句简短的追问或反馈（保持面试官口吻），然后自然过渡到下一题。',
                 '- 全部题目问完后告知面试环节结束，等待用户点击「生成评价」。',
                 '- 不要一次抛出多道题。',
-            ].join('\u000a');
+            ].filter(Boolean).join('\u000a');
         }
         // recency 钢印（单聊同源的简版）：防止聊久了褪成没有名字的职业顾问
         ctx += [
@@ -641,35 +681,40 @@ const JobHuntApp: React.FC = () => {
         }
     }, [input, isSending, activeSession, sessionChar, persistSession, callLLM, buildSystemPrompt, typeOut, applyCommands, addToast, jhSettings.autoSpeak]);
 
-    // ─── 新建会话 ───
-    const createSession = useCallback(async (topic: JobSession['topic'], positionId?: string) => {
+    // ─── 发起模拟练习（C4：面试与岗位解耦，综合/岗位 + 两档 + 附加提示词）───
+    const startPractice = useCallback(async () => {
         if (!selectedChar) { addToast('先去神经链接里建一个角色吧', 'info'); return; }
-        const pos = positionId ? positions.find(p => p.id === positionId) : undefined;
+        const kind: 'comprehensive' | 'position' = practiceTargetId ? 'position' : 'comprehensive';
+        const pos = practiceTargetId ? positions.find(p => p.id === practiceTargetId) : undefined;
         const now = Date.now();
+        const extra = practiceExtra.trim();
         const session: JobSession = {
-            id: genId('jses'), charId: selectedChar.id, topic, positionId,
-            title: topic === 'interview'
-                ? `模拟面试 · ${pos ? `${pos.code} ${pos.title}` : '未指定岗位'}`
-                : pos ? `聊聊 ${pos.code} · ${pos.title}` : `和${selectedChar.name}聊求职`,
+            id: genId('jses'), charId: selectedChar.id, topic: 'interview', positionId: pos?.id,
+            practiceTarget: { kind, positionId: pos?.id, mode: practiceMode, extraPrompt: extra || undefined },
+            title: `模拟面试 · ${pos ? `${pos.code} ${pos.title}` : '综合模式'}`,
             messages: [], memorySyncedCount: 0, createdAt: now, updatedAt: now,
         };
+        setShowPracticeSetup(false);
         await persistSession(session);
-        setShowNewSession(false);
+        setActiveSession(session);
         setView('chat');
-        if (topic === 'interview') {
-            await bootstrapInterview(session, selectedChar, pos);
-        }
-    }, [selectedChar, positions, persistSession, addToast]);
+        await bootstrapInterview(session, selectedChar, pos);
+    }, [selectedChar, practiceTargetId, practiceMode, practiceExtra, positions, persistSession, addToast]);
 
     // ─── 模拟面试：先生成题目清单，再由面试官抛第一题 ───
     const bootstrapInterview = useCallback(async (session: JobSession, char: CharacterProfile, pos?: JobPosition) => {
         setIsSending(true);
         try {
+            const pt = session.practiceTarget;
+            const targetDesc = pos ? `「${pos.code} 的 ${pos.title}」` : '综合面试（不限定具体岗位，围绕候选人方向和通用能力）';
+            const toneLine = pt?.mode === 'coach' ? '风格：轻松陪练，语气鼓励、可适当给提示。' : '风格：严肃面试官，正式、有压力感。';
             const genPrompt = [
-                `你是「${pos ? `${pos.code} 的 ${pos.title}` : '目标岗位'}」的面试官，为候选人 ${userProfile.name} 准备 ${INTERVIEW_QUESTION_COUNT} 道面试题。`,
+                `你是${targetDesc}的面试官，为候选人 ${userProfile.name} 准备 ${INTERVIEW_QUESTION_COUNT} 道面试题。`,
+                toneLine,
+                pt?.extraPrompt ? `额外要求：${pt.extraPrompt}` : '',
                 '要求：由浅入深，覆盖自我介绍/岗位匹配/项目深挖/软素质；公司只用代号；',
                 `严格输出 JSON 字符串数组（长度 ${INTERVIEW_QUESTION_COUNT}），不要输出其它任何内容。`,
-            ].join('\u000a');
+            ].filter(Boolean).join('\u000a');
             const raw = await callLLM(genPrompt, [], '请给出题目清单。', char);
             let questions: string[] = [];
             try {
@@ -1012,6 +1057,31 @@ const JobHuntApp: React.FC = () => {
         await reloadAll();
     }, [reloadAll]);
 
+    // ── 多选批量操作（删除二次确认） ──
+    const togglePosSelect = useCallback((id: string) => {
+        setSelectedPosIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+    }, []);
+    const exitSelectMode = useCallback(() => { setPosSelectMode(false); setSelectedPosIds(new Set()); }, []);
+    const bulkDeletePositions = useCallback(async () => {
+        if (selectedPosIds.size === 0) return;
+        if (!window.confirm(`删除选中的 ${selectedPosIds.size} 个岗位卡？关联笔记会保留，此操作不可撤销。`)) return;
+        for (const id of selectedPosIds) { try { await DB.deleteJobPosition(id); } catch { /* 单个失败跳过 */ } }
+        exitSelectMode();
+        await reloadAll();
+    }, [selectedPosIds, exitSelectMode, reloadAll]);
+    const bulkSetStage = useCallback(async (stage: JobStage) => {
+        if (selectedPosIds.size === 0) return;
+        const now = Date.now();
+        const all = await DB.getJobPositions();
+        for (const id of selectedPosIds) {
+            const p = all.find(x => x.id === id);
+            if (!p) continue;
+            try { await DB.saveJobPosition({ ...p, stage, timeline: [...p.timeline, { ts: now, stage }], updatedAt: now }); } catch { /* 跳过 */ }
+        }
+        exitSelectMode();
+        await reloadAll();
+    }, [selectedPosIds, exitSelectMode, reloadAll]);
+
     const deleteSession = useCallback(async (session: JobSession) => {
         if (!window.confirm(`删除会话「${session.title}」？`)) return;
         await DB.deleteJobSession(session.id);
@@ -1025,11 +1095,39 @@ const JobHuntApp: React.FC = () => {
         await reloadAll();
     }, [reloadAll]);
 
+    // C5：笔记人工编辑落库（刷新 updatedAt）
+    const saveNoteEdit = useCallback(async () => {
+        if (!viewingNote) return;
+        const title = noteEditTitle.trim();
+        const content = noteEditContent.trim();
+        if (!title || !content) { addToast('标题和正文都要填', 'info'); return; }
+        const next: JobNote = { ...viewingNote, title, content, updatedAt: Date.now() };
+        await DB.saveJobNote(next);
+        setViewingNote(next);
+        setNoteEditing(false);
+        await reloadAll();
+        addToast('笔记已保存', 'success');
+    }, [viewingNote, noteEditTitle, noteEditContent, addToast, reloadAll]);
+
     const deleteResume = useCallback(async (resume: JobResume) => {
         if (!window.confirm(`删除简历「${resume.name}」？`)) return;
         await DB.deleteJobResume(resume.id);
         await reloadAll();
     }, [reloadAll]);
+
+    // 把一份简历解析进竞争力档案（端上提取的脱敏文本过 codify 后交 LLM）
+    const parseResume = useCallback(async (resume: JobResume) => {
+        setParsingResumeId(resume.id);
+        try {
+            const merged = await parseResumeIntoProfile(resume, apiConfig);
+            setJobProfile(merged);
+            addToast('已解析进竞争力档案', 'success');
+        } catch (e: any) {
+            addToast(`解析失败：${e?.message || '未知错误'}`, 'error');
+        } finally {
+            setParsingResumeId(null);
+        }
+    }, [apiConfig, addToast]);
 
     const openEditPosition = useCallback((pos: JobPosition) => {
         setEditingPosition(pos);
@@ -1386,14 +1484,39 @@ const JobHuntApp: React.FC = () => {
         return list;
     }, [positions, posSearch, posStageFilter, posSort]);
 
-    // 按阶段分组（折叠面板带计数）；关闭时返回单组
-    const positionGroups = useMemo<{ stage: JobStage | null; label: string; items: JobPosition[] }[]>(() => {
-        if (!posGroupByStage) return [{ stage: null, label: '', items: filteredPositions }];
-        const order = (Object.keys(STAGE_ORDER) as JobStage[]).sort((a, b) => STAGE_ORDER[a] - STAGE_ORDER[b]);
-        return order
-            .map(st => ({ stage: st, label: STAGE_LABEL[st], items: filteredPositions.filter(p => p.stage === st) }))
-            .filter(g => g.items.length > 0);
-    }, [filteredPositions, posGroupByStage]);
+    // 分组：不分组 / 按阶段 / 按岗位名（带计数）
+    const positionGroups = useMemo<{ key: string; label: string; stage: JobStage | null; items: JobPosition[] }[]>(() => {
+        if (posGroupBy === 'stage') {
+            const order = (Object.keys(STAGE_ORDER) as JobStage[]).sort((a, b) => STAGE_ORDER[a] - STAGE_ORDER[b]);
+            return order
+                .map(st => ({ key: st, label: STAGE_LABEL[st], stage: st, items: filteredPositions.filter(p => p.stage === st) }))
+                .filter(g => g.items.length > 0);
+        }
+        if (posGroupBy === 'title') {
+            const map = new Map<string, JobPosition[]>();
+            filteredPositions.forEach(p => { const k = (p.title || '未命名').trim(); if (!map.has(k)) map.set(k, []); map.get(k)!.push(p); });
+            return [...map.entries()].map(([k, items]) => ({ key: `t_${k}`, label: k, stage: null, items }));
+        }
+        return [{ key: 'all', label: '', stage: null, items: filteredPositions }];
+    }, [filteredPositions, posGroupBy]);
+
+    // C3 驾驶舱统计：在投/面试中/已上岸 + 阶段漏斗 + 下一步拉平
+    const cockpit = useMemo(() => {
+        const activeCount = positions.filter(p => ['applied', 'written', 'interview', 'offer_talk'].includes(p.stage)).length;
+        const interviewing = positions.filter(p => p.stage === 'interview').length;
+        const offers = positions.filter(p => p.stage === 'offer').length;
+        const funnel = (['watching', 'applied', 'written', 'interview', 'offer_talk', 'offer'] as JobStage[])
+            .map(st => ({ st, label: STAGE_LABEL[st], count: positions.filter(p => p.stage === st).length }));
+        const nextSteps = positions.filter(p => p.stage !== 'rejected' && (p.nextStep || '').trim())
+            .map(p => ({ id: p.id, code: p.code, nextStep: (p.nextStep || '').trim() }));
+        return { activeCount, interviewing, offers, funnel, nextSteps };
+    }, [positions]);
+
+    // C3：竞争力档案落库 + 刷新（用户手改条目 source:'user'）
+    const saveProfile = useCallback(async (next: JobProfile) => {
+        await DB.saveJobProfile(next);
+        setJobProfile(next);
+    }, []);
 
     return (
         <div className="h-full w-full bg-[#f6f8fa] flex flex-col font-sans relative">
@@ -1407,21 +1530,36 @@ const JobHuntApp: React.FC = () => {
                         <ReadCvLogo className="w-5 h-5 text-sky-500" weight="fill" />
                         <span className="font-bold text-slate-800">上岸计划</span>
                     </div>
-                    <button onClick={() => setShowJhSettings(true)} className="p-2 ml-1 rounded-full hover:bg-slate-100 active:scale-90 transition-transform">
+                    <button onClick={() => setShowJhSettings(true)} className="p-2 ml-auto rounded-full hover:bg-slate-100 active:scale-90 transition-transform">
                         <GearSix className="w-[18px] h-[18px] text-slate-400" />
                     </button>
                     <button onClick={() => setShowPrivacyInfo(true)} className="p-2 rounded-full hover:bg-slate-100 active:scale-90 transition-transform" aria-label="隐私说明">
                         <Question className="w-[18px] h-[18px] text-slate-400" />
                     </button>
-                    <div className="ml-auto flex items-center gap-1 overflow-x-auto no-scrollbar max-w-[55%]">
-                        {characters.slice(0, 8).map(c => (
-                            <button key={c.id} onClick={() => setSelectedCharId(c.id)}
-                                className={`shrink-0 rounded-full border-2 transition-all ${selectedCharId === c.id ? 'border-sky-400 scale-105' : 'border-transparent opacity-60'}`}>
-                                {c.avatar
-                                    ? <img src={c.avatar} className="w-8 h-8 rounded-full object-cover" alt={c.name} />
-                                    : <div className="w-8 h-8 rounded-full bg-sky-100 flex items-center justify-center text-xs text-sky-600 font-bold">{c.name.slice(0, 1)}</div>}
-                            </button>
-                        ))}
+                    <div className="relative ml-1 shrink-0">
+                        <button onClick={() => setShowCharPicker(v => !v)}
+                            className="block rounded-full border-2 border-sky-400 overflow-hidden active:scale-90 transition-transform" aria-label="切换角色">
+                            {selectedChar?.avatar
+                                ? <img src={selectedChar.avatar} className="w-8 h-8 rounded-full object-cover block" alt={selectedChar?.name || ''} />
+                                : <div className="w-8 h-8 rounded-full bg-sky-100 flex items-center justify-center text-xs text-sky-600 font-bold">{(selectedChar?.name || '?').slice(0, 1)}</div>}
+                        </button>
+                        {showCharPicker && (
+                            <>
+                                <div className="fixed inset-0 z-30" onClick={() => setShowCharPicker(false)} />
+                                <div className="absolute right-0 mt-1.5 z-40 w-44 max-h-72 overflow-y-auto bg-white rounded-2xl shadow-xl border border-slate-200 p-1.5">
+                                    {characters.map(c => (
+                                        <button key={c.id} onClick={() => { setSelectedCharId(c.id); setShowCharPicker(false); }}
+                                            className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-xl text-left active:scale-[0.98] transition-transform ${selectedCharId === c.id ? 'bg-sky-50' : 'hover:bg-slate-50'}`}>
+                                            {c.avatar
+                                                ? <img src={c.avatar} className="w-7 h-7 rounded-full object-cover shrink-0" alt={c.name} />
+                                                : <div className="w-7 h-7 rounded-full bg-sky-100 flex items-center justify-center text-[11px] text-sky-600 font-bold shrink-0">{c.name.slice(0, 1)}</div>}
+                                            <span className={`text-sm truncate ${selectedCharId === c.id ? 'text-sky-600 font-semibold' : 'text-slate-600'}`}>{c.name}</span>
+                                            {selectedCharId === c.id && <span className="ml-auto text-sky-500 text-xs">✓</span>}
+                                        </button>
+                                    ))}
+                                </div>
+                            </>
+                        )}
                     </div>
                 </div>
                 {/* Tab 栏 */}
@@ -1438,44 +1576,115 @@ const JobHuntApp: React.FC = () => {
             <div className="flex-1 overflow-y-auto no-scrollbar px-4 py-4 pb-28">
                 {/* Tab 1：工作台 = 模拟面试记录（日常求职对话已并入单聊） */}
                 {homeTab === 'sessions' && (
-                    <div className="space-y-2.5">
-                        {/* 和角色聊求职 → 跳单聊（求职能力已并入，在加号菜单第 2 页开求职模式） */}
-                        <button
-                            onClick={() => { if (selectedCharId) setActiveCharacterId(selectedCharId); openApp(AppID.Chat); }}
-                            className="w-full text-left px-4 py-3.5 rounded-2xl bg-gradient-to-r from-sky-500 to-cyan-500 text-white shadow-sm active:scale-[0.98] transition-transform"
-                        >
-                            <div className="text-sm font-bold">和{selectedChar?.name || '角色'}聊求职 → 去单聊</div>
-                            <div className="text-[11px] text-white/80 mt-0.5">日常求职对话已并入单聊：开启求职模式后，TA 能看到岗位/笔记还能帮你记录</div>
-                        </button>
-                        {sessions.filter(s => s.topic === 'interview').length === 0 && (
-                            <div className="text-center text-slate-400 text-sm mt-12 px-8 leading-relaxed">
-                                这里只存模拟面试记录。<br />到「岗位」tab 的岗位卡上发起模拟面试；日常聊求职直接去单聊。
+                    <div className="space-y-3">
+                        {/* Hero 海岸区：总览 + 阶段漏斗 */}
+                        <div className="rounded-3xl p-4 bg-gradient-to-br from-sky-600 via-sky-400 to-amber-50 shadow-sm">
+                            <div className="text-white/90 text-xs font-semibold tracking-wide">上岸进度</div>
+                            <div className="flex items-end gap-5 mt-1.5">
+                                <div><div className="text-3xl font-black text-white leading-none">{cockpit.activeCount}</div><div className="text-[11px] text-white/80 mt-1">在投</div></div>
+                                <div><div className="text-3xl font-black text-white leading-none">{cockpit.interviewing}</div><div className="text-[11px] text-white/80 mt-1">面试中</div></div>
+                                <div><div className="text-3xl font-black text-white leading-none">{cockpit.offers}</div><div className="text-[11px] text-white/80 mt-1">已上岸</div></div>
+                            </div>
+                            <div className="mt-3 flex items-stretch gap-1 rounded-xl bg-white/25 backdrop-blur-sm p-1">
+                                {cockpit.funnel.map(f => (
+                                    <div key={f.st} className="flex-1 text-center py-0.5">
+                                        <div className="text-[13px] font-bold text-white leading-none">{f.count}</div>
+                                        <div className="text-[9px] text-white/85 mt-0.5 truncate">{f.label}</div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* 竞争力档案卡 */}
+                        <div className="bg-white rounded-2xl border border-slate-200/70 shadow-sm p-4">
+                            <div className="flex items-center gap-2">
+                                <span className="text-sm font-bold text-slate-800">竞争力档案</span>
+                                <button onClick={() => { setProfDirection(jobProfile?.direction || ''); setShowProfileEdit(true); }} className="ml-auto text-xs text-sky-500 font-semibold flex items-center gap-1 active:scale-95 transition-transform"><PencilSimple className="w-3.5 h-3.5" />编辑</button>
+                            </div>
+                            {jobProfile?.direction && <div className="text-xs text-slate-600 mt-1.5">方向：{jobProfile.direction}</div>}
+                            {(jobProfile?.strengths.length || 0) > 0 && (
+                                <div className="mt-2">
+                                    <div className="text-[11px] text-slate-400 mb-1">竞争点</div>
+                                    <div className="flex flex-wrap gap-1.5">{jobProfile!.strengths.map(s => <span key={s.id} className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200">{s.text}</span>)}</div>
+                                </div>
+                            )}
+                            {(jobProfile?.gaps.length || 0) > 0 && (
+                                <div className="mt-2">
+                                    <div className="text-[11px] text-slate-400 mb-1">改进点</div>
+                                    <div className="flex flex-wrap gap-1.5">{jobProfile!.gaps.map(g => <span key={g.id} className="text-[11px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">{g.kind === 'resume' ? '简历·' : '策略·'}{g.text}</span>)}</div>
+                                </div>
+                            )}
+                            {!jobProfile?.direction && !(jobProfile?.strengths.length) && !(jobProfile?.gaps.length) && (
+                                <div className="text-xs text-slate-400 mt-1.5 leading-relaxed">还没建立档案。到「笔记本」导入简历点「解析进档案」，或在单聊里让角色帮你沉淀；也可以点右上「编辑」手动填。</div>
+                            )}
+                        </div>
+
+                        {/* 下一步清单 */}
+                        {cockpit.nextSteps.length > 0 && (
+                            <div className="bg-white rounded-2xl border border-slate-200/70 shadow-sm p-4">
+                                <div className="text-sm font-bold text-slate-800 mb-2">下一步</div>
+                                <div className="space-y-2">
+                                    {cockpit.nextSteps.map(ns => (
+                                        <button key={ns.id} onClick={() => setHomeTab('positions')} className="w-full flex items-start gap-2 text-left active:scale-[0.99] transition-transform">
+                                            <span className="text-[10px] font-bold text-slate-500 bg-slate-100 rounded px-1.5 py-0.5 shrink-0 mt-0.5">{ns.code}</span>
+                                            <span className="text-xs text-slate-600 flex-1">{ns.nextStep}</span>
+                                        </button>
+                                    ))}
+                                </div>
                             </div>
                         )}
-                        {sessions.filter(s => s.topic === 'interview').map(s => (
-                            <div key={s.id} onClick={() => { setActiveSession(s); setView('chat'); }}
-                                className="bg-white rounded-2xl border border-slate-200/70 shadow-sm p-4 active:scale-[0.99] transition-transform cursor-pointer">
-                                <div className="flex items-center gap-2">
-                                    <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-semibold ${s.topic === 'interview' ? 'bg-sky-100 text-sky-700' : 'bg-slate-100 text-slate-500'}`}>
-                                        {s.topic === 'interview' ? '模拟面试' : s.topic === 'position' ? '岗位' : '闲聊'}
-                                    </span>
-                                    <span className="text-sm font-semibold text-slate-800 truncate flex-1">{s.title}</span>
-                                    <button onClick={e => { e.stopPropagation(); deleteSession(s); }} className="p-1 text-slate-300 hover:text-rose-400">
-                                        <Trash className="w-4 h-4" />
-                                    </button>
-                                </div>
-                                <div className="text-xs text-slate-400 mt-1.5 truncate">
-                                    {s.messages.length ? s.messages[s.messages.length - 1].content.slice(0, 60) : '还没开始聊'}
-                                </div>
-                                <div className="text-[10px] text-slate-300 mt-1">{sessionCharName(s)} · {new Date(s.updatedAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · {s.messages.length} 条</div>
+
+                        {/* 模拟练习入口卡 */}
+                        <button onClick={() => { setPracticeTargetId(''); setPracticeForm('text'); setPracticeMode('strict'); setPracticeExtra(''); setPracticeTplName(''); setShowPracticeSetup(true); }}
+                            className="w-full text-left px-4 py-3.5 rounded-2xl bg-gradient-to-r from-violet-500 to-sky-500 text-white shadow-sm active:scale-[0.98] transition-transform">
+                            <div className="text-sm font-bold flex items-center gap-1.5"><Microphone className="w-4 h-4" />开始模拟练习</div>
+                            <div className="text-[11px] text-white/80 mt-0.5">选角色和目标岗位，严肃面试官 / 轻松陪练两档</div>
+                        </button>
+
+                        {/* 练习记录列表 */}
+                        <div>
+                            <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">练习记录</div>
+                            {sessions.filter(s => s.topic === 'interview').length === 0 && (
+                                <div className="text-center text-slate-400 text-sm py-6 px-8 leading-relaxed">还没有练习记录。点上面「开始模拟练习」发起一场。</div>
+                            )}
+                            <div className="space-y-2.5">
+                                {sessions.filter(s => s.topic === 'interview').map(s => (
+                                    <div key={s.id} onClick={() => { setActiveSession(s); setView('chat'); }}
+                                        className="bg-white rounded-2xl border border-slate-200/70 shadow-sm p-4 active:scale-[0.99] transition-transform cursor-pointer">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-[10px] px-1.5 py-0.5 rounded-md font-semibold bg-sky-100 text-sky-700">模拟面试</span>
+                                            <span className="text-sm font-semibold text-slate-800 truncate flex-1">{s.title}</span>
+                                            <button onClick={e => { e.stopPropagation(); deleteSession(s); }} className="p-1 text-slate-300 hover:text-rose-400">
+                                                <Trash className="w-4 h-4" />
+                                            </button>
+                                        </div>
+                                        <div className="text-xs text-slate-400 mt-1.5 truncate">
+                                            {s.messages.length ? s.messages[s.messages.length - 1].content.slice(0, 60) : '还没开始聊'}
+                                        </div>
+                                        <div className="text-[10px] text-slate-300 mt-1">{sessionCharName(s)} · {new Date(s.updatedAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · {s.messages.length} 条</div>
+                                    </div>
+                                ))}
                             </div>
-                        ))}
+                        </div>
+
+                        {/* 页底单聊模式备注卡 */}
+                        <div className="rounded-2xl bg-slate-100/70 border border-slate-200/60 px-4 py-3">
+                            <div className="text-[11px] text-slate-500 leading-relaxed">日常想和角色聊求职？在单聊里开启「上岸计划模式」，TA 就能看到你的岗位/档案/笔记，边聊边帮你记录。</div>
+                        </div>
                     </div>
                 )}
 
                 {/* Tab 2：岗位看板 */}
                 {homeTab === 'positions' && (
                     <div className="space-y-3">
+                        {/* 头部：新建岗位（原右下角 FAB 补位到这里） */}
+                        <div className="flex items-center">
+                            <span className="text-sm font-bold text-slate-700">岗位库</span>
+                            <button onClick={() => { setEditingPosition(null); setPosCode(''); setPosTitle(''); setPosCompanyLocal(''); setPosNextStep(''); setPosJd(''); setPosHrName(''); setPosProjectName(''); setPosNotes(''); setPosInterviewAt(''); setPosWaiting(false); setPosCodeDirty(false); setShowNewPosition(true); }}
+                                className="ml-auto flex items-center gap-1 text-xs font-semibold text-white bg-sky-500 rounded-xl px-3 py-1.5 active:scale-95 transition-transform">
+                                <Plus className="w-4 h-4" weight="bold" />新建岗位
+                            </button>
+                        </div>
                         {/* 浏览工具条：搜索 + 阶段多选 chips + 排序 + 分组开关（纯前端） */}
                         {positions.length > 0 && (
                             <div className="space-y-2">
@@ -1503,9 +1712,15 @@ const JobHuntApp: React.FC = () => {
                                         <option value="stage">阶段进度</option>
                                         <option value="company">公司名</option>
                                     </select>
-                                    <button onClick={() => setPosGroupByStage(v => !v)}
-                                        className={`text-xs px-2.5 py-1.5 rounded-lg font-semibold border transition-all active:scale-95 ${posGroupByStage ? 'bg-sky-50 text-sky-600 border-sky-200' : 'bg-white text-slate-400 border-slate-200'}`}>
-                                        {posGroupByStage ? '✓ 按阶段分组' : '按阶段分组'}
+                                    <select value={posGroupBy} onChange={e => setPosGroupBy(e.target.value as typeof posGroupBy)}
+                                        className="text-xs bg-white border border-slate-200 rounded-lg px-2 py-1.5 text-slate-500 outline-none">
+                                        <option value="none">不分组</option>
+                                        <option value="stage">按阶段</option>
+                                        <option value="title">按岗位</option>
+                                    </select>
+                                    <button onClick={() => { if (posSelectMode) exitSelectMode(); else setPosSelectMode(true); }}
+                                        className={`text-xs px-2.5 py-1.5 rounded-lg font-semibold border transition-all active:scale-95 ${posSelectMode ? 'bg-sky-500 text-white border-sky-500' : 'bg-white text-slate-400 border-slate-200'}`}>
+                                        {posSelectMode ? '完成' : '多选'}
                                     </button>
                                     <span className="text-[11px] text-slate-400 ml-auto">{filteredPositions.length} 个</span>
                                 </div>
@@ -1520,6 +1735,20 @@ const JobHuntApp: React.FC = () => {
                                 </div>
                             </div>
                         )}
+                        {posSelectMode && positions.length > 0 && (
+                            <div className="sticky top-0 z-10 flex items-center gap-2 bg-white border border-sky-200 rounded-xl px-3 py-2 shadow-sm">
+                                <span className="text-xs font-bold text-sky-600">已选 {selectedPosIds.size}</span>
+                                <select value="" onChange={e => { if (e.target.value) bulkSetStage(e.target.value as JobStage); }}
+                                    disabled={selectedPosIds.size === 0}
+                                    className="text-xs bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-slate-500 outline-none disabled:opacity-50">
+                                    <option value="">批量改阶段…</option>
+                                    {(Object.keys(STAGE_LABEL) as JobStage[]).map(st => <option key={st} value={st}>{STAGE_LABEL[st]}</option>)}
+                                </select>
+                                <button onClick={bulkDeletePositions} disabled={selectedPosIds.size === 0}
+                                    className="text-xs px-2.5 py-1.5 rounded-lg font-semibold bg-rose-50 text-rose-500 border border-rose-200 active:scale-95 disabled:opacity-50">批量删除</button>
+                                <button onClick={exitSelectMode} className="text-xs text-slate-400 ml-auto">取消</button>
+                            </div>
+                        )}
                         {positions.length === 0 && (
                             <div className="text-center text-slate-400 text-sm mt-16 px-8 leading-relaxed">
                                 还没有在推进的岗位。<br />建卡时公司用代号（A厂/B司），真实公司名只存在本机、永远不会发给 AI。
@@ -1529,30 +1758,35 @@ const JobHuntApp: React.FC = () => {
                             <div className="text-center text-slate-400 text-sm mt-12 px-8">没找到匹配的岗位，换个关键词或清除筛选试试。</div>
                         )}
                         {positionGroups.map(group => (
-                            <div key={group.stage || 'all'} className="space-y-2.5">
-                                {group.stage && (
+                            <div key={group.key} className="space-y-2.5">
+                                {group.label && (
                                     <div className="flex items-center gap-2 pt-1">
-                                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${STAGE_STYLE[group.stage]}`}>{group.label}</span>
+                                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${group.stage ? STAGE_STYLE[group.stage] : 'bg-slate-100 text-slate-500'}`}>{group.label}</span>
                                         <span className="text-[10px] text-slate-400">{group.items.length}</span>
                                     </div>
                                 )}
                                 <div className={jhSettings.positionView === 'masonry' ? 'columns-2 gap-2.5' : 'space-y-2.5'}>
-                                {group.items.map(p => (
-                            jhSettings.positionView === 'compact' ? (
-                                <button key={p.id} onClick={() => openEditPosition(p)}
-                                    className="w-full text-left bg-white rounded-xl border border-slate-200/70 shadow-sm px-3 py-2.5 flex items-center gap-2 active:scale-[0.99] transition-transform">
+                                {group.items.map(p => {
+                            const sel = selectedPosIds.has(p.id);
+                            const cardClick = () => posSelectMode ? togglePosSelect(p.id) : openEditPosition(p);
+                            return jhSettings.positionView === 'compact' ? (
+                                <button key={p.id} onClick={cardClick}
+                                    className={`w-full text-left bg-white rounded-xl shadow-sm px-3 py-2.5 flex items-center gap-2 active:scale-[0.99] transition-transform border-l-4 ${STAGE_ACCENT[p.stage]} ${sel ? 'ring-2 ring-sky-400' : 'ring-1 ring-slate-200/60'}`}>
+                                    {posSelectMode && <span className={`w-4 h-4 rounded-full border-2 shrink-0 ${sel ? 'bg-sky-500 border-sky-500' : 'border-slate-300'}`} />}
                                     <span className="text-sm font-bold text-slate-800 shrink-0">{p.code}</span>
                                     <span className="text-xs text-slate-500 truncate flex-1">{p.title}</span>
                                     <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold shrink-0 ${STAGE_STYLE[p.stage]}`}>{STAGE_LABEL[p.stage]}</span>
-                                    {p.updatedAt && <span className="text-[10px] text-slate-300 shrink-0">{relTimeLabel(p.updatedAt)}</span>}
                                 </button>
                             ) : (
-                            <div key={p.id} className={`bg-white rounded-2xl border border-slate-200/70 shadow-sm p-4 ${jhSettings.positionView === 'masonry' ? 'break-inside-avoid mb-2.5' : ''}`}>
+                            <div key={p.id} onClick={cardClick}
+                                className={`bg-white rounded-2xl shadow-sm p-4 border-l-4 cursor-pointer ${STAGE_ACCENT[p.stage]} ${jhSettings.positionView === 'masonry' ? 'break-inside-avoid mb-2.5' : ''} ${sel ? 'ring-2 ring-sky-400' : 'ring-1 ring-slate-200/60'}`}>
+                                {/* 头部：代号+阶段一行，岗位名独立一行（双列不挤） */}
                                 <div className="flex items-center gap-2">
-                                    <span className="text-sm font-bold text-slate-800">{p.code}</span>
-                                    <span className="text-sm text-slate-500 truncate flex-1">{p.title}</span>
-                                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${STAGE_STYLE[p.stage]}`}>{STAGE_LABEL[p.stage]}</span>
+                                    {posSelectMode && <span className={`w-4 h-4 rounded-full border-2 shrink-0 ${sel ? 'bg-sky-500 border-sky-500' : 'border-slate-300'}`} />}
+                                    <span className="text-[15px] font-bold text-slate-800 flex-1 truncate">{p.code}</span>
+                                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold shrink-0 ${STAGE_STYLE[p.stage]}`}>{STAGE_LABEL[p.stage]}</span>
                                 </div>
+                                <div className="text-[13px] font-semibold text-slate-600 mt-0.5 break-words">{p.title}</div>
                                 {p.companyNameLocal && (
                                     <div className="text-[11px] text-slate-400 mt-1">备注：{p.companyNameLocal}</div>
                                 )}
@@ -1564,7 +1798,7 @@ const JobHuntApp: React.FC = () => {
                                     </div>
                                 )}
                                 {p.nextStep && (
-                                    <div className="text-xs text-sky-600 bg-sky-50 rounded-lg px-2.5 py-1.5 mt-2">下一步：{p.nextStep}</div>
+                                    <div className="text-xs text-sky-700 bg-sky-50 rounded-lg px-2.5 py-1.5 mt-2 font-medium">下一步：{p.nextStep}</div>
                                 )}
                                 {(p.rounds || []).length > 0 && (
                                     <div className="flex items-center gap-1.5 mt-2 flex-wrap">
@@ -1585,7 +1819,6 @@ const JobHuntApp: React.FC = () => {
                                             </div>
                                         );
                                     }
-                                    // 只剩过期时间时淡显，提醒去改状态
                                     if (p.interviewAt && p.interviewAt <= Date.now() - 3600 * 1000) {
                                         return <div className="text-[11px] text-slate-300 mt-2">面试已过：{fmtJobTime(p.interviewAt)}</div>;
                                     }
@@ -1596,45 +1829,25 @@ const JobHuntApp: React.FC = () => {
                                     return wd ? <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-2.5 py-1.5 mt-2">⏳ 等反馈中 · 第 {wd} 天</div> : null;
                                 })()}
                                 {p.jd && (
-                                    <div className="mt-2">
-                                        <button onClick={() => setJdOpenId(jdOpenId === p.id ? null : p.id)}
-                                            className="text-xs text-slate-500 font-semibold flex items-center gap-1 active:scale-95 transition-transform">
-                                            <FileText className="w-3.5 h-3.5" /> {jdOpenId === p.id ? '收起 JD' : '查看 JD'}
-                                        </button>
-                                        {jdOpenId === p.id && (
-                                            <div className="mt-1.5 text-xs text-slate-600 bg-slate-50 rounded-xl px-3 py-2.5 whitespace-pre-wrap leading-relaxed max-h-48 overflow-y-auto">{p.jd}</div>
-                                        )}
+                                    <div className="mt-2 flex items-start gap-1.5">
+                                        <FileText className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
+                                        <div className="text-xs text-slate-500 leading-relaxed line-clamp-2 flex-1 whitespace-pre-wrap">{p.jd}</div>
+                                        <button onClick={e => { e.stopPropagation(); openEditPosition(p); }} className="p-1 -mt-0.5 text-slate-300 hover:text-sky-500 shrink-0"><PencilSimple className="w-3.5 h-3.5" /></button>
                                     </div>
                                 )}
                                 {p.notes && (
-                                    <div className="mt-2">
-                                        <button onClick={() => setNotesOpenId(notesOpenId === p.id ? null : p.id)}
-                                            className="text-xs text-indigo-500 font-semibold flex items-center gap-1 active:scale-95 transition-transform">
-                                            <Notebook className="w-3.5 h-3.5" /> {notesOpenId === p.id ? '收起笔记' : '查看笔记'}
-                                        </button>
-                                        {notesOpenId === p.id && (
-                                            <div className="mt-1.5 text-xs text-slate-600 bg-indigo-50/60 rounded-xl px-3 py-2.5 whitespace-pre-wrap leading-relaxed max-h-48 overflow-y-auto">{p.notes}</div>
-                                        )}
+                                    <div className="mt-1.5 flex items-start gap-1.5">
+                                        <Notebook className="w-3.5 h-3.5 text-indigo-400 shrink-0 mt-0.5" />
+                                        <div className="text-xs text-slate-500 leading-relaxed line-clamp-2 flex-1 whitespace-pre-wrap">{p.notes}</div>
+                                        <button onClick={e => { e.stopPropagation(); openEditPosition(p); }} className="p-1 -mt-0.5 text-slate-300 hover:text-indigo-500 shrink-0"><PencilSimple className="w-3.5 h-3.5" /></button>
                                     </div>
                                 )}
-                                <div className="flex items-center gap-2 mt-3 flex-wrap">
-                                    <button onClick={() => { setSelectedCharId(p.charId || selectedCharId); createSession('interview', p.id); }}
-                                        className="text-xs px-3 py-1.5 rounded-lg bg-sky-500 text-white font-semibold active:scale-95 transition-transform">模拟面试</button>
-                                    <button onClick={() => { if (p.charId || selectedCharId) setActiveCharacterId(p.charId || selectedCharId); openApp(AppID.Chat); }}
-                                        className="text-xs px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 font-semibold active:scale-95 transition-transform">聊这个岗位 → 单聊</button>
-                                    <select value={p.stage} onChange={e => advanceStage(p, e.target.value as JobStage)}
-                                        className="text-xs bg-slate-50 border border-slate-200 rounded-lg px-1.5 py-1.5 text-slate-500 outline-none ml-auto">
-                                        {(Object.keys(STAGE_LABEL) as JobStage[]).map(st => <option key={st} value={st}>{STAGE_LABEL[st]}</option>)}
-                                    </select>
-                                    <button onClick={() => openEditPosition(p)} className="text-xs text-slate-400 px-1">编辑</button>
-                                    <button onClick={() => deletePosition(p)} className="p-1 text-slate-300 hover:text-rose-400"><Trash className="w-4 h-4" /></button>
-                                </div>
                                 {p.updatedAt && (
                                     <div className="text-[10px] text-slate-300 mt-2">最后更新 {relTimeLabel(p.updatedAt)}</div>
                                 )}
                             </div>
-                            )
-                                ))}
+                            );
+                            })}
                                 </div>
                             </div>
                         ))}
@@ -1685,6 +1898,11 @@ const JobHuntApp: React.FC = () => {
                                             <div className="text-sm font-semibold text-slate-700 truncate">{r.name}</div>
                                             <div className="text-[10px] text-slate-400">{r.sourceFormat.toUpperCase()} · {new Date(r.createdAt).toLocaleDateString('zh-CN')} · {r.rawText.length} 字</div>
                                         </div>
+                                        <button onClick={() => parseResume(r)} disabled={!!parsingResumeId}
+                                            className="flex items-center gap-1 text-xs text-sky-600 font-semibold shrink-0 disabled:opacity-50">
+                                            {parsingResumeId === r.id ? <CircleNotch className="w-3.5 h-3.5 animate-spin" /> : <ReadCvLogo className="w-3.5 h-3.5" />}
+                                            {parsingResumeId === r.id ? '解析中' : '解析进档案'}
+                                        </button>
                                         <button onClick={() => deleteResume(r)} className="p-1 text-slate-300 hover:text-rose-400"><Trash className="w-4 h-4" /></button>
                                     </div>
                                 ))}
@@ -1694,28 +1912,153 @@ const JobHuntApp: React.FC = () => {
                 )}
             </div>
 
-            {/* 悬浮新建按钮 */}
-            <div className="absolute right-5 z-30" style={{ bottom: 'max(1.5rem, calc(var(--safe-bottom) + 1rem))' }}>
-                <button
-                    onClick={() => { if (homeTab === 'positions') { setEditingPosition(null); setPosCode(''); setPosTitle(''); setPosCompanyLocal(''); setPosNextStep(''); setPosJd(''); setPosHrName(''); setPosProjectName(''); setPosNotes(''); setPosInterviewAt(''); setPosWaiting(false); setPosCodeDirty(false); setShowNewPosition(true); } else setShowNewSession(true); }}
-                    className="p-4 rounded-2xl bg-sky-500 text-white shadow-lg shadow-sky-200 active:scale-90 transition-transform">
-                    <Plus className="w-6 h-6" weight="bold" />
-                </button>
-            </div>
-
-            {/* 新建会话弹窗：日常求职对话已并入单聊，这里只留去单聊 + 面试指引 */}
-            {showNewSession && (
-                <div className="absolute inset-0 z-40 bg-black/30 flex items-end" onClick={() => setShowNewSession(false)}>
-                    <div className="w-full bg-white rounded-t-3xl p-5" onClick={e => e.stopPropagation()} style={{ paddingBottom: 'max(1.25rem, var(--safe-bottom))' }}>
-                        <div className="font-bold text-slate-800 mb-1">和{selectedChar?.name || '角色'}聊求职</div>
-                        <div className="text-xs text-slate-400 mb-4">日常求职对话已并入单聊；模拟面试请到「岗位」tab 从岗位卡发起</div>
-                        <div className="space-y-2">
-                            <button onClick={() => { setShowNewSession(false); if (selectedCharId) setActiveCharacterId(selectedCharId); openApp(AppID.Chat); }}
-                                className="w-full text-left px-4 py-3.5 rounded-2xl bg-sky-50 border border-sky-200 active:scale-[0.98] transition-transform">
-                                <div className="text-sm font-semibold text-sky-700">去单聊聊求职 →</div>
-                                <div className="text-[11px] text-slate-400 mt-0.5">焦虑/选 offer/盘进展都在单聊里聊，开启求职模式后 TA 还能帮你建卡记笔记</div>
-                            </button>
+            {/* 竞争力档案编辑弹窗（手改条目标 source:'user'，AI 重新解析不覆盖） */}
+            {showProfileEdit && (() => {
+                const base: JobProfile = jobProfile || { id: 'main', direction: '', strengths: [], gaps: [], resumeDigest: '', updatedAt: Date.now() };
+                const addEdge = () => {
+                    const t = profNewEdge.trim(); if (!t) return;
+                    saveProfile({ ...base, direction: profDirection.trim(), strengths: [...base.strengths, { id: genId('edge'), text: t, source: 'user' }], updatedAt: Date.now() });
+                    setProfNewEdge('');
+                };
+                const addGap = () => {
+                    const t = profNewGap.trim(); if (!t) return;
+                    saveProfile({ ...base, direction: profDirection.trim(), gaps: [...base.gaps, { id: genId('gap'), text: t, kind: profNewGapKind, source: 'user' }], updatedAt: Date.now() });
+                    setProfNewGap('');
+                };
+                const delEdge = (id: string) => saveProfile({ ...base, direction: profDirection.trim(), strengths: base.strengths.filter(s => s.id !== id), updatedAt: Date.now() });
+                const delGap = (id: string) => saveProfile({ ...base, direction: profDirection.trim(), gaps: base.gaps.filter(g => g.id !== id), updatedAt: Date.now() });
+                const done = () => { saveProfile({ ...base, direction: profDirection.trim(), updatedAt: Date.now() }); setShowProfileEdit(false); };
+                return (
+                <div className="absolute inset-0 z-50 bg-black/30 flex items-end" onClick={() => setShowProfileEdit(false)}>
+                    <div className="w-full bg-white rounded-t-3xl p-5 max-h-[85%] overflow-y-auto" onClick={e => e.stopPropagation()} style={{ paddingBottom: 'max(1.25rem, var(--safe-bottom))' }}>
+                        <div className="font-bold text-slate-800 mb-3">编辑竞争力档案</div>
+                        <div className="space-y-4">
+                            <div>
+                                <label className="text-xs text-slate-500 font-semibold">求职方向</label>
+                                <input value={profDirection} onChange={e => setProfDirection(e.target.value)} placeholder="一句话，比如：三年前端，主攻 C 端体验"
+                                    className="w-full mt-1 bg-slate-100 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-sky-200" />
+                            </div>
+                            <div>
+                                <div className="text-xs text-slate-500 font-semibold mb-1.5">竞争点</div>
+                                <div className="flex flex-wrap gap-1.5 mb-2">
+                                    {base.strengths.map(s => (
+                                        <span key={s.id} className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 flex items-center gap-1">
+                                            {s.text}<button onClick={() => delEdge(s.id)} className="text-emerald-400 hover:text-rose-400 font-bold">×</button>
+                                        </span>
+                                    ))}
+                                    {base.strengths.length === 0 && <span className="text-[11px] text-slate-300">还没有，加一条</span>}
+                                </div>
+                                <div className="flex gap-2">
+                                    <input value={profNewEdge} onChange={e => setProfNewEdge(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addEdge(); }} placeholder="加一条竞争点"
+                                        className="flex-1 bg-slate-100 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-200" />
+                                    <button onClick={addEdge} className="px-3 rounded-xl bg-emerald-500 text-white text-sm font-semibold active:scale-95 transition-transform">加</button>
+                                </div>
+                            </div>
+                            <div>
+                                <div className="text-xs text-slate-500 font-semibold mb-1.5">改进点</div>
+                                <div className="flex flex-wrap gap-1.5 mb-2">
+                                    {base.gaps.map(g => (
+                                        <span key={g.id} className="text-[11px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 flex items-center gap-1">
+                                            {g.kind === 'resume' ? '简历·' : '策略·'}{g.text}<button onClick={() => delGap(g.id)} className="text-amber-400 hover:text-rose-400 font-bold">×</button>
+                                        </span>
+                                    ))}
+                                    {base.gaps.length === 0 && <span className="text-[11px] text-slate-300">还没有，加一条</span>}
+                                </div>
+                                <div className="flex gap-2">
+                                    <select value={profNewGapKind} onChange={e => setProfNewGapKind(e.target.value as 'strategy' | 'resume')}
+                                        className="bg-slate-100 rounded-xl px-2 text-sm outline-none text-slate-500">
+                                        <option value="strategy">策略</option>
+                                        <option value="resume">简历</option>
+                                    </select>
+                                    <input value={profNewGap} onChange={e => setProfNewGap(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addGap(); }} placeholder="加一条改进点"
+                                        className="flex-1 bg-slate-100 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-200" />
+                                    <button onClick={addGap} className="px-3 rounded-xl bg-amber-500 text-white text-sm font-semibold active:scale-95 transition-transform">加</button>
+                                </div>
+                            </div>
                         </div>
+                        <button onClick={done} className="w-full mt-4 py-3 rounded-xl bg-sky-500 text-white text-sm font-bold active:scale-[0.98] transition-transform">完成</button>
+                    </div>
+                </div>
+                );
+            })()}
+
+            {/* 模拟练习设置弹窗（C4：角色/目标/形态/两档/附加提示词+模板） */}
+            {showPracticeSetup && (
+                <div className="absolute inset-0 z-50 bg-black/30 flex items-end" onClick={() => setShowPracticeSetup(false)}>
+                    <div className="w-full bg-white rounded-t-3xl p-5 max-h-[88%] overflow-y-auto" onClick={e => e.stopPropagation()} style={{ paddingBottom: 'max(1.25rem, var(--safe-bottom))' }}>
+                        <div className="font-bold text-slate-800 mb-3">模拟练习设置</div>
+                        <div className="space-y-4">
+                            <div>
+                                <div className="text-xs text-slate-500 font-semibold mb-1.5">面试官角色</div>
+                                <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+                                    {characters.map(c => (
+                                        <button key={c.id} onClick={() => setSelectedCharId(c.id)}
+                                            className={`flex flex-col items-center gap-1 shrink-0 ${selectedCharId === c.id ? '' : 'opacity-60'}`}>
+                                            {c.avatar
+                                                ? <img src={c.avatar} className={`w-11 h-11 rounded-full object-cover border-2 ${selectedCharId === c.id ? 'border-sky-400' : 'border-transparent'}`} alt={c.name} />
+                                                : <div className={`w-11 h-11 rounded-full bg-sky-100 flex items-center justify-center text-sm text-sky-600 font-bold border-2 ${selectedCharId === c.id ? 'border-sky-400' : 'border-transparent'}`}>{c.name.slice(0, 1)}</div>}
+                                            <span className="text-[10px] text-slate-500 max-w-[52px] truncate">{c.name}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                            <div>
+                                <div className="text-xs text-slate-500 font-semibold mb-1.5">练习目标</div>
+                                <div className="flex flex-wrap gap-1.5">
+                                    <button onClick={() => setPracticeTargetId('')}
+                                        className={`text-xs px-3 py-1.5 rounded-xl font-semibold border transition-all active:scale-95 ${practiceTargetId === '' ? 'bg-sky-50 text-sky-600 border-sky-200 ring-1 ring-sky-100' : 'bg-white text-slate-500 border-slate-200'}`}>综合模式</button>
+                                    {positions.filter(p => p.stage !== 'rejected').map(p => (
+                                        <button key={p.id} onClick={() => setPracticeTargetId(p.id)}
+                                            className={`text-xs px-3 py-1.5 rounded-xl font-semibold border transition-all active:scale-95 ${practiceTargetId === p.id ? 'bg-sky-50 text-sky-600 border-sky-200 ring-1 ring-sky-100' : 'bg-white text-slate-500 border-slate-200'}`}>{p.code} · {p.title}</button>
+                                    ))}
+                                </div>
+                            </div>
+                            <div>
+                                <div className="text-xs text-slate-500 font-semibold mb-1.5">练习形态</div>
+                                <div className="flex gap-2">
+                                    <button onClick={() => setPracticeForm('text')}
+                                        className={`flex-1 py-2.5 rounded-xl text-xs font-semibold border transition-all active:scale-95 ${practiceForm === 'text' ? 'bg-sky-50 text-sky-600 border-sky-200 ring-1 ring-sky-100' : 'bg-white text-slate-500 border-slate-200'}`}>文字</button>
+                                    <div className="flex-1 py-2.5 rounded-xl text-xs font-semibold border border-slate-200 bg-slate-50 text-slate-300 text-center">语音 · 研发中</div>
+                                    <div className="flex-1 py-2.5 rounded-xl text-xs font-semibold border border-slate-200 bg-slate-50 text-slate-300 text-center">视频 · 研发中</div>
+                                </div>
+                            </div>
+                            <div>
+                                <div className="text-xs text-slate-500 font-semibold mb-1.5">面试官风格</div>
+                                <div className="flex gap-2">
+                                    {([['strict', '严肃面试官', '正式、有压力感'], ['coach', '轻松陪练', '鼓励、给提示']] as const).map(([v, label, desc]) => (
+                                        <button key={v} onClick={() => setPracticeMode(v)}
+                                            className={`flex-1 text-left px-3 py-2 rounded-xl border transition-all active:scale-[0.98] ${practiceMode === v ? 'bg-sky-50 border-sky-200 ring-1 ring-sky-100' : 'bg-white border-slate-200'}`}>
+                                            <div className={`text-xs font-bold ${practiceMode === v ? 'text-sky-600' : 'text-slate-600'}`}>{label}</div>
+                                            <div className="text-[10px] text-slate-400 mt-0.5">{desc}</div>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                            <div>
+                                <div className="text-xs text-slate-500 font-semibold mb-1.5">附加提示词（选填）</div>
+                                {jhSettings.practiceTemplates.length > 0 && (
+                                    <div className="flex flex-wrap gap-1.5 mb-2">
+                                        {jhSettings.practiceTemplates.map(t => (
+                                            <span key={t.id} className="text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200 flex items-center gap-1">
+                                                <button onClick={() => setPracticeExtra(t.text)}>{t.name}</button>
+                                                <button onClick={() => patchJhSettings({ practiceTemplates: jhSettings.practiceTemplates.filter(x => x.id !== t.id) })} className="text-slate-400 hover:text-rose-400 font-bold">×</button>
+                                            </span>
+                                        ))}
+                                    </div>
+                                )}
+                                <textarea value={practiceExtra} onChange={e => setPracticeExtra(e.target.value)} rows={3}
+                                    placeholder="比如：多问项目里的技术难点；语气强势一点；重点考察系统设计……"
+                                    className="w-full bg-slate-100 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-sky-200 resize-none leading-relaxed" />
+                                <div className="flex gap-2 mt-2">
+                                    <input value={practiceTplName} onChange={e => setPracticeTplName(e.target.value)} placeholder="给这段提示词起个名，存为模板"
+                                        className="flex-1 bg-slate-100 rounded-xl px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-sky-200" />
+                                    <button onClick={() => { const name = practiceTplName.trim(); const text = practiceExtra.trim(); if (!name || !text) { addToast('模板名和提示词都要填', 'info'); return; } patchJhSettings({ practiceTemplates: [...jhSettings.practiceTemplates, { id: genId('ptpl'), name, text }] }); setPracticeTplName(''); addToast('已存为模板', 'success'); }}
+                                        className="px-3 rounded-xl bg-slate-200 text-slate-600 text-xs font-semibold active:scale-95 transition-transform">存为模板</button>
+                                </div>
+                            </div>
+                        </div>
+                        <button onClick={startPractice} disabled={isSending}
+                            className="w-full mt-4 py-3 rounded-xl bg-gradient-to-r from-violet-500 to-sky-500 text-white text-sm font-bold active:scale-[0.98] transition-transform disabled:opacity-60">开始练习</button>
                     </div>
                 </div>
             )}
@@ -1804,32 +2147,55 @@ const JobHuntApp: React.FC = () => {
                             </div>
                         </div>
                         <button onClick={savePosition} className="w-full mt-4 py-3 rounded-xl bg-sky-500 text-white text-sm font-bold active:scale-[0.98] transition-transform">保存</button>
+                        {editingPosition && (
+                            <button onClick={() => { const p = editingPosition; setShowNewPosition(false); setEditingPosition(null); deletePosition(p); }}
+                                className="w-full mt-2 py-2.5 rounded-xl text-rose-500 text-sm font-semibold active:scale-[0.98] transition-transform">删除这个岗位</button>
+                        )}
                     </div>
                 </div>
             )}
 
             {/* 笔记详情弹窗 */}
             {viewingNote && (
-                <div className="absolute inset-0 z-40 bg-black/40 flex items-center justify-center p-4" onClick={() => setViewingNote(null)}>
+                <div className="absolute inset-0 z-40 bg-black/40 flex items-center justify-center p-4" onClick={() => { setViewingNote(null); setNoteEditing(false); }}>
                     <div className="w-full max-w-md bg-white rounded-3xl p-5 max-h-[85%] flex flex-col" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center gap-2 mb-3">
                             <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-semibold ${NOTE_KIND_STYLE[viewingNote.kind]}`}>{NOTE_KIND_LABEL[viewingNote.kind]}</span>
-                            <span className="font-bold text-slate-800 truncate flex-1">{viewingNote.title}</span>
-                            <button onClick={() => deleteNote(viewingNote)} className="p-1 text-slate-300 hover:text-rose-400"><Trash className="w-4 h-4" /></button>
-                            <button onClick={() => setViewingNote(null)} className="p-1 text-slate-400"><X className="w-4 h-4" /></button>
+                            {noteEditing
+                                ? <input value={noteEditTitle} onChange={e => setNoteEditTitle(e.target.value)} className="flex-1 bg-slate-100 rounded-lg px-2.5 py-1.5 text-sm font-bold text-slate-800 outline-none focus:ring-2 focus:ring-sky-200" />
+                                : <span className="font-bold text-slate-800 truncate flex-1">{viewingNote.title}</span>}
+                            {!noteEditing && (
+                                <button onClick={() => { setNoteEditTitle(viewingNote.title); setNoteEditContent(viewingNote.content); setNoteEditing(true); }}
+                                    className="flex items-center gap-1 text-xs text-sky-500 font-semibold px-1 active:scale-95 transition-transform"><PencilSimple className="w-3.5 h-3.5" />编辑</button>
+                            )}
+                            <button onClick={() => { setViewingNote(null); setNoteEditing(false); }} className="p-1 text-slate-400"><X className="w-4 h-4" /></button>
                         </div>
                         <div className="flex-1 overflow-y-auto">
-                            <MarkdownBlock text={viewingNote.content} />
+                            {noteEditing
+                                ? <textarea value={noteEditContent} onChange={e => setNoteEditContent(e.target.value)} rows={12}
+                                    className="w-full h-full min-h-[240px] bg-slate-100 rounded-xl px-3 py-2.5 text-sm text-slate-700 outline-none focus:ring-2 focus:ring-sky-200 resize-none leading-relaxed" />
+                                : <MarkdownBlock text={viewingNote.content} />}
                         </div>
-                        <div className="text-[10px] text-slate-300 mt-3">
-                            {characters.find(c => c.id === viewingNote.charId)?.name || ''} · 最后更新 {relTimeLabel(viewingNote.updatedAt ?? viewingNote.createdAt)}
-                            {viewingNote.sessionId && sessions.some(s => s.id === viewingNote.sessionId) && (
-                                <button className="text-sky-500 font-semibold ml-2"
-                                    onClick={() => { const src = sessions.find(x => x.id === viewingNote.sessionId); if (src) { setViewingNote(null); setActiveSession(src); setView('chat'); } }}>
-                                    回到来源会话 →
-                                </button>
-                            )}
-                        </div>
+                        {noteEditing ? (
+                            <div className="flex items-center gap-2 mt-3">
+                                <button onClick={() => deleteNote(viewingNote)} className="text-xs text-rose-500 font-semibold active:scale-95 transition-transform">删除这篇笔记</button>
+                                <button onClick={() => setNoteEditing(false)} className="ml-auto text-xs text-slate-400 px-2 py-1.5">取消</button>
+                                <button onClick={saveNoteEdit} className="text-xs font-bold text-white bg-sky-500 rounded-xl px-4 py-1.5 active:scale-95 transition-transform">保存</button>
+                            </div>
+                        ) : (
+                            <div className="mt-3">
+                                <div className="text-[10px] text-slate-300">
+                                    {characters.find(c => c.id === viewingNote.charId)?.name || ''} · 最后更新 {relTimeLabel(viewingNote.updatedAt ?? viewingNote.createdAt)}
+                                    {viewingNote.sessionId && sessions.some(s => s.id === viewingNote.sessionId) && (
+                                        <button className="text-sky-500 font-semibold ml-2"
+                                            onClick={() => { const src = sessions.find(x => x.id === viewingNote.sessionId); if (src) { setViewingNote(null); setNoteEditing(false); setActiveSession(src); setView('chat'); } }}>
+                                            回到来源会话 →
+                                        </button>
+                                    )}
+                                </div>
+                                <button onClick={() => deleteNote(viewingNote)} className="mt-2 text-xs text-rose-500 font-semibold active:scale-95 transition-transform">删除这篇笔记</button>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}

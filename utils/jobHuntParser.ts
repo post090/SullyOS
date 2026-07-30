@@ -76,6 +76,13 @@ export interface JobParseResult {
     noteEdits: { titleKey: string; content: string }[];
     /** 要删除的笔记标题关键词 */
     noteDeletes: string[];
+    /** 竞争力档案编辑（写 JobProfile，source:'char'） */
+    edgeAdds: string[];
+    edgeDels: string[];
+    gapAdds: { kind: 'strategy' | 'resume'; text: string }[];
+    gapDels: string[];
+    /** 求职方向（同批多条取最后一条）；undefined=不改 */
+    direction?: string;
 }
 
 const JOB_UPDATE_RE = /\[\[JOB_UPDATE:([^|\]]+)\|([^|\]]+)\|([^\]]*)\]\]/g;
@@ -87,6 +94,12 @@ const JOB_NOTE_DEL_RE = /\[\[JOB_NOTE_DEL:([^\]]+)\]\]/g;
 const JOB_ROUND_RE = /\[\[JOB_ROUND:([^|\]]+)\|([^|\]]+)\|([^|\]]+)\|([^|\]]*)\|?([^\]]*)\]\]/g;
 const JOB_INTERVIEW_RE = /\[\[JOB_INTERVIEW:([^|\]]+)\|([^\]]*)\]\]/g;
 const JOB_WAITING_RE = /\[\[JOB_WAITING:([^|\]]+)\|?([^\]]*)\]\]/g;
+// 竞争力档案指令（第八节）：文本段用 [\s\S] 兜跨行
+const JOB_EDGE_ADD_RE = /\[\[JOB_EDGE_ADD:([\s\S]*?)\]\]/g;
+const JOB_EDGE_DEL_RE = /\[\[JOB_EDGE_DEL:([\s\S]*?)\]\]/g;
+const JOB_GAP_ADD_RE = /\[\[JOB_GAP_ADD:([^|\]]+)\|([\s\S]*?)\]\]/g;
+const JOB_GAP_DEL_RE = /\[\[JOB_GAP_DEL:([\s\S]*?)\]\]/g;
+const JOB_DIRECTION_RE = /\[\[JOB_DIRECTION:([\s\S]*?)\]\]/g;
 
 // LLM 常会用中文写阶段/类型，宽容映射；不认识的一律回落安全默认值
 const STAGE_MAP: Record<string, JobStage> = {
@@ -172,6 +185,10 @@ export const normalizeJobStage = (raw: string): JobStage =>
 export const normalizeNoteKind = (raw: string): JobNoteKind =>
     NOTE_KIND_MAP[raw.trim().toLowerCase()] ?? 'note';
 
+/** 改进点分层：认「简历/resume/写法」为 resume，其余回落 strategy */
+export const normalizeGapKind = (raw: string): 'strategy' | 'resume' =>
+    /简历|resume|写法/i.test((raw || '').trim()) ? 'resume' : 'strategy';
+
 /** 从 LLM 回复中提取全部指令并剥离标记。解析失败的标记直接丢弃（不阻塞正文渲染） */
 export function parseJobHuntCommands(text: string): JobParseResult {
     const updates: ParsedJobUpdate[] = [];
@@ -183,6 +200,11 @@ export function parseJobHuntCommands(text: string): JobParseResult {
     const positionDeletes: string[] = [];
     const noteEdits: { titleKey: string; content: string }[] = [];
     const noteDeletes: string[] = [];
+    const edgeAdds: string[] = [];
+    const edgeDels: string[] = [];
+    const gapAdds: { kind: 'strategy' | 'resume'; text: string }[] = [];
+    const gapDels: string[] = [];
+    let direction: string | undefined;
 
     let cleanText = text.replace(JOB_UPDATE_RE, (_m, code: string, stage: string, nextStep: string) => {
         const c = (code || '').trim();
@@ -258,10 +280,37 @@ export function parseJobHuntCommands(text: string): JobParseResult {
         return '';
     });
 
+    // ── 竞争力档案（第八节）：方向 / 竞争点增删 / 改进点增删 ──
+    cleanText = cleanText.replace(JOB_DIRECTION_RE, (_m, v: string) => {
+        const t = (v || '').trim();
+        if (t) direction = t; // 多条取最后一条
+        return '';
+    });
+    cleanText = cleanText.replace(JOB_EDGE_ADD_RE, (_m, v: string) => {
+        const t = (v || '').trim();
+        if (t) edgeAdds.push(t);
+        return '';
+    });
+    cleanText = cleanText.replace(JOB_EDGE_DEL_RE, (_m, v: string) => {
+        const t = (v || '').trim();
+        if (t) edgeDels.push(t);
+        return '';
+    });
+    cleanText = cleanText.replace(JOB_GAP_ADD_RE, (_m, kindRaw: string, v: string) => {
+        const t = (v || '').trim();
+        if (t) gapAdds.push({ kind: normalizeGapKind(kindRaw || ''), text: t });
+        return '';
+    });
+    cleanText = cleanText.replace(JOB_GAP_DEL_RE, (_m, v: string) => {
+        const t = (v || '').trim();
+        if (t) gapDels.push(t);
+        return '';
+    });
+
     // 剥标记后可能留下成串空行，压回最多一个空行
     cleanText = cleanText.replace(/(\s*\r?\n){3,}/g, '\u000a\u000a').trim();
 
-    return { cleanText, updates, sets, rounds, interviews, waitings, notes, positionDeletes, noteEdits, noteDeletes };
+    return { cleanText, updates, sets, rounds, interviews, waitings, notes, positionDeletes, noteEdits, noteDeletes, edgeAdds, edgeDels, gapAdds, gapDels, direction };
 }
 
 /** 注入 system prompt 的指令说明段（教角色怎么用标记；全套增删改，删除要审慎） */
@@ -274,6 +323,7 @@ export const JOB_COMMAND_GUIDE = [
     '5. 删岗位卡：[[JOB_DEL:代号]]。仅当用户明确要求删除、或流程彻底结束且用户同意清理时才用，删除要克制。',
     '6. 记入笔记本：[[JOB_NOTE:类型|标题|正文]]。类型限 eval(面试评价)/resume_advice(简历建议)/analysis(岗位分析)/note(随手记)；正文用 markdown，可多行。只记真正值得回看的结论。',
     '7. 改笔记：[[JOB_NOTE_EDIT:标题关键词|新正文]]（整篇替换）；删笔记：[[JOB_NOTE_DEL:标题关键词]]。关键词按标题匹配最近一条，只能操作上面列出的笔记；删除同样审慎。',
-    '8. 隐私铁律：公司一律用代号（如 A厂、B司），绝不写真实公司名；用户的真实姓名、电话、住址等信息绝不写进任何指令或回复。',
-    '9. 这些指令只在聊到求职时才用，日常闲聊不要输出。',
+    '8. 竞争力档案（帮用户沉淀求职优劣势，聊到相关话题才用）：加竞争点 [[JOB_EDGE_ADD:一句话优势]]；删竞争点 [[JOB_EDGE_DEL:关键词]]；加改进点 [[JOB_GAP_ADD:strategy或resume|一句话]]（strategy=求职策略层，resume=简历写法层）；删改进点 [[JOB_GAP_DEL:关键词]]；设求职方向 [[JOB_DIRECTION:一句话方向]]（改方向=直接发新的覆盖）。删除或覆盖前先跟用户确认。',
+    '9. 隐私铁律：公司一律用代号（如 A厂、B司），绝不写真实公司名；用户的真实姓名、电话、住址等信息绝不写进任何指令或回复。',
+    '10. 这些指令只在聊到求职时才用，日常闲聊不要输出。',
 ].join('\u000a');

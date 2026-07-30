@@ -2255,6 +2255,13 @@ export interface JobSession {
         currentIndex: number;
         finished: boolean;
     };
+    /** 模拟练习目标（C4 面试与岗位解耦）：综合/岗位库任选 + 语音两档 + 附加提示词；positionId 允许空 */
+    practiceTarget?: {
+        kind: 'comprehensive' | 'position';
+        positionId?: string;
+        mode?: 'strict' | 'coach';
+        extraPrompt?: string;
+    };
     /** 已喂入记忆宫殿的消息数（增量导入游标，避免重复入库） */
     memorySyncedCount?: number;
     createdAt: number;

@@ -13,9 +13,10 @@
  */
 
 import { DB } from './db';
-import { JobNote, JobPosition, JobRound, Message } from '../types';
+import { JobNote, JobPosition, JobProfile, JobResume, JobRound, Message } from '../types';
 import { JobParseResult, JOB_COMMAND_GUIDE, normalizeJobStage, JobSettableField } from './jobHuntParser';
 import { redactPrivacy, codifyCompanies } from './privacyRedact';
+import { loadJhSettings } from './jobHuntSettings';
 
 const STAGE_LABEL: Record<string, string> = {
     watching: '观望中', applied: '已投递', written: '笔试中', interview: '面试中', offer_talk: '沟通Offer', offer: '已接受Offer', rejected: '已结束',
@@ -121,7 +122,7 @@ export function buildPositionPromptLine(p: JobPosition, allPositions: JobPositio
 
 /** 一张 job_card 消息的 metadata.jobCard 结构 */
 export interface JobCardPayload {
-    jobKind: 'update' | 'set' | 'round' | 'interview_time' | 'waiting' | 'delete' | 'note' | 'note_edit' | 'note_del';
+    jobKind: 'update' | 'set' | 'round' | 'interview_time' | 'waiting' | 'delete' | 'note' | 'note_edit' | 'note_del' | 'edge_add' | 'edge_del' | 'gap_add' | 'gap_del' | 'direction';
     /** update/set/round/interview_time/waiting/delete：岗位代号 */
     code?: string;
     stage?: string;
@@ -158,19 +159,50 @@ const FIELD_LABEL: Record<JobSettableField, string> = {
 export async function buildJobHuntPromptBlock(): Promise<string> {
     let positions: JobPosition[] = [];
     let notes: JobNote[] = [];
+    let profile: JobProfile | null = null;
+    let resumes: JobResume[] = [];
     try { positions = await DB.getJobPositions(); } catch { /* 表还没建等场景，静默 */ }
     try { notes = await DB.getJobNotes(); } catch { /* 同上 */ }
+    try { profile = await DB.getJobProfile(); } catch { /* 同上 */ }
+    try { resumes = await DB.getJobResumes(); } catch { /* 同上 */ }
+
+    // 单聊注入档位（用户级全局设置；读失败用默认：档案开、简历摘要、岗位开）
+    let inject: { resume: 'none' | 'raw' | 'digest'; profile: boolean; positions: boolean } = { resume: 'digest', profile: true, positions: true };
+    try { inject = loadJhSettings().inject; } catch { /* 用默认 */ }
 
     const lines: string[] = ['### 【求职工作台 · 上岸计划】'];
     lines.push(`你在帮用户推进求职。以下是工作台当前状态（公司都是代号，真实公司名你看不到也不需要知道）：`);
-    const active = positions.filter(p => p.stage !== 'rejected');
-    if (active.length > 0) {
-        lines.push('【在推进的岗位】');
-        active.forEach(p => {
-            lines.push(buildPositionPromptLine(p, positions));
-        });
-    } else {
-        lines.push('【在推进的岗位】暂无建档岗位（用户聊到新投递时你可以用指令帮 ta 建卡）。');
+    // 竞争力档案段（用户级单份；永远不含真名/真实公司）
+    if (inject.profile && profile && (profile.direction || profile.strengths.length || profile.gaps.length)) {
+        lines.push('【候选人竞争力档案】');
+        if (profile.direction) lines.push(`求职方向：${profile.direction}`);
+        if (profile.strengths.length) lines.push(`竞争点：${profile.strengths.map(s => s.text).join('；')}`);
+        const gapS = profile.gaps.filter(g => g.kind === 'strategy').map(g => g.text);
+        const gapR = profile.gaps.filter(g => g.kind === 'resume').map(g => g.text);
+        if (gapS.length) lines.push(`求职策略层改进：${gapS.join('；')}`);
+        if (gapR.length) lines.push(`简历写法层改进：${gapR.join('；')}`);
+    }
+
+    // 简历段：none 不注入 / raw 脱敏原文~1500 字 / digest 结构化摘要~600 字
+    if (inject.resume === 'digest' && profile?.resumeDigest) {
+        lines.push('【简历摘要】');
+        lines.push(profile.resumeDigest.slice(0, 600));
+    } else if (inject.resume === 'raw' && resumes[0]?.rawText) {
+        lines.push('【简历原文（已脱敏）】');
+        lines.push(resumes[0].rawText.slice(0, 1500));
+    }
+
+    // 岗位段
+    if (inject.positions) {
+        const active = positions.filter(p => p.stage !== 'rejected');
+        if (active.length > 0) {
+            lines.push('【在推进的岗位】');
+            active.forEach(p => {
+                lines.push(buildPositionPromptLine(p, positions));
+            });
+        } else {
+            lines.push('【在推进的岗位】暂无建档岗位（用户聊到新投递时你可以用指令帮 ta 建卡）。');
+        }
     }
     const recentNotes = notes.slice(0, 8);
     if (recentNotes.length > 0) {
@@ -371,6 +403,46 @@ export async function applyJobDirectives(
         } catch (err: any) { rejected.push(`JOB_NOTE_DEL ${key}: ${err?.message || err}`); }
     }
 
+    // ── 竞争力档案编辑（第八节；写 JobProfile，source:'char'，单份 main） ──
+    const hasProfileEdit = parsed.edgeAdds.length > 0 || parsed.edgeDels.length > 0
+        || parsed.gapAdds.length > 0 || parsed.gapDels.length > 0 || parsed.direction !== undefined;
+    if (hasProfileEdit) {
+        try {
+            const existing = await DB.getJobProfile();
+            const profile: JobProfile = existing || { id: 'main', direction: '', strengths: [], gaps: [], resumeDigest: '', updatedAt: now };
+            let strengths = [...profile.strengths];
+            let gaps = [...profile.gaps];
+            const cut = (t: string) => (t.length > 60 ? `${t.slice(0, 60)}…` : t);
+            // 删（关键词 includes，大小写不敏感）
+            for (const key of parsed.edgeDels) {
+                const k = key.toLowerCase();
+                const before = strengths.length;
+                strengths = strengths.filter(s => !s.text.toLowerCase().includes(k));
+                if (strengths.length < before) cards.push({ jobKind: 'edge_del', valuePreview: key });
+                else rejected.push(`JOB_EDGE_DEL: 没匹配到含「${key}」的竞争点`);
+            }
+            for (const key of parsed.gapDels) {
+                const k = key.toLowerCase();
+                const before = gaps.length;
+                gaps = gaps.filter(g => !g.text.toLowerCase().includes(k));
+                if (gaps.length < before) cards.push({ jobKind: 'gap_del', valuePreview: key });
+                else rejected.push(`JOB_GAP_DEL: 没匹配到含「${key}」的改进点`);
+            }
+            // 加
+            for (const text of parsed.edgeAdds) {
+                strengths.push({ id: genId('str'), text, source: 'char' });
+                cards.push({ jobKind: 'edge_add', valuePreview: cut(text) });
+            }
+            for (const g of parsed.gapAdds) {
+                gaps.push({ id: genId('gap'), text: g.text, kind: g.kind, source: 'char' });
+                cards.push({ jobKind: 'gap_add', fieldLabel: g.kind === 'resume' ? '简历写法' : '求职策略', valuePreview: cut(g.text) });
+            }
+            const direction = parsed.direction !== undefined ? parsed.direction : profile.direction;
+            if (parsed.direction !== undefined) cards.push({ jobKind: 'direction', valuePreview: parsed.direction });
+            await DB.saveJobProfile({ id: 'main', direction, strengths, gaps, resumeDigest: profile.resumeDigest, updatedAt: now });
+        } catch (e: any) { rejected.push(`JOB_PROFILE: ${e?.message || e}`); }
+    }
+
     // 落库成功后广播刷新（桌面日历等常驻组件监听此事件即时更新）
     if (cards.length > 0 && typeof window !== 'undefined') {
         try { window.dispatchEvent(new CustomEvent('sully-job-updated')); } catch { /* 非浏览器环境忽略 */ }
@@ -401,6 +473,16 @@ export function describeJobCard(card: JobCardPayload | undefined, charName: stri
             return `[系统: ${charName}修改了求职笔记《${card.title}》]`;
         case 'note_del':
             return `[系统: ${charName}删除了求职笔记《${card.title}》]`;
+        case 'edge_add':
+            return `[系统: ${charName}给你的竞争力档案加了个竞争点：${card.valuePreview}]`;
+        case 'edge_del':
+            return `[系统: ${charName}移除了竞争点「${card.valuePreview}」]`;
+        case 'gap_add':
+            return `[系统: ${charName}加了个${card.fieldLabel || ''}改进点：${card.valuePreview}]`;
+        case 'gap_del':
+            return `[系统: ${charName}移除了改进点「${card.valuePreview}」]`;
+        case 'direction':
+            return `[系统: ${charName}把求职方向更新为：${card.valuePreview}]`;
         default:
             return '[求职工作台操作]';
     }
@@ -424,6 +506,11 @@ export function describeJobBatch(cards: JobCardPayload[], charName: string): str
             case 'note': return `记${c.noteKindLabel}《${c.title}》`;
             case 'note_edit': return `改笔记《${c.title}》`;
             case 'note_del': return `删笔记《${c.title}》`;
+            case 'edge_add': return `加竞争点：${c.valuePreview}`;
+            case 'edge_del': return `删竞争点「${c.valuePreview}」`;
+            case 'gap_add': return `加${c.fieldLabel || ''}改进点：${c.valuePreview}`;
+            case 'gap_del': return `删改进点「${c.valuePreview}」`;
+            case 'direction': return `方向→${c.valuePreview}`;
             default: return '工作台操作';
         }
     });

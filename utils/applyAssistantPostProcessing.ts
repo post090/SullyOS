@@ -1446,7 +1446,7 @@ ${lines.join(String.fromCharCode(10))}
     // 仅 jobHuntEnabled 角色才会被教这套标签；但与备忘录同款保险：检测到就执行。
     // 同一轮回复的所有指令合并落一张聚合 job_card（metadata.jobCards 数组），
     // 避免 AI 一次建四张卡刷屏七条胶囊；MessageItem 的 job-event 聚合卡渲染。
-    if (/\[\[JOB_(?:SET|UPDATE|ROUND|INTERVIEW|WAITING|DEL|NOTE|NOTE_EDIT|NOTE_DEL):/.test(aiContent)) {
+    if (/\[\[JOB_(?:SET|UPDATE|ROUND|INTERVIEW|WAITING|DEL|NOTE|NOTE_EDIT|NOTE_DEL|EDGE_ADD|EDGE_DEL|GAP_ADD|GAP_DEL|DIRECTION):/.test(aiContent)) {
         try {
             const { parseJobHuntCommands } = await import('./jobHuntParser');
             const { applyJobDirectives, describeJobBatch } = await import('./jobDirectives');
