@@ -30,6 +30,8 @@ export interface JobHuntSettings {
         audio: JobApiRef | null;
         audioAnalysis: boolean;
         transcribeMode: 'stt' | 'audioModel';
+        /** 面试：关闭角色语音播放（只看文字） */
+        mutePlayback: boolean;
     };
     /**
      * 本地模糊化档位（全程离线，只有代号化后的文本上云）：
@@ -49,7 +51,7 @@ export const DEFAULT_JH_SETTINGS: JobHuntSettings = {
     inject: { resume: 'digest', profile: true, positions: true, notes: true },
     interviewInject: { profile: true, resumeDigest: true },
     practiceTemplates: [],
-    api: { chat: null, stt: null, ttsProvider: 'follow', audio: null, audioAnalysis: false, transcribeMode: 'stt' },
+    api: { chat: null, stt: null, ttsProvider: 'follow', audio: null, audioAnalysis: false, transcribeMode: 'stt', mutePlayback: false },
     redactMode: { company: 'initial', name: 'fixed' },
     positionView: 'detailed',
 };

@@ -347,7 +347,7 @@ const CallApp: React.FC = () => {
   const [audioUrl, setAudioUrl] = useState<string>('');
   const [traceId, setTraceId] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState('');
-  const [isSpeakerOn, setIsSpeakerOn] = useState(true);
+  const [isSpeakerOn, setIsSpeakerOn] = useState(() => !loadCallSettings().mutePlayback);
   const [isAudioPlaying, setIsAudioPlaying] = useState(false);
   const [callStartedAt, setCallStartedAt] = useState<number | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -516,6 +516,8 @@ const CallApp: React.FC = () => {
       setSelectedCharId(ch.id);
       resetCurrentCall();
       setActiveScene(callAutoStart);
+      // 面试/场景通话：把该场景的「关闭角色语音播放」持久设置种成外放初值（未带时不覆盖通话默认）
+      if (typeof callAutoStart.mutePlayback === 'boolean') setIsSpeakerOn(!callAutoStart.mutePlayback);
       setViewMode('in-call');
     }
     consumeCallAutoStart();
@@ -1567,6 +1569,16 @@ const CallApp: React.FC = () => {
                     })}
                   </div>
                 </div>
+                <button onClick={() => { const next = !callSettings.mutePlayback; patchCallSettings({ mutePlayback: next }); setIsSpeakerOn(!next); if (next && isAudioPlaying) pauseAudio(); }}
+                  className="w-full flex items-center justify-between bg-slate-50 rounded-2xl px-4 py-3 active:scale-[0.98] transition-transform">
+                  <div className="text-left">
+                    <div className="text-xs font-bold text-slate-700">关闭角色语音播放</div>
+                    <div className="text-[10px] text-slate-400 mt-0.5">只看文字、不放声音；通话里还能用「外放」临时切回来</div>
+                  </div>
+                  <div className={`w-11 h-6 rounded-full p-0.5 transition-colors shrink-0 ${callSettings.mutePlayback ? 'bg-violet-500' : 'bg-slate-300'}`}>
+                    <div className={`w-5 h-5 bg-white rounded-full shadow transition-transform ${callSettings.mutePlayback ? 'translate-x-5' : ''}`} />
+                  </div>
+                </button>
                 <button onClick={() => { setShowCallSettings(false); openApp(AppID.Settings); }}
                   className="w-full py-2.5 rounded-xl text-xs font-bold text-slate-500 bg-slate-100 active:scale-[0.98] transition-transform">
                   更多全局 API 配置 → 系统设置

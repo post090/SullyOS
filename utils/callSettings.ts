@@ -16,12 +16,14 @@ export interface CallSettings {
     audio: CallApiRef | null;
     /** 转写方式：stt = 录音走 STT 接口；audioModel = 录音直接交音频模型转写 */
     transcribeMode: 'stt' | 'audioModel';
+    /** 关闭角色语音播放：只看文字、不放 TTS 声音（持久默认，通话内仍可用「外放」临时切换） */
+    mutePlayback: boolean;
 }
 
 export const CALL_SETTINGS_KEY = 'os_call_settings';
 
 export const DEFAULT_CALL_SETTINGS: CallSettings = {
-    stt: null, audio: null, transcribeMode: 'stt',
+    stt: null, audio: null, transcribeMode: 'stt', mutePlayback: false,
 };
 
 export const loadCallSettings = (): CallSettings => {
@@ -33,6 +35,7 @@ export const loadCallSettings = (): CallSettings => {
         stt: raw.stt?.baseUrl ? raw.stt : null,
         audio: raw.audio?.baseUrl ? raw.audio : null,
         transcribeMode: raw.transcribeMode === 'audioModel' ? 'audioModel' : 'stt',
+        mutePlayback: !!raw.mutePlayback,
     };
 };
 

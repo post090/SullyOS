@@ -79,6 +79,12 @@ const friendlyError = (raw: string): string => {
 // 麦克风也亮，但永远不返回结果、也不报错）。
 const STT_WATCHDOG_MS = 7000;
 
+// 系统（native）识别看门狗：开麦后这么久还没收到任何识别信号，多半是这台设备的
+// RecognitionService 根本不返回结果（国产 ROM 缺谷歌语音服务的典型症状：start()
+// 正常 resolve、麦克风也开着，但永远不推 partialResults、也不报错）。给一次可操作
+// 提示，但不打断会话——用户可能只是还没开口。比 web 略长，进一步降低误报。
+const STT_NATIVE_WATCHDOG_MS = 9000;
+
 const startWeb = (lang: string, cb: SttCallbacks): SttSession => {
   const Ctor = getWebCtor();
   if (!Ctor) throw new Error('当前浏览器不支持语音识别');
@@ -174,6 +180,9 @@ const startNative = async (lang: string, cb: SttCallbacks): Promise<SttSession> 
   let restartTimer: ReturnType<typeof setTimeout> | null = null;
   let popupTried = false;             // 是否已经 fallback 过 popup:true
   let totalRestarts = 0;              // 累计重启次数（任何原因）
+  let gotSignal = false;              // 是否收到过任何识别信号（partialResults）
+  let watchdog: ReturnType<typeof setTimeout> | null = null;
+  const clearWatchdog = () => { if (watchdog) { clearTimeout(watchdog); watchdog = null; } };
 
   const MAX_TOTAL_RESTARTS = 8;       // 总重启上限，超过就停（避免日志爆炸）
   const RESTART_DELAY_MS = 600;       // no-match 重启间隔
@@ -185,6 +194,8 @@ const startNative = async (lang: string, cb: SttCallbacks): Promise<SttSession> 
     handle = await SpeechRecognition.addListener('partialResults', (data: any) => {
       const m = data?.matches?.[0];
       if (m) {
+        gotSignal = true;
+        clearWatchdog();
         accumulatedText = m;
         cb.onPartial?.(accumulatedText);
       }
@@ -207,6 +218,7 @@ const startNative = async (lang: string, cb: SttCallbacks): Promise<SttSession> 
 
   const cleanup = async () => {
     ended = true;
+    clearWatchdog();
     if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
     if (handle) { await handle.remove().catch(() => {}); handle = null; }
     // stop() 必须 await，否则下一轮 start() 会撞上未释放的 RecognitionService 报 busy
@@ -293,6 +305,12 @@ const startNative = async (lang: string, cb: SttCallbacks): Promise<SttSession> 
 
   // 启动第一轮
   runOneCycle();
+
+  // 看门狗：开麦后一直没有任何识别信号就给可操作提示（不打断会话，见常量注释）
+  watchdog = setTimeout(() => {
+    if (gotSignal || ended) return;
+    cb.onError?.('还没识别到声音。如果点了没反应，多半是这台设备的系统语音识别不可用（常见于缺谷歌语音服务的 ROM）——去「设置 → 其他 API」里填一个云端语音识别（STT）的 Key 就能稳定用。');
+  }, STT_NATIVE_WATCHDOG_MS);
 
   return {
     stop: async () => {

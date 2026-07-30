@@ -249,6 +249,8 @@ export interface CallAutoStartConfig {
   ttsProviderOverride?: TtsProvider;
   /** 音频说话状态分析（面试专用）：开关 + 分析用 API + 转写方式 */
   audioAnalysis?: { enabled: boolean; api?: Partial<APIConfig>; transcribeMode?: 'stt' | 'audioModel' };
+  /** 关闭角色语音播放：只看文字、不放 TTS 声音（面试/场景通话把该场景的持久设置带进来，种下通话的「外放」初值） */
+  mutePlayback?: boolean;
 }
 
 export interface APIConfig {

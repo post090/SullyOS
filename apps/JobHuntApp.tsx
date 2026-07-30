@@ -737,6 +737,7 @@ const JobHuntApp: React.FC = () => {
                 audioAnalysis: (jhSettings.api.audioAnalysis && jhSettings.api.audio?.baseUrl)
                     ? { enabled: true, api: { baseUrl: jhSettings.api.audio.baseUrl, apiKey: jhSettings.api.audio.apiKey, model: jhSettings.api.audio.model }, transcribeMode: jhSettings.api.transcribeMode }
                     : undefined,
+                mutePlayback: jhSettings.api.mutePlayback,
             });
             return;
         }
@@ -1508,6 +1509,18 @@ const JobHuntApp: React.FC = () => {
                                     ))}
                                 </div>
                                 <div className="text-[10px] text-slate-400 mt-1 px-1">只切服务商，密钥沿用全局配置里填的</div>
+                            </div>
+                            <div>
+                                <button onClick={() => patchJhSettings({ api: { ...jhSettings.api, mutePlayback: !jhSettings.api.mutePlayback } })}
+                                    className="w-full flex items-center justify-between bg-slate-50 rounded-2xl px-4 py-3 active:scale-[0.98] transition-transform">
+                                    <div className="text-left">
+                                        <div className="text-xs font-bold text-slate-700">关闭角色语音播放（语音面试）</div>
+                                        <div className="text-[10px] text-slate-400 mt-0.5">面试官只出文字、不放声音；通话里还能用「外放」临时切回来</div>
+                                    </div>
+                                    <div className={`w-11 h-6 rounded-full p-0.5 transition-colors shrink-0 ${jhSettings.api.mutePlayback ? 'bg-sky-500' : 'bg-slate-300'}`}>
+                                        <div className={`w-5 h-5 bg-white rounded-full shadow transition-transform ${jhSettings.api.mutePlayback ? 'translate-x-5' : ''}`} />
+                                    </div>
+                                </button>
                             </div>
                             <div>
                                 <button onClick={() => patchJhSettings({ api: { ...jhSettings.api, audioAnalysis: !jhSettings.api.audioAnalysis } })}
