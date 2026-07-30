@@ -15,6 +15,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import Modal from '../os/Modal';
 import { DB } from '../../utils/db';
 import { CharacterProfile, JobPosition, JobNote, JobResume, JobStage } from '../../types';
+import { JobHuntSettings, loadJhSettings, saveJhSettings } from '../../utils/jobHuntSettings';
 
 const STAGE_LABEL: Record<JobStage, string> = {
     watching: '观望中', applied: '已投递', written: '笔试中', interview: '面试中', offer_talk: '沟通Offer', offer: '已接受Offer', rejected: '已结束',
@@ -51,6 +52,16 @@ const JobHuntPanelModal: React.FC<JobHuntPanelModalProps> = ({
     const [notes, setNotes] = useState<JobNote[]>([]);
     const [resumes, setResumes] = useState<JobResume[]>([]);
     const [expandedNoteId, setExpandedNoteId] = useState<string | null>(null);
+    // 单聊注入三项（存全局 jhSettings.inject，所有角色共用）
+    const [inject, setInject] = useState<JobHuntSettings['inject']>(() => loadJhSettings().inject);
+    const patchInject = useCallback((p: Partial<JobHuntSettings['inject']>) => {
+        setInject(prev => {
+            const next = { ...prev, ...p };
+            const full = loadJhSettings();
+            saveJhSettings({ ...full, inject: next });
+            return next;
+        });
+    }, []);
 
     const reload = useCallback(async () => {
         try { setPositions(await DB.getJobPositions()); } catch { setPositions([]); }
@@ -61,6 +72,7 @@ const JobHuntPanelModal: React.FC<JobHuntPanelModalProps> = ({
     useEffect(() => {
         if (!isOpen) return;
         setExpandedNoteId(null);
+        setInject(loadJhSettings().inject);
         reload();
     }, [isOpen, reload]);
 
@@ -99,6 +111,35 @@ const JobHuntPanelModal: React.FC<JobHuntPanelModalProps> = ({
                             <span className={`absolute top-0.5 w-6 h-6 rounded-full bg-white shadow transition-all ${enabled ? 'left-[22px]' : 'left-0.5'}`} />
                         </button>
                     </div>
+                    {/* 注入内容三项：开关下方展开，全局生效（所有开了求职模式的角色共用） */}
+                    {enabled && (
+                        <div className="mt-3 pt-3 border-t border-sky-200/60 space-y-2.5">
+                            <div>
+                                <p className="text-[11px] font-bold text-slate-600 mb-1.5">简历注入</p>
+                                <div className="flex gap-1.5">
+                                    {([['none', '不注入'], ['digest', '摘要'], ['raw', '全文']] as const).map(([v, label]) => (
+                                        <button key={v} onClick={() => patchInject({ resume: v })}
+                                            className={`px-3 py-1.5 text-[11px] font-bold rounded-lg border transition-all active:scale-95 ${inject.resume === v ? 'bg-sky-100 text-sky-600 border-sky-300' : 'bg-white text-slate-400 border-slate-200'}`}>
+                                            {label}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                            {([
+                                ['profile', '竞争力档案', inject.profile] as const,
+                                ['positions', '岗位摘要', inject.positions] as const,
+                            ]).map(([key, label, on]) => (
+                                <button key={key} onClick={() => patchInject({ [key]: !on } as Partial<JobHuntSettings['inject']>)}
+                                    className="w-full flex items-center justify-between px-1 active:scale-[0.99] transition-transform">
+                                    <span className="text-[11px] font-bold text-slate-600">{label}</span>
+                                    <span className={`w-9 h-5 rounded-full p-0.5 transition-colors ${on ? 'bg-sky-500' : 'bg-slate-300'}`}>
+                                        <span className={`block w-4 h-4 bg-white rounded-full shadow transition-transform ${on ? 'translate-x-4' : ''}`} />
+                                    </span>
+                                </button>
+                            ))}
+                            <p className="text-[10px] text-slate-400 leading-relaxed">注入选项全局生效，所有开了求职模式的角色共用同一份。</p>
+                        </div>
+                    )}
                 </div>
 
                 {/* 岗位卡列表 */}

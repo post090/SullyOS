@@ -872,7 +872,7 @@ const PhoneShell: React.FC = () => {
        {/* 壁纸底层：进 App 时只柔和虚化/压暗作背景，不再做缩放「过场」——
           进 App 的过渡感统一交给 App 容器的淡入（见下方 animate-fade-in 包裹层）。 */}
        <div
-         className="absolute inset-0 bg-cover bg-center transition-all duration-500 ease-[cubic-bezier(0.25,0.1,0.25,1)]"
+         className="absolute inset-0 bg-cover bg-center transition-opacity duration-500 ease-[cubic-bezier(0.25,0.1,0.25,1)]"
          style={{
              backgroundImage: bgImageValue,
              filter: activeApp !== AppID.Launcher ? 'blur(10px)' : 'none',
@@ -882,7 +882,9 @@ const PhoneShell: React.FC = () => {
          }}
        />
        
-       <div className={`absolute inset-0 transition-all duration-500 ${activeApp === AppID.Launcher ? 'bg-transparent' : 'bg-white/50 backdrop-blur-3xl'}`} />
+       {/* 进 App 背景压暗+糊化：不再用 transition animate 全屏 backdrop-filter（移动端 GPU 灾难），
+           瞬间切换；App 本体 200ms 淡入盖在上面，糊化瞬切基本不可见，但省掉了每帧重算。 */}
+       <div className={`absolute inset-0 ${activeApp === AppID.Launcher ? 'bg-transparent' : 'bg-white/50 backdrop-blur-3xl'}`} />
        
        {/* 外壳安全区两种策略：
           - 未迁移 App：外壳铺满 body（含 --app-height 多出的 +safe-bottom 溢出区），用 padding 让位安全区，

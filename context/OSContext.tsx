@@ -1,6 +1,6 @@
 
 import React, { createContext, useContext, useEffect, useState, useRef, useCallback } from 'react';
-import { APIConfig, AppID, OSTheme, VirtualTime, CharacterProfile, CharacterGroup, ChatTheme, Toast, FullBackupData, UserProfile, ApiPreset, GroupProfile, SystemLog, Worldbook, NovelBook, SongSheet, Message, RealtimeConfig, AppearancePreset, CloudBackupConfig, CloudBackupFile } from '../types';
+import { APIConfig, AppID, OSTheme, VirtualTime, CharacterProfile, CharacterGroup, ChatTheme, Toast, FullBackupData, UserProfile, ApiPreset, GroupProfile, SystemLog, Worldbook, NovelBook, SongSheet, Message, RealtimeConfig, AppearancePreset, CloudBackupConfig, CloudBackupFile, CallAutoStartConfig } from '../types';
 import { DB } from '../utils/db';
 import { modelRejectsSamplingParams, stripSamplingParams, isSamplingParamError } from '../utils/samplingParamCompat';
 import { extractImagesInPlace, deepCloneForExport } from '../utils/backupExport';
@@ -394,6 +394,11 @@ interface OSContextType {
   dateAutoStartCharId: string | null;
   openDateWithChar: (charId: string) => void;
   consumeDateAutoStart: () => void;
+
+  // 语音面试/场景通话：携带场景设定+覆盖配置拨通 CallApp，CallApp 挂载自动进 in-call；挂断即清
+  callAutoStart: CallAutoStartConfig | null;
+  openCallWithChar: (cfg: CallAutoStartConfig) => void;
+  consumeCallAutoStart: () => void;
 }
 
 const PREVIOUS_DEFAULT_WALLPAPER = [
@@ -1076,6 +1081,8 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   }, [activeApp, activeCharacterId, suspendedCall, runNativeRecovery]);
   // 聊天「见面」按钮 → 见面：记录目标角色，DateApp 挂载后消费一次并自动进入见面
   const [dateAutoStartCharId, setDateAutoStartCharId] = useState<string | null>(null);
+  // 语音面试/场景通话 → CallApp：记录场景配置，CallApp 挂载后消费一次并自动进 in-call
+  const [callAutoStart, setCallAutoStart] = useState<CallAutoStartConfig | null>(null);
 
   // 同一条主动消息可能同时经 'proactive-message-sent' 与 'active-msg-received'
   // 两条事件链路到达这里，各发一次就是用户看到的「重复两条通知」。
@@ -4744,6 +4751,13 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     setActiveApp(AppID.Date);
   };
   const consumeDateAutoStart = () => setDateAutoStartCharId(null);
+  // 从上岸计划等场景拨通语音通话：切角色 + 记录场景配置 + 打开 CallApp
+  const openCallWithChar = (cfg: CallAutoStartConfig) => {
+    setActiveCharacterId(cfg.charId);
+    setCallAutoStart(cfg);
+    setActiveApp(AppID.Call);
+  };
+  const consumeCallAutoStart = () => setCallAutoStart(null);
   const unlock = () => setIsLocked(false);
 
   const suspendCall = (info: { charId: string; charName: string; charAvatar?: string; startedAt: number; bubbles?: any[]; sessionId?: string; elapsedSeconds?: number; voiceLang?: string }) => {
@@ -4875,7 +4889,10 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     clearSuspendedCall,
     dateAutoStartCharId,
     openDateWithChar,
-    consumeDateAutoStart
+    consumeDateAutoStart,
+    callAutoStart,
+    openCallWithChar,
+    consumeCallAutoStart
   };
 
   return (

@@ -74,11 +74,12 @@ const RULES: RedactRule[] = [
  * @param opts.realNames 需要替换的真实姓名列表（如用户姓名）；空串/单字忽略，防止误伤
  * @param opts.nameMode 姓名档位：fixed=固定「候选人」（默认）/ pinyin=拼音缩写 / off=真名不替换
  */
-export function redactPrivacy(raw: string, opts: { realNames?: string[]; nameMode?: NameRedactMode } = {}): RedactResult {
+export function redactPrivacy(raw: string, opts: { realNames?: string[]; nameMode?: NameRedactMode; redactPii?: boolean; customTerms?: string[]; customTermMode?: 'hide' | 'initial' } = {}): RedactResult {
     let text = raw;
     const hits: RedactHit[] = [];
 
-    for (const rule of RULES) {
+    // 基础敏感信息（手机/邮箱/证件/银行卡/住址）——默认打码，可由 redactPii=false 关闭
+    if (opts.redactPii !== false) for (const rule of RULES) {
         // bodyGroup 规则只取主体组：前置定位字符不进替换集，split/join 语义与原 lookbehind 版一致
         const matches = rule.bodyGroup
             ? Array.from(text.matchAll(rule.re), mm => mm[2]).filter(Boolean)
@@ -103,6 +104,21 @@ export function redactPrivacy(raw: string, opts: { realNames?: string[]; nameMod
         const replacement = nameMode === 'pinyin' ? (pinyinAbbr(name, false) || '候选人') : '候选人';
         text = text.split(name).join(replacement);
         hits.push({ label: `姓名「${name.slice(0, 1)}**」`, count });
+    }
+
+    // 自定义词打码（公司名/学校名/项目名等，用户手填）：长词优先，避免子串先被替换掉
+    const terms = (opts.customTerms || []).map(t => (t || '').trim()).filter(t => t.length >= 2);
+    if (terms.length > 0) {
+        terms.sort((a, b) => b.length - a.length);
+        const mode = opts.customTermMode || 'hide';
+        let customCount = 0;
+        for (const term of terms) {
+            if (!text.includes(term)) continue;
+            customCount += text.split(term).length - 1;
+            const replacement = mode === 'initial' ? `${Array.from(term)[0]}**` : '[已隐藏]';
+            text = text.split(term).join(replacement);
+        }
+        if (customCount > 0) hits.push({ label: '自定义词', count: customCount });
     }
 
     return { text, hits, changed: hits.length > 0 };

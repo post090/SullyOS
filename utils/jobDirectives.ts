@@ -107,6 +107,7 @@ export function buildPositionPromptLine(p: JobPosition, allPositions: JobPositio
     const wd = waitingDays(p);
     if (wd) parts.push(`等反馈第 ${wd} 天`);
     if (p.projectName) parts.push(`项目：${p.projectName}`);
+    if (p.location) parts.push(`地点：${p.location}`);
     if (p.nextStep) parts.push(`下一步：${p.nextStep}`);
     const jd = jdDigestForPrompt(p, allPositions);
     if (jd) parts.push(`JD 摘要：${jd}`);
@@ -149,7 +150,7 @@ export interface JobCardPayload {
 }
 
 const FIELD_LABEL: Record<JobSettableField, string> = {
-    title: '岗位名', projectName: '项目名', jd: 'JD', nextStep: '下一步', stage: '阶段', notes: '岗位笔记',
+    title: '岗位名', projectName: '项目名', jd: 'JD', nextStep: '下一步', stage: '阶段', notes: '岗位笔记', location: '地点',
 };
 
 /**
@@ -271,6 +272,8 @@ export async function applyJobDirectives(
                 next.title = s.value;
             } else if (s.field === 'projectName') {
                 next.projectName = s.value || undefined;
+            } else if (s.field === 'location') {
+                next.location = s.value || undefined;
             } else if (s.field === 'nextStep') {
                 next.nextStep = s.value || undefined;
             } else if (s.field === 'jd') {

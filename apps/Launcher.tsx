@@ -1149,6 +1149,16 @@ const Launcher: React.FC = () => {
   const contentColor = theme.contentColor || '#ffffff';
   const acnh = theme.skin === 'animalcrossing'; // 动森彩蛋：Dock 换奶油木质底
   const paper = theme.skin !== 'animalcrossing' && theme.skin !== 'mobilegame' && theme.skin !== 'tamagotchi' && isPaperWallpaper(theme.wallpaper);
+  // 玻璃回归修复：每个桌面页最底层铺一层本地壁纸（z:-1），让小组件 backdrop-filter 有真壁纸可采样。
+  // 根因：翻页滚动容器/页面的 contain:paint + translateZ(0) + content-visibility 都是 backdrop root，
+  // 把小组件玻璃与最外层 PhoneShell 壁纸隔断了；性能层不能拆，改为给玻璃就近铺一层壁纸。
+  const _wp = theme.wallpaper || '';
+  const _wpIsUrl = _wp.startsWith('http') || _wp.startsWith('data:') || _wp.startsWith('blob:');
+  const launcherBgStyle: React.CSSProperties = _wp
+    ? (_wpIsUrl
+        ? { backgroundImage: `url(${_wp})`, backgroundSize: 'cover', backgroundPosition: 'center' }
+        : { background: _wp })
+    : { background: '#0f1115' };
   // 已迁移 App 外壳已收回到可见 viewport 底边，dock 仅需自留视觉间距，无需再 + safe-bottom
   // （否则会比 home 条上方多让 34px，dock 看起来悬空）。
   const launcherBottomInset = '1.25rem';
@@ -1256,9 +1266,13 @@ const Launcher: React.FC = () => {
           {allPages.map((page, idx) => (
               <div
                 key={idx}
-                className={`w-full flex-shrink-0 snap-center snap-always h-full ${page.type === 'widgets' ? '' : 'flex flex-col px-6 pt-12 pb-8'}`}
+                className={`relative w-full flex-shrink-0 snap-center snap-always h-full ${page.type === 'widgets' ? '' : 'flex flex-col px-6 pt-12 pb-8'}`}
                 style={{ contentVisibility: 'auto', contain: 'layout paint', transform: 'translateZ(0)' }}
               >
+                  {/* 玻璃回归修复：本页本地壁纸垫底（z:-1 在内容下方、在 backdrop root 内），供小组件玻璃采样。 */}
+                  {!paper && !acnh && (
+                      <div className="absolute inset-0 pointer-events-none" aria-hidden style={{ ...launcherBgStyle, zIndex: -1 }} />
+                  )}
                   {page.type === 'widgets' ? (
                       <WidgetsPage
                         contentColor={contentColor}

@@ -15,8 +15,8 @@ import { resilientFetch } from '../utils/resilientFetch';
 import { parseJobHuntCommands, JOB_COMMAND_GUIDE, normalizeJobStage } from '../utils/jobHuntParser';
 import { buildPositionPromptLine, fmtJobTime, nextInterviewTs, waitingDays, ROUND_KIND_LABEL, ROUND_STATUS_LABEL, relTimeLabel } from '../utils/jobDirectives';
 import { parseResumeIntoProfile } from '../utils/jobProfileGen';
-import { JobHuntSettings, JH_SETTINGS_KEY, loadJhSettings } from '../utils/jobHuntSettings';
-import { redactPrivacy, codifyCompanies, genCompanyCode, RedactResult } from '../utils/privacyRedact';
+import { JobHuntSettings, JH_SETTINGS_KEY, loadJhSettings, JobApiRef } from '../utils/jobHuntSettings';
+import { redactPrivacy, codifyCompanies, genCompanyCode, RedactResult, NameRedactMode } from '../utils/privacyRedact';
 import { synthesizeSpeech, characterHasVoice } from '../utils/ttsRouter';
 import { hashTtsParams, getCachedTts, saveCachedTts } from '../utils/ttsCache';
 import { startStt, isSttSupported, SttSession, SttProviderConfig } from '../utils/speechToText';
@@ -30,6 +30,7 @@ import { getDailyScheduleForChar } from '../utils/dailySchedule';
 import { isScheduleFeatureOn } from '../utils/scheduleGenerator';
 import { resolveCharTimeZone, nowInTimeZone } from '../utils/timezone';
 import CharApiHubModal from '../components/chat/CharApiHubModal';
+import ApiConnectionPicker from '../components/os/ApiConnectionPicker';
 
 // ─── CDN 动态加载（照 StudyApp 先例，不进 bundle）─────────────────
 
@@ -168,16 +169,6 @@ const STAGE_STYLE: Record<JobStage, string> = {
     offer: 'bg-emerald-100 text-emerald-700',
     rejected: 'bg-rose-100 text-rose-500',
 };
-// 阶段左侧强调色条（卡片色彩层次：一眼分清进展）
-const STAGE_ACCENT: Record<JobStage, string> = {
-    watching: 'border-l-violet-300',
-    applied: 'border-l-slate-300',
-    written: 'border-l-amber-400',
-    interview: 'border-l-sky-400',
-    offer_talk: 'border-l-teal-400',
-    offer: 'border-l-emerald-400',
-    rejected: 'border-l-rose-300',
-};
 const NOTE_KIND_LABEL: Record<JobNoteKind, string> = {
     eval: '面试评价', resume_advice: '简历建议', analysis: '岗位分析', note: '随手记',
 };
@@ -236,7 +227,7 @@ type SttPhase = 'idle' | 'starting' | 'listening' | 'recognizing';
 let jobMigrationRunning = false;
 
 const JobHuntApp: React.FC = () => {
-    const { closeApp, characters, activeCharacterId, setActiveCharacterId, openApp, apiConfig, addToast, userProfile, memoryPalaceConfig, realtimeConfig, updateCharacter } = useOS();
+    const { closeApp, characters, activeCharacterId, setActiveCharacterId, openApp, apiConfig, addToast, userProfile, memoryPalaceConfig, realtimeConfig, updateCharacter, openCallWithChar } = useOS();
 
     // 数据
     const [sessions, setSessions] = useState<JobSession[]>([]);
@@ -272,6 +263,16 @@ const JobHuntApp: React.FC = () => {
     const [pasteText, setPasteText] = useState('');
     const [importBusy, setImportBusy] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    // 简历导入 · 生成脱敏预览前先弹打码选项（默认勾选基础敏感信息+姓名，公司/学校/项目名靠手填词）
+    const [pendingImport, setPendingImport] = useState<{ name: string; format: JobResume['sourceFormat']; rawText: string } | null>(null);
+    const [impPii, setImpPii] = useState(true);
+    const [impName, setImpName] = useState(true);
+    const [impNameMode, setImpNameMode] = useState<NameRedactMode>('fixed');
+    const [impCustomTerms, setImpCustomTerms] = useState('');
+    const [impCustomMode, setImpCustomMode] = useState<'hide' | 'initial'>('hide');
+    // 脱敏预览 · 可编辑正文 + Markdown 渲染/编辑态切换
+    const [previewEditText, setPreviewEditText] = useState('');
+    const [previewMdMode, setPreviewMdMode] = useState(false);
 
     // 新建岗位表单
     const [posCode, setPosCode] = useState('');
@@ -281,6 +282,7 @@ const JobHuntApp: React.FC = () => {
     const [posJd, setPosJd] = useState('');
     const [posHrName, setPosHrName] = useState('');
     const [posProjectName, setPosProjectName] = useState('');
+    const [posLocation, setPosLocation] = useState('');
     const [posNotes, setPosNotes] = useState(''); // 岗位笔记（多行，注入时同 JD 脱敏+截断）
     const [posInterviewAt, setPosInterviewAt] = useState(''); // datetime-local 值，空=未定/清除
     const [posWaiting, setPosWaiting] = useState(false);
@@ -357,12 +359,19 @@ const JobHuntApp: React.FC = () => {
         [characters, activeSession],
     );
 
-    const sttCfg = useMemo<SttProviderConfig>(() => ({
-        provider: apiConfig?.sttProvider === 'cloud' && apiConfig?.sttApiKey ? 'cloud' : 'system',
-        baseUrl: apiConfig?.sttBaseUrl,
-        apiKey: apiConfig?.sttApiKey,
-        model: apiConfig?.sttModel,
-    }), [apiConfig?.sttProvider, apiConfig?.sttBaseUrl, apiConfig?.sttApiKey, apiConfig?.sttModel]);
+    const sttCfg = useMemo<SttProviderConfig>(() => {
+        // 面试会话且配了面试独立 STT：用它（provider 固定 cloud）；否则跟随全局
+        const ov = jhSettings.api.stt;
+        if (activeSession?.topic === 'interview' && ov?.apiKey) {
+            return { provider: 'cloud', baseUrl: ov.baseUrl, apiKey: ov.apiKey, model: ov.model };
+        }
+        return {
+            provider: apiConfig?.sttProvider === 'cloud' && apiConfig?.sttApiKey ? 'cloud' : 'system',
+            baseUrl: apiConfig?.sttBaseUrl,
+            apiKey: apiConfig?.sttApiKey,
+            model: apiConfig?.sttModel,
+        };
+    }, [activeSession?.topic, jhSettings.api.stt, apiConfig?.sttProvider, apiConfig?.sttBaseUrl, apiConfig?.sttApiKey, apiConfig?.sttModel]);
     const sttSupported = useMemo(() => isSttSupported(sttCfg), [sttCfg]);
 
     // 返回键：弹窗 → 聊天视图 → 关 App
@@ -594,10 +603,14 @@ const JobHuntApp: React.FC = () => {
         return ctx;
     }, [userProfile, positions, realtimeConfig]);
 
-    // ─── LLM 调用（resilientFetch：120s + 瞬断补枪；角色级 chatApiOverride 优先）───
-    const callLLM = useCallback(async (systemPrompt: string, history: JobChatMessage[], extraUser?: string, char?: CharacterProfile): Promise<string> => {
-        // 与单聊同款：角色配了专属主 API 就走角色的，否则跟随全局
-        const eff = char?.chatApiOverride?.baseUrl ? char.chatApiOverride : apiConfig;
+    // ─── LLM 调用（resilientFetch：120s + 瞬断补枪）───
+    // API 优先级（§13）：面试会话 = interviewApi(jhSettings.api.chat) > jobHuntApiOverride > chatApiOverride > 全局；
+    //                    普通岗位会话（不传 interviewApi）= jobHuntApiOverride > chatApiOverride > 全局。
+    const callLLM = useCallback(async (systemPrompt: string, history: JobChatMessage[], extraUser?: string, char?: CharacterProfile, interviewApi?: JobApiRef | null): Promise<string> => {
+        const eff = interviewApi?.baseUrl ? interviewApi
+            : char?.jobHuntApiOverride?.baseUrl ? char.jobHuntApiOverride
+            : char?.chatApiOverride?.baseUrl ? char.chatApiOverride
+            : apiConfig;
         const messages: { role: string; content: string }[] = [{ role: 'system', content: systemPrompt }];
         for (const m of history.slice(-40)) {
             messages.push({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content });
@@ -688,6 +701,38 @@ const JobHuntApp: React.FC = () => {
         const pos = practiceTargetId ? positions.find(p => p.id === practiceTargetId) : undefined;
         const now = Date.now();
         const extra = practiceExtra.trim();
+        // 语音形态：走 CallApp 语音面试（openCallWithChar 携带面试官场景），不建文字会话
+        if (practiceForm === 'voice') {
+            const posLine = pos ? buildPositionPromptLine(pos, positions) : '';
+            const targetDesc = pos ? `「${pos.code} 的 ${pos.title}」` : '综合面试（不限定具体岗位，围绕候选人方向和通用能力）';
+            const toneLine = practiceMode === 'coach' ? '风格：轻松陪练，语气鼓励、可适当给提示。' : '风格：严肃面试官，正式、有压力感。';
+            const sceneContext = [
+                `【模拟面试场景】你现在是${targetDesc}的面试官，正在对候选人 ${userProfile.name} 进行一场电话面试。`,
+                toneLine,
+                posLine ? `目标岗位信息：${posLine}` : '',
+                extra ? `额外要求：${extra}` : '',
+                '要求：一次只问一个问题，由浅入深覆盖自我介绍/岗位匹配/项目深挖/软素质；候选人答完再追问或进入下一题；公司一律用代号，不要念真实公司名或任何个人隐私。',
+            ].filter(Boolean).join('\u000a');
+            setShowPracticeSetup(false);
+            openCallWithChar({
+                charId: selectedChar.id,
+                sceneContext,
+                sceneLabel: `模拟面试 · ${pos ? `${pos.code} ${pos.title}` : '综合'} · ${practiceMode === 'coach' ? '轻松陪练' : '严肃面试官'}`,
+                // 面试独立 API 三路（§13）：对话 LLM = jhSettings.api.chat > jobHuntApiOverride > chatApiOverride > 全局
+                apiOverride: jhSettings.api.chat?.baseUrl ? jhSettings.api.chat
+                    : selectedChar.jobHuntApiOverride?.baseUrl ? selectedChar.jobHuntApiOverride
+                    : selectedChar.chatApiOverride?.baseUrl ? selectedChar.chatApiOverride
+                    : undefined,
+                sttOverride: jhSettings.api.stt?.baseUrl
+                    ? { baseUrl: jhSettings.api.stt.baseUrl, apiKey: jhSettings.api.stt.apiKey, model: jhSettings.api.stt.model }
+                    : undefined,
+                ttsProviderOverride: jhSettings.api.ttsProvider !== 'follow' ? jhSettings.api.ttsProvider : undefined,
+                audioAnalysis: (jhSettings.api.audioAnalysis && jhSettings.api.audio?.baseUrl)
+                    ? { enabled: true, api: { baseUrl: jhSettings.api.audio.baseUrl, apiKey: jhSettings.api.audio.apiKey, model: jhSettings.api.audio.model }, transcribeMode: jhSettings.api.transcribeMode }
+                    : undefined,
+            });
+            return;
+        }
         const session: JobSession = {
             id: genId('jses'), charId: selectedChar.id, topic: 'interview', positionId: pos?.id,
             practiceTarget: { kind, positionId: pos?.id, mode: practiceMode, extraPrompt: extra || undefined },
@@ -699,7 +744,7 @@ const JobHuntApp: React.FC = () => {
         setActiveSession(session);
         setView('chat');
         await bootstrapInterview(session, selectedChar, pos);
-    }, [selectedChar, practiceTargetId, practiceMode, practiceExtra, positions, persistSession, addToast]);
+    }, [selectedChar, practiceTargetId, practiceForm, practiceMode, practiceExtra, positions, userProfile, jhSettings, openCallWithChar, persistSession, addToast]);
 
     // ─── 模拟面试：先生成题目清单，再由面试官抛第一题 ───
     const bootstrapInterview = useCallback(async (session: JobSession, char: CharacterProfile, pos?: JobPosition) => {
@@ -715,7 +760,7 @@ const JobHuntApp: React.FC = () => {
                 '要求：由浅入深，覆盖自我介绍/岗位匹配/项目深挖/软素质；公司只用代号；',
                 `严格输出 JSON 字符串数组（长度 ${INTERVIEW_QUESTION_COUNT}），不要输出其它任何内容。`,
             ].filter(Boolean).join('\u000a');
-            const raw = await callLLM(genPrompt, [], '请给出题目清单。', char);
+            const raw = await callLLM(genPrompt, [], '请给出题目清单。', char, jhSettings.api.chat);
             let questions: string[] = [];
             try {
                 const jsonMatch = raw.match(/\[[\s\S]*\]/);
@@ -731,7 +776,7 @@ const JobHuntApp: React.FC = () => {
             await persistSession(s);
             // 面试官开场 + 第一题
             const raw2 = await callLLM(await buildSystemPrompt(char, s), [],
-                '（系统：面试开始。请你以面试官身份简短开场，然后提出第 1 题。）', char);
+                '（系统：面试开始。请你以面试官身份简短开场，然后提出第 1 题。）', char, jhSettings.api.chat);
             const parsed = parseJobHuntCommands(raw2);
             const charMsg: JobChatMessage = { role: 'char', content: parsed.cleanText || raw2, ts: Date.now() };
             s = { ...s, messages: [charMsg], updatedAt: Date.now() };
@@ -746,7 +791,7 @@ const JobHuntApp: React.FC = () => {
         } finally {
             setIsSending(false);
         }
-    }, [userProfile, callLLM, persistSession, buildSystemPrompt, typeOut, addToast, jhSettings.autoSpeak]);
+    }, [userProfile, callLLM, persistSession, buildSystemPrompt, typeOut, addToast, jhSettings.autoSpeak, jhSettings.api.chat]);
 
     // ─── 面试结束 → 结构化评价报告 → 自动归档笔记本 ───
     const generateInterviewEval = useCallback(async () => {
@@ -757,7 +802,7 @@ const JobHuntApp: React.FC = () => {
                 '（系统：面试结束。请以面试官身份生成结构化评价报告，markdown 排版，包含：',
                 '1. 维度打分（表达/岗位匹配/深度/临场，各 10 分制）；2. 逐题点评；3. 三条最优先的改进建议。',
                 '并把报告全文用 [[JOB_NOTE:eval|标题|正文]] 指令归档，标题带上岗位代号。）',
-            ].join('\u000a'), sessionChar);
+            ].join('\u000a'), sessionChar, jhSettings.api.chat);
             const parsed = parseJobHuntCommands(raw);
             // 兜底：LLM 忘了打指令标记时，把正文直接落成 eval 笔记，评价不能丢
             if (!parsed.notes.length && parsed.cleanText) {
@@ -778,7 +823,7 @@ const JobHuntApp: React.FC = () => {
         } finally {
             setIsSending(false);
         }
-    }, [activeSession, sessionChar, isSending, callLLM, buildSystemPrompt, typeOut, persistSession, applyCommands, addToast]);
+    }, [activeSession, sessionChar, isSending, callLLM, buildSystemPrompt, typeOut, persistSession, applyCommands, addToast, jhSettings.api.chat]);
 
     // ─── TTS：读题/回放（走 ttsCache 全局持久缓存；opts 供自动朗读在 state 未刷新时直接传现场会话）───
     const playMessageVoice = useCallback(async (msg: JobChatMessage, idx: number, opts?: { session?: JobSession; char?: CharacterProfile }) => {
@@ -797,11 +842,14 @@ const JobHuntApp: React.FC = () => {
         }
         setTtsBusyIdx(idx);
         try {
+            // 面试会话可单独指定 TTS 服务商（密钥沿用全局）；其它会话跟随全局
+            const ttsOv = sess?.topic === 'interview' && jhSettings.api.ttsProvider !== 'follow' ? jhSettings.api.ttsProvider : null;
+            const effApi = ttsOv ? { ...apiConfig, ttsProvider: ttsOv } : apiConfig;
             const ttsText = msg.content.replace(/[#*`>\-]/g, '').slice(0, 600);
-            const key = msg.voiceKey || hashTtsParams({ app: 'jobhunt', charId: char.id, text: ttsText, vp: char.voiceProfile });
+            const key = msg.voiceKey || hashTtsParams({ app: 'jobhunt', charId: char.id, text: ttsText, vp: char.voiceProfile, ...(ttsOv ? { provider: ttsOv } : {}) });
             let blob = await getCachedTts(key);
             if (!blob) {
-                const url = await synthesizeSpeech(ttsText, char, apiConfig, { groupId: apiConfig.minimaxGroupId || undefined });
+                const url = await synthesizeSpeech(ttsText, char, effApi, { groupId: apiConfig.minimaxGroupId || undefined });
                 blob = await (await fetch(url)).blob();
                 await saveCachedTts(key, blob);
             }
@@ -826,7 +874,7 @@ const JobHuntApp: React.FC = () => {
         } finally {
             setTtsBusyIdx(null);
         }
-    }, [sessionChar, apiConfig, playingIdx, ttsBusyIdx, activeSession, persistSession, addToast]);
+    }, [sessionChar, apiConfig, playingIdx, ttsBusyIdx, activeSession, persistSession, addToast, jhSettings.api.ttsProvider]);
     useEffect(() => { playVoiceRef.current = playMessageVoice; }, [playMessageVoice]);
 
     // ─── 语音输入（云端优先 + 状态全外显，吸取通话 STT 教训）───
@@ -926,7 +974,17 @@ const JobHuntApp: React.FC = () => {
         setView('home');
     }, [activeSession, syncSessionToMemory, jhSettings.autoMemorySync, jhSettings.syncThreshold]);
 
-    // ─── 简历导入：PDF / DOCX / TXT / 粘贴 → 本地脱敏 → 预览确认 ───
+    // ─── 简历导入：PDF / DOCX / TXT / 粘贴 → 打码选项 → 本地脱敏 → 可编辑预览 → 确认 ───
+    // 打开打码选项弹窗：重置为默认（基础敏感信息+姓名勾选，姓名档位跟随全局设置）
+    const openImportOptions = useCallback((pending: { name: string; format: JobResume['sourceFormat']; rawText: string }) => {
+        setImpPii(true);
+        setImpName(true);
+        setImpNameMode(jhSettings.redactMode.name);
+        setImpCustomTerms('');
+        setImpCustomMode('hide');
+        setPendingImport(pending);
+    }, [jhSettings.redactMode.name]);
+
     const handleResumeFile = useCallback(async (file: File) => {
         setImportBusy(true);
         try {
@@ -959,38 +1017,53 @@ const JobHuntApp: React.FC = () => {
                 text = await file.text();
             }
             if (!text.trim()) throw new Error('没提取到内容');
-            const result = redactPrivacy(text, { realNames: [userProfile.name], nameMode: jhSettings.redactMode.name });
-            setResumePreview({ name, format, result });
+            openImportOptions({ name, format, rawText: text });
         } catch (e: any) {
             addToast(`简历导入失败：${e?.message || '未知错误'}`, 'error');
         } finally {
             setImportBusy(false);
             if (fileInputRef.current) fileInputRef.current.value = '';
         }
-    }, [userProfile, jhSettings.redactMode.name, addToast]);
+    }, [openImportOptions, addToast]);
 
     const confirmResumeImport = useCallback(async () => {
         if (!resumePreview) return;
         const resume: JobResume = {
             id: genId('jres'), name: resumePreview.name,
-            rawText: resumePreview.result.text, sourceFormat: resumePreview.format,
+            rawText: (previewEditText.trim() || resumePreview.result.text), sourceFormat: resumePreview.format,
             createdAt: Date.now(),
         };
         await DB.saveJobResume(resume);
         setResumePreview(null);
         await reloadAll();
         addToast('简历已导入（存的是脱敏版）', 'success');
-    }, [resumePreview, reloadAll, addToast]);
+    }, [resumePreview, previewEditText, reloadAll, addToast]);
+
+    // 生成脱敏预览：按打码选项跑 redactPrivacy，进入可编辑预览
+    const runRedactPreview = useCallback(() => {
+        if (!pendingImport) return;
+        const terms = impCustomTerms.split(/[\s,，、]+/).map(t => t.trim()).filter(Boolean);
+        const result = redactPrivacy(pendingImport.rawText, {
+            realNames: impName ? [userProfile.name] : [],
+            nameMode: impName ? impNameMode : 'off',
+            redactPii: impPii,
+            customTerms: terms,
+            customTermMode: impCustomMode,
+        });
+        setResumePreview({ name: pendingImport.name, format: pendingImport.format, result });
+        setPreviewEditText(result.text);
+        setPreviewMdMode(false);
+        setPendingImport(null);
+    }, [pendingImport, impCustomTerms, impName, impNameMode, impPii, impCustomMode, userProfile]);
 
     // 粘贴导入：同样过脱敏预览闸
     const handlePasteImport = useCallback(() => {
         const text = pasteText.trim();
         if (!text) { addToast('先粘贴简历文本', 'info'); return; }
-        const result = redactPrivacy(text, { realNames: [userProfile.name], nameMode: jhSettings.redactMode.name });
         setShowPasteImport(false);
+        openImportOptions({ name: `粘贴的简历 ${new Date().toLocaleDateString('zh-CN')}`, format: 'paste', rawText: text });
         setPasteText('');
-        setResumePreview({ name: `粘贴的简历 ${new Date().toLocaleDateString('zh-CN')}`, format: 'paste', result });
-    }, [pasteText, userProfile, jhSettings.redactMode.name, addToast]);
+    }, [pasteText, openImportOptions, addToast]);
 
     // 对话里引用简历 → 让角色改
     const sendResumeToChat = useCallback((resume: JobResume) => {
@@ -1012,6 +1085,7 @@ const JobHuntApp: React.FC = () => {
                 jd: posJd.trim() || undefined,
                 hrName: posHrName.trim() || undefined,
                 projectName: posProjectName.trim() || undefined,
+                location: posLocation.trim() || undefined,
                 notes: posNotes.trim() || undefined,
                 interviewAt: localInputToTs(posInterviewAt),
                 // 已在等保留原起点不重置；关掉开关才清空
@@ -1029,6 +1103,7 @@ const JobHuntApp: React.FC = () => {
                 jd: posJd.trim() || undefined,
                 hrName: posHrName.trim() || undefined,
                 projectName: posProjectName.trim() || undefined,
+                location: posLocation.trim() || undefined,
                 notes: posNotes.trim() || undefined,
                 interviewAt: localInputToTs(posInterviewAt),
                 waitingSince: posWaiting ? now : undefined,
@@ -1038,10 +1113,10 @@ const JobHuntApp: React.FC = () => {
         }
         setShowNewPosition(false); setEditingPosition(null);
         setPosCode(''); setPosTitle(''); setPosCompanyLocal(''); setPosNextStep('');
-        setPosJd(''); setPosHrName(''); setPosProjectName(''); setPosNotes('');
+        setPosJd(''); setPosHrName(''); setPosProjectName(''); setPosLocation(''); setPosNotes('');
         setPosInterviewAt(''); setPosWaiting(false); setPosCodeDirty(false);
         await reloadAll();
-    }, [posCode, posTitle, posCompanyLocal, posNextStep, posJd, posHrName, posProjectName, posNotes, posInterviewAt, posWaiting, posCodeDirty, editingPosition, selectedChar, reloadAll, addToast]);
+    }, [posCode, posTitle, posCompanyLocal, posNextStep, posJd, posHrName, posProjectName, posLocation, posNotes, posInterviewAt, posWaiting, posCodeDirty, editingPosition, selectedChar, reloadAll, addToast]);
 
     const advanceStage = useCallback(async (pos: JobPosition, stage: JobStage) => {
         const now = Date.now();
@@ -1133,7 +1208,7 @@ const JobHuntApp: React.FC = () => {
         setEditingPosition(pos);
         setPosCode(pos.code); setPosTitle(pos.title);
         setPosCompanyLocal(pos.companyNameLocal || ''); setPosNextStep(pos.nextStep || '');
-        setPosJd(pos.jd || ''); setPosHrName(pos.hrName || ''); setPosProjectName(pos.projectName || '');
+        setPosJd(pos.jd || ''); setPosHrName(pos.hrName || ''); setPosProjectName(pos.projectName || ''); setPosLocation(pos.location || '');
         setPosNotes(pos.notes || '');
         setPosInterviewAt(tsToLocalInput(pos.interviewAt)); setPosWaiting(!!pos.waitingSince);
         setPosCodeDirty(!!pos.codeLocked);
@@ -1142,22 +1217,92 @@ const JobHuntApp: React.FC = () => {
 
     // ─── 渲染：脱敏预览（导入确认前的最后一道闸）───
 
+    const renderImportOptions = () => {
+        if (!pendingImport) return null;
+        const nameModes: { v: NameRedactMode; label: string }[] = [
+            { v: 'fixed', label: '换成「候选人」' },
+            { v: 'pinyin', label: '拼音缩写' },
+            { v: 'off', label: '不打码' },
+        ];
+        return (
+            <div className="absolute inset-0 z-50 bg-black/40 flex items-end sm:items-center justify-center p-4">
+                <div className="w-full max-w-md bg-white rounded-3xl p-5 max-h-[88%] overflow-y-auto">
+                    <div className="font-bold text-slate-800 mb-1">导入前 · 选择要打码的内容</div>
+                    <div className="text-xs text-slate-500 mb-4">全程本地处理，原文不出设备。默认项已勾选，按需调整。</div>
+                    <label className="flex items-start gap-3 py-2 cursor-pointer">
+                        <input type="checkbox" checked={impPii} onChange={e => setImpPii(e.target.checked)} className="mt-0.5 w-4 h-4 accent-sky-500" />
+                        <div>
+                            <div className="text-sm font-semibold text-slate-700">基础敏感信息</div>
+                            <div className="text-[11px] text-slate-400">手机号 / 邮箱 / 身份证 / 银行卡 / 详细住址（建议保持勾选）</div>
+                        </div>
+                    </label>
+                    <label className="flex items-start gap-3 py-2 cursor-pointer">
+                        <input type="checkbox" checked={impName} onChange={e => setImpName(e.target.checked)} className="mt-0.5 w-4 h-4 accent-sky-500" />
+                        <div className="flex-1">
+                            <div className="text-sm font-semibold text-slate-700">姓名</div>
+                            <div className="text-[11px] text-slate-400">你的真实姓名</div>
+                        </div>
+                    </label>
+                    {impName && (
+                        <div className="flex gap-2 pl-7 mb-1">
+                            {nameModes.map(m => (
+                                <button key={m.v} onClick={() => setImpNameMode(m.v)}
+                                    className={`px-3 py-1.5 text-[11px] font-bold rounded-lg border transition-all active:scale-95 ${impNameMode === m.v ? 'bg-sky-50 text-sky-600 border-sky-200' : 'bg-white text-slate-500 border-slate-200'}`}>{m.label}</button>
+                            ))}
+                        </div>
+                    )}
+                    <div className="mt-3 pt-3 border-t border-slate-100">
+                        <div className="text-sm font-semibold text-slate-700">公司名 / 学校名 / 项目名等</div>
+                        <div className="text-[11px] text-slate-400 mb-2">这些没法自动认出来，填上要隐去的词（逗号、顿号或换行分隔），预览里还能手动补改。</div>
+                        <textarea value={impCustomTerms} onChange={e => setImpCustomTerms(e.target.value)} rows={2}
+                            placeholder="如：字节跳动，清华大学，商家增长项目"
+                            className="w-full bg-slate-100 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-sky-200" />
+                        <div className="flex gap-2 mt-2">
+                            {([['hide', '完全隐去'], ['initial', '保留首字（如 字**）']] as const).map(([v, label]) => (
+                                <button key={v} onClick={() => setImpCustomMode(v)}
+                                    className={`px-3 py-1.5 text-[11px] font-bold rounded-lg border transition-all active:scale-95 ${impCustomMode === v ? 'bg-sky-50 text-sky-600 border-sky-200' : 'bg-white text-slate-500 border-slate-200'}`}>{label}</button>
+                            ))}
+                        </div>
+                    </div>
+                    <div className="mt-3 text-[11px] text-amber-600 bg-amber-50 rounded-xl px-3 py-2 leading-relaxed">
+                        打码越多越稳妥，但公司 / 学校 / 项目被隐去后，AI 做竞争力分析时会不了解你背景的含金量，结论可能更笼统。
+                    </div>
+                    <div className="flex gap-2 mt-4">
+                        <button onClick={() => setPendingImport(null)} className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-600 text-sm font-semibold active:scale-95 transition-transform">取消</button>
+                        <button onClick={runRedactPreview} className="flex-1 py-2.5 rounded-xl bg-sky-500 text-white text-sm font-semibold active:scale-95 transition-transform">生成预览</button>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
     const renderRedactPreview = () => {
         if (!resumePreview) return null;
         const { result } = resumePreview;
         return (
             <div className="absolute inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
-                <div className="w-full max-w-md bg-white rounded-3xl p-5 max-h-[85%] flex flex-col">
-                    <div className="font-bold text-slate-800 mb-1">脱敏预览 · {resumePreview.name}</div>
+                <div className="w-full max-w-md bg-white rounded-3xl p-5 max-h-[88%] flex flex-col">
+                    <div className="flex items-center justify-between mb-1">
+                        <div className="font-bold text-slate-800">脱敏预览 · {resumePreview.name}</div>
+                        <button onClick={() => setPreviewMdMode(m => !m)}
+                            className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-slate-100 text-slate-500 active:scale-95 transition-transform">
+                            {previewMdMode ? '切到编辑' : '预览排版'}
+                        </button>
+                    </div>
                     <div className="text-xs text-slate-500 mb-3">
                         {result.changed
                             ? `本地已打码 ${result.hits.reduce((a, h) => a + h.count, 0)} 处：${result.hits.map(h => `${h.label}×${h.count}`).join('、')}`
                             : '未发现敏感信息（也请自己扫一眼）'}
-                        。确认后仅保存脱敏版，原文不落库、不发送。
+                        。可直接编辑（用 Markdown 排版更清晰）；确认后仅保存这份脱敏版。
                     </div>
-                    <div className="flex-1 overflow-y-auto bg-slate-50 rounded-xl p-3 text-xs text-slate-600 whitespace-pre-wrap leading-relaxed border border-slate-200">
-                        {result.text.slice(0, 8000)}{result.text.length > 8000 ? '…（预览截断，完整内容会保存）' : ''}
-                    </div>
+                    {previewMdMode ? (
+                        <div className="flex-1 overflow-y-auto bg-slate-50 rounded-xl p-3 border border-slate-200">
+                            <MarkdownBlock text={previewEditText || '（空）'} />
+                        </div>
+                    ) : (
+                        <textarea value={previewEditText} onChange={e => setPreviewEditText(e.target.value)}
+                            className="flex-1 min-h-[220px] overflow-y-auto bg-slate-50 rounded-xl p-3 text-xs text-slate-700 leading-relaxed border border-slate-200 outline-none focus:ring-2 focus:ring-sky-200 resize-none font-mono" />
+                    )}
                     <div className="flex gap-2 mt-4">
                         <button onClick={() => setResumePreview(null)} className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-600 text-sm font-semibold active:scale-95 transition-transform">取消</button>
                         <button onClick={confirmResumeImport} className="flex-1 py-2.5 rounded-xl bg-sky-500 text-white text-sm font-semibold active:scale-95 transition-transform">确认导入</button>
@@ -1230,6 +1375,109 @@ const JobHuntApp: React.FC = () => {
                                 <span className="text-[11px] text-slate-500">才沉淀</span>
                             </div>
                         )}
+                    </div>
+                    <div>
+                        <div className="text-xs font-bold text-slate-500 mb-1">模拟面试出题素材</div>
+                        <div className="text-[10px] text-slate-400 mb-2">出题时给面试官看什么额外材料（都会先脱敏/代号化）</div>
+                        <div className="space-y-1.5">
+                            {([
+                                ['profile', '竞争力档案', jhSettings.interviewInject.profile] as const,
+                                ['resumeDigest', '简历摘要', jhSettings.interviewInject.resumeDigest] as const,
+                            ]).map(([key, label, on]) => (
+                                <button key={key} onClick={() => patchJhSettings({ interviewInject: { ...jhSettings.interviewInject, [key]: !on } })}
+                                    className="w-full flex items-center justify-between bg-slate-50 rounded-xl px-3.5 py-2.5 active:scale-[0.98] transition-transform">
+                                    <span className="text-xs font-bold text-slate-600">{label}</span>
+                                    <span className={`w-9 h-5 rounded-full p-0.5 transition-colors shrink-0 ${on ? 'bg-sky-500' : 'bg-slate-300'}`}>
+                                        <span className={`block w-4 h-4 bg-white rounded-full shadow transition-transform ${on ? 'translate-x-4' : ''}`} />
+                                    </span>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                    <div>
+                        <div className="text-xs font-bold text-slate-500 mb-1">练习提示词模板</div>
+                        <div className="text-[10px] text-slate-400 mb-2">练习设置里「存为模板」存下的附加提示词，这里统一删</div>
+                        {jhSettings.practiceTemplates.length === 0 ? (
+                            <div className="text-[11px] text-slate-300 px-1">还没有模板</div>
+                        ) : (
+                            <div className="space-y-1.5">
+                                {jhSettings.practiceTemplates.map(t => (
+                                    <div key={t.id} className="flex items-center gap-2 bg-slate-50 rounded-xl px-3 py-2">
+                                        <div className="flex-1 min-w-0">
+                                            <div className="text-xs font-bold text-slate-600 truncate">{t.name}</div>
+                                            <div className="text-[10px] text-slate-400 truncate">{t.text}</div>
+                                        </div>
+                                        <button onClick={() => patchJhSettings({ practiceTemplates: jhSettings.practiceTemplates.filter(x => x.id !== t.id) })}
+                                            className="text-slate-300 hover:text-rose-400 shrink-0 active:scale-90 transition-transform"><Trash size={16} /></button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                    <div>
+                        <div className="text-xs font-bold text-slate-500 mb-1">面试独立 API</div>
+                        <div className="text-[10px] text-slate-400 mb-2">只影响面试会话（文字+语音）；不设就跟随角色/全局配置</div>
+                        <div className="space-y-3">
+                            <div>
+                                <div className="text-[11px] font-bold text-slate-600 mb-1">对话 LLM</div>
+                                <ApiConnectionPicker value={jhSettings.api.chat} onChange={v => patchJhSettings({ api: { ...jhSettings.api, chat: v ? { ...v } : null } })}
+                                    followLabel="跟随角色 / 全局配置" compact hint={null} />
+                            </div>
+                            <div>
+                                <div className="text-[11px] font-bold text-slate-600 mb-1">云端语音识别（STT）</div>
+                                <ApiConnectionPicker value={jhSettings.api.stt} onChange={v => patchJhSettings({ api: { ...jhSettings.api, stt: v ? { ...v } : null } })}
+                                    followLabel="跟随全局 STT" compact hint={null} />
+                                <div className="text-[10px] text-slate-400 mt-1 px-1">语音面试里把你说的话转文字；选的站要支持 /audio/transcriptions</div>
+                            </div>
+                            <div>
+                                <div className="text-[11px] font-bold text-slate-600 mb-1">语音合成（TTS）服务商</div>
+                                <div className="flex flex-wrap gap-1.5">
+                                    {([['follow', '跟随全局'], ['minimax', 'MiniMax'], ['fishaudio', '鱼声'], ['elevenlabs', 'ElevenLabs']] as const).map(([v, label]) => (
+                                        <button key={v} onClick={() => patchJhSettings({ api: { ...jhSettings.api, ttsProvider: v } })}
+                                            className={`px-3 py-1.5 text-[11px] font-bold rounded-lg border transition-all active:scale-95 ${jhSettings.api.ttsProvider === v ? 'bg-sky-50 text-sky-600 border-sky-200 ring-1 ring-sky-100' : 'bg-white text-slate-400 border-slate-200'}`}>
+                                            {label}
+                                        </button>
+                                    ))}
+                                </div>
+                                <div className="text-[10px] text-slate-400 mt-1 px-1">只切服务商，密钥沿用全局配置里填的</div>
+                            </div>
+                            <div>
+                                <button onClick={() => patchJhSettings({ api: { ...jhSettings.api, audioAnalysis: !jhSettings.api.audioAnalysis } })}
+                                    className="w-full flex items-center justify-between bg-slate-50 rounded-2xl px-4 py-3 active:scale-[0.98] transition-transform">
+                                    <div className="text-left">
+                                        <div className="text-xs font-bold text-slate-700">说话状态分析（语音面试）</div>
+                                        <div className="text-[10px] text-slate-400 mt-0.5">音频理解模型听你的回答，给清晰度/语速/自信度反馈，挂断后出表达复盘</div>
+                                    </div>
+                                    <div className={`w-11 h-6 rounded-full p-0.5 transition-colors shrink-0 ${jhSettings.api.audioAnalysis ? 'bg-sky-500' : 'bg-slate-300'}`}>
+                                        <div className={`w-5 h-5 bg-white rounded-full shadow transition-transform ${jhSettings.api.audioAnalysis ? 'translate-x-5' : ''}`} />
+                                    </div>
+                                </button>
+                                {jhSettings.api.audioAnalysis && (
+                                    <div className="mt-2 space-y-2.5">
+                                        <div>
+                                            <div className="text-[11px] font-bold text-slate-600 mb-1">音频理解模型</div>
+                                            <ApiConnectionPicker value={jhSettings.api.audio} onChange={v => patchJhSettings({ api: { ...jhSettings.api, audio: v ? { ...v } : null } })} compact hint={null} />
+                                            <div className="text-[10px] text-slate-400 mt-1 px-1">要选支持音频输入的多模态模型；不选则分析不生效</div>
+                                        </div>
+                                        <div>
+                                            <div className="text-[11px] font-bold text-slate-600 mb-1">转写方式</div>
+                                            <div className="space-y-1.5">
+                                                {([
+                                                    ['stt', '双轨（推荐）', 'STT 先出字不等人，音频模型后台慢慢分析状态'] as const,
+                                                    ['audioModel', '一体', '录音直接交给音频模型，转写+分析一次完成（出字较慢）'] as const,
+                                                ]).map(([v, label, desc]) => (
+                                                    <button key={v} onClick={() => patchJhSettings({ api: { ...jhSettings.api, transcribeMode: v } })}
+                                                        className={`w-full text-left px-3 py-2 rounded-xl border transition-all active:scale-[0.99] ${jhSettings.api.transcribeMode === v ? 'bg-sky-50 border-sky-200 ring-1 ring-sky-100' : 'bg-white border-slate-200'}`}>
+                                                        <div className={`text-xs font-bold ${jhSettings.api.transcribeMode === v ? 'text-sky-600' : 'text-slate-600'}`}>{label}</div>
+                                                        <div className="text-[10px] text-slate-400 mt-0.5">{desc}</div>
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
                     </div>
                     <div>
                         <div className="text-xs font-bold text-slate-500 mb-1">公司名模糊化（全程离线拼音库，不联网）</div>
@@ -1452,6 +1700,7 @@ const JobHuntApp: React.FC = () => {
                 {/* 隐藏文件输入（聊天里也能导）+ 脱敏预览 */}
                 <input ref={fileInputRef} type="file" accept=".pdf,.docx,.txt,.md" className="hidden"
                     onChange={e => { const f = e.target.files?.[0]; if (f) handleResumeFile(f); }} />
+                {pendingImport && renderImportOptions()}
                 {resumePreview && renderRedactPreview()}
                 {sessionChar && (
                     <CharApiHubModal isOpen={showApiHub} onClose={() => setShowApiHub(false)} char={sessionChar}
@@ -1473,7 +1722,7 @@ const JobHuntApp: React.FC = () => {
         let list = positions.filter(p => {
             if (posStageFilter.size > 0 && !posStageFilter.has(p.stage)) return false;
             if (!q) return true;
-            return [p.code, p.title, p.companyNameLocal, p.projectName, p.jd, p.notes]
+            return [p.code, p.title, p.companyNameLocal, p.projectName, p.location, p.jd, p.notes]
                 .some(f => (f || '').toLowerCase().includes(q));
         });
         list = [...list].sort((a, b) => {
@@ -1771,7 +2020,7 @@ const JobHuntApp: React.FC = () => {
                             const cardClick = () => posSelectMode ? togglePosSelect(p.id) : openEditPosition(p);
                             return jhSettings.positionView === 'compact' ? (
                                 <button key={p.id} onClick={cardClick}
-                                    className={`w-full text-left bg-white rounded-xl shadow-sm px-3 py-2.5 flex items-center gap-2 active:scale-[0.99] transition-transform border-l-4 ${STAGE_ACCENT[p.stage]} ${sel ? 'ring-2 ring-sky-400' : 'ring-1 ring-slate-200/60'}`}>
+                                    className={`w-full text-left bg-white rounded-xl shadow-sm px-3 py-2.5 flex items-center gap-2 active:scale-[0.99] transition-transform ${sel ? 'ring-2 ring-sky-400' : 'ring-1 ring-slate-200/60'}`}>
                                     {posSelectMode && <span className={`w-4 h-4 rounded-full border-2 shrink-0 ${sel ? 'bg-sky-500 border-sky-500' : 'border-slate-300'}`} />}
                                     <span className="text-sm font-bold text-slate-800 shrink-0">{p.code}</span>
                                     <span className="text-xs text-slate-500 truncate flex-1">{p.title}</span>
@@ -1779,7 +2028,7 @@ const JobHuntApp: React.FC = () => {
                                 </button>
                             ) : (
                             <div key={p.id} onClick={cardClick}
-                                className={`bg-white rounded-2xl shadow-sm p-4 border-l-4 cursor-pointer ${STAGE_ACCENT[p.stage]} ${jhSettings.positionView === 'masonry' ? 'break-inside-avoid mb-2.5' : ''} ${sel ? 'ring-2 ring-sky-400' : 'ring-1 ring-slate-200/60'}`}>
+                                className={`bg-white rounded-2xl shadow-sm p-4 cursor-pointer ${jhSettings.positionView === 'masonry' ? 'break-inside-avoid mb-2.5' : ''} ${sel ? 'ring-2 ring-sky-400' : 'ring-1 ring-slate-200/60'}`}>
                                 {/* 头部：代号+阶段一行，岗位名独立一行（双列不挤） */}
                                 <div className="flex items-center gap-2">
                                     {posSelectMode && <span className={`w-4 h-4 rounded-full border-2 shrink-0 ${sel ? 'bg-sky-500 border-sky-500' : 'border-slate-300'}`} />}
@@ -1790,10 +2039,12 @@ const JobHuntApp: React.FC = () => {
                                 {p.companyNameLocal && (
                                     <div className="text-[11px] text-slate-400 mt-1">备注：{p.companyNameLocal}</div>
                                 )}
-                                {(p.projectName || p.hrName) && (
+                                {(p.projectName || p.location || p.hrName) && (
                                     <div className="text-[11px] text-slate-400 mt-1">
                                         {p.projectName && <span>项目：{p.projectName}</span>}
-                                        {p.projectName && p.hrName && <span> · </span>}
+                                        {p.projectName && (p.location || p.hrName) && <span> · </span>}
+                                        {p.location && <span>地点：{p.location}</span>}
+                                        {p.location && p.hrName && <span> · </span>}
                                         {p.hrName && <span>HR：{p.hrName}</span>}
                                     </div>
                                 )}
@@ -2018,7 +2269,8 @@ const JobHuntApp: React.FC = () => {
                                 <div className="flex gap-2">
                                     <button onClick={() => setPracticeForm('text')}
                                         className={`flex-1 py-2.5 rounded-xl text-xs font-semibold border transition-all active:scale-95 ${practiceForm === 'text' ? 'bg-sky-50 text-sky-600 border-sky-200 ring-1 ring-sky-100' : 'bg-white text-slate-500 border-slate-200'}`}>文字</button>
-                                    <div className="flex-1 py-2.5 rounded-xl text-xs font-semibold border border-slate-200 bg-slate-50 text-slate-300 text-center">语音 · 研发中</div>
+                                    <button onClick={() => setPracticeForm('voice')}
+                                        className={`flex-1 py-2.5 rounded-xl text-xs font-semibold border transition-all active:scale-95 ${practiceForm === 'voice' ? 'bg-sky-50 text-sky-600 border-sky-200 ring-1 ring-sky-100' : 'bg-white text-slate-500 border-slate-200'}`}>语音</button>
                                     <div className="flex-1 py-2.5 rounded-xl text-xs font-semibold border border-slate-200 bg-slate-50 text-slate-300 text-center">视频 · 研发中</div>
                                 </div>
                             </div>
@@ -2097,6 +2349,11 @@ const JobHuntApp: React.FC = () => {
                             <div>
                                 <label className="text-xs text-slate-500 font-semibold">项目名/业务线（选填）</label>
                                 <input value={posProjectName} onChange={e => setPosProjectName(e.target.value)} placeholder="如：商家后台、风控中台 — AI 会用它分析岗位"
+                                    className="w-full mt-1 bg-slate-100 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-sky-200" />
+                            </div>
+                            <div>
+                                <label className="text-xs text-slate-500 font-semibold">工作地点（选填）</label>
+                                <input value={posLocation} onChange={e => setPosLocation(e.target.value)} placeholder="如：上海、杭州·远程 — AI 可见，也能帮你改"
                                     className="w-full mt-1 bg-slate-100 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-sky-200" />
                             </div>
                             <div>
@@ -2217,6 +2474,7 @@ const JobHuntApp: React.FC = () => {
             {/* 隐藏文件输入 + 脱敏预览 + 工作台设置 */}
             <input ref={fileInputRef} type="file" accept=".pdf,.docx,.txt,.md" className="hidden"
                 onChange={e => { const f = e.target.files?.[0]; if (f) handleResumeFile(f); }} />
+            {pendingImport && renderImportOptions()}
             {resumePreview && renderRedactPreview()}
             {showJhSettings && renderSettingsModal()}
 

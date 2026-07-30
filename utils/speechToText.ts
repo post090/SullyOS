@@ -25,6 +25,8 @@ export interface SttCallbacks {
   onLevel?: (level: number) => void;
   /** Cloud mode only: recording stopped, upload/recognition in flight — show a busy state. */
   onRecognizing?: () => void;
+  /** Cloud mode only: 录音结束、拿到完整音频 Blob（面试音频说话状态分析用；系统/浏览器识别拿不到音频流，不触发）。 */
+  onAudioBlob?: (blob: Blob) => void;
 }
 
 /** Cloud STT settings (OpenAI-compatible /v1/audio/transcriptions). */
@@ -381,6 +383,8 @@ const startCloud = async (lang: string, cb: SttCallbacks, cfg: SttProviderConfig
         cb.onEnd?.();
         return;
       }
+      // 把完整音频交给调用方（面试场景后台分析说话状态）；不影响下方 STT 转写
+      cb.onAudioBlob?.(blob);
       const fd = new FormData();
       const ext = /mp4/.test(mime) ? 'm4a' : 'webm';
       fd.append('file', blob, `voice.${ext}`);

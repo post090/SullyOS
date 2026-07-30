@@ -403,6 +403,11 @@ const Settings: React.FC = () => {
   const [localVoicePromptDate, setLocalVoicePromptDate] = useState(apiConfig.voicePrompts?.dateVoice || '');
   const [showVoicePrompts, setShowVoicePrompts] = useState(false);
   const [showAceStepGuide, setShowAceStepGuide] = useState(false);
+  // 其他 API 双层视图：上层简洁能力卡 + 官方长表单收进「详细配置」折叠（两套视图写同一份草稿 state）
+  const [showOtherDetail, setShowOtherDetail] = useState(false);
+  const [expandedOtherCard, setExpandedOtherCard] = useState<string | null>(null);
+  // STT 模型预置下拉选了「自定义」时展开手填框
+  const [sttModelCustom, setSttModelCustom] = useState(false);
   const [otherStatusMsg, setOtherStatusMsg] = useState('');
   // 高级设置（流式/温度）默认折叠 — 大多数用户不需要碰
   const [showApiAdvanced, setShowApiAdvanced] = useState(false);
@@ -2368,7 +2373,150 @@ const Settings: React.FC = () => {
                 语音 / 写歌等非 LLM 类 API。这些设置 <span className="font-semibold text-slate-500">不会随预设切换</span>，通常只配置一次。
             </p>
 
-            <div className="space-y-4">
+            {/* 上层简洁视图：每能力一张紧凑卡，状态一行 + 点开展开关键选项；完整字段在下方「详细配置」，两套视图写同一份草稿 */}
+            <div className="space-y-2.5">
+                {/* TTS 卡 */}
+                <div className="rounded-2xl border border-slate-200/70 bg-white/60 backdrop-blur-sm overflow-hidden">
+                    <button type="button" onClick={() => setExpandedOtherCard(v => v === 'tts' ? null : 'tts')} className="w-full flex items-center justify-between px-4 py-3 text-left">
+                        <span>
+                            <span className="text-xs font-bold text-slate-700 block">语音合成（TTS）</span>
+                            <span className="text-[11px] text-slate-400 mt-0.5 block">
+                                当前引擎：{localTtsProvider === 'fishaudio' ? '鱼声 Fish' : localTtsProvider === 'elevenlabs' ? 'ElevenLabs' : 'MiniMax'}
+                                {localTtsProvider === 'fishaudio' ? (localFishKey ? ' · Key 已配' : ' · 未配 Key') : localTtsProvider === 'elevenlabs' ? (localElevenKey ? ' · Key 已配' : ' · 未配 Key') : (localMiniMaxKey ? ' · 独立 Key 已配' : ' · 沿用主 Key')}
+                            </span>
+                        </span>
+                        <span className={`shrink-0 ml-2 text-slate-400 transition-transform ${expandedOtherCard === 'tts' ? 'rotate-180' : ''}`}>▾</span>
+                    </button>
+                    {expandedOtherCard === 'tts' && (
+                        <div className="px-4 pb-3.5 space-y-2">
+                            <div className="flex gap-1.5">
+                                {([['minimax', 'MiniMax'], ['fishaudio', '鱼声'], ['elevenlabs', 'ElevenLabs']] as const).map(([key, name]) => (
+                                    <button key={key} type="button" onClick={() => selectTtsProvider(key)}
+                                        className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all active:scale-95 ${localTtsProvider === key ? 'bg-primary/10 text-primary border-primary/30' : 'bg-white/70 text-slate-500 border-slate-200'}`}>
+                                        {name}
+                                    </button>
+                                ))}
+                            </div>
+                            <p className="text-[10px] text-slate-400 pl-0.5">切换立即生效；各家的 Key / 模型在下方「详细配置」里填。</p>
+                        </div>
+                    )}
+                </div>
+
+                {/* STT 卡：站点下拉复用主 API 站区 + 模型预置可改下拉 */}
+                <div className="rounded-2xl border border-slate-200/70 bg-white/60 backdrop-blur-sm overflow-hidden">
+                    <button type="button" onClick={() => setExpandedOtherCard(v => v === 'stt' ? null : 'stt')} className="w-full flex items-center justify-between px-4 py-3 text-left">
+                        <span>
+                            <span className="text-xs font-bold text-slate-700 block">语音输入（STT）</span>
+                            <span className="text-[11px] text-slate-400 mt-0.5 block">
+                                {localSttProvider === 'cloud'
+                                    ? `云端识别 · ${localSttModel.trim() || 'FunAudioLLM/SenseVoiceSmall'}${localSttKey ? '' : ' · 未配 Key'}`
+                                    : '系统识别（国产 ROM 上可能不稳）'}
+                            </span>
+                        </span>
+                        <span className={`shrink-0 ml-2 text-slate-400 transition-transform ${expandedOtherCard === 'stt' ? 'rotate-180' : ''}`}>▾</span>
+                    </button>
+                    {expandedOtherCard === 'stt' && (
+                        <div className="px-4 pb-3.5 space-y-2.5">
+                            <div className="flex bg-white/50 border border-slate-200/60 rounded-xl p-1 gap-1">
+                                <button type="button" onClick={() => setLocalSttProvider('system')}
+                                    className={`flex-1 py-2 rounded-lg text-xs font-semibold transition-all ${localSttProvider === 'system' ? 'bg-primary text-white shadow-sm' : 'text-slate-600 active:bg-white/60'}`}>
+                                    系统识别
+                                </button>
+                                <button type="button" onClick={() => setLocalSttProvider('cloud')}
+                                    className={`flex-1 py-2 rounded-lg text-xs font-semibold transition-all ${localSttProvider === 'cloud' ? 'bg-primary text-white shadow-sm' : 'text-slate-600 active:bg-white/60'}`}>
+                                    云端识别
+                                </button>
+                            </div>
+                            {localSttProvider === 'cloud' && (
+                                <>
+                                    <div>
+                                        <label className="text-[9px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1 block">API 站（选了自动填 URL+Key）</label>
+                                        <GlassSelect compact
+                                            value={stations.find(s => s.key === stationKey(localSttBaseUrl, localSttKey))?.key || ''}
+                                            placeholder={localSttKey ? '手填配置（详细配置可改）' : '— 选择站点 —'}
+                                            options={stations.map(s => ({ value: s.key, label: s.name, sub: s.baseUrl }))}
+                                            onChange={(v) => { const st = stations.find(s => s.key === v); if (st) { setLocalSttBaseUrl(st.baseUrl); setLocalSttKey(st.apiKey); } }} />
+                                        <p className="text-[10px] text-slate-400 mt-1 pl-1">站要支持 /audio/transcriptions（如硅基流动）；也可在「详细配置」手填。</p>
+                                    </div>
+                                    <div>
+                                        <label className="text-[9px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1 block">模型</label>
+                                        <GlassSelect compact
+                                            value={sttModelCustom ? '__custom__' : (['FunAudioLLM/SenseVoiceSmall', 'whisper-large-v3'].includes(localSttModel.trim()) ? localSttModel.trim() : (localSttModel.trim() ? '__custom__' : 'FunAudioLLM/SenseVoiceSmall'))}
+                                            options={[
+                                                { value: 'FunAudioLLM/SenseVoiceSmall', label: 'SenseVoiceSmall', sub: '硅基流动免费 · 中文效果好' },
+                                                { value: 'whisper-large-v3', label: 'whisper-large-v3', sub: 'Groq / OpenAI 兼容' },
+                                                { value: '__custom__', label: '自定义…', sub: '手填模型 id' },
+                                            ]}
+                                            onChange={(v) => { if (v === '__custom__') { setSttModelCustom(true); } else { setSttModelCustom(false); setLocalSttModel(v); } }} />
+                                    </div>
+                                    {(sttModelCustom || (!!localSttModel.trim() && !['FunAudioLLM/SenseVoiceSmall', 'whisper-large-v3'].includes(localSttModel.trim()))) && (
+                                        <input type="text" spellCheck={false} value={localSttModel} onChange={(e) => setLocalSttModel(e.target.value)} placeholder="自定义模型 id" className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-4 py-2.5 text-sm font-mono focus:bg-white transition-all" />
+                                    )}
+                                    <p className="text-[10px] text-slate-400 pl-0.5">改完点底部「保存其他 API」。</p>
+                                </>
+                            )}
+                        </div>
+                    )}
+                </div>
+
+                {/* MiniMax 卡 */}
+                <div className="rounded-2xl border border-slate-200/70 bg-white/60 backdrop-blur-sm overflow-hidden">
+                    <button type="button" onClick={() => setExpandedOtherCard(v => v === 'minimax' ? null : 'minimax')} className="w-full flex items-center justify-between px-4 py-3 text-left">
+                        <span>
+                            <span className="text-xs font-bold text-slate-700 block">MiniMax 账号</span>
+                            <span className="text-[11px] text-slate-400 mt-0.5 block">
+                                {localMiniMaxRegion === 'overseas' ? '海外站' : '国服'} · {localMiniMaxKey ? '独立 Key 已配' : '沿用主 Key'}{localMiniMaxGroupId ? ' · Group ID 已填' : ''}
+                            </span>
+                        </span>
+                        <span className={`shrink-0 ml-2 text-slate-400 transition-transform ${expandedOtherCard === 'minimax' ? 'rotate-180' : ''}`}>▾</span>
+                    </button>
+                    {expandedOtherCard === 'minimax' && (
+                        <div className="px-4 pb-3.5 space-y-2.5">
+                            <div className="flex gap-1.5">
+                                {([['domestic', '国服'], ['overseas', '海外']] as const).map(([key, name]) => (
+                                    <button key={key} type="button" onClick={() => setLocalMiniMaxRegion(key)}
+                                        className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all active:scale-95 ${localMiniMaxRegion === key ? 'bg-primary/10 text-primary border-primary/30' : 'bg-white/70 text-slate-500 border-slate-200'}`}>
+                                        {name}
+                                    </button>
+                                ))}
+                            </div>
+                            <input type="password" name="minimax-api-secret-quick" autoComplete="new-password" spellCheck={false} value={localMiniMaxKey} onChange={(e) => setLocalMiniMaxKey(e.target.value)} placeholder="MiniMax API Secret（留空则复用主 Key）" className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-4 py-2.5 text-sm font-mono focus:bg-white transition-all" />
+                            <input type="text" spellCheck={false} value={localMiniMaxGroupId} onChange={(e) => setLocalMiniMaxGroupId(e.target.value)} placeholder="Group ID（部分账号/模型需要）" className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-4 py-2.5 text-sm font-mono focus:bg-white transition-all" />
+                            <p className="text-[10px] text-slate-400 pl-0.5">改完点底部「保存其他 API」。</p>
+                        </div>
+                    )}
+                </div>
+
+                {/* 写歌 AceStep 卡 */}
+                <div className="rounded-2xl border border-slate-200/70 bg-white/60 backdrop-blur-sm overflow-hidden">
+                    <button type="button" onClick={() => setExpandedOtherCard(v => v === 'acestep' ? null : 'acestep')} className="w-full flex items-center justify-between px-4 py-3 text-left">
+                        <span>
+                            <span className="text-xs font-bold text-slate-700 block">写歌（ACE-Step）</span>
+                            <span className="text-[11px] text-slate-400 mt-0.5 block">{localAceStepKey ? 'Replicate Token 已配' : '未配 Token · 可选'}</span>
+                        </span>
+                        <span className={`shrink-0 ml-2 text-slate-400 transition-transform ${expandedOtherCard === 'acestep' ? 'rotate-180' : ''}`}>▾</span>
+                    </button>
+                    {expandedOtherCard === 'acestep' && (
+                        <div className="px-4 pb-3.5 space-y-2">
+                            <input type="password" name="ace-step-api-token-quick" autoComplete="new-password" spellCheck={false} value={localAceStepKey} onChange={(e) => setLocalAceStepKey(e.target.value)} placeholder="r8_xxx（写歌 App 调 ACE-Step 用）" className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-4 py-2.5 text-sm font-mono focus:bg-white transition-all" />
+                            <p className="text-[10px] text-slate-400 pl-0.5">怎么拿 Token 看「详细配置」里的指南；改完点底部保存。</p>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* 官方完整长表单：整体收进折叠，字段不删，与上面卡片写同一份数据 */}
+            <button type="button" onClick={() => setShowOtherDetail(v => !v)}
+                className="w-full flex items-center justify-between rounded-2xl border border-slate-200/70 bg-slate-50/60 px-4 py-3 mt-3 text-left">
+                <span>
+                    <span className="text-xs font-bold text-slate-600 block">详细配置（完整表单）</span>
+                    <span className="text-[11px] text-slate-400 mt-0.5 block">所有字段的原始表单——和上面的卡片是同一份数据，改哪边都一样</span>
+                </span>
+                <span className={`shrink-0 ml-2 text-slate-400 transition-transform ${showOtherDetail ? 'rotate-180' : ''}`}>▾</span>
+            </button>
+
+            {showOtherDetail && (
+            <div className="space-y-4 mt-3">
                 <p className="text-[11px] text-slate-400 -mt-1 pl-1 leading-relaxed">
                     🎙️ 语音生成支持 <span className="font-semibold text-slate-500">MiniMax</span> / <span className="font-semibold text-slate-500">鱼声 Fish</span> / <span className="font-semibold text-slate-500">ElevenLabs</span> 三家——下面都可以填，最后在底部「当前语音引擎」里三选一。
                 </p>
@@ -2609,7 +2757,7 @@ const Settings: React.FC = () => {
                             </div>
                             <div>
                                 <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block pl-1">STT 模型（可选）</label>
-                                <input type="text" spellCheck={false} value={localSttModel} onChange={(e) => setLocalSttModel(e.target.value)} placeholder="默认 FunAudioLLM/SenseVoiceSmall（硬基流动免费）" className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-4 py-2.5 text-sm font-mono focus:bg-white transition-all" />
+                                <input type="text" spellCheck={false} value={localSttModel} onChange={(e) => setLocalSttModel(e.target.value)} placeholder="默认 FunAudioLLM/SenseVoiceSmall（硅基流动免费）" className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-4 py-2.5 text-sm font-mono focus:bg-white transition-all" />
                                 <p className="text-[11px] text-slate-400 mt-1 pl-1">用其它家时改成对应模型，如 Groq 的 <span className="font-mono">whisper-large-v3</span>。改完记得点下面「保存其他 API」。</p>
                             </div>
                         </div>
@@ -2690,11 +2838,12 @@ const Settings: React.FC = () => {
                         </div>
                     )}
                 </div>
-
-                <button onClick={handleSaveOtherApis} className="w-full py-3 rounded-2xl font-bold text-white shadow-lg shadow-amber-500/20 bg-amber-500 active:scale-95 transition-all mt-2">
-                    {otherStatusMsg || '保存其他 API'}
-                </button>
             </div>
+            )}
+
+            <button onClick={handleSaveOtherApis} className="w-full py-3 rounded-2xl font-bold text-white shadow-lg shadow-amber-500/20 bg-amber-500 active:scale-95 transition-all mt-4">
+                {otherStatusMsg || '保存其他 API'}
+            </button>
         </SettingsSection>
 
         {/* 实时感知配置区域 */}

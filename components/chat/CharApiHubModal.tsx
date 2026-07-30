@@ -8,6 +8,8 @@
  *     模型不识图就关着，防止 image 段直接报错。
  *  3. 副 API 便捷聚合：主动消息副 API（proactiveConfig.secondaryApi）与情绪评估
  *     API（emotionConfig.api）。原有各自的配置面板全部保留，这里只是同一处快捷改。
+ *  4. 上岸计划对话：该角色在上岸计划 App 内对话用的模型（jobHuntApiOverride），
+ *     不设 = 跟随聊天主 API（再往上才是全局默认）。
  *
  * 站点/模型的增删改（模板管理）仍只在 系统设置 → API 配置。
  */
@@ -46,6 +48,8 @@ const CharApiHubModal: React.FC<CharApiHubModalProps> = ({ isOpen, onClose, char
     const [proSecApi, setProSecApi] = useState<ApiTriple | null>(char.proactiveConfig?.secondaryApi ?? null);
     // 情绪评估 API（null = 跟随主 API）
     const [emoApi, setEmoApi] = useState<ApiTriple | null>(char.emotionConfig?.api?.baseUrl ? char.emotionConfig.api : null);
+    // 上岸计划对话 API（null = 跟随聊天主 API）
+    const [jobApi, setJobApi] = useState<ApiTriple | null>(char.jobHuntApiOverride?.baseUrl ? char.jobHuntApiOverride : null);
 
     useEffect(() => {
         if (!isOpen) return;
@@ -54,6 +58,7 @@ const CharApiHubModal: React.FC<CharApiHubModalProps> = ({ isOpen, onClose, char
         setProUseSec(!!char.proactiveConfig?.useSecondaryApi);
         setProSecApi(char.proactiveConfig?.secondaryApi ?? null);
         setEmoApi(char.emotionConfig?.api?.baseUrl ? char.emotionConfig.api : null);
+        setJobApi(char.jobHuntApiOverride?.baseUrl ? char.jobHuntApiOverride : null);
     }, [isOpen, char.id]);
 
     const followSub = apiConfig.model ? `${apiConfig.model} · ${hostOf(apiConfig.baseUrl)}` : hostOf(apiConfig.baseUrl);
@@ -63,6 +68,7 @@ const CharApiHubModal: React.FC<CharApiHubModalProps> = ({ isOpen, onClose, char
         const patch: Partial<CharacterProfile> = {
             chatApiOverride: mainApi?.baseUrl ? { ...mainApi } : undefined,
             hotNewsImagesToAI: newsImgToAI,
+            jobHuntApiOverride: jobApi?.baseUrl ? { ...jobApi } : undefined,
         };
         // 主动消息副 API：不动 proactiveConfig 的其余字段；从未配置过主动消息时给最小骨架
         const pc = char.proactiveConfig;
@@ -157,6 +163,19 @@ const CharApiHubModal: React.FC<CharApiHubModalProps> = ({ isOpen, onClose, char
                             hint={null}
                         />
                     </div>
+                </div>
+
+                {/* 4. 上岸计划对话 */}
+                <div className="space-y-2 pt-1 border-t border-slate-100">
+                    <SectionTitle label="上岸计划对话" sub="该角色在上岸计划 App 里聊天/面试用的模型；不设则跟随上面的聊天主 API。" />
+                    <ApiConnectionPicker
+                        value={jobApi}
+                        onChange={setJobApi}
+                        followLabel="跟随聊天主 API"
+                        followSub={mainSub}
+                        compact
+                        hint={null}
+                    />
                 </div>
             </div>
         </Modal>

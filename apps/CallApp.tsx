@@ -19,7 +19,10 @@ import { RealtimeContextManager } from '../utils/realtimeContext';
 import { buildTaskSupervisionContext } from '../utils/taskContextInjector';
 import { DB } from '../utils/db';
 import { ChatPrompts } from '../utils/chatPrompts';
-import { Message, ChatTheme, AppID } from '../types';
+import { Message, ChatTheme, AppID, CallAutoStartConfig, JobNote } from '../types';
+import { analyzeAnswerAudio, AnswerAudioAnalysis, paceLabel } from '../utils/interviewAudioAnalysis';
+import { CallSettings, loadCallSettings, saveCallSettings } from '../utils/callSettings';
+import ApiConnectionPicker from '../components/os/ApiConnectionPicker';
 import { PRESET_THEMES } from '../components/chat/ChatConstants';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
 type CallState = 'idle' | 'connecting' | 'listening' | 'thinking' | 'speaking' | 'ended' | 'error';
@@ -293,9 +296,14 @@ ${getVoicePromptOverride(getTtsProvider()) ?? (getTtsProvider() === 'fishaudio' 
   return [coreContext, timeContext, callPrompt, voiceLangPrompt].filter(Boolean).join('\n\n');
 };
 const CallApp: React.FC = () => {
-  const { closeApp, openApp, characters, activeCharacterId, addToast, apiConfig, userProfile, customThemes, suspendCall, suspendedCall, clearSuspendedCall, updateCharacter, characterGroups } = useOS();
+  const { closeApp, openApp, characters, activeCharacterId, addToast, apiConfig, userProfile, customThemes, suspendCall, suspendedCall, clearSuspendedCall, updateCharacter, characterGroups, callAutoStart, consumeCallAutoStart } = useOS();
 
   const [viewMode, setViewMode] = useState<ViewMode>('role-select');
+  // 语音面试/场景通话：当前生效的场景配置（拼场景 prompt / 覆盖 LLM·STT·TTS / 顶部小字），挂断即清
+  const [activeScene, setActiveScene] = useState<CallAutoStartConfig | null>(null);
+  // 面试音频说话状态分析：每轮结果累积（挂断汇总复盘）+ 最新一条浮条（可点收）
+  const analysisResultsRef = useRef<AnswerAudioAnalysis[]>([]);
+  const [analysisBar, setAnalysisBar] = useState<AnswerAudioAnalysis | null>(null);
   const [selectedCharId, setSelectedCharId] = useState<string>(activeCharacterId || characters[0]?.id || '');
   const ROLES_PER_PAGE = 6;
   const [roleGroupId, setRoleGroupId] = useState<string>(GROUP_FILTER_ALL); // 选人页的分组筛选
@@ -315,13 +323,26 @@ const CallApp: React.FC = () => {
   // 录音波形：最近的音量采样（云端=真实音量，系统=伪随机律动，因为麦被 RecognitionService 占用拿不到音频流）
   const [sttLevels, setSttLevels] = useState<number[]>([]);
   const sttSessionRef = useRef<SttSession | null>(null);
-  const sttCfg = useMemo<SttProviderConfig>(() => ({
-    // 没填 Key 时 startStt 会回退系统识别，这里也按 system 处理，伪波形才会正常补上
-    provider: apiConfig?.sttProvider === 'cloud' && apiConfig?.sttApiKey ? 'cloud' : 'system',
-    baseUrl: apiConfig?.sttBaseUrl,
-    apiKey: apiConfig?.sttApiKey,
-    model: apiConfig?.sttModel,
-  }), [apiConfig?.sttProvider, apiConfig?.sttBaseUrl, apiConfig?.sttApiKey, apiConfig?.sttModel]);
+  // 通话独立设置（齿轮 bottom sheet；存 localStorage os_call_settings）
+  const [callSettings, setCallSettings] = useState<CallSettings>(loadCallSettings);
+  const [showCallSettings, setShowCallSettings] = useState(false);
+  const patchCallSettings = (p: Partial<CallSettings>) => {
+    setCallSettings(prev => { const next = { ...prev, ...p }; saveCallSettings(next); return next; });
+  };
+  const sttCfg = useMemo<SttProviderConfig>(() => {
+    // 取值链：面试场景 sttOverride > 通话独立设置 > 全局配置
+    const ov = activeScene?.sttOverride;
+    if (ov && ov.apiKey) return { provider: 'cloud', baseUrl: ov.baseUrl, apiKey: ov.apiKey, model: ov.model };
+    const cs = callSettings.stt;
+    if (cs?.apiKey) return { provider: 'cloud', baseUrl: cs.baseUrl, apiKey: cs.apiKey, model: cs.model };
+    return {
+      // 没填 Key 时 startStt 会回退系统识别，这里也按 system 处理，伪波形才会正常补上
+      provider: apiConfig?.sttProvider === 'cloud' && apiConfig?.sttApiKey ? 'cloud' : 'system',
+      baseUrl: apiConfig?.sttBaseUrl,
+      apiKey: apiConfig?.sttApiKey,
+      model: apiConfig?.sttModel,
+    };
+  }, [activeScene?.sttOverride, callSettings.stt, apiConfig?.sttProvider, apiConfig?.sttBaseUrl, apiConfig?.sttApiKey, apiConfig?.sttModel]);
   const sttSupported = useMemo(() => isSttSupported(sttCfg), [sttCfg]);
   const [audioUrl, setAudioUrl] = useState<string>('');
   const [traceId, setTraceId] = useState<string>('');
@@ -426,7 +447,7 @@ const CallApp: React.FC = () => {
     };
   };
   // ── TTS 服务商分发：电话语音也支持 MiniMax ↔ 鱼声 ↔ ElevenLabs 三选一 ──
-  const ttsProviderNow = resolveTtsProvider(apiConfig);
+  const ttsProviderNow = activeScene?.ttsProviderOverride || resolveTtsProvider(apiConfig);
   const isFishTts = ttsProviderNow === 'fishaudio';
   const isElevenTts = ttsProviderNow === 'elevenlabs';
   // 当前服务商下，这个角色能否合成语音（决定要不要走 TTS / 给"语音未配置"提示）。
@@ -485,6 +506,20 @@ const CallApp: React.FC = () => {
       clearSuspendedCall();
     }
   }, [suspendedCall]);
+  // 上岸计划等场景拨通：消费 callAutoStart → 切到该角色、进 in-call、记录场景（挂断即清）
+  const callAutoConsumedRef = useRef(false);
+  useEffect(() => {
+    if (!callAutoStart || callAutoConsumedRef.current) return;
+    callAutoConsumedRef.current = true;
+    const ch = characters.find(c => c.id === callAutoStart.charId);
+    if (ch) {
+      setSelectedCharId(ch.id);
+      resetCurrentCall();
+      setActiveScene(callAutoStart);
+      setViewMode('in-call');
+    }
+    consumeCallAutoStart();
+  }, [callAutoStart]);
   useEffect(() => () => {
     revokeSessionBlobs();
     sttSessionRef.current?.stop();
@@ -535,6 +570,30 @@ const CallApp: React.FC = () => {
         onError: (m) => { if (m) addToast(m, 'info'); },
         onLevel: (lv) => setSttLevels(prev => [...prev.slice(-27), lv]),
         onRecognizing: () => setSttRecognizing(true),
+        onAudioBlob: (blob) => {
+          // 面试场景且开了音频分析：后台分析说话状态（双轨失败静默，一体失败提示重说）
+          const aa = activeScene?.audioAnalysis;
+          const ap = aa?.api;
+          if (aa?.enabled && ap?.baseUrl && ap.apiKey && ap.model) {
+            const lastQ = [...bubbles].reverse().find(b => b.role === 'assistant')?.text || '';
+            const want = aa.transcribeMode === 'audioModel';
+            analyzeAnswerAudio(blob, { baseUrl: ap.baseUrl, apiKey: ap.apiKey, model: ap.model }, lastQ, want)
+              .then(res => {
+                analysisResultsRef.current = [...analysisResultsRef.current, res];
+                setAnalysisBar(res);
+                if (want && res.transcript) setDraftInput(res.transcript);
+              })
+              .catch(() => { if (want) addToast('这段没听清，再说一遍？', 'info'); });
+            return;
+          }
+          // 普通通话一体模式：录音直接交音频模型转写进输入框（不做状态分析）
+          const ca = callSettings.audio;
+          if (!activeScene && callSettings.transcribeMode === 'audioModel' && ca?.apiKey) {
+            analyzeAnswerAudio(blob, { baseUrl: ca.baseUrl, apiKey: ca.apiKey, model: ca.model }, '', true)
+              .then(res => { if (res.transcript) setDraftInput(res.transcript); })
+              .catch(() => { /* STT 转写还在跑，静默 */ });
+          }
+        },
         onEnd: () => {
           isListeningRef.current = false;
           setIsListening(false);
@@ -646,7 +705,10 @@ const CallApp: React.FC = () => {
       try {
         setCallStartedAt(Date.now());
         setCallState('connecting');
-        const rawGreeting = await requestAssistantReply('（电话刚接通。你先开口——像平时接到这个人电话一样自然地说第一句话。不要解释你在做什么，就是最自然的那个"喂"或者"诶"或者别的什么。）');
+        const greetingPrompt = activeScene
+          ? '（面试电话刚接通。你是面试官，先简短自报身份和所在公司/岗位，再开始面试。语气自然专业，不要解释你在做什么。）'
+          : '（电话刚接通。你先开口——像平时接到这个人电话一样自然地说第一句话。不要解释你在做什么，就是最自然的那个"喂"或者"诶"或者别的什么。）';
+        const rawGreeting = await requestAssistantReply(greetingPrompt);
         const greetingLeadEmotion = extractLeadingEmotion(rawGreeting);
         const greetingText = sanitizeAssistantOutput(rawGreeting);
         const nowTs = Date.now();
@@ -793,6 +855,9 @@ const CallApp: React.FC = () => {
     revokeSessionBlobs();
     stopPlayback();
     setCallState('idle');
+    setActiveScene(null);
+    analysisResultsRef.current = [];
+    setAnalysisBar(null);
     setBubbles([]);
     setDraftInput('');
     setAudioUrl('');
@@ -835,6 +900,37 @@ const CallApp: React.FC = () => {
         eventSummary: `刚和用户通了 ${formatDuration(elapsedSeconds)} 电话（${Math.max(1, userTurns)} 轮对话）${keepsakeLine ? `，印象最深的一句：${keepsakeLine}` : ''}`,
       })).catch(() => { /* ignore */ });
     }
+    // 面试音频分析：≥2 轮 → 汇总「面试表达复盘」落笔记本（此时场景尚未清）
+    if (activeScene && analysisResultsRef.current.length >= 2 && selectedChar?.id) {
+      try {
+        const rs = analysisResultsRef.current;
+        const avg = (arr: number[]) => Math.round((arr.reduce((a, b) => a + b, 0) / arr.length) * 10) / 10;
+        const fast = rs.filter(r => r.pace === 'fast').length;
+        const slow = rs.filter(r => r.pace === 'slow').length;
+        const paceSummary = fast > slow && fast >= rs.length / 2 ? '整体偏快' : slow > fast && slow >= rs.length / 2 ? '整体偏慢' : '语速基本适中';
+        const lines = [
+          `> ${activeScene.sceneLabel || '模拟面试'} · ${rs.length} 段回答`,
+          '',
+          `- 平均清晰度：${avg(rs.map(r => r.clarity))}/5`,
+          `- 平均自信度：${avg(rs.map(r => r.confidence))}/5`,
+          `- 语速：${paceSummary}`,
+          '',
+          '**逐段点评**',
+          ...rs.map((r, i) => `${i + 1}. 清晰${r.clarity}/自信${r.confidence}·${paceLabel(r.pace)}——${r.note}`),
+        ];
+        const note: JobNote = {
+          id: `jnote-calleval-${Date.now()}`,
+          kind: 'analysis',
+          title: `面试表达复盘 · ${new Date().toLocaleDateString('zh-CN')}`,
+          content: lines.join('\u000a'),
+          charId: selectedChar.id,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+        await DB.saveJobNote(note);
+        addToast('面试表达复盘已存到上岸计划笔记本', 'success');
+      } catch { /* 复盘失败不影响挂断 */ }
+    }
     clearSuspendedCall();
     resetCurrentCall();
     setViewMode('history');
@@ -864,7 +960,8 @@ const CallApp: React.FC = () => {
     return [...history, { role: 'user', content: finalInput }];
   };
   const requestAssistantReply = async (input: string, skipDbId?: number): Promise<string> => {
-    const baseUrl = apiConfig.baseUrl?.replace(/\/+$/, '');
+    const apiOv = activeScene?.apiOverride;
+    const baseUrl = (apiOv?.baseUrl || apiConfig.baseUrl)?.replace(/\/+$/, '');
     if (!baseUrl) throw new Error('请先在设置里配置聊天 API URL');
     const userName = userProfile?.name?.trim() || '用户';
     if (selectedChar) {
@@ -879,7 +976,8 @@ const CallApp: React.FC = () => {
       : '';
     const coreContext = selectedChar
       ? (() => {
-          const base = ContextBuilder.buildCoreContext(selectedChar, userProfile, true);
+          const raw = ContextBuilder.buildCoreContext(selectedChar, userProfile, true);
+          const base = activeScene?.sceneContext ? `${activeScene.sceneContext}\n\n${raw}` : raw;
           return taskBlock ? `${base}\n${taskBlock}` : base;
         })()
       : undefined;
@@ -904,9 +1002,9 @@ const CallApp: React.FC = () => {
     };
     const chatData = await safeFetchJson(`${baseUrl}/chat/completions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiConfig.apiKey || 'sk-none'}` },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiOv?.apiKey || apiConfig.apiKey || 'sk-none'}` },
       body: JSON.stringify({
-        model: apiConfig.model,
+        model: apiOv?.model || apiConfig.model,
         messages: [{ role: 'system', content: systemPrompt }, ...messages],
         temperature: 0.85,
         // max_tokens 是 Claude 原生 API 的必填字段；缺了它，OpenAI→Claude 中转会被
@@ -1420,7 +1518,7 @@ const CallApp: React.FC = () => {
               <Clock size={16} weight="bold" style={{ color: accentColor }} /> 通话记录
             </button>
             <div className="flex items-center justify-between pt-1">
-              <button onClick={() => openApp(AppID.Settings)} title="设置"
+              <button onClick={() => setShowCallSettings(true)} title="通话设置"
                 className="w-9 h-9 rounded-full border border-white/15 bg-white/[0.04] flex items-center justify-center text-white/60 active:scale-90 transition">
                 <Gear size={16} weight="fill" />
               </button>
@@ -1431,6 +1529,52 @@ const CallApp: React.FC = () => {
             </div>
           </div>
         </div>
+
+        {/* 通话独立设置 bottom sheet（存 os_call_settings，与全局 API 配置分开） */}
+        {showCallSettings && (
+          <div className="absolute inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-end" onClick={() => setShowCallSettings(false)}>
+            <div className="w-full bg-white rounded-t-3xl p-5 max-h-[80%] overflow-y-auto" onClick={e => e.stopPropagation()} style={{ paddingBottom: 'max(1.25rem, var(--safe-bottom))' }}>
+              <div className="font-bold text-slate-800 mb-1">通话设置</div>
+              <div className="text-[10px] text-slate-400 mb-4">只影响电话里的语音输入；面试来电自带的配置优先于这里</div>
+              <div className="space-y-4">
+                <div>
+                  <div className="text-xs font-bold text-slate-500 mb-1.5">云端语音识别（STT）</div>
+                  <ApiConnectionPicker value={callSettings.stt} onChange={v => patchCallSettings({ stt: v ? { ...v } : null })}
+                    followLabel="跟随全局 STT" compact hint={null} />
+                  <div className="text-[10px] text-slate-400 mt-1 px-1">选的站要支持 /audio/transcriptions；不设则用系统设置里的全局 STT</div>
+                </div>
+                <div>
+                  <div className="text-xs font-bold text-slate-500 mb-1.5">音频理解模型（可选）</div>
+                  <ApiConnectionPicker value={callSettings.audio} onChange={v => patchCallSettings({ audio: v ? { ...v } : null })} compact hint={null} />
+                  <div className="text-[10px] text-slate-400 mt-1 px-1">支持音频输入的多模态模型；配了才能选下面的「一体」转写</div>
+                </div>
+                <div>
+                  <div className="text-xs font-bold text-slate-500 mb-1.5">转写方式</div>
+                  <div className="space-y-1.5">
+                    {([
+                      ['stt', 'STT 转写（默认）', '录完上传 STT 接口出字，快而稳'] as const,
+                      ['audioModel', '一体（音频模型）', '录音直接交音频理解模型转写进输入框，出字较慢'] as const,
+                    ]).map(([v, label, desc]) => {
+                      const disabled = v === 'audioModel' && !callSettings.audio?.apiKey;
+                      return (
+                        <button key={v} disabled={disabled}
+                          onClick={() => patchCallSettings({ transcribeMode: v })}
+                          className={`w-full text-left px-3 py-2 rounded-xl border transition-all active:scale-[0.99] disabled:opacity-40 ${callSettings.transcribeMode === v ? 'bg-violet-50 border-violet-200 ring-1 ring-violet-100' : 'bg-white border-slate-200'}`}>
+                          <div className={`text-xs font-bold ${callSettings.transcribeMode === v ? 'text-violet-600' : 'text-slate-600'}`}>{label}</div>
+                          <div className="text-[10px] text-slate-400 mt-0.5">{disabled ? '先在上面配个音频理解模型' : desc}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <button onClick={() => { setShowCallSettings(false); openApp(AppID.Settings); }}
+                  className="w-full py-2.5 rounded-xl text-xs font-bold text-slate-500 bg-slate-100 active:scale-[0.98] transition-transform">
+                  更多全局 API 配置 → 系统设置
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -1582,6 +1726,16 @@ const CallApp: React.FC = () => {
           <h1 className="mt-0.5 font-serif text-[2.6rem] leading-none tracking-wide text-white" style={{ textShadow: `0 0 26px ${accentColor}aa, 0 0 6px ${accentColor}66` }}>{selectedChar?.name || '未选择'}</h1>
           <div className="mt-2.5 text-[11px] tracking-[0.25em] text-white/55">{connSub}</div>
           <div className="mt-1.5 text-lg tabular-nums font-extralight tracking-[0.2em]" style={{ color: accentColor }}>{formatDuration(elapsedSeconds)}</div>
+          {activeScene?.sceneLabel && (
+            <div className="mt-2 inline-block px-3 py-1 rounded-full text-[10px] font-semibold tracking-wide text-white/80 bg-white/10 border border-white/15">{activeScene.sceneLabel}</div>
+          )}
+          {analysisBar && (
+            <button onClick={() => setAnalysisBar(null)}
+              className="mt-2 mx-auto flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-semibold text-white/85 bg-white/12 border border-white/15 active:scale-95 transition-transform">
+              <span>🎧 清晰度 {analysisBar.clarity}/5 · {paceLabel(analysisBar.pace)} · 自信 {analysisBar.confidence}/5</span>
+              <span className="opacity-50">✕</span>
+            </button>
+          )}
         </div>
       </div>
       {/* portrait + aura —— 键盘弹起时（body.ios-keyboard-open）整块收起，把可视区让给消息+输入框，

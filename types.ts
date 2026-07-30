@@ -231,6 +231,26 @@ export type MinimaxRegion = 'domestic' | 'overseas';
 // 'elevenlabs' 走 ElevenLabs。全局三选一：切换后所有语音场景（聊天语音条 / 约会 / 电话）统一用同一家。
 export type TtsProvider = 'minimax' | 'fishaudio' | 'elevenlabs';
 
+/**
+ * 语音面试/场景通话自动开始配置（OSContext.callAutoStart）——上岸计划等场景拨通 CallApp 时携带：
+ * 角色 + 场景设定（拼在 coreContext 前）+ 顶部小字 + 对话/STT/TTS 覆盖 + 音频分析。挂断即清。
+ */
+export interface CallAutoStartConfig {
+  charId: string;
+  /** 场景设定，拼在通话 coreContext 前（如面试官身份/岗位背景），指导 AI 行为 */
+  sceneContext: string;
+  /** 通话页顶部小字（如「模拟面试 · 严肃面试官」） */
+  sceneLabel?: string;
+  /** 覆盖对话 LLM（面试独立 API），缺省用通话默认解析链 */
+  apiOverride?: Partial<APIConfig>;
+  /** 覆盖云端 STT（provider 固定 cloud） */
+  sttOverride?: { baseUrl?: string; apiKey?: string; model?: string };
+  /** 覆盖 TTS 服务商（密钥沿用全局） */
+  ttsProviderOverride?: TtsProvider;
+  /** 音频说话状态分析（面试专用）：开关 + 分析用 API + 转写方式 */
+  audioAnalysis?: { enabled: boolean; api?: Partial<APIConfig>; transcribeMode?: 'stt' | 'audioModel' };
+}
+
 export interface APIConfig {
   baseUrl: string;
   apiKey: string;
@@ -2308,6 +2328,8 @@ export interface JobPosition {
     hrName?: string;
     /** 项目名/业务线 — 可进 prompt，面试出题与岗位分析素材 */
     projectName?: string;
+    /** 工作地点/城市 — 可选，可进 prompt（面试出题/岗位分析素材）；非强隐私，默认不打码 */
+    location?: string;
     /** 岗位笔记 — 自由展开内容（面经细节/灵感/待查事项）；nextStep 保持一句话策略位。进 prompt 同 JD 待遇（脱敏+截断） */
     notes?: string;
     /** 环节轮次（面试/笔试统一）；旧数据无此字段按空数组处理 */
