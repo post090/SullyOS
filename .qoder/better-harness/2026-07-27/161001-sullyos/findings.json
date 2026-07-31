@@ -1,0 +1,144 @@
+{
+  "summary": {
+    "projectName": "SullyOS",
+    "locale": "zh-CN",
+    "modelId": "agent-work-loop-v4",
+    "reportContractVersion": 25,
+    "overview": "项目本体的文档地图、测试资产与 CI 工作流基础扎实，但这些能力尚未接入当前提供方的规则面：交付验收仍靠手动构建链条，组件层改动缺少验证覆盖，学习回路因窗口证据不足暂无法判定。",
+    "aiAgentPractice": {
+      "inspectedSurfaces": [
+        "Workflows"
+      ],
+      "coverageRows": [
+        {
+          "surface": "Workflows",
+          "scopes": [
+            "Project"
+          ],
+          "count": 2,
+          "paths": [
+            ".github/workflows/build-apk.yml",
+            ".github/workflows/sync-upstream.yml"
+          ]
+        },
+        {
+          "surface": "Custom Agents",
+          "scopes": [
+            "Project"
+          ],
+          "count": 0
+        },
+        {
+          "surface": "Memories",
+          "scopes": [
+            "Project"
+          ],
+          "count": 2
+        }
+      ]
+    },
+    "assignmentSummaries": [],
+    "dimensions": [
+      {
+        "id": "task-understanding",
+        "label": "任务理解",
+        "score": 64,
+        "summary": "仓库有丰富的\"改 X 前必读 Y\"文档地图，但该导航仅存在于另一提供方的指令文件中，当前提供方项目规则与 AGENTS.md 为零，大型源码树无嵌套指令覆盖。",
+        "findingRefs": [
+          "agent-guidance-not-routed"
+        ]
+      },
+      {
+        "id": "controlled-execution",
+        "label": "可控执行",
+        "score": 70,
+        "summary": "构建/测试/同步脚本与包管理器声明清晰可达（pnpm + lockfile），但本窗口会话未观察到任何脚本被实际执行的证据，停留在配置可达层。",
+        "findingRefs": []
+      },
+      {
+        "id": "change-validation",
+        "label": "改动验证",
+        "score": 66,
+        "summary": "utils/worker 层有 120 个跟踪测试文件且历史上源码与测试常见共改；但 180 个组件源文件零测试、测试配置显式排除组件层，本次变更窗口的 UI 改动无伴生验证。",
+        "findingRefs": [
+          "component-change-validation-gap",
+          "image-fallback-no-diagnostics"
+        ]
+      },
+      {
+        "id": "reliable-delivery",
+        "label": "可靠交付",
+        "score": 50,
+        "summary": "APK 构建工作流仅支持手动触发，无 PR/push 自动检查门禁；本窗口内高置信度的交付需求（提交并构建）以未观察到验收证据收束，验收检查在当前边界内不可判定。",
+        "findingRefs": [
+          "delivery-acceptance-manual-only"
+        ]
+      },
+      {
+        "id": "learning-capture",
+        "label": "经验沉淀",
+        "score": 42,
+        "summary": "本次完成了有边界的学习回路评审：记忆治理与资产覆盖检查为干净，但 30 天窗口内仅 2 个活动日、1 个合格任务 Episode，重复性判定因 Episode 不足而无法得出结论。",
+        "findingRefs": []
+      }
+    ]
+  },
+  "findings": [
+    {
+      "id": "agent-guidance-not-routed",
+      "title": "项目治理文档地图未接入当前提供方，大型仓库无 AGENTS.md 覆盖",
+      "severity": "Medium",
+      "reason": "事实：项目证据包报告 agentInstructions status=missing（建议至少 2 份），884 个跟踪文件、30 个核心候选的源码树无任何 AGENTS.md；当前提供方项目规则/技能/命令资产计数全部为零。仓库根部存在另一提供方的指令文件，内含完整的\"改某模块前必读某文档\"路由表（fork-governance、instant-push 契约、记忆系统等）。推断：当前提供方执行任务时不会被自动路由到这些治理约束，改动持续运行/推送/记忆等敏感模块时存在错失权威上下文的实际风险。不确定性：无法证明某次任务因此实际出错，本窗口会话无编辑事件可供对照。",
+      "expectedOutput": [
+        "任何提供方的编码代理在动工前都能从根 AGENTS.md 被路由到对应模块的治理文档，无需依赖特定提供方的指令文件。"
+      ],
+      "expectedArtifact": "AGENTS.md",
+      "aiFixPrompt": "/better-harness fix this issue\n\n在仓库根目录创建 AGENTS.md，将现有文档地图（各模块\"动工前必读\"路由表）以提供方中立的形式引用过来，不重写文档内容本身；为最大的两个源码区（utils/、components/chat/）各加一份最小的嵌套 AGENTS.md，说明模块边界与必读文档。\n\n## 约束\n\n- 只新增导航与约束引用，不复制粘贴长文档正文\n- 保持既有另一提供方指令文件不动\n\n## Validation\n\n- git ls-files 中出现根 AGENTS.md 与至少 1 份嵌套 AGENTS.md\n- 重跑项目证据包，确认 agentInstructions 状态不再为 missing",
+      "dimensionRefs": [
+        "task-understanding"
+      ]
+    },
+    {
+      "id": "component-change-validation-gap",
+      "title": "180 个组件源文件零测试，本次变更窗口的 UI 改动无伴生验证",
+      "severity": "Medium",
+      "reason": "事实：测试配置的 include 仅覆盖 utils 与 worker，注释明确说明因未安装 jsdom 而排除 React 组件测试；语言画像显示 tsx 源文件 180 个、测试文件 0 个。证据包在生成时刻检测到 6 个 UI 组件源文件改动而无任何 story/快照/测试伴生更新（ui-story-snapshot-sync，中等置信度）。推断：组件层回归只能靠人工肉眼发现，UI 热点文件（如聊天消息渲染链）的改动风险随迭代速度累积。不确定性：漂移检测基于当时的 diff，具体改动集会随提交演进。",
+      "expectedOutput": [
+        "UI 组件改动可以由至少一条项目自有检查覆盖，而不是完全依赖人工验证。"
+      ],
+      "expectedArtifact": "组件测试通道 + 样板测试",
+      "aiFixPrompt": "/better-harness fix this issue\n\n为组件层建立最小验证能力：在 vitest 配置中增加一个 jsdom（或 @vitest/browser）环境的组件测试通道，并为改动最频繁的聊天消息渲染组件补一个最小交互测试作为样板。\n\n## 约束\n\n- 需要新增 devDependencies（jsdom、@testing-library/react 等），安装前向用户确认\n- 不改动现有 utils/worker 测试通道的 node 环境配置\n\n## Validation\n\n- pnpm vitest run 全量通过，且运行清单中包含至少 1 个组件测试文件",
+      "dimensionRefs": [
+        "change-validation"
+      ]
+    },
+    {
+      "id": "delivery-acceptance-manual-only",
+      "title": "交付验收无自动门禁：APK 构建仅手动触发，PR/push 无任何检查",
+      "severity": "Medium",
+      "reason": "事实：build-apk 工作流仅配置 workflow_dispatch 手动触发（文件内注释确认了这一现状），仓库无 PR/push 触发的测试、lint 或构建检查工作流。本窗口会话中存在一条高置信度的交付需求（提交并构建 APK 以供使用），其验收证据在观察边界内为 unobserved。推断：交付正确性完全依赖操作者手动串联\"提交→手动触发构建→自行确认产物\"，任一环节遗漏都不会被系统拦截。不确定性：外部 CI 运行历史未打开，无法断言历史构建的成败情况。",
+      "expectedOutput": [
+        "每次提交都自动产生一条与当前修订绑定的验收证据，交付不再完全依赖手动链条。"
+      ],
+      "expectedArtifact": "CI 检查工作流",
+      "aiFixPrompt": "/better-harness fix this issue\n\n新增一个轻量 CI 检查工作流：在 push 与 pull_request 上运行 pnpm install --frozen-lockfile 与 pnpm run test:run（现有 vitest 通道），使每次提交至少有一条自动验收证据；APK 构建仍保留手动触发不变。\n\n## 约束\n\n- 不改动现有 build-apk 与 sync-upstream 工作流\n- 新工作流推送到远端属于外部可见变更，提交/推送前需用户确认\n\n## Validation\n\n- 新工作流文件通过 YAML 语法检查\n- 一次 push 后能在 CI 上看到该检查的运行记录",
+      "dimensionRefs": [
+        "reliable-delivery"
+      ]
+    },
+    {
+      "id": "image-fallback-no-diagnostics",
+      "title": "外链图片镜像降级链全程无诊断记录，事后无法定位裂图原因",
+      "severity": "Low",
+      "reason": "事实：外链图片组件的降级路径（原链失败→记入会话级死亡名单→切换公共镜像→镜像全挂交回调用方）经源码核验全程零日志，也未接入项目自有的 devDebug 分类日志体系（该体系的模块级 logger 工厂正是为此类排障设计）。该链路是活跃维护点：当前 HEAD 提交即为裂图兜底修复。推断：用户报告\"表情包裂了/图变慢了\"时，无法从捕获日志判断是原链失败、哪个镜像被使用、还是全链失败，与项目排障文档确立的\"对时间线\"方法论脱节。不确定性：未实际触发一次线上裂图来验证排障成本。",
+      "expectedOutput": [
+        "裂图类反馈可以直接用捕获日志定位到具体失败节点，不再依赖用户复述与盲猜。"
+      ],
+      "expectedArtifact": "降级链诊断日志",
+      "aiFixPrompt": "/better-harness fix this issue\n\n将外链图片组件的降级事件接入项目自有的 devDebug 分类日志：在原链失败记入死亡名单、切换到某个镜像、镜像全部失败三个节点，用现有的模块级 logger 工厂各记一条事件（含图床 host 与所用镜像序号），遵循现有日志体系的门禁与脱敏约定。\n\n## 约束\n\n- 复用现有日志工厂与捕获类别，不新建日志通道\n- 不改变降级行为本身\n\n## Validation\n\n- pnpm vitest run 通过\n- 本地用一个无效外链图片地址触发降级，在调试面板中能看到对应事件条目",
+      "dimensionRefs": [
+        "change-validation"
+      ]
+    }
+  ]
+}

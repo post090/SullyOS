@@ -133,3 +133,33 @@ export const exportAllNotes = async (notes: JobNote[]): Promise<ExportResult> =>
         shareTitle: '上岸计划笔记',
     });
 };
+
+/**
+ * 导出一组预格式化的文本条目为 zip（岗位库等复用；每条一个 txt，文件名去重，zip 名带时间戳）。
+ * 文本由调用方（掌握各自的标签/字段含义）拼好后传入，本层只管打包 + 分享/下载。
+ */
+export const exportTextEntries = async (
+    entries: { name: string; text: string }[],
+    opts: { zipBaseName: string; shareTitle: string },
+): Promise<ExportResult> => {
+    if (!entries.length) throw new Error('没有可导出的内容');
+    const mod: any = await import('jszip');
+    const JSZip = mod.default || mod;
+    const zip = new JSZip();
+    const used = new Set<string>();
+    entries.forEach((e, idx) => {
+        const base = safeFileName(e.name, `条目${idx + 1}`);
+        let name = `${base}.txt`;
+        let k = 2;
+        while (used.has(name)) { name = `${base}(${k++}).txt`; }
+        used.add(name);
+        zip.file(name, e.text);
+    });
+    const blob: Blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+    return shareOrDownload({
+        fileName: `${opts.zipBaseName}_${exportStamp()}.zip`,
+        mime: 'application/zip',
+        blob,
+        shareTitle: opts.shareTitle,
+    });
+};

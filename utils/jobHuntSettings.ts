@@ -42,6 +42,8 @@ export interface JobHuntSettings {
         ttsProvider: 'follow' | 'minimax' | 'fishaudio' | 'elevenlabs';
         audio: JobApiRef | null;
         audioAnalysis: boolean;
+        /** 音频理解模式：off=不用 / follow=跟随全局主模型（自带音频理解）/ dedicated=单独配音频模型。audioAnalysis 与它保持同步（off 即 false） */
+        audioMode: 'off' | 'follow' | 'dedicated';
         transcribeMode: 'stt' | 'audioModel';
         /** 面试：关闭角色语音播放（只看文字） */
         mutePlayback: boolean;
@@ -57,6 +59,8 @@ export interface JobHuntSettings {
     redactMode: { company: 'initial' | 'pinyin' | 'custom' | 'off'; name: 'fixed' | 'pinyin' | 'off' };
     /** 岗位列表视图：简略（一行预览）/ 详细 / 竖卡片瀑布流 */
     positionView: 'compact' | 'detailed' | 'masonry';
+    /** 笔记本视图：简略（一行）/ 详细（默认）/ 双列 */
+    noteView: 'compact' | 'detailed' | 'masonry';
 }
 
 export const JH_SETTINGS_KEY = 'os_jobhunt_settings';
@@ -67,15 +71,21 @@ export const DEFAULT_JH_SETTINGS: JobHuntSettings = {
     aiPerms: { posProgress: true, posFields: true, posDelete: true, noteCreate: true, noteEdit: true, noteDelete: true, profile: true },
     interviewInject: { profile: true, resumeDigest: true },
     practiceTemplates: [],
-    api: { chat: null, stt: null, ttsProvider: 'follow', audio: null, audioAnalysis: false, transcribeMode: 'stt', mutePlayback: false, interviewSkin: 'proLight' },
+    api: { chat: null, stt: null, ttsProvider: 'follow', audio: null, audioAnalysis: false, audioMode: 'off', transcribeMode: 'stt', mutePlayback: false, interviewSkin: 'proLight' },
     redactMode: { company: 'initial', name: 'fixed' },
     positionView: 'detailed',
+    noteView: 'detailed',
 };
 
 /** 读取 + 缺省合并（嵌套对象逐层兜底，老数据/部分写入都能补齐新字段） */
 export const loadJhSettings = (): JobHuntSettings => {
     let raw: any = {};
     try { raw = JSON.parse(localStorage.getItem(JH_SETTINGS_KEY) || '{}') || {}; } catch { raw = {}; }
+    const api = { ...DEFAULT_JH_SETTINGS.api, ...(raw.api || {}) };
+    // 迁移：老数据只有 audioAnalysis(bool)+audio，没有 audioMode 时按其推断
+    if (!(raw.api && raw.api.audioMode)) {
+        api.audioMode = api.audioAnalysis ? (api.audio ? 'dedicated' : 'follow') : 'off';
+    }
     return {
         ...DEFAULT_JH_SETTINGS,
         ...raw,
@@ -83,7 +93,7 @@ export const loadJhSettings = (): JobHuntSettings => {
         aiPerms: { ...DEFAULT_JH_SETTINGS.aiPerms, ...(raw.aiPerms || {}) },
         interviewInject: { ...DEFAULT_JH_SETTINGS.interviewInject, ...(raw.interviewInject || {}) },
         practiceTemplates: Array.isArray(raw.practiceTemplates) ? raw.practiceTemplates : [],
-        api: { ...DEFAULT_JH_SETTINGS.api, ...(raw.api || {}) },
+        api,
         redactMode: { ...DEFAULT_JH_SETTINGS.redactMode, ...(raw.redactMode || {}) },
     };
 };

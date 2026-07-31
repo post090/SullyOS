@@ -16,7 +16,7 @@ import { parseJobHuntCommands, JOB_COMMAND_GUIDE, normalizeJobStage } from '../u
 import { buildPositionPromptLine, fmtJobTime, nextInterviewTs, waitingDays, ROUND_KIND_LABEL, ROUND_STATUS_LABEL, relTimeLabel } from '../utils/jobDirectives';
 import { parseResumeIntoProfile } from '../utils/jobProfileGen';
 import { JobHuntSettings, JH_SETTINGS_KEY, loadJhSettings, JobApiRef } from '../utils/jobHuntSettings';
-import { exportSingleNote, exportAllNotes } from '../utils/jobNoteExport';
+import { exportSingleNote, exportAllNotes, exportTextEntries } from '../utils/jobNoteExport';
 import { redactPrivacy, codifyCompanies, genCompanyCode, RedactResult, NameRedactMode } from '../utils/privacyRedact';
 import { synthesizeSpeech, characterHasVoice } from '../utils/ttsRouter';
 import { hashTtsParams, getCachedTts, saveCachedTts } from '../utils/ttsCache';
@@ -854,9 +854,23 @@ const JobHuntApp: React.FC = () => {
                     ? { baseUrl: jhSettings.api.stt.baseUrl, apiKey: jhSettings.api.stt.apiKey, model: jhSettings.api.stt.model }
                     : undefined,
                 ttsProviderOverride: jhSettings.api.ttsProvider !== 'follow' ? jhSettings.api.ttsProvider : undefined,
-                audioAnalysis: (jhSettings.api.audioAnalysis && jhSettings.api.audio?.baseUrl)
-                    ? { enabled: true, api: { baseUrl: jhSettings.api.audio.baseUrl, apiKey: jhSettings.api.audio.apiKey, model: jhSettings.api.audio.model }, transcribeMode: jhSettings.api.transcribeMode }
-                    : undefined,
+                audioAnalysis: (() => {
+                    const m = jhSettings.api.audioMode || (jhSettings.api.audioAnalysis ? (jhSettings.api.audio ? 'dedicated' : 'follow') : 'off');
+                    if (m === 'off') return undefined;
+                    if (m === 'follow') {
+                        // 跟随全局：用面试主对话模型（需支持音频输入）做音频理解，不另配模型
+                        const g: { baseUrl?: string; apiKey?: string; model?: string } | null = jhSettings.api.chat?.baseUrl ? jhSettings.api.chat
+                            : selectedChar.jobHuntApiOverride?.baseUrl ? selectedChar.jobHuntApiOverride
+                            : selectedChar.chatApiOverride?.baseUrl ? selectedChar.chatApiOverride
+                            : (apiConfig?.baseUrl ? { baseUrl: apiConfig.baseUrl, apiKey: apiConfig.apiKey, model: apiConfig.model } : null);
+                        return g?.baseUrl
+                            ? { enabled: true, api: { baseUrl: g.baseUrl, apiKey: g.apiKey, model: g.model }, transcribeMode: jhSettings.api.transcribeMode }
+                            : undefined;
+                    }
+                    return jhSettings.api.audio?.baseUrl
+                        ? { enabled: true, api: { baseUrl: jhSettings.api.audio.baseUrl, apiKey: jhSettings.api.audio.apiKey, model: jhSettings.api.audio.model }, transcribeMode: jhSettings.api.transcribeMode }
+                        : undefined;
+                })(),
                 mutePlayback: jhSettings.api.mutePlayback,
                 skin: jhSettings.api.interviewSkin === 'proLight' ? 'proLight' : undefined,
                 // 挂断时按这个上下文补一条 interview 练习记录进「练习记录」（有说过话才记）
@@ -1344,6 +1358,48 @@ const JobHuntApp: React.FC = () => {
         }
     }, [notes, addToast]);
 
+    // 新建空白笔记（手动）：先落一条占位再直接进编辑态，用户写完保存即可。
+    const createBlankNote = useCallback(async () => {
+        if (!selectedChar?.id) { addToast('先在右上角选一个角色', 'info'); return; }
+        const now = Date.now();
+        const note: JobNote = { id: genId('jnote'), kind: 'note', title: '新笔记', content: '', charId: selectedChar.id, createdAt: now, updatedAt: now };
+        await DB.saveJobNote(note);
+        await reloadAll();
+        setViewingNote(note);
+        setNoteEditTitle(note.title);
+        setNoteEditContent('');
+        setNoteEditing(true);
+    }, [selectedChar?.id, reloadAll, addToast]);
+
+    // 岗位库导出全部（打包 zip，每个岗位一个 txt）。真实公司名/HR 名属本地展示字段，只进本地导出，不上云。
+    const handleExportAllPositions = useCallback(async () => {
+        if (!positions.length) { addToast('还没有岗位可导出', 'info'); return; }
+        const positionToTxt = (p: JobPosition): string => {
+            const lines = [
+                `${p.code}${p.title && p.title !== p.code ? ' · ' + p.title : ''}`,
+                `【阶段】${STAGE_LABEL[p.stage]}`,
+                p.companyNameLocal ? `【公司】${p.companyNameLocal}` : '',
+                p.projectName ? `【项目/业务】${p.projectName}` : '',
+                p.location ? `【地点】${p.location}` : '',
+                p.hrName ? `【HR】${p.hrName}` : '',
+                p.interviewAt ? `【下一场面试】${new Date(p.interviewAt).toLocaleString('zh-CN')}` : '',
+                p.nextStep ? `【下一步】${p.nextStep}` : '',
+                `【更新】${new Date(p.updatedAt).toLocaleString('zh-CN')}`,
+                '────────────────────',
+                p.jd ? `[JD]\n${p.jd}\n` : '',
+                p.notes ? `[岗位笔记]\n${p.notes}` : '',
+            ].filter(Boolean);
+            return lines.join('\n') + '\n';
+        };
+        try {
+            const entries = positions.map(p => ({ name: `${p.code}${p.title && p.title !== p.code ? ' ' + p.title : ''}`, text: positionToTxt(p) }));
+            const r = await exportTextEntries(entries, { zipBaseName: '上岸计划岗位', shareTitle: '上岸计划岗位库' });
+            addToast(r === 'shared' ? '已打开分享' : `已导出 ${positions.length} 个岗位`, 'success');
+        } catch (e: any) {
+            addToast('导出失败：' + (e?.message || e), 'error');
+        }
+    }, [positions, addToast]);
+
     // 标签 / 绑定岗位：直接改、立即落库（不必进“编辑”态，方便随手管理；纯人类，AI 不碰）
     const patchViewingNote = useCallback(async (p: Partial<JobNote>) => {
         if (!viewingNote) return;
@@ -1650,37 +1706,45 @@ const JobHuntApp: React.FC = () => {
                                 <div className="text-[10px] text-slate-400 mt-1 px-1">只改语音面试（openCallWithChar）的配色，不影响普通通话</div>
                             </div>
                             <div>
-                                <button onClick={() => patchJhSettings({ api: { ...jhSettings.api, audioAnalysis: !jhSettings.api.audioAnalysis } })}
-                                    className="w-full flex items-center justify-between bg-slate-50 rounded-2xl px-4 py-3 active:scale-[0.98] transition-transform">
-                                    <div className="text-left">
-                                        <div className="text-xs font-bold text-slate-700">说话状态分析（语音面试）</div>
-                                        <div className="text-[10px] text-slate-400 mt-0.5">音频理解模型听你的回答，给清晰度/语速/自信度反馈，挂断后出表达复盘</div>
+                                <div className="text-xs font-bold text-slate-700">说话状态分析（语音面试）</div>
+                                <div className="text-[10px] text-slate-400 mt-0.5 mb-2">听你的回答给清晰度/语速/自信度反馈；转写的话会连同说话状态一起发给面试官，挂断后出表达复盘</div>
+                                <div className="space-y-1.5">
+                                    {([
+                                        ['off', '不使用', '关掉音频理解。你说的话只做语音转写后直接发，不分析说话状态'] as const,
+                                        ['follow', '跟随全局（主模型自带）', '不另配模型，用上面配的面试主对话模型来听音频（需该模型支持音频输入）；仍会转写文字，音频交给它一起理解'] as const,
+                                        ['dedicated', '独立音频模型', '单独配一个多模态模型专门听你的回答'] as const,
+                                    ]).map(([v, label, desc]) => {
+                                        const on = (jhSettings.api.audioMode || 'off') === v;
+                                        return (
+                                            <button key={v} onClick={() => patchJhSettings({ api: { ...jhSettings.api, audioMode: v, audioAnalysis: v !== 'off' } })}
+                                                className={`w-full text-left px-3 py-2 rounded-xl border transition-all active:scale-[0.99] ${on ? 'bg-sky-50 border-sky-200 ring-1 ring-sky-100' : 'bg-white border-slate-200'}`}>
+                                                <div className={`text-xs font-bold ${on ? 'text-sky-600' : 'text-slate-600'}`}>{label}</div>
+                                                <div className="text-[10px] text-slate-400 mt-0.5 leading-tight">{desc}</div>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                                {jhSettings.api.audioMode === 'dedicated' && (
+                                    <div className="mt-2">
+                                        <div className="text-[11px] font-bold text-slate-600 mb-1">音频理解模型</div>
+                                        <ApiConnectionPicker value={jhSettings.api.audio} onChange={v => patchJhSettings({ api: { ...jhSettings.api, audio: v ? { ...v } : null } })} compact hint={null} />
+                                        <div className="text-[10px] text-slate-400 mt-1 px-1">要选支持音频输入的多模态模型；不选则分析不生效</div>
                                     </div>
-                                    <div className={`w-11 h-6 rounded-full p-0.5 transition-colors shrink-0 ${jhSettings.api.audioAnalysis ? 'bg-sky-500' : 'bg-slate-300'}`}>
-                                        <div className={`w-5 h-5 bg-white rounded-full shadow transition-transform ${jhSettings.api.audioAnalysis ? 'translate-x-5' : ''}`} />
-                                    </div>
-                                </button>
-                                {jhSettings.api.audioAnalysis && (
-                                    <div className="mt-2 space-y-2.5">
-                                        <div>
-                                            <div className="text-[11px] font-bold text-slate-600 mb-1">音频理解模型</div>
-                                            <ApiConnectionPicker value={jhSettings.api.audio} onChange={v => patchJhSettings({ api: { ...jhSettings.api, audio: v ? { ...v } : null } })} compact hint={null} />
-                                            <div className="text-[10px] text-slate-400 mt-1 px-1">要选支持音频输入的多模态模型；不选则分析不生效</div>
-                                        </div>
-                                        <div>
-                                            <div className="text-[11px] font-bold text-slate-600 mb-1">转写方式</div>
-                                            <div className="space-y-1.5">
-                                                {([
-                                                    ['stt', '双轨（推荐）', 'STT 先出字不等人，音频模型后台慢慢分析状态'] as const,
-                                                    ['audioModel', '一体', '录音直接交给音频模型，转写+分析一次完成（出字较慢）'] as const,
-                                                ]).map(([v, label, desc]) => (
-                                                    <button key={v} onClick={() => patchJhSettings({ api: { ...jhSettings.api, transcribeMode: v } })}
-                                                        className={`w-full text-left px-3 py-2 rounded-xl border transition-all active:scale-[0.99] ${jhSettings.api.transcribeMode === v ? 'bg-sky-50 border-sky-200 ring-1 ring-sky-100' : 'bg-white border-slate-200'}`}>
-                                                        <div className={`text-xs font-bold ${jhSettings.api.transcribeMode === v ? 'text-sky-600' : 'text-slate-600'}`}>{label}</div>
-                                                        <div className="text-[10px] text-slate-400 mt-0.5">{desc}</div>
-                                                    </button>
-                                                ))}
-                                            </div>
+                                )}
+                                {(jhSettings.api.audioMode === 'dedicated' || jhSettings.api.audioMode === 'follow') && (
+                                    <div className="mt-2">
+                                        <div className="text-[11px] font-bold text-slate-600 mb-1">转写方式</div>
+                                        <div className="space-y-1.5">
+                                            {([
+                                                ['stt', '双轨（推荐）', 'STT 先出字不等人，音频模型后台慢慢分析状态'] as const,
+                                                ['audioModel', '一体', '录音直接交给音频模型，转写+分析一次完成（出字较慢）'] as const,
+                                            ]).map(([v, label, desc]) => (
+                                                <button key={v} onClick={() => patchJhSettings({ api: { ...jhSettings.api, transcribeMode: v } })}
+                                                    className={`w-full text-left px-3 py-2 rounded-xl border transition-all active:scale-[0.99] ${jhSettings.api.transcribeMode === v ? 'bg-sky-50 border-sky-200 ring-1 ring-sky-100' : 'bg-white border-slate-200'}`}>
+                                                    <div className={`text-xs font-bold ${jhSettings.api.transcribeMode === v ? 'text-sky-600' : 'text-slate-600'}`}>{label}</div>
+                                                    <div className="text-[10px] text-slate-400 mt-0.5">{desc}</div>
+                                                </button>
+                                            ))}
                                         </div>
                                     </div>
                                 )}
@@ -1723,6 +1787,57 @@ const JobHuntApp: React.FC = () => {
     );
 
     // ─── 渲染：聊天视图（文档流）───────────────────────────
+
+    // 岗位/竞争力档案相关 hooks 必须放在下面聊天视图早 return 之前，否则进入聊天视图时少跑这几个 hook 会触发 React #300。
+    const filteredPositions = useMemo(() => {
+        const q = posSearch.trim().toLowerCase();
+        let list = positions.filter(p => {
+            if (posStageFilter.size > 0 && !posStageFilter.has(p.stage)) return false;
+            if (!q) return true;
+            return [p.code, p.title, p.companyNameLocal, p.projectName, p.location, p.jd, p.notes]
+                .some(f => (f || '').toLowerCase().includes(q));
+        });
+        list = [...list].sort((a, b) => {
+            if (posSort === 'stage') return (STAGE_ORDER[a.stage] - STAGE_ORDER[b.stage]) || (b.updatedAt - a.updatedAt);
+            if (posSort === 'company') return (a.companyNameLocal || a.code).localeCompare(b.companyNameLocal || b.code, 'zh');
+            return b.updatedAt - a.updatedAt; // updated
+        });
+        return list;
+    }, [positions, posSearch, posStageFilter, posSort]);
+
+    // 分组：不分组 / 按阶段 / 按岗位名（带计数）
+    const positionGroups = useMemo<{ key: string; label: string; stage: JobStage | null; items: JobPosition[] }[]>(() => {
+        if (posGroupBy === 'stage') {
+            const order = (Object.keys(STAGE_ORDER) as JobStage[]).sort((a, b) => STAGE_ORDER[a] - STAGE_ORDER[b]);
+            return order
+                .map(st => ({ key: st, label: STAGE_LABEL[st], stage: st, items: filteredPositions.filter(p => p.stage === st) }))
+                .filter(g => g.items.length > 0);
+        }
+        if (posGroupBy === 'title') {
+            const map = new Map<string, JobPosition[]>();
+            filteredPositions.forEach(p => { const k = (p.title || '未命名').trim(); if (!map.has(k)) map.set(k, []); map.get(k)!.push(p); });
+            return [...map.entries()].map(([k, items]) => ({ key: `t_${k}`, label: k, stage: null, items }));
+        }
+        return [{ key: 'all', label: '', stage: null, items: filteredPositions }];
+    }, [filteredPositions, posGroupBy]);
+
+    // C3 驾驶舱统计：在投/面试中/已上岸 + 阶段漏斗 + 下一步拉平
+    const cockpit = useMemo(() => {
+        const activeCount = positions.filter(p => ['applied', 'written', 'interview', 'offer_talk'].includes(p.stage)).length;
+        const interviewing = positions.filter(p => p.stage === 'interview').length;
+        const offers = positions.filter(p => p.stage === 'offer').length;
+        const funnel = (['watching', 'applied', 'written', 'interview', 'offer_talk', 'offer'] as JobStage[])
+            .map(st => ({ st, label: STAGE_LABEL[st], count: positions.filter(p => p.stage === st).length }));
+        const nextSteps = positions.filter(p => p.stage !== 'rejected' && (p.nextStep || '').trim())
+            .map(p => ({ id: p.id, code: p.code, nextStep: (p.nextStep || '').trim() }));
+        return { activeCount, interviewing, offers, funnel, nextSteps };
+    }, [positions]);
+
+    // C3：竞争力档案落库 + 刷新（用户手改条目 source:'user'）
+    const saveProfile = useCallback(async (next: JobProfile) => {
+        await DB.saveJobProfile(next);
+        setJobProfile(next);
+    }, []);
 
     if (view === 'chat' && activeSession) {
         const interview = activeSession.interview;
@@ -1924,56 +2039,7 @@ const JobHuntApp: React.FC = () => {
 
     const sessionCharName = (s: JobSession) => characters.find(c => c.id === s.charId)?.name || '角色已删除';
 
-    // 岗位浏览：搜索（code/title/公司/项目名/jd/notes）+ 阶段多选筛选 + 排序（纯前端）
-    const filteredPositions = useMemo(() => {
-        const q = posSearch.trim().toLowerCase();
-        let list = positions.filter(p => {
-            if (posStageFilter.size > 0 && !posStageFilter.has(p.stage)) return false;
-            if (!q) return true;
-            return [p.code, p.title, p.companyNameLocal, p.projectName, p.location, p.jd, p.notes]
-                .some(f => (f || '').toLowerCase().includes(q));
-        });
-        list = [...list].sort((a, b) => {
-            if (posSort === 'stage') return (STAGE_ORDER[a.stage] - STAGE_ORDER[b.stage]) || (b.updatedAt - a.updatedAt);
-            if (posSort === 'company') return (a.companyNameLocal || a.code).localeCompare(b.companyNameLocal || b.code, 'zh');
-            return b.updatedAt - a.updatedAt; // updated
-        });
-        return list;
-    }, [positions, posSearch, posStageFilter, posSort]);
-
-    // 分组：不分组 / 按阶段 / 按岗位名（带计数）
-    const positionGroups = useMemo<{ key: string; label: string; stage: JobStage | null; items: JobPosition[] }[]>(() => {
-        if (posGroupBy === 'stage') {
-            const order = (Object.keys(STAGE_ORDER) as JobStage[]).sort((a, b) => STAGE_ORDER[a] - STAGE_ORDER[b]);
-            return order
-                .map(st => ({ key: st, label: STAGE_LABEL[st], stage: st, items: filteredPositions.filter(p => p.stage === st) }))
-                .filter(g => g.items.length > 0);
-        }
-        if (posGroupBy === 'title') {
-            const map = new Map<string, JobPosition[]>();
-            filteredPositions.forEach(p => { const k = (p.title || '未命名').trim(); if (!map.has(k)) map.set(k, []); map.get(k)!.push(p); });
-            return [...map.entries()].map(([k, items]) => ({ key: `t_${k}`, label: k, stage: null, items }));
-        }
-        return [{ key: 'all', label: '', stage: null, items: filteredPositions }];
-    }, [filteredPositions, posGroupBy]);
-
-    // C3 驾驶舱统计：在投/面试中/已上岸 + 阶段漏斗 + 下一步拉平
-    const cockpit = useMemo(() => {
-        const activeCount = positions.filter(p => ['applied', 'written', 'interview', 'offer_talk'].includes(p.stage)).length;
-        const interviewing = positions.filter(p => p.stage === 'interview').length;
-        const offers = positions.filter(p => p.stage === 'offer').length;
-        const funnel = (['watching', 'applied', 'written', 'interview', 'offer_talk', 'offer'] as JobStage[])
-            .map(st => ({ st, label: STAGE_LABEL[st], count: positions.filter(p => p.stage === st).length }));
-        const nextSteps = positions.filter(p => p.stage !== 'rejected' && (p.nextStep || '').trim())
-            .map(p => ({ id: p.id, code: p.code, nextStep: (p.nextStep || '').trim() }));
-        return { activeCount, interviewing, offers, funnel, nextSteps };
-    }, [positions]);
-
-    // C3：竞争力档案落库 + 刷新（用户手改条目 source:'user'）
-    const saveProfile = useCallback(async (next: JobProfile) => {
-        await DB.saveJobProfile(next);
-        setJobProfile(next);
-    }, []);
+    // filteredPositions / positionGroups / cockpit / saveProfile 已上移至聊天视图早 return 之前（修复 React #300）。
 
     return (
         <div className="h-full w-full bg-[#f6f8fa] flex flex-col font-sans relative">
@@ -1987,13 +2053,7 @@ const JobHuntApp: React.FC = () => {
                         <ReadCvLogo className="w-5 h-5 text-sky-500" weight="fill" />
                         <span className="font-bold text-slate-800">上岸计划</span>
                     </div>
-                    <button onClick={() => setShowJhSettings(true)} className="p-2 ml-auto rounded-full hover:bg-slate-100 active:scale-90 transition-transform">
-                        <GearSix className="w-[18px] h-[18px] text-slate-400" />
-                    </button>
-                    <button onClick={() => setShowPrivacyInfo(true)} className="p-2 rounded-full hover:bg-slate-100 active:scale-90 transition-transform" aria-label="隐私说明">
-                        <Question className="w-[18px] h-[18px] text-slate-400" />
-                    </button>
-                    <div className="relative ml-1 shrink-0">
+                    <div className="relative ml-auto shrink-0">
                         <button onClick={() => setShowCharPicker(v => !v)}
                             className="block rounded-full border-2 border-sky-400 overflow-hidden active:scale-90 transition-transform" aria-label="切换角色">
                             {selectedChar?.avatar
@@ -2018,6 +2078,12 @@ const JobHuntApp: React.FC = () => {
                             </>
                         )}
                     </div>
+                    <button onClick={() => setShowJhSettings(true)} className="p-2 ml-1 rounded-full hover:bg-slate-100 active:scale-90 transition-transform">
+                        <GearSix className="w-[18px] h-[18px] text-slate-400" />
+                    </button>
+                    <button onClick={() => setShowPrivacyInfo(true)} className="p-2 rounded-full hover:bg-slate-100 active:scale-90 transition-transform" aria-label="隐私说明">
+                        <Question className="w-[18px] h-[18px] text-slate-400" />
+                    </button>
                 </div>
                 {/* Tab 栏 */}
                 <div className="flex px-4 gap-5">
@@ -2140,10 +2206,16 @@ const JobHuntApp: React.FC = () => {
                         {/* 头部：新建岗位（原右下角 FAB 补位到这里） */}
                         <div className="flex items-center">
                             <span className="text-sm font-bold text-slate-700">岗位库</span>
-                            <button onClick={() => { setEditingPosition(null); setPosCode(''); setPosTitle(''); setPosCompanyLocal(''); setPosNextStep(''); setPosJd(''); setPosHrName(''); setPosProjectName(''); setPosNotes(''); setPosInterviewAt(''); setPosWaiting(false); setPosCodeDirty(false); setShowNewPosition(true); }}
-                                className="ml-auto flex items-center gap-1 text-xs font-semibold text-white bg-sky-500 rounded-xl px-3 py-1.5 active:scale-95 transition-transform">
-                                <Plus className="w-4 h-4" weight="bold" />新建岗位
-                            </button>
+                            <div className="ml-auto flex items-center gap-2">
+                                {positions.length > 0 && (
+                                    <button onClick={handleExportAllPositions}
+                                        className="text-[11px] text-sky-600 font-semibold px-2 py-1 rounded-lg bg-sky-50 active:scale-95 transition-transform">导出全部 (zip)</button>
+                                )}
+                                <button onClick={() => { setEditingPosition(null); setPosCode(''); setPosTitle(''); setPosCompanyLocal(''); setPosNextStep(''); setPosJd(''); setPosHrName(''); setPosProjectName(''); setPosNotes(''); setPosInterviewAt(''); setPosWaiting(false); setPosCodeDirty(false); setShowNewPosition(true); }}
+                                    className="flex items-center gap-1 text-xs font-semibold text-white bg-sky-500 rounded-xl px-3 py-1.5 active:scale-95 transition-transform">
+                                    <Plus className="w-4 h-4" weight="bold" />新建岗位
+                                </button>
+                            </div>
                         </div>
                         {/* 浏览工具条：搜索 + 阶段多选 chips + 排序 + 分组开关（纯前端） */}
                         {positions.length > 0 && (
@@ -2319,18 +2391,27 @@ const JobHuntApp: React.FC = () => {
                 {/* Tab 3：笔记本 = 角色帮你记的东西 + 简历库 */}
                 {homeTab === 'notebook' && (
                     <div>
+                        {/* 头部：与「岗位库」一致的标题 + 新建 + 导出全部 */}
+                        <div className="flex items-center mb-3">
+                            <span className="text-sm font-bold text-slate-700">笔记本{notes.length ? ` · ${notes.length}` : ''}</span>
+                            <div className="ml-auto flex items-center gap-2">
+                                {notes.length > 0 && (
+                                    <button onClick={handleExportAllNotes}
+                                        className="text-[11px] text-sky-600 font-semibold px-2 py-1 rounded-lg bg-sky-50 active:scale-95 transition-transform">导出全部 (zip)</button>
+                                )}
+                                <button onClick={createBlankNote}
+                                    className="flex items-center gap-1 text-xs font-semibold text-white bg-sky-500 rounded-xl px-3 py-1.5 active:scale-95 transition-transform">
+                                    <Plus className="w-4 h-4" weight="bold" />新建
+                                </button>
+                            </div>
+                        </div>
                         {notes.length === 0 && (
                             <div className="text-center text-slate-400 text-sm mt-10 mb-6 px-8 leading-relaxed">
-                                角色帮你记的面试评价、简历建议、岗位分析都会集中在这里，方便回看。你还能给笔记打自定义标签、绑定岗位、搜索筛选。
+                                角色帮你记的面试评价、简历建议、岗位分析都会集中在这里，方便回看。你还能给笔记打自定义标签、绑定岗位、搜索筛选。点右上角「新建」也能自己记一条。
                             </div>
                         )}
                         {notes.length > 0 && (
                             <div className="space-y-2 mb-3">
-                                <div className="flex items-center justify-between">
-                                    <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">笔记本 · {notes.length}</span>
-                                    <button onClick={handleExportAllNotes}
-                                        className="text-[11px] text-sky-600 font-semibold px-2 py-1 rounded-lg bg-sky-50 active:scale-95 transition-transform">导出全部 (zip)</button>
-                                </div>
                                 <input value={noteSearch} onChange={e => setNoteSearch(e.target.value)}
                                     placeholder="搜索标题 / 正文 / 标签"
                                     className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-sky-200" />
@@ -2358,26 +2439,34 @@ const JobHuntApp: React.FC = () => {
                                         })}
                                     </div>
                                 )}
-                                <div className="flex items-center gap-2 text-[11px]">
-                                    <span className="text-slate-400">排序</span>
+                                <div className="flex items-center gap-2">
                                     <select value={noteSort} onChange={e => setNoteSort(e.target.value as 'updated' | 'created' | 'title' | 'kind')}
-                                        className="bg-white border border-slate-200 rounded-lg px-2 py-1 outline-none">
+                                        className="text-xs bg-white border border-slate-200 rounded-lg px-2 py-1.5 text-slate-500 outline-none">
                                         <option value="updated">最近更新</option>
                                         <option value="created">创建时间</option>
                                         <option value="title">标题</option>
                                         <option value="kind">类型</option>
                                     </select>
-                                    <span className="text-slate-400 ml-1">分组</span>
                                     <select value={noteGroupBy} onChange={e => setNoteGroupBy(e.target.value as 'none' | 'kind' | 'tag')}
-                                        className="bg-white border border-slate-200 rounded-lg px-2 py-1 outline-none">
+                                        className="text-xs bg-white border border-slate-200 rounded-lg px-2 py-1.5 text-slate-500 outline-none">
                                         <option value="none">不分组</option>
                                         <option value="kind">按类型</option>
                                         <option value="tag">按标签</option>
                                     </select>
                                     {(noteSearch || noteKindFilter.size > 0 || noteTagFilter.size > 0) && (
                                         <button onClick={() => { setNoteSearch(''); setNoteKindFilter(new Set()); setNoteTagFilter(new Set()); }}
-                                            className="ml-auto text-slate-400 underline">清除筛选</button>
+                                            className="text-xs px-2.5 py-1.5 rounded-lg font-semibold border bg-white text-slate-400 border-slate-200 active:scale-95 transition-all">清除</button>
                                     )}
+                                    <span className="text-[11px] text-slate-400 ml-auto">{noteGroups.reduce((s, g) => s + g.notes.length, 0)} 篇</span>
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                    <span className="text-[11px] text-slate-400">视图</span>
+                                    {([['compact', '简略'], ['detailed', '详细'], ['masonry', '双列']] as const).map(([v, label]) => (
+                                        <button key={v} onClick={() => patchJhSettings({ noteView: v })}
+                                            className={`text-[11px] px-2.5 py-1 rounded-lg font-semibold border transition-all active:scale-95 ${jhSettings.noteView === v ? 'bg-sky-50 text-sky-600 border-sky-200' : 'bg-white text-slate-400 border-slate-200'}`}>
+                                            {label}
+                                        </button>
+                                    ))}
                                 </div>
                             </div>
                         )}
@@ -2392,35 +2481,48 @@ const JobHuntApp: React.FC = () => {
                         )}
                         <div className="space-y-3">
                             {noteGroups.map(group => (
-                                <div key={group.key} className="space-y-2.5">
+                                <div key={group.key} className="space-y-2">
                                     {group.label && (
                                         <div className="text-[11px] font-bold text-slate-400 px-1 pt-1">{group.label} · {group.notes.length}</div>
                                     )}
-                                    {group.notes.map(n => {
-                                        const boundIds = n.positionIds ? n.positionIds : (n.positionId ? [n.positionId] : []);
-                                        const boundCodes = boundIds.map(id => positions.find(p => p.id === id)?.code).filter(Boolean) as string[];
-                                        return (
-                                            <div key={n.id} onClick={() => setViewingNote(n)}
-                                                className="bg-white rounded-2xl border border-slate-200/70 shadow-sm p-4 active:scale-[0.99] transition-transform cursor-pointer">
-                                                <div className="flex items-center gap-2">
-                                                    <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-semibold ${NOTE_KIND_STYLE[n.kind]}`}>{NOTE_KIND_LABEL[n.kind]}</span>
-                                                    <span className="text-sm font-semibold text-slate-800 truncate flex-1">{n.title}</span>
-                                                </div>
-                                                <div className="text-xs text-slate-400 mt-1.5">{n.content.replace(/[#*`>]/g, '').slice(0, 80)}</div>
-                                                {(n.tags?.length || boundCodes.length) ? (
-                                                    <div className="flex flex-wrap items-center gap-1 mt-1.5">
-                                                        {boundCodes.map(c => (
-                                                            <span key={c} className="text-[10px] px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-500 font-medium">🔗{c}</span>
-                                                        ))}
-                                                        {(n.tags || []).map(t => (
-                                                            <span key={t} className="text-[10px] px-1.5 py-0.5 rounded-md bg-sky-50 text-sky-600 font-medium">#{t}</span>
-                                                        ))}
+                                    <div className={jhSettings.noteView === 'masonry' ? 'columns-2 gap-2.5' : 'space-y-2.5'}>
+                                        {group.notes.map(n => {
+                                            const boundIds = n.positionIds ? n.positionIds : (n.positionId ? [n.positionId] : []);
+                                            const boundCodes = boundIds.map(id => positions.find(p => p.id === id)?.code).filter(Boolean) as string[];
+                                            const masonry = jhSettings.noteView === 'masonry';
+                                            if (jhSettings.noteView === 'compact') {
+                                                return (
+                                                    <div key={n.id} onClick={() => setViewingNote(n)}
+                                                        className="bg-white rounded-xl border border-slate-200/70 shadow-sm px-3 py-2 flex items-center gap-2 active:scale-[0.99] transition-transform cursor-pointer">
+                                                        <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-semibold shrink-0 ${NOTE_KIND_STYLE[n.kind]}`}>{NOTE_KIND_LABEL[n.kind]}</span>
+                                                        <span className="text-sm font-medium text-slate-700 truncate flex-1">{n.title || '（无标题）'}</span>
+                                                        <span className="text-[10px] text-slate-300 shrink-0">{relTimeLabel(n.updatedAt ?? n.createdAt)}</span>
                                                     </div>
-                                                ) : null}
-                                                <div className="text-[10px] text-slate-300 mt-1">{characters.find(c => c.id === n.charId)?.name || ''} · 最后更新 {relTimeLabel(n.updatedAt ?? n.createdAt)}</div>
-                                            </div>
-                                        );
-                                    })}
+                                                );
+                                            }
+                                            return (
+                                                <div key={n.id} onClick={() => setViewingNote(n)}
+                                                    className={`bg-white rounded-2xl border border-slate-200/70 shadow-sm p-4 active:scale-[0.99] transition-transform cursor-pointer${masonry ? ' mb-2.5 break-inside-avoid' : ''}`}>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-semibold ${NOTE_KIND_STYLE[n.kind]}`}>{NOTE_KIND_LABEL[n.kind]}</span>
+                                                        <span className="text-sm font-semibold text-slate-800 truncate flex-1">{n.title}</span>
+                                                    </div>
+                                                    <div className="text-xs text-slate-400 mt-1.5">{n.content.replace(/[#*`>]/g, '').slice(0, 80)}</div>
+                                                    {(n.tags?.length || boundCodes.length) ? (
+                                                        <div className="flex flex-wrap items-center gap-1 mt-1.5">
+                                                            {boundCodes.map(c => (
+                                                                <span key={c} className="text-[10px] px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-500 font-medium">🔗{c}</span>
+                                                            ))}
+                                                            {(n.tags || []).map(t => (
+                                                                <span key={t} className="text-[10px] px-1.5 py-0.5 rounded-md bg-sky-50 text-sky-600 font-medium">#{t}</span>
+                                                            ))}
+                                                        </div>
+                                                    ) : null}
+                                                    <div className="text-[10px] text-slate-300 mt-1">{characters.find(c => c.id === n.charId)?.name || ''} · 最后更新 {relTimeLabel(n.updatedAt ?? n.createdAt)}</div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
                                 </div>
                             ))}
                         </div>
@@ -2790,7 +2892,7 @@ const JobHuntApp: React.FC = () => {
                                                             return (
                                                                 <button key={p.id} onClick={() => patchViewingNote({ positionIds: on ? bound.filter(x => x !== p.id) : [...bound, p.id] })}
                                                                     className={`text-[11px] px-2 py-0.5 rounded-full font-medium transition-colors ${on ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-400'}`}>
-                                                                    🔗{p.code}
+                                                                    🔗{p.code} {p.title}
                                                                 </button>
                                                             );
                                                         })}
