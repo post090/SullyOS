@@ -19,7 +19,7 @@ import { RealtimeContextManager } from '../utils/realtimeContext';
 import { buildTaskSupervisionContext } from '../utils/taskContextInjector';
 import { DB } from '../utils/db';
 import { ChatPrompts } from '../utils/chatPrompts';
-import { Message, ChatTheme, AppID, CallAutoStartConfig, JobNote } from '../types';
+import { Message, ChatTheme, AppID, CallAutoStartConfig, JobNote, JobSession, JobChatMessage } from '../types';
 import { analyzeAnswerAudio, AnswerAudioAnalysis, paceLabel } from '../utils/interviewAudioAnalysis';
 import { CallSettings, loadCallSettings, saveCallSettings } from '../utils/callSettings';
 import ApiConnectionPicker from '../components/os/ApiConnectionPicker';
@@ -939,6 +939,32 @@ const CallApp: React.FC = () => {
         addToast('面试表达复盘已存到上岸计划笔记本', 'success');
       } catch { /* 复盘失败不影响挂断 */ }
     }
+    // 上岸计划语音模拟练习：挂断时把这场练习补一条 interview 记录进「练习记录」（有说过话才记）。
+    if (activeScene?.practice && selectedChar?.id) {
+      try {
+        const msgs: JobChatMessage[] = bubbles
+          .filter(b => b.role === 'user' || b.role === 'assistant')
+          .map(b => ({ role: b.role === 'user' ? 'user' : 'char', content: b.text, ts: b.timestamp }));
+        const spoke = msgs.some(m => m.role === 'user');
+        if (spoke) {
+          const startedAt = callStartedAt || msgs[0]?.ts || Date.now();
+          const session: JobSession = {
+            id: `jses-voice-${currentSessionId}`,
+            charId: selectedChar.id,
+            topic: 'interview',
+            positionId: activeScene.practice.target.positionId,
+            practiceTarget: activeScene.practice.target,
+            title: activeScene.practice.title,
+            messages: msgs,
+            interview: { questions: [], currentIndex: msgs.length, finished: true },
+            memorySyncedCount: 0,
+            createdAt: startedAt,
+            updatedAt: Date.now(),
+          };
+          await DB.saveJobSession(session);
+        }
+      } catch { /* 练习记录补写失败不影响挂断 */ }
+    }
     clearSuspendedCall();
     resetCurrentCall();
     setViewMode('history');
@@ -1751,11 +1777,11 @@ const CallApp: React.FC = () => {
           <span style={{ color: accentColor }}>✦</span>
         </div>
         {/* name block */}
-        <div className={`${isProLight ? 'pt-4' : 'pt-7'} text-center`}>
-          <div className="text-sm" style={{ color: `${accentColor}cc`, textShadow: `0 0 12px ${accentColor}` }}>❀</div>
-          <h1 className={`mt-0.5 font-serif ${isProLight ? 'text-[2rem]' : 'text-[2.6rem]'} leading-none tracking-wide text-white`} style={{ textShadow: `0 0 26px ${accentColor}aa, 0 0 6px ${accentColor}66` }}>{selectedChar?.name || '未选择'}</h1>
-          <div className="mt-2.5 text-[11px] tracking-[0.25em] text-white/55">{connSub}</div>
-          <div className="mt-1.5 text-lg tabular-nums font-extralight tracking-[0.2em]" style={{ color: accentColor }}>{formatDuration(elapsedSeconds)}</div>
+        <div className={`${isProLight ? 'pt-2' : 'pt-7'} text-center`}>
+          {!isProLight && <div className="text-sm" style={{ color: `${accentColor}cc`, textShadow: `0 0 12px ${accentColor}` }}>❀</div>}
+          <h1 className={`mt-0.5 font-serif ${isProLight ? 'text-[1.5rem]' : 'text-[2.6rem]'} leading-none tracking-wide text-white`} style={{ textShadow: isProLight ? 'none' : `0 0 26px ${accentColor}aa, 0 0 6px ${accentColor}66` }}>{selectedChar?.name || '未选择'}</h1>
+          <div className={`${isProLight ? 'mt-1' : 'mt-2.5'} text-[11px] tracking-[0.25em] text-white/55`}>{connSub}</div>
+          <div className={`${isProLight ? 'mt-0.5 text-base' : 'mt-1.5 text-lg'} tabular-nums font-extralight tracking-[0.2em]`} style={{ color: accentColor }}>{formatDuration(elapsedSeconds)}</div>
           {activeScene?.sceneLabel && (
             <div className="mt-2 inline-block px-3 py-1 rounded-full text-[10px] font-semibold tracking-wide text-white/80 bg-white/10 border border-white/15">{activeScene.sceneLabel}</div>
           )}
@@ -1771,26 +1797,30 @@ const CallApp: React.FC = () => {
       {/* portrait + aura —— 键盘弹起时（body.ios-keyboard-open）整块收起，把可视区让给消息+输入框，
           避免大头像把输入框顶出键盘上方的可视区（见 index.html 的 .sully-call-hero 规则）。 */}
       <div className={`sully-call-hero ${isProLight ? 'pt-1 pb-0.5' : 'pt-3 pb-1'} flex flex-col items-center justify-center`}>
-        <div className={`relative ${isProLight ? 'w-24 h-24' : 'w-40 h-40'}`}>
-          <div className={`absolute -inset-3 rounded-full blur-xl ${waveActive ? 'animate-pulse' : ''}`} style={{ background: `radial-gradient(closest-side, ${accentColor}, transparent)`, opacity: waveActive ? 0.8 : 0.4 }} />
-          <div className="absolute -inset-1 rounded-full" style={{ boxShadow: `0 0 0 1px ${accentColor}55, inset 0 0 24px ${accentColor}33` }} />
-          <div className={`absolute inset-0 rounded-full border ${displayCallState === 'speaking' ? 'animate-ping' : 'opacity-40'}`} style={{ borderColor: `${accentColor}66` }} />
+        <div className={`relative ${isProLight ? 'w-20 h-20' : 'w-40 h-40'}`}>
+          {!isProLight && <>
+            <div className={`absolute -inset-3 rounded-full blur-xl ${waveActive ? 'animate-pulse' : ''}`} style={{ background: `radial-gradient(closest-side, ${accentColor}, transparent)`, opacity: waveActive ? 0.8 : 0.4 }} />
+            <div className="absolute -inset-1 rounded-full" style={{ boxShadow: `0 0 0 1px ${accentColor}55, inset 0 0 24px ${accentColor}33` }} />
+            <div className={`absolute inset-0 rounded-full border ${displayCallState === 'speaking' ? 'animate-ping' : 'opacity-40'}`} style={{ borderColor: `${accentColor}66` }} />
+          </>}
           {selectedChar?.avatar
-            ? <img src={selectedChar.avatar} alt={selectedChar.name} className="relative z-10 w-full h-full rounded-full object-cover" style={{ boxShadow: `0 0 30px ${accentColor}55` }} />
+            ? <img src={selectedChar.avatar} alt={selectedChar.name} className="relative z-10 w-full h-full rounded-full object-cover" style={{ boxShadow: isProLight ? '0 4px 14px rgba(15,23,42,.18)' : `0 0 30px ${accentColor}55` }} />
             : <div className="relative z-10 w-full h-full rounded-full flex items-center justify-center text-4xl font-serif" style={{ backgroundColor: `${accentColor}55` }}>{selectedChar?.name?.[0] || '角'}</div>}
         </div>
         {/* analyzing status + waveform */}
-        <div className={`${isProLight ? 'mt-3' : 'mt-5'} flex flex-col items-center gap-2`}>
+        <div className={`${isProLight ? 'mt-2 gap-1' : 'mt-5 gap-2'} flex flex-col items-center`}>
           <div className="text-center leading-tight">
             <div className="text-sm text-white/85">{analyzeLabel.cn}{waveActive ? '…' : ''}</div>
-            <div className="text-[9px] tracking-[0.3em] text-white/35 mt-0.5">{analyzeLabel.en}</div>
+            {!isProLight && <div className="text-[9px] tracking-[0.3em] text-white/35 mt-0.5">{analyzeLabel.en}</div>}
           </div>
-          <div className="flex items-center justify-center gap-[3px] h-7">
-            {CALL_WAVE.map((h, i) => (
-              <span key={i} className={`w-[3px] rounded-full transition-all duration-300 ${waveActive ? 'animate-pulse' : ''}`}
-                style={{ height: `${waveActive ? h : 3}px`, background: `linear-gradient(to top, ${accentColor}33, ${accentColor})`, animationDelay: `${i * 60}ms` }} />
-            ))}
-          </div>
+          {!isProLight && (
+            <div className="flex items-center justify-center gap-[3px] h-7">
+              {CALL_WAVE.map((h, i) => (
+                <span key={i} className={`w-[3px] rounded-full transition-all duration-300 ${waveActive ? 'animate-pulse' : ''}`}
+                  style={{ height: `${waveActive ? h : 3}px`, background: `linear-gradient(to top, ${accentColor}33, ${accentColor})`, animationDelay: `${i * 60}ms` }} />
+              ))}
+            </div>
+          )}
         </div>
       </div>
       <div ref={callScrollableRef} className="flex-1 min-h-0 overflow-y-auto no-scrollbar mx-4 mb-2 px-4 py-3 space-y-3 rounded-2xl border border-white/10 bg-white/[0.04] backdrop-blur-md" style={{ boxShadow: `inset 0 1px 0 ${accentColor}33` }}>

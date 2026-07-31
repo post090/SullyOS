@@ -253,6 +253,11 @@ export interface CallAutoStartConfig {
   mutePlayback?: boolean;
   /** 通话皮肤：'proLight'=白蓝专业风（面试默认），缺省沿用深紫默认皮肤 */
   skin?: 'proLight';
+  /** 上岸计划语音模拟练习上下文：带上它，挂断时把这场语音练习补一条 interview 记录进「练习记录」 */
+  practice?: {
+    target: { kind: 'comprehensive' | 'position'; positionId?: string; mode?: 'strict' | 'coach'; extraPrompt?: string };
+    title: string;
+  };
 }
 
 export interface APIConfig {

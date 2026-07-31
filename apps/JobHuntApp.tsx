@@ -16,6 +16,7 @@ import { parseJobHuntCommands, JOB_COMMAND_GUIDE, normalizeJobStage } from '../u
 import { buildPositionPromptLine, fmtJobTime, nextInterviewTs, waitingDays, ROUND_KIND_LABEL, ROUND_STATUS_LABEL, relTimeLabel } from '../utils/jobDirectives';
 import { parseResumeIntoProfile } from '../utils/jobProfileGen';
 import { JobHuntSettings, JH_SETTINGS_KEY, loadJhSettings, JobApiRef } from '../utils/jobHuntSettings';
+import { exportSingleNote, exportAllNotes } from '../utils/jobNoteExport';
 import { redactPrivacy, codifyCompanies, genCompanyCode, RedactResult, NameRedactMode } from '../utils/privacyRedact';
 import { synthesizeSpeech, characterHasVoice } from '../utils/ttsRouter';
 import { hashTtsParams, getCachedTts, saveCachedTts } from '../utils/ttsCache';
@@ -858,6 +859,11 @@ const JobHuntApp: React.FC = () => {
                     : undefined,
                 mutePlayback: jhSettings.api.mutePlayback,
                 skin: jhSettings.api.interviewSkin === 'proLight' ? 'proLight' : undefined,
+                // 挂断时按这个上下文补一条 interview 练习记录进「练习记录」（有说过话才记）
+                practice: {
+                    target: { kind, positionId: pos?.id, mode: practiceMode, extraPrompt: extra || undefined },
+                    title: `模拟面试 · ${pos ? `${pos.code} ${pos.title}` : '综合模式'}`,
+                },
             });
             return;
         }
@@ -1318,6 +1324,25 @@ const JobHuntApp: React.FC = () => {
         await reloadAll();
         addToast('笔记已保存', 'success');
     }, [viewingNote, noteEditTitle, noteEditContent, addToast, reloadAll]);
+
+    // 导出：单篇 txt / 全部打包 zip。native 弹系统分享面板，web 直接下载（取消分享不算失败）。
+    const handleExportNote = useCallback(async (note: JobNote) => {
+        try {
+            const r = await exportSingleNote(note);
+            addToast(r === 'shared' ? '已打开分享' : '笔记已导出', 'success');
+        } catch (e: any) {
+            addToast('导出失败：' + (e?.message || e), 'error');
+        }
+    }, [addToast]);
+    const handleExportAllNotes = useCallback(async () => {
+        if (!notes.length) { addToast('还没有笔记可导出', 'info'); return; }
+        try {
+            const r = await exportAllNotes(notes);
+            addToast(r === 'shared' ? '已打开分享' : `已导出 ${notes.length} 篇笔记`, 'success');
+        } catch (e: any) {
+            addToast('导出失败：' + (e?.message || e), 'error');
+        }
+    }, [notes, addToast]);
 
     // 标签 / 绑定岗位：直接改、立即落库（不必进“编辑”态，方便随手管理；纯人类，AI 不碰）
     const patchViewingNote = useCallback(async (p: Partial<JobNote>) => {
@@ -2301,6 +2326,11 @@ const JobHuntApp: React.FC = () => {
                         )}
                         {notes.length > 0 && (
                             <div className="space-y-2 mb-3">
+                                <div className="flex items-center justify-between">
+                                    <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">笔记本 · {notes.length}</span>
+                                    <button onClick={handleExportAllNotes}
+                                        className="text-[11px] text-sky-600 font-semibold px-2 py-1 rounded-lg bg-sky-50 active:scale-95 transition-transform">导出全部 (zip)</button>
+                                </div>
                                 <input value={noteSearch} onChange={e => setNoteSearch(e.target.value)}
                                     placeholder="搜索标题 / 正文 / 标签"
                                     className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-sky-200" />
@@ -2788,7 +2818,10 @@ const JobHuntApp: React.FC = () => {
                                         </button>
                                     )}
                                 </div>
-                                <button onClick={() => deleteNote(viewingNote)} className="mt-2 text-xs text-rose-500 font-semibold active:scale-95 transition-transform">删除这篇笔记</button>
+                                <div className="mt-2 flex items-center gap-4">
+                                    <button onClick={() => handleExportNote(viewingNote)} className="text-xs text-sky-600 font-semibold active:scale-95 transition-transform">导出为 txt</button>
+                                    <button onClick={() => deleteNote(viewingNote)} className="text-xs text-rose-500 font-semibold active:scale-95 transition-transform">删除这篇笔记</button>
+                                </div>
                             </div>
                         )}
                     </div>
