@@ -402,6 +402,8 @@ const JobHuntApp: React.FC = () => {
     const [posHrName, setPosHrName] = useState('');
     const [posProjectName, setPosProjectName] = useState('');
     const [posLocation, setPosLocation] = useState('');
+    const [posSalary, setPosSalary] = useState(''); // 薪资（自由文本，范围或单个数）
+    const [posStage, setPosStage] = useState<JobStage>('applied'); // 当前阶段（编辑可改，改了记一条时间线）
     const [posNotes, setPosNotes] = useState(''); // 岗位笔记（多行，注入时同 JD 脱敏+截断）
     const [posInterviewAt, setPosInterviewAt] = useState(''); // datetime-local 值，空=未定/清除
     const [posWaiting, setPosWaiting] = useState(false);
@@ -1235,12 +1237,16 @@ const JobHuntApp: React.FC = () => {
         if (editingPosition) {
             await DB.saveJobPosition({
                 ...editingPosition, code, title,
+                stage: posStage,
+                // 阶段改了才补一条时间线，没改保留原时间线
+                timeline: posStage !== editingPosition.stage ? [...editingPosition.timeline, { ts: now, stage: posStage }] : editingPosition.timeline,
                 companyNameLocal: posCompanyLocal.trim() || undefined,
                 nextStep: posNextStep.trim() || undefined,
                 jd: posJd.trim() || undefined,
                 hrName: posHrName.trim() || undefined,
                 projectName: posProjectName.trim() || undefined,
                 location: posLocation.trim() || undefined,
+                salary: posSalary.trim() || undefined,
                 notes: posNotes.trim() || undefined,
                 interviewAt: localInputToTs(posInterviewAt),
                 // 已在等保留原起点不重置；关掉开关才清空
@@ -1251,14 +1257,15 @@ const JobHuntApp: React.FC = () => {
             });
         } else {
             await DB.saveJobPosition({
-                id: genId('jpos'), code, title, stage: 'applied',
+                id: genId('jpos'), code, title, stage: posStage,
                 nextStep: posNextStep.trim() || undefined,
-                timeline: [{ ts: now, stage: 'applied' }],
+                timeline: [{ ts: now, stage: posStage }],
                 companyNameLocal: posCompanyLocal.trim() || undefined,
                 jd: posJd.trim() || undefined,
                 hrName: posHrName.trim() || undefined,
                 projectName: posProjectName.trim() || undefined,
                 location: posLocation.trim() || undefined,
+                salary: posSalary.trim() || undefined,
                 notes: posNotes.trim() || undefined,
                 interviewAt: localInputToTs(posInterviewAt),
                 waitingSince: posWaiting ? now : undefined,
@@ -1268,10 +1275,10 @@ const JobHuntApp: React.FC = () => {
         }
         setShowNewPosition(false); setEditingPosition(null);
         setPosCode(''); setPosTitle(''); setPosCompanyLocal(''); setPosNextStep('');
-        setPosJd(''); setPosHrName(''); setPosProjectName(''); setPosLocation(''); setPosNotes('');
-        setPosInterviewAt(''); setPosWaiting(false); setPosCodeDirty(false);
+        setPosJd(''); setPosHrName(''); setPosProjectName(''); setPosLocation(''); setPosSalary(''); setPosNotes('');
+        setPosInterviewAt(''); setPosWaiting(false); setPosCodeDirty(false); setPosStage('applied');
         await reloadAll();
-    }, [posCode, posTitle, posCompanyLocal, posNextStep, posJd, posHrName, posProjectName, posLocation, posNotes, posInterviewAt, posWaiting, posCodeDirty, editingPosition, selectedChar, reloadAll, addToast]);
+    }, [posCode, posTitle, posCompanyLocal, posNextStep, posJd, posHrName, posProjectName, posLocation, posSalary, posStage, posNotes, posInterviewAt, posWaiting, posCodeDirty, editingPosition, selectedChar, reloadAll, addToast]);
 
     const advanceStage = useCallback(async (pos: JobPosition, stage: JobStage) => {
         const now = Date.now();
@@ -1381,6 +1388,7 @@ const JobHuntApp: React.FC = () => {
                 p.companyNameLocal ? `【公司】${p.companyNameLocal}` : '',
                 p.projectName ? `【项目/业务】${p.projectName}` : '',
                 p.location ? `【地点】${p.location}` : '',
+                p.salary ? `【薪资】${p.salary}` : '',
                 p.hrName ? `【HR】${p.hrName}` : '',
                 p.interviewAt ? `【下一场面试】${new Date(p.interviewAt).toLocaleString('zh-CN')}` : '',
                 p.nextStep ? `【下一步】${p.nextStep}` : '',
@@ -1486,6 +1494,8 @@ const JobHuntApp: React.FC = () => {
         setPosCode(pos.code); setPosTitle(pos.title);
         setPosCompanyLocal(pos.companyNameLocal || ''); setPosNextStep(pos.nextStep || '');
         setPosJd(pos.jd || ''); setPosHrName(pos.hrName || ''); setPosProjectName(pos.projectName || ''); setPosLocation(pos.location || '');
+        setPosSalary(pos.salary || '');
+        setPosStage(pos.stage);
         setPosNotes(pos.notes || '');
         setPosInterviewAt(tsToLocalInput(pos.interviewAt)); setPosWaiting(!!pos.waitingSince);
         setPosCodeDirty(!!pos.codeLocked);
@@ -2211,7 +2221,7 @@ const JobHuntApp: React.FC = () => {
                                     <button onClick={handleExportAllPositions}
                                         className="text-[11px] text-sky-600 font-semibold px-2 py-1 rounded-lg bg-sky-50 active:scale-95 transition-transform">导出全部 (zip)</button>
                                 )}
-                                <button onClick={() => { setEditingPosition(null); setPosCode(''); setPosTitle(''); setPosCompanyLocal(''); setPosNextStep(''); setPosJd(''); setPosHrName(''); setPosProjectName(''); setPosNotes(''); setPosInterviewAt(''); setPosWaiting(false); setPosCodeDirty(false); setShowNewPosition(true); }}
+                                <button onClick={() => { setEditingPosition(null); setPosCode(''); setPosTitle(''); setPosCompanyLocal(''); setPosNextStep(''); setPosJd(''); setPosHrName(''); setPosProjectName(''); setPosLocation(''); setPosSalary(''); setPosNotes(''); setPosInterviewAt(''); setPosWaiting(false); setPosCodeDirty(false); setShowNewPosition(true); }}
                                     className="flex items-center gap-1 text-xs font-semibold text-white bg-sky-500 rounded-xl px-3 py-1.5 active:scale-95 transition-transform">
                                     <Plus className="w-4 h-4" weight="bold" />新建岗位
                                 </button>
@@ -2319,6 +2329,11 @@ const JobHuntApp: React.FC = () => {
                                     <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold shrink-0 ${STAGE_STYLE[p.stage]}`}>{STAGE_LABEL[p.stage]}</span>
                                 </div>
                                 <div className="text-[13px] font-semibold text-slate-600 mt-0.5 break-words">{p.title}</div>
+                                {p.salary && (
+                                    <div className="mt-1.5">
+                                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 font-semibold">💰 {p.salary}</span>
+                                    </div>
+                                )}
                                 {p.companyNameLocal && (
                                     <div className="text-[11px] text-slate-400 mt-1">备注：{p.companyNameLocal}</div>
                                 )}
@@ -2488,7 +2503,7 @@ const JobHuntApp: React.FC = () => {
                                     <div className={jhSettings.noteView === 'masonry' ? 'columns-2 gap-2.5' : 'space-y-2.5'}>
                                         {group.notes.map(n => {
                                             const boundIds = n.positionIds ? n.positionIds : (n.positionId ? [n.positionId] : []);
-                                            const boundCodes = boundIds.map(id => positions.find(p => p.id === id)?.code).filter(Boolean) as string[];
+                                            const boundPositions = boundIds.map(id => positions.find(p => p.id === id)).filter(Boolean) as JobPosition[];
                                             const masonry = jhSettings.noteView === 'masonry';
                                             if (jhSettings.noteView === 'compact') {
                                                 return (
@@ -2508,10 +2523,10 @@ const JobHuntApp: React.FC = () => {
                                                         <span className="text-sm font-semibold text-slate-800 truncate flex-1">{n.title}</span>
                                                     </div>
                                                     <div className="text-xs text-slate-400 mt-1.5">{n.content.replace(/[#*`>]/g, '').slice(0, 80)}</div>
-                                                    {(n.tags?.length || boundCodes.length) ? (
+                                                    {(n.tags?.length || boundPositions.length) ? (
                                                         <div className="flex flex-wrap items-center gap-1 mt-1.5">
-                                                            {boundCodes.map(c => (
-                                                                <span key={c} className="text-[10px] px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-500 font-medium">🔗{c}</span>
+                                                            {boundPositions.map(p => (
+                                                                <span key={p.id} className="text-[10px] px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-500 font-medium">🔗{p.code}{p.title && p.title !== p.code ? ' ' + p.title : ''}</span>
                                                             ))}
                                                             {(n.tags || []).map(t => (
                                                                 <span key={t} className="text-[10px] px-1.5 py-0.5 rounded-md bg-sky-50 text-sky-600 font-medium">#{t}</span>
@@ -2748,6 +2763,18 @@ const JobHuntApp: React.FC = () => {
                                     className="w-full mt-1 bg-slate-100 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-sky-200" />
                             </div>
                             <div>
+                                <label className="text-xs text-slate-500 font-semibold">当前阶段</label>
+                                <select value={posStage} onChange={e => setPosStage(e.target.value as JobStage)}
+                                    className="w-full mt-1 bg-slate-100 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-sky-200">
+                                    {(Object.keys(STAGE_ORDER) as JobStage[]).sort((a, b) => STAGE_ORDER[a] - STAGE_ORDER[b]).map(st => (
+                                        <option key={st} value={st}>{STAGE_LABEL[st]}</option>
+                                    ))}
+                                </select>
+                                {editingPosition && posStage !== editingPosition.stage && (
+                                    <div className="text-[10px] text-sky-500 mt-1">保存后会在时间线记一条阶段变更</div>
+                                )}
+                            </div>
+                            <div>
                                 <label className="text-xs text-slate-500 font-semibold">真实公司名（选填，仅本机，永不发给 AI）</label>
                                 <input value={posCompanyLocal}
                                     onChange={e => {
@@ -2770,6 +2797,11 @@ const JobHuntApp: React.FC = () => {
                             <div>
                                 <label className="text-xs text-slate-500 font-semibold">工作地点（选填）</label>
                                 <input value={posLocation} onChange={e => setPosLocation(e.target.value)} placeholder="如：上海、杭州·远程 — AI 可见，也能帮你改"
+                                    className="w-full mt-1 bg-slate-100 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-sky-200" />
+                            </div>
+                            <div>
+                                <label className="text-xs text-slate-500 font-semibold">薪资（选填，可填范围或单个数）</label>
+                                <input value={posSalary} onChange={e => setPosSalary(e.target.value)} placeholder="如：15-20k、25k、20k×14薪、面议 — 是否发给 AI 在单聊面板里控制"
                                     className="w-full mt-1 bg-slate-100 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-sky-200" />
                             </div>
                             <div>

@@ -2381,6 +2381,8 @@ export interface JobPosition {
     projectName?: string;
     /** 工作地点/城市 — 可选，可进 prompt（面试出题/岗位分析素材）；非强隐私，默认不打码 */
     location?: string;
+    /** 薪资 — 自由文本，可填范围或单个数（如 "15-20k"、"25k"、"面议"、"20k×14薪"）；是否进 prompt 由 aiPerms.posSalary 控制 */
+    salary?: string;
     /** 岗位笔记 — 自由展开内容（面经细节/灵感/待查事项）；nextStep 保持一句话策略位。进 prompt 同 JD 待遇（脱敏+截断） */
     notes?: string;
     /** 环节轮次（面试/笔试统一）；旧数据无此字段按空数组处理 */

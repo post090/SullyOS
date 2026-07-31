@@ -20,7 +20,7 @@ export interface ParsedJobUpdate {
 }
 
 /** 岗位字段的可写白名单（AI 能改的字段；hrName/companyNameLocal 是真实人名/公司名，AI 看不到也不可写；code 永不入列） */
-export type JobSettableField = 'title' | 'projectName' | 'jd' | 'nextStep' | 'stage' | 'notes' | 'location';
+export type JobSettableField = 'title' | 'projectName' | 'jd' | 'nextStep' | 'stage' | 'notes' | 'location' | 'salary';
 
 export interface ParsedJobSet {
     code: string;
@@ -126,6 +126,7 @@ const FIELD_MAP: Record<string, JobSettableField> = {
     title: 'title', '岗位名': 'title', '职位': 'title', '职位名': 'title', '岗位': 'title',
     project: 'projectName', projectname: 'projectName', '项目': 'projectName', '项目名': 'projectName', '业务线': 'projectName',
     location: 'location', '地点': 'location', '城市': 'location', '工作地点': 'location', '工作城市': 'location',
+    salary: 'salary', pay: 'salary', '薪资': 'salary', '薪水': 'salary', '工资': 'salary', '待遇': 'salary', '薪酬': 'salary', '薪': 'salary',
     jd: 'jd', '岗位描述': 'jd', '职位描述': 'jd', '描述': 'jd', 'jd描述': 'jd',
     next: 'nextStep', nextstep: 'nextStep', '下一步': 'nextStep', '下步': 'nextStep', '行动': 'nextStep',
     stage: 'stage', '阶段': 'stage', '状态': 'stage', '进展': 'stage',
@@ -318,7 +319,7 @@ export function parseJobHuntCommands(text: string): JobParseResult {
 export const JOB_COMMAND_GUIDE = [
     '【求职工作台指令】对话里出现岗位进展变化或值得沉淀的结论时，你可以在回复末尾追加指令（用户看不到标记本身，会看到一张操作卡片）：',
     '1. 建卡/更新岗位：[[JOB_UPDATE:代号|阶段|下一步]]。阶段限 watching(观望中)/applied(已投递)/written(笔试)/interview(面试)/offer_talk(沟通Offer，初步通过在聊薪资待遇)/offer(已接受Offer)/rejected(挂了)；「下一步」写一句话行动项，可留空。用户提到新投了岗位可以用它建卡（代号自拟，如 C司）；看上了但还没投的岗位用 watching；已建档的岗位有进展就更新。',
-    '2. 改岗位字段：[[JOB_SET:代号|字段|值]]，一条改一个字段。字段限：title(岗位名)、project(项目名/业务线)、location(工作地点/城市)、jd(岗位描述，可多行)、next(下一步)、stage(阶段)、notes(岗位笔记，可多行)。例：用户口述/粘贴了某岗位 JD → [[JOB_SET:C司|jd|这里是整段岗位描述…]]；记岗位笔记 → [[JOB_SET:C司|notes|面试官提到团队在做…]]。只能改已建档的岗位（上面列出的）；真实公司名/HR 名你看不到也不要写。',
+    '2. 改岗位字段：[[JOB_SET:代号|字段|值]]，一条改一个字段。字段限：title(岗位名)、project(项目名/业务线)、location(工作地点/城市)、salary(薪资，可填范围或单个数，如 15-20k 或 25k)、jd(岗位描述，可多行)、next(下一步)、stage(阶段)、notes(岗位笔记，可多行)。例：用户口述/粘贴了某岗位 JD → [[JOB_SET:C司|jd|这里是整段岗位描述…]]；记岗位笔记 → [[JOB_SET:C司|notes|面试官提到团队在做…]]。只能改已建档的岗位（上面列出的）；真实公司名/HR 名你看不到也不要写。',
     '3. 环节轮次：[[JOB_ROUND:代号|轮次|类型|状态|时间]]。类型限 interview(面试)/written(笔试)；轮次 1~10；状态限 pending(待安排)/scheduled(待进行)/awaiting(等结果)/passed(通过)/failed(挂了)；时间可省，格式 M-D HH:mm（如 8-2 14:00），填「清除」删时间。例：用户说周四下午两点三面 → [[JOB_ROUND:C司|3|面试|待进行|8-6 14:00]]；二面过了 → [[JOB_ROUND:C司|2|面试|通过]]。同代号同类型同轮次再发即更新该轮。',
     '4. 面试时间快捷：[[JOB_INTERVIEW:代号|M-D HH:mm]]（只记下一场面试时间，不分轮次时用）/ [[JOB_INTERVIEW:代号|清除]]；等反馈：[[JOB_WAITING:代号]]（开始等）/ [[JOB_WAITING:代号|清除]]（结束等）。',
     '5. 删岗位卡：[[JOB_DEL:代号]]。仅当用户明确要求删除、或流程彻底结束且用户同意清理时才用，删除要克制。',

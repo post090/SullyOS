@@ -108,6 +108,12 @@ export function buildPositionPromptLine(p: JobPosition, allPositions: JobPositio
     if (wd) parts.push(`等反馈第 ${wd} 天`);
     if (p.projectName) parts.push(`项目：${codifyCompanies(p.projectName, allPositions)}`);
     if (p.location) parts.push(`地点：${codifyCompanies(p.location, allPositions)}`);
+    // 薪资仅在用户允许 AI 管理薪资（aiPerms.posSalary）时才注入，关掉则 AI 完全看不到
+    if (p.salary) {
+        let salaryOk = true;
+        try { salaryOk = loadJhSettings().aiPerms.posSalary !== false; } catch { /* 读不到设置默认可见 */ }
+        if (salaryOk) parts.push(`薪资：${p.salary}`);
+    }
     if (p.nextStep) {
         // 下一步多为自由文本（可能写真实公司名/人名），同 JD/笔记一样先脱敏再代号化
         const ns = codifyCompanies(redactPrivacy(p.nextStep).text, allPositions).replace(/\s+/g, ' ').trim();
@@ -154,7 +160,7 @@ export interface JobCardPayload {
 }
 
 const FIELD_LABEL: Record<JobSettableField, string> = {
-    title: '岗位名', projectName: '项目名', jd: 'JD', nextStep: '下一步', stage: '阶段', notes: '岗位笔记', location: '地点',
+    title: '岗位名', projectName: '项目名', jd: 'JD', nextStep: '下一步', stage: '阶段', notes: '岗位笔记', location: '地点', salary: '薪资',
 };
 
 /**
@@ -227,6 +233,7 @@ export async function buildJobHuntPromptBlock(): Promise<string> {
         const banned: string[] = [];
         if (!perms.posProgress) banned.push('改岗位阶段/进展、环节轮次、面试时间、等反馈状态');
         if (!perms.posFields) banned.push('改岗位名/项目/JD/地点/下一步等字段');
+        if (!perms.posSalary) banned.push('查看或改动薪资');
         if (!perms.posDelete) banned.push('删除岗位卡');
         if (!perms.noteCreate) banned.push('新建笔记');
         if (!perms.noteEdit) banned.push('改写已有笔记');
@@ -254,7 +261,7 @@ export async function applyJobDirectives(
 
     // AI 改动权限（纯人类授权，逐项开关）：关掉的类别直接丢弃该批指令。
     // 读失败用全开默认（不因设置读不到就把 AI 能力全封）。
-    let perms = { posProgress: true, posFields: true, posDelete: true, noteCreate: true, noteEdit: true, noteDelete: true, profile: true };
+    let perms = { posProgress: true, posFields: true, posSalary: true, posDelete: true, noteCreate: true, noteEdit: true, noteDelete: true, profile: true };
     try { perms = loadJhSettings().aiPerms; } catch { /* 用全开默认 */ }
 
     // ── 岗位建卡/更新 ──
@@ -285,8 +292,9 @@ export async function applyJobDirectives(
 
     // ── 岗位字段编辑（任意可写字段） ──
     for (const s of parsed.sets) {
-        // stage 字段属于「进展」权限，其余字段属于「字段」权限
-        if (s.field === 'stage' ? !perms.posProgress : !perms.posFields) continue;
+        // stage 属「进展」权限，salary 属「薪资」权限，其余字段属「字段」权限
+        const fieldAllowed = s.field === 'stage' ? perms.posProgress : s.field === 'salary' ? perms.posSalary : perms.posFields;
+        if (!fieldAllowed) continue;
         try {
             const all = await DB.getJobPositions();
             const target = all.find(p => p.code === s.code);
@@ -304,6 +312,8 @@ export async function applyJobDirectives(
                 next.projectName = s.value || undefined;
             } else if (s.field === 'location') {
                 next.location = s.value || undefined;
+            } else if (s.field === 'salary') {
+                next.salary = s.value || undefined;
             } else if (s.field === 'nextStep') {
                 next.nextStep = s.value || undefined;
             } else if (s.field === 'jd') {

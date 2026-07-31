@@ -25,6 +25,7 @@ export interface JobHuntSettings {
     aiPerms: {
         posProgress: boolean;  // 建卡 / 改阶段进展 / 环节轮次 / 面试时间 / 等反馈
         posFields: boolean;    // 改岗位名 / 项目 / JD / 地点 / 下一步
+        posSalary: boolean;    // 读取并改动薪资（关掉 = AI 看不到也改不了薪资）
         posDelete: boolean;    // 删除岗位卡
         noteCreate: boolean;   // 新建笔记
         noteEdit: boolean;     // 改写已有笔记
@@ -68,7 +69,7 @@ export const JH_SETTINGS_KEY = 'os_jobhunt_settings';
 export const DEFAULT_JH_SETTINGS: JobHuntSettings = {
     zoom: 1, typewriter: true, autoSpeak: 'interview', autoMemorySync: true, syncThreshold: 6,
     inject: { resume: 'digest', profile: true, positions: true, notes: true },
-    aiPerms: { posProgress: true, posFields: true, posDelete: true, noteCreate: true, noteEdit: true, noteDelete: true, profile: true },
+    aiPerms: { posProgress: true, posFields: true, posSalary: true, posDelete: true, noteCreate: true, noteEdit: true, noteDelete: true, profile: true },
     interviewInject: { profile: true, resumeDigest: true },
     practiceTemplates: [],
     api: { chat: null, stt: null, ttsProvider: 'follow', audio: null, audioAnalysis: false, audioMode: 'off', transcribeMode: 'stt', mutePlayback: false, interviewSkin: 'proLight' },

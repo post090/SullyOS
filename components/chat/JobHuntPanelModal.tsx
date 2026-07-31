@@ -161,6 +161,7 @@ const JobHuntPanelModal: React.FC<JobHuntPanelModalProps> = ({
                                     ['岗位', [
                                         ['posProgress', '建卡 / 改阶段进展 / 环节 / 面试时间'] as const,
                                         ['posFields', '改岗位名 / 项目 / JD / 地点 / 下一步'] as const,
+                                        ['posSalary', '查看并改动薪资（关掉 = 看不到也改不了）'] as const,
                                         ['posDelete', '删除岗位卡'] as const,
                                     ]] as const,
                                     ['笔记', [
