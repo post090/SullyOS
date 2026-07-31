@@ -62,6 +62,16 @@ const JobHuntPanelModal: React.FC<JobHuntPanelModalProps> = ({
             return next;
         });
     }, []);
+    // AI 改动权限（纯人类授权，逐项勾选；存全局 jhSettings.aiPerms，所有角色共用）
+    const [aiPerms, setAiPerms] = useState<JobHuntSettings['aiPerms']>(() => loadJhSettings().aiPerms);
+    const patchAiPerms = useCallback((p: Partial<JobHuntSettings['aiPerms']>) => {
+        setAiPerms(prev => {
+            const next = { ...prev, ...p };
+            const full = loadJhSettings();
+            saveJhSettings({ ...full, aiPerms: next });
+            return next;
+        });
+    }, []);
 
     const reload = useCallback(async () => {
         try { setPositions(await DB.getJobPositions()); } catch { setPositions([]); }
@@ -73,6 +83,7 @@ const JobHuntPanelModal: React.FC<JobHuntPanelModalProps> = ({
         if (!isOpen) return;
         setExpandedNoteId(null);
         setInject(loadJhSettings().inject);
+        setAiPerms(loadJhSettings().aiPerms);
         reload();
     }, [isOpen, reload]);
 
@@ -139,6 +150,44 @@ const JobHuntPanelModal: React.FC<JobHuntPanelModalProps> = ({
                                 </button>
                             ))}
                             <p className="text-[10px] text-slate-400 leading-relaxed">注入选项全局生效，所有开了求职模式的角色共用同一份。</p>
+                            {/* AI 可改动的内容（纯人类授权，逐项勾选；关掉 = AI 发了指令也不会落库） */}
+                            <div className="pt-2.5 border-t border-sky-200/60">
+                                <p className="text-[11px] font-bold text-slate-600 mb-1">AI 可改动的内容</p>
+                                <p className="text-[10px] text-slate-400 mb-2 leading-relaxed">取消勾选后 {char.name} 就不能再改对应的东西（只能看）。</p>
+                                {([
+                                    ['岗位', [
+                                        ['posProgress', '建卡 / 改阶段进展 / 环节 / 面试时间'] as const,
+                                        ['posFields', '改岗位名 / 项目 / JD / 地点 / 下一步'] as const,
+                                        ['posDelete', '删除岗位卡'] as const,
+                                    ]] as const,
+                                    ['笔记', [
+                                        ['noteCreate', '新建笔记'] as const,
+                                        ['noteEdit', '改写已有笔记'] as const,
+                                        ['noteDelete', '删除笔记'] as const,
+                                    ]] as const,
+                                    ['档案', [
+                                        ['profile', '改竞争力档案（竞争点 / 改进点 / 方向）'] as const,
+                                    ]] as const,
+                                ]).map(([group, items]) => (
+                                    <div key={group} className="mb-1.5">
+                                        <p className="text-[10px] font-bold text-slate-400 mb-1">{group}</p>
+                                        <div className="space-y-1.5">
+                                            {items.map(([key, label]) => {
+                                                const on = aiPerms[key];
+                                                return (
+                                                    <button key={key} onClick={() => patchAiPerms({ [key]: !on } as Partial<JobHuntSettings['aiPerms']>)}
+                                                        className="w-full flex items-center justify-between px-1 active:scale-[0.99] transition-transform">
+                                                        <span className="text-[11px] text-slate-600">{label}</span>
+                                                        <span className={`w-9 h-5 rounded-full p-0.5 transition-colors shrink-0 ${on ? 'bg-sky-500' : 'bg-slate-300'}`}>
+                                                            <span className={`block w-4 h-4 bg-white rounded-full shadow transition-transform ${on ? 'translate-x-4' : ''}`} />
+                                                        </span>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
                         </div>
                     )}
                 </div>

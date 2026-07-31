@@ -310,7 +310,7 @@ const JobHuntApp: React.FC = () => {
     const [profNewGap, setProfNewGap] = useState('');
     const [profNewGapKind, setProfNewGapKind] = useState<'strategy' | 'resume'>('strategy');
     const [practiceTargetId, setPracticeTargetId] = useState<string>(''); // '' = 综合面试
-    const [practiceForm, setPracticeForm] = useState<'text' | 'voice' | 'video'>('text');
+    const [practiceForm, setPracticeForm] = useState<'text' | 'voice' | 'video'>('voice');
     const [practiceMode, setPracticeMode] = useState<'strict' | 'coach'>('strict');
     const [practiceExtra, setPracticeExtra] = useState('');
     const [practiceTplName, setPracticeTplName] = useState('');
@@ -1935,13 +1935,13 @@ const JobHuntApp: React.FC = () => {
                             {(jobProfile?.strengths.length || 0) > 0 && (
                                 <div className="mt-2">
                                     <div className="text-[11px] text-slate-400 mb-1">竞争点</div>
-                                    <div className="flex flex-wrap gap-1.5">{jobProfile!.strengths.map(s => <span key={s.id} className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200">{s.text}</span>)}</div>
+                                    <div className="flex flex-wrap gap-1.5">{jobProfile!.strengths.map(s => <span key={s.id} className="text-[11px] px-2 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200/70 leading-snug">{s.text}</span>)}</div>
                                 </div>
                             )}
                             {(jobProfile?.gaps.length || 0) > 0 && (
                                 <div className="mt-2">
                                     <div className="text-[11px] text-slate-400 mb-1">改进点</div>
-                                    <div className="flex flex-wrap gap-1.5">{jobProfile!.gaps.map(g => <span key={g.id} className="text-[11px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">{g.kind === 'resume' ? '简历·' : '策略·'}{g.text}</span>)}</div>
+                                    <div className="flex flex-wrap gap-1.5">{jobProfile!.gaps.map(g => <span key={g.id} className="text-[11px] px-2 py-1 rounded-lg bg-amber-50 text-amber-700 border border-amber-200/70 leading-snug"><span className="text-amber-500/80 font-semibold">{g.kind === 'resume' ? '简历·' : '策略·'}</span>{g.text}</span>)}</div>
                                 </div>
                             )}
                             {!jobProfile?.direction && !(jobProfile?.strengths.length) && !(jobProfile?.gaps.length) && (
@@ -1965,7 +1965,7 @@ const JobHuntApp: React.FC = () => {
                         )}
 
                         {/* 模拟练习入口卡 */}
-                        <button onClick={() => { setPracticeTargetId(''); setPracticeForm('text'); setPracticeMode('strict'); setPracticeExtra(''); setPracticeTplName(''); setShowPracticeSetup(true); }}
+                        <button onClick={() => { setPracticeTargetId(''); setPracticeForm('voice'); setPracticeMode('strict'); setPracticeExtra(''); setPracticeTplName(''); setShowPracticeSetup(true); }}
                             className="w-full text-left px-4 py-3.5 rounded-2xl bg-gradient-to-r from-violet-500 to-sky-500 text-white shadow-sm active:scale-[0.98] transition-transform">
                             <div className="text-sm font-bold flex items-center gap-1.5"><Microphone className="w-4 h-4" />开始模拟练习</div>
                             <div className="text-[11px] text-white/80 mt-0.5">选角色和目标岗位，严肃面试官 / 轻松陪练两档</div>
@@ -2424,8 +2424,6 @@ const JobHuntApp: React.FC = () => {
                             <div>
                                 <div className="text-xs text-slate-500 font-semibold mb-1.5">练习形态</div>
                                 <div className="flex gap-2">
-                                    <button onClick={() => setPracticeForm('text')}
-                                        className={`flex-1 py-2.5 rounded-xl text-xs font-semibold border transition-all active:scale-95 ${practiceForm === 'text' ? 'bg-sky-50 text-sky-600 border-sky-200 ring-1 ring-sky-100' : 'bg-white text-slate-500 border-slate-200'}`}>文字</button>
                                     <button onClick={() => setPracticeForm('voice')}
                                         className={`flex-1 py-2.5 rounded-xl text-xs font-semibold border transition-all active:scale-95 ${practiceForm === 'voice' ? 'bg-sky-50 text-sky-600 border-sky-200 ring-1 ring-sky-100' : 'bg-white text-slate-500 border-slate-200'}`}>语音</button>
                                     <div className="flex-1 py-2.5 rounded-xl text-xs font-semibold border border-slate-200 bg-slate-50 text-slate-300 text-center">视频 · 研发中</div>

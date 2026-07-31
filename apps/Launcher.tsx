@@ -1419,7 +1419,7 @@ const Launcher: React.FC = () => {
              } : undefined}
            >
                {dockAppsConfig.map(app => (
-                   <div key={app.id} data-launcher-item={app.id} data-launcher-kind="dock" className={`relative transition-all duration-300 ease-out ${layoutEditing ? 'launcher-edit-item' : ''}`}>
+                   <div key={app.id} data-launcher-item={app.id} data-launcher-kind="dock" className={`relative ${layoutEditing ? 'launcher-edit-item' : ''}`}>
                         <AppIcon app={app} onClick={() => { if (!layoutEditing) openApp(app.id); }} variant="dock" size="md" />
                         {app.id === 'chat' && totalUnread > 0 && (
                             <div className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full text-white text-[9px] flex items-center justify-center border-2 border-white/20 shadow-sm font-bold pointer-events-none animate-pop-in">

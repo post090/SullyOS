@@ -153,11 +153,24 @@ const startNative = async (lang: string, cb: SttCallbacks): Promise<SttSession> 
     throw new Error('系统语音识别不可用（available() 探测失败）。可能是 ROM 裁剪了 RecognitionService，可以试试装个带 GMS 的设备、或者用文字输入。');
   }
 
-  // ── 2. 权限检查 ──
-  const perm = await SpeechRecognition.checkPermissions().catch(() => ({ speechRecognition: 'prompt' as const }));
-  if (perm.speechRecognition !== 'granted') {
-    const req = await SpeechRecognition.requestPermissions();
-    if (req.speechRecognition !== 'granted') throw new Error('麦克风权限被拒绝');
+  // ── 2. 权限检查（容错）──
+  // 关键教训：部分 ROM 的 requestPermissions() 会返回非标准状态（明明 RECORD_AUDIO
+  // 早已授权，却回 'prompt' / 'denied' / 空），若在这里"非 granted 即抛拒绝"就会
+  // 误报"没麦克风权限"，把已授权的用户直接挡在门外。策略改为：只在"明确 denied
+  // 且请求后仍 denied"时才拦；其余一律放行，让 start() 去实测——真没权限时 Android
+  // 的 SpeechRecognizer 会以错误回来，由识别循环兜底给可操作提示，不会静默。
+  try {
+    let st: string | undefined;
+    try { st = (await SpeechRecognition.checkPermissions())?.speechRecognition; } catch { st = undefined; }
+    if (st !== 'granted') {
+      try { st = (await SpeechRecognition.requestPermissions())?.speechRecognition; } catch { /* 请求本身失败也不拦，交给 start() 实测 */ }
+    }
+    if (st === 'denied') {
+      throw new Error('麦克风权限被拒绝，去系统设置里允许一下');
+    }
+  } catch (e: any) {
+    // 只把"明确拒绝"往上抛；其它探测异常吞掉、继续尝试 start()
+    if (e instanceof Error && /拒绝/.test(e.message)) throw e;
   }
 
   // ── 3. 状态变量 ──
@@ -346,8 +359,14 @@ const startCloud = async (lang: string, cb: SttCallbacks, cfg: SttProviderConfig
     throw new Error('当前环境不支持录音（MediaRecorder 不可用）');
   }
 
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => {
-    throw new Error('麦克风权限被拒绝，去系统设置里允许一下');
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true }).catch((err: any) => {
+    // 不能把所有失败都说成"权限被拒绝"（以前的 bug：用户明明授了权，却因
+    // 设备无麦/被占用等报"权限被拒绝"）。按错误名区分，给准确可操作文案。
+    const name = err?.name || '';
+    if (/NotAllowed|Security/i.test(name)) throw new Error('麦克风权限被拒绝，去系统设置里允许一下');
+    if (/NotFound|Overconstrained/i.test(name)) throw new Error('没找到可用麦克风（设备无麦风/被禁用）');
+    if (/NotReadable|AbortError/i.test(name)) throw new Error('麦克风被其它应用占用了，关掉那边再试');
+    throw new Error(`无法开启录音（${name || '未知错误'}）`);
   });
 
   // ── 实时音量：AnalyserNode 取时域 RMS，~100ms 一次推给 UI 画波形 ──

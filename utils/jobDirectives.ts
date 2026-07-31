@@ -217,6 +217,22 @@ export async function buildJobHuntPromptBlock(): Promise<string> {
     }
     lines.push('');
     lines.push(JOB_COMMAND_GUIDE);
+    // AI 改动权限：把用户关掉的操作明确告知，避免 AI 反复发被拒指令、浪费 token
+    try {
+        const perms = loadJhSettings().aiPerms;
+        const banned: string[] = [];
+        if (!perms.posProgress) banned.push('改岗位阶段/进展、环节轮次、面试时间、等反馈状态');
+        if (!perms.posFields) banned.push('改岗位名/项目/JD/地点/下一步等字段');
+        if (!perms.posDelete) banned.push('删除岗位卡');
+        if (!perms.noteCreate) banned.push('新建笔记');
+        if (!perms.noteEdit) banned.push('改写已有笔记');
+        if (!perms.noteDelete) banned.push('删除笔记');
+        if (!perms.profile) banned.push('改竞争力档案（竞争点/改进点/方向）');
+        if (banned.length) {
+            lines.push('');
+            lines.push(`⚠ 用户已关闭以下操作权限，你【绝对不要】尝试相应指令（发了也会被拒绝）：${banned.join('；')}。`);
+        }
+    } catch { /* 读不到设置就不加约束 */ }
     return lines.join('\n');
 }
 
@@ -232,8 +248,14 @@ export async function applyJobDirectives(
     const rejected: string[] = [];
     const now = Date.now();
 
+    // AI 改动权限（纯人类授权，逐项开关）：关掉的类别直接丢弃该批指令。
+    // 读失败用全开默认（不因设置读不到就把 AI 能力全封）。
+    let perms = { posProgress: true, posFields: true, posDelete: true, noteCreate: true, noteEdit: true, noteDelete: true, profile: true };
+    try { perms = loadJhSettings().aiPerms; } catch { /* 用全开默认 */ }
+
     // ── 岗位建卡/更新 ──
     for (const u of parsed.updates) {
+        if (!perms.posProgress) break;
         try {
             const all = await DB.getJobPositions();
             const existing = all.find(p => p.code === u.code);
@@ -259,6 +281,8 @@ export async function applyJobDirectives(
 
     // ── 岗位字段编辑（任意可写字段） ──
     for (const s of parsed.sets) {
+        // stage 字段属于「进展」权限，其余字段属于「字段」权限
+        if (s.field === 'stage' ? !perms.posProgress : !perms.posFields) continue;
         try {
             const all = await DB.getJobPositions();
             const target = all.find(p => p.code === s.code);
@@ -296,6 +320,7 @@ export async function applyJobDirectives(
 
     // ── 环节轮次（同代号同类型同轮次 = 更新，否则新建） ──
     for (const r of parsed.rounds) {
+        if (!perms.posProgress) break;
         try {
             const all = await DB.getJobPositions();
             const target = all.find(p => p.code === r.code);
@@ -322,6 +347,7 @@ export async function applyJobDirectives(
 
     // ── 面试时间快捷（interviewAt） ──
     for (const iv of parsed.interviews) {
+        if (!perms.posProgress) break;
         try {
             const all = await DB.getJobPositions();
             const target = all.find(p => p.code === iv.code);
@@ -333,6 +359,7 @@ export async function applyJobDirectives(
 
     // ── 等反馈开关（waitingSince；已在等则保留原起点，天数不重置） ──
     for (const w of parsed.waitings) {
+        if (!perms.posProgress) break;
         try {
             const all = await DB.getJobPositions();
             const target = all.find(p => p.code === w.code);
@@ -345,6 +372,7 @@ export async function applyJobDirectives(
 
     // ── 岗位删除 ──
     for (const code of parsed.positionDeletes) {
+        if (!perms.posDelete) break;
         try {
             const all = await DB.getJobPositions();
             const target = all.find(p => p.code === code);
@@ -356,6 +384,7 @@ export async function applyJobDirectives(
 
     // ── 笔记新建 ──
     for (const n of parsed.notes) {
+        if (!perms.noteCreate) break;
         try {
             const note: JobNote = {
                 id: genId('jnote'), kind: n.kind, title: n.title, content: n.content,
@@ -380,6 +409,7 @@ export async function applyJobDirectives(
 
     // ── 笔记编辑（整篇替换） ──
     for (const e2 of parsed.noteEdits) {
+        if (!perms.noteEdit) break;
         try {
             const all = await DB.getJobNotes();
             const target = findNote(all, e2.titleKey);
@@ -395,6 +425,7 @@ export async function applyJobDirectives(
 
     // ── 笔记删除 ──
     for (const key of parsed.noteDeletes) {
+        if (!perms.noteDelete) break;
         try {
             const all = await DB.getJobNotes();
             const target = findNote(all, key);
@@ -411,7 +442,7 @@ export async function applyJobDirectives(
     // ── 竞争力档案编辑（第八节；写 JobProfile，source:'char'，单份 main） ──
     const hasProfileEdit = parsed.edgeAdds.length > 0 || parsed.edgeDels.length > 0
         || parsed.gapAdds.length > 0 || parsed.gapDels.length > 0 || parsed.direction !== undefined;
-    if (hasProfileEdit) {
+    if (hasProfileEdit && perms.profile) {
         try {
             const existing = await DB.getJobProfile();
             const profile: JobProfile = existing || { id: 'main', direction: '', strengths: [], gaps: [], resumeDigest: '', updatedAt: now };
