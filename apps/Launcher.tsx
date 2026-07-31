@@ -563,8 +563,6 @@ const Launcher: React.FC = () => {
       grabOffsetX?: number;
       grabOffsetY?: number;
       lastTarget?: string;
-      lastTargetKind?: string;
-      lastTargetPos?: 'before' | 'after';  // 插入位置：target 左半=before，右半=after
       targetElement?: HTMLElement;
   } | null>(null);
   const suppressLayoutClickUntil = useRef(0);
@@ -899,76 +897,29 @@ const Launcher: React.FC = () => {
       }
   };
 
-  const reorderByTarget = useCallback((sourceKind: string, sourceId: string, targetKind: string, targetId: string, pos: 'before' | 'after') => {
-      if (sourceId === targetId) return;
-      // widget 只能在自己内部插入（隔离，不参与跨容器）
-      if (sourceKind === 'widget' || targetKind === 'widget') {
-          if (sourceKind !== 'widget' || targetKind !== 'widget') return;
-          const items = [...pinwheelOrderRef.current];
-          const from = items.indexOf(sourceId as any);
-          if (from < 0) return;
-          const [moved] = items.splice(from, 1);
-          let to = items.indexOf(targetId as any);
-          if (to < 0) return;
-          if (pos === 'after') to += 1;
-          items.splice(to, 0, moved);
-          pinwheelOrderRef.current = items;
-          setPinwheelOrder(items);
-          return;
-      }
-      // 同 kind 插入
-      if (sourceKind === targetKind) {
-          const items = sourceKind === 'app' ? [...launcherAppOrderRef.current] : [...launcherDockOrderRef.current];
-          const from = items.indexOf(sourceId);
-          if (from < 0) return;
-          const [moved] = items.splice(from, 1);
-          let to = items.indexOf(targetId);
-          if (to < 0) return;
-          if (pos === 'after') to += 1;
-          items.splice(to, 0, moved);
-          if (sourceKind === 'app') {
-              launcherAppOrderRef.current = items;
-              setLauncherAppOrder(items);
-          } else {
-              launcherDockOrderRef.current = items;
-              setLauncherDockOrder(items);
-          }
-          return;
-      }
-      // 跨 kind：app ↔ dock（插入语义）
-      if (sourceKind === 'app' && targetKind === 'dock') {
-          const appArr = launcherAppOrderRef.current.filter(id => id !== sourceId);
-          const dockArr = [...launcherDockOrderRef.current];
-          let targetIdx = dockArr.indexOf(targetId);
-          if (targetIdx < 0) return;
-          if (pos === 'after') targetIdx += 1;
-          // dock 满 4 个：挤出末位回 app（插到 source 原位置附近）
-          if (dockArr.length >= 4) {
-              const evicted = dockArr.pop();
-              if (evicted) {
-                  const sourceOrigIdx = launcherAppOrderRef.current.indexOf(sourceId);
-                  appArr.splice(Math.min(sourceOrigIdx, appArr.length), 0, evicted);
-              }
-          }
-          dockArr.splice(targetIdx, 0, sourceId);
-          launcherAppOrderRef.current = appArr;
-          setLauncherAppOrder(appArr);
-          launcherDockOrderRef.current = dockArr;
-          setLauncherDockOrder(dockArr);
-          return;
-      }
-      if (sourceKind === 'dock' && targetKind === 'app') {
-          const dockArr = launcherDockOrderRef.current.filter(id => id !== sourceId);
-          const appArr = [...launcherAppOrderRef.current];
-          let targetIdx = appArr.indexOf(targetId);
-          if (targetIdx < 0) return;
-          if (pos === 'after') targetIdx += 1;
-          appArr.splice(targetIdx, 0, sourceId);
-          launcherAppOrderRef.current = appArr;
-          setLauncherAppOrder(appArr);
-          launcherDockOrderRef.current = dockArr;
-          setLauncherDockOrder(dockArr);
-          return;
+  const reorderByTarget = useCallback((kind: string, source: string, target: string) => {
+      if (source === target) return;
+      const reorder = <T extends string>(items: T[]) => {
+          const from = items.indexOf(source as T);
+          const to = items.indexOf(target as T);
+          if (from < 0 || to < 0) return items;
+          const next = [...items];
+          const [moved] = next.splice(from, 1);
+          next.splice(to, 0, moved);
+          return next;
+      };
+      if (kind === 'app') {
+          const next = reorder(launcherAppOrderRef.current);
+          launcherAppOrderRef.current = next;
+          setLauncherAppOrder(next);
+      } else if (kind === 'dock') {
+          const next = reorder(launcherDockOrderRef.current);
+          launcherDockOrderRef.current = next;
+          setLauncherDockOrder(next);
+      } else if (kind === 'widget') {
+          const next = reorder(pinwheelOrderRef.current) as Array<'music' | 'appsA' | 'appsB' | 'image'>;
+          pinwheelOrderRef.current = next;
+          setPinwheelOrder(next);
       }
   }, []);
 
@@ -1019,7 +970,7 @@ const Launcher: React.FC = () => {
       const turn = () => {
           const pointer = layoutPointer.current;
           const scroller = scrollContainerRef.current;
-          if (!pointer?.active || (pointer.kind !== 'app' && pointer.kind !== 'dock') || !scroller || layoutPageTurnDirection.current !== direction) {
+          if (!pointer?.active || pointer.kind !== 'app' || !scroller || layoutPageTurnDirection.current !== direction) {
               clearLayoutPageTurn();
               return;
           }
@@ -1029,7 +980,7 @@ const Launcher: React.FC = () => {
               clearLayoutPageTurn();
               return;
           }
-          pointer.targetElement?.classList.remove('launcher-drop-target', 'launcher-drop-before', 'launcher-drop-after');
+          pointer.targetElement?.classList.remove('launcher-drop-target');
           pointer.targetElement = undefined;
           pointer.lastTarget = undefined;
           activePageIndexRef.current = nextPage;
@@ -1039,7 +990,7 @@ const Launcher: React.FC = () => {
           layoutPageTurnTimer.current = setTimeout(turn, 760);
       };
       layoutPageTurnTimer.current = setTimeout(turn, 560);
-  }, [appPages.length, totalPages, clearLayoutPageTurn]);
+  }, [appPages.length, clearLayoutPageTurn]);
 
   useEffect(() => () => {
       clearLayoutPressTimer();
@@ -1078,7 +1029,7 @@ const Launcher: React.FC = () => {
       const pointer = layoutPointer.current;
       if (!pointer || pointer.pointerId !== e.pointerId) return;
       if (!pointer.active) {
-          if (Math.hypot(e.clientX - pointer.x, e.clientY - pointer.y) > 14) {
+          if (Math.hypot(e.clientX - pointer.x, e.clientY - pointer.y) > 9) {
               clearLayoutPressTimer();
               layoutPointer.current = null;
           }
@@ -1090,32 +1041,24 @@ const Launcher: React.FC = () => {
           pointer.ghost.style.top = `${e.clientY - (pointer.grabOffsetY || 0)}px`;
       }
       const rootRect = e.currentTarget.getBoundingClientRect();
-      // dock→app 拖到边缘也要能翻页（widget 不参与）
-      const canPageTurn = pointer.kind === 'app' || pointer.kind === 'dock';
-      if (canPageTurn && e.clientX <= rootRect.left + 72) queueLayoutPageTurn(-1);
-      else if (canPageTurn && e.clientX >= rootRect.right - 72) queueLayoutPageTurn(1);
+      if (pointer.kind === 'app' && e.clientX <= rootRect.left + 72) queueLayoutPageTurn(-1);
+      else if (pointer.kind === 'app' && e.clientX >= rootRect.right - 72) queueLayoutPageTurn(1);
       else clearLayoutPageTurn();
       const target = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>('[data-launcher-item]');
       const targetKey = target?.dataset.launcherItem;
       const targetKind = target?.dataset.launcherKind;
-      // widget 隔离：只跟 widget 换；app/dock 可互相换；排除自身
-      const isWidgetCross = (pointer.kind === 'widget') !== (targetKind === 'widget');
-      const validTarget = !!targetKey && !!targetKind && targetKey !== pointer.key && !isWidgetCross;
+      const validTarget = !!targetKey && targetKind === pointer.kind && targetKey !== pointer.key;
       if (!validTarget) {
-          // 空白区域：不清空 lastTarget，保留上一个有效 target 让用户能拖到两个图标中间。
-          // 只清视觉指示，松手时仍按 lastTarget 插入。
+          pointer.targetElement?.classList.remove('launcher-drop-target');
+          pointer.targetElement = undefined;
+          pointer.lastTarget = undefined;
           return;
       }
-      // 检测鼠标在 target 左半还是右半，决定插入到 target 前/后
-      const targetRect = target!.getBoundingClientRect();
-      const pos: 'before' | 'after' = (e.clientX - targetRect.left) < targetRect.width / 2 ? 'before' : 'after';
-      if (target === pointer.targetElement && pos === pointer.lastTargetPos) return;
-      pointer.targetElement?.classList.remove('launcher-drop-target', 'launcher-drop-before', 'launcher-drop-after');
-      target?.classList.add('launcher-drop-target', `launcher-drop-${pos}`);
+      if (target === pointer.targetElement) return;
+      pointer.targetElement?.classList.remove('launcher-drop-target');
+      target?.classList.add('launcher-drop-target');
       pointer.targetElement = target;
       pointer.lastTarget = targetKey;
-      pointer.lastTargetKind = targetKind;
-      pointer.lastTargetPos = pos;
   };
 
   const finishLayoutPointer = (e?: React.PointerEvent<HTMLDivElement>) => {
@@ -1128,10 +1071,8 @@ const Launcher: React.FC = () => {
           pointer.element.style.pointerEvents = '';
           pointer.element.classList.remove('launcher-dragging');
           pointer.ghost?.remove();
-          pointer.targetElement?.classList.remove('launcher-drop-target', 'launcher-drop-before', 'launcher-drop-after');
-          if (pointer.lastTarget && pointer.lastTargetKind && pointer.lastTargetPos) {
-              reorderByTarget(pointer.kind, pointer.key, pointer.lastTargetKind, pointer.lastTarget, pointer.lastTargetPos);
-          }
+          pointer.targetElement?.classList.remove('launcher-drop-target');
+          if (pointer.lastTarget) reorderByTarget(pointer.kind, pointer.key, pointer.lastTarget);
           void updateTheme({
               launcherAppOrder: launcherAppOrderRef.current,
               launcherDockOrder: launcherDockOrderRef.current,
@@ -1178,10 +1119,6 @@ const Launcher: React.FC = () => {
       }}
     >
       <style>{`
-        /* 图标本身允许浏览器长按延迟（不被容器 pan-x pan-y 抢走），编辑模式完全接管 */
-        [data-launcher-item] {
-          touch-action: manipulation;
-        }
         .launcher-edit-item {
           touch-action: none;
           cursor: grab;
@@ -1203,13 +1140,6 @@ const Launcher: React.FC = () => {
           outline: 1.5px dashed rgba(75,65,54,.36);
           outline-offset: 5px;
           border-radius: 1.35rem;
-        }
-        /* 插入位置指示：左/右一条高亮竖线 */
-        .launcher-drop-before {
-          box-shadow: -3px 0 0 0 rgba(75,65,54,.55);
-        }
-        .launcher-drop-after {
-          box-shadow: 3px 0 0 0 rgba(75,65,54,.55);
         }
       `}</style>
 
