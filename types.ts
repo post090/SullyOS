@@ -251,6 +251,8 @@ export interface CallAutoStartConfig {
   audioAnalysis?: { enabled: boolean; api?: Partial<APIConfig>; transcribeMode?: 'stt' | 'audioModel' };
   /** 关闭角色语音播放：只看文字、不放 TTS 声音（面试/场景通话把该场景的持久设置带进来，种下通话的「外放」初值） */
   mutePlayback?: boolean;
+  /** 通话皮肤：'proLight'=白蓝专业风（面试默认），缺省沿用深紫默认皮肤 */
+  skin?: 'proLight';
 }
 
 export interface APIConfig {

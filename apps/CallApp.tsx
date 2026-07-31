@@ -372,8 +372,12 @@ const CallApp: React.FC = () => {
   const callTouchStartPos = useRef({ x: 0, y: 0 });
   const selectedChar = useMemo(() => characters.find(c => c.id === selectedCharId) || null, [characters, selectedCharId]);
   const recordDetail = useMemo(() => callRecords.find(r => r.id === recordDetailId) || null, [callRecords, recordDetailId]);
+  // 面试白蓝专业皮肤：activeScene.skin==='proLight' 时整通话界面翻成浅底深字的商务风
+  const isProLight = activeScene?.skin === 'proLight';
   // 从角色聊天主题中提取强调色，用于通话界面的按钮和高亮
   const accentColor = useMemo(() => {
+    // 白蓝专业皮肤：强制蓝色 accent，不跟角色主题走（保证浅底下按钮/高亮统一克制）
+    if (isProLight) return '#2563eb';
     const themeId = selectedChar?.bubbleStyle || 'default';
     const theme: ChatTheme | undefined = customThemes?.find((t: ChatTheme) => t.id === themeId) || PRESET_THEMES[themeId];
     const raw = (theme?.user?.backgroundColor || '#8b5cf6').trim();
@@ -388,7 +392,7 @@ const CallApp: React.FC = () => {
       if (lum < 90) return '#a78bfa';
     }
     return raw;
-  }, [selectedChar?.bubbleStyle, customThemes]);
+  }, [selectedChar?.bubbleStyle, customThemes, isProLight]);
   const callScrollableRef = useRef<HTMLDivElement | null>(null);
   const draftInputRef = useRef<HTMLInputElement | null>(null);
   // 输入面板默认展开，但「进入通话」时不能自动聚焦输入框——移动端一聚焦就弹
@@ -1687,10 +1691,22 @@ const CallApp: React.FC = () => {
     : displayCallState === 'error' ? { cn: '连接异常', en: 'SIGNAL ERROR' }
     : { cn: '聆听中', en: 'LISTENING' };
   return (
-    <div className="h-full w-full relative bg-[#0a0613] text-white flex flex-col overflow-hidden">
+    <div className={`h-full w-full relative flex flex-col overflow-hidden ${isProLight ? 'sully-call-prolight bg-[#eef4fd] text-slate-800' : 'bg-[#0a0613] text-white'}`}>
+      {isProLight && (
+        // 白蓝皮肤：把原本为深底设计的半透白/默认白字翻成浅底深字，尽量不动 JSX 结构，用作用域 CSS 覆盖常用工具类
+        <style>{`
+          .sully-call-prolight [class*="text-white"] { color: #334155 !important; }
+          .sully-call-prolight [class*="bg-white/"] { background-color: rgba(37,99,235,0.06) !important; }
+          .sully-call-prolight [class*="border-white/"] { border-color: rgba(37,99,235,0.18) !important; }
+          .sully-call-prolight [class*="bg-black/"] { background-color: rgba(255,255,255,0.7) !important; }
+          .sully-call-prolight [class*="bg-white/8"], .sully-call-prolight [class*="bg-white/12"] { background-color: rgba(37,99,235,0.08) !important; }
+          .sully-call-prolight [class*="text-rose-"] { color: #e11d48 !important; }
+          .sully-call-prolight input::placeholder { color: #94a3b8 !important; }
+        `}</style>
+      )}
       {/* blurred character art */}
       <div
-        className="absolute inset-0 bg-cover bg-center scale-125 blur-3xl opacity-30"
+        className={`absolute inset-0 bg-cover bg-center scale-125 blur-3xl ${isProLight ? 'opacity-10' : 'opacity-30'}`}
         style={{ backgroundImage: selectedChar?.avatar ? `url(${selectedChar.avatar})` : undefined }}
       />
       {/* accent aura glows */}
@@ -1699,7 +1715,7 @@ const CallApp: React.FC = () => {
       <div className="absolute -bottom-20 left-1/2 -translate-x-1/2 w-[150%] h-80 rounded-full blur-3xl opacity-25 pointer-events-none"
         style={{ background: `radial-gradient(closest-side, ${accentColor}, transparent)` }} />
       {/* vignette */}
-      <div className="absolute inset-0 bg-gradient-to-b from-black/55 via-[#0a0613]/75 to-black/90 pointer-events-none" />
+      <div className={`absolute inset-0 pointer-events-none ${isProLight ? 'bg-gradient-to-b from-white/50 via-[#eef4fd]/40 to-white/70' : 'bg-gradient-to-b from-black/55 via-[#0a0613]/75 to-black/90'}`} />
       {/* floating sparkles */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         {CALL_SPARKLES.map((p, i) => (
@@ -1857,7 +1873,7 @@ const CallApp: React.FC = () => {
                 disabled={sendingBusy || sttRecognizing}
                 title={sttRecognizing ? '识别中…' : isListening ? '结束语音输入' : '按一下开始说话'}
                 className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 transition active:scale-90 disabled:opacity-60"
-                style={isListening || sttRecognizing ? { background: '#f0569f', boxShadow: '0 0 14px #f0569f99' } : { background: 'rgba(255,255,255,0.08)' }}
+                style={isListening || sttRecognizing ? { background: '#f0569f', boxShadow: '0 0 14px #f0569f99' } : { background: isProLight ? 'rgba(37,99,235,0.1)' : 'rgba(255,255,255,0.08)' }}
               >
                 {sttRecognizing
                   ? <span className="w-4 h-4 rounded-full border-2 border-white/30 animate-spin" style={{ borderTopColor: '#fff' }} />
@@ -1871,7 +1887,7 @@ const CallApp: React.FC = () => {
               className="flex-1 min-w-0 bg-transparent px-2 text-sm outline-none placeholder:text-white/35"
               placeholder={isListening ? '在听你说……' : sendingBusy ? `${selectedChar?.name || '对方'}正在想……` : `想对${selectedChar?.name || '对方'}说什么？`}
             />
-            <button onClick={handleTurn} disabled={sendingBusy} className="shrink-0 px-4 py-2 rounded-xl text-sm font-medium text-white disabled:opacity-40 transition active:scale-95" style={{ backgroundColor: accentColor, boxShadow: `0 0 16px ${accentColor}66` }}>{sendingBusy ? '…' : '说'}</button>
+            <button onClick={handleTurn} disabled={sendingBusy} className="shrink-0 px-4 py-2 rounded-xl text-sm font-medium disabled:opacity-40 transition active:scale-95" style={{ backgroundColor: accentColor, color: '#fff', boxShadow: `0 0 16px ${accentColor}66` }}>{sendingBusy ? '…' : '说'}</button>
           </div>
           {isListening && (
             <div className="flex items-center gap-2 mt-1.5 px-1">
@@ -1906,7 +1922,7 @@ const CallApp: React.FC = () => {
           {/* mic */}
           <button onClick={() => setShowInputPanel(prev => !prev)} className="flex flex-col items-center gap-1.5 transition active:scale-95">
             <span className="w-14 h-14 rounded-full border flex items-center justify-center backdrop-blur-md transition"
-              style={showInputPanel ? { background: `${accentColor}33`, borderColor: `${accentColor}88`, boxShadow: `0 0 18px ${accentColor}55` } : { background: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.15)' }}>
+              style={showInputPanel ? { background: `${accentColor}33`, borderColor: `${accentColor}88`, boxShadow: `0 0 18px ${accentColor}55` } : { background: isProLight ? 'rgba(37,99,235,0.06)' : 'rgba(255,255,255,0.06)', borderColor: isProLight ? 'rgba(37,99,235,0.22)' : 'rgba(255,255,255,0.15)' }}>
               <Microphone size={22} weight="fill" className="text-white/90" />
             </span>
             <span className="text-[10px] text-white/70">麦克风</span>
@@ -1915,7 +1931,7 @@ const CallApp: React.FC = () => {
           {/* translate */}
           <button onClick={() => setShowLangPicker(prev => !prev)} title="语音语种" className="flex flex-col items-center gap-1.5 transition active:scale-95">
             <span className="w-14 h-14 rounded-full border flex items-center justify-center backdrop-blur-md transition"
-              style={voiceLang ? { background: `${accentColor}33`, borderColor: `${accentColor}88`, boxShadow: `0 0 18px ${accentColor}55` } : { background: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.15)' }}>
+              style={voiceLang ? { background: `${accentColor}33`, borderColor: `${accentColor}88`, boxShadow: `0 0 18px ${accentColor}55` } : { background: isProLight ? 'rgba(37,99,235,0.06)' : 'rgba(255,255,255,0.06)', borderColor: isProLight ? 'rgba(37,99,235,0.22)' : 'rgba(255,255,255,0.15)' }}>
               <Translate size={22} weight="fill" className="text-white/90" />
             </span>
             <span className="text-[10px] text-white/70">翻译</span>
@@ -1940,7 +1956,7 @@ const CallApp: React.FC = () => {
             className="flex flex-col items-center gap-1.5 transition active:scale-95"
           >
             <span className="w-14 h-14 rounded-full border flex items-center justify-center backdrop-blur-md transition"
-              style={isSpeakerOn ? { background: `${accentColor}33`, borderColor: `${accentColor}88`, boxShadow: `0 0 18px ${accentColor}55` } : { background: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.15)' }}>
+              style={isSpeakerOn ? { background: `${accentColor}33`, borderColor: `${accentColor}88`, boxShadow: `0 0 18px ${accentColor}55` } : { background: isProLight ? 'rgba(37,99,235,0.06)' : 'rgba(255,255,255,0.06)', borderColor: isProLight ? 'rgba(37,99,235,0.22)' : 'rgba(255,255,255,0.15)' }}>
               {isSpeakerOn
                 ? <SpeakerHigh size={22} weight="fill" className="text-white/90" />
                 : <SpeakerSlash size={22} weight="fill" className="text-white/50" />}

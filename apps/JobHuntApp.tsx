@@ -789,6 +789,7 @@ const JobHuntApp: React.FC = () => {
                     ? { enabled: true, api: { baseUrl: jhSettings.api.audio.baseUrl, apiKey: jhSettings.api.audio.apiKey, model: jhSettings.api.audio.model }, transcribeMode: jhSettings.api.transcribeMode }
                     : undefined,
                 mutePlayback: jhSettings.api.mutePlayback,
+                skin: jhSettings.api.interviewSkin === 'proLight' ? 'proLight' : undefined,
             });
             return;
         }
@@ -1588,6 +1589,19 @@ const JobHuntApp: React.FC = () => {
                                         <div className={`w-5 h-5 bg-white rounded-full shadow transition-transform ${jhSettings.api.mutePlayback ? 'translate-x-5' : ''}`} />
                                     </div>
                                 </button>
+                            </div>
+                            <div>
+                                <div className="text-xs font-bold text-slate-700 px-1 mb-1.5">面试界面皮肤</div>
+                                <div className="grid grid-cols-2 gap-2">
+                                    {([['proLight', '白蓝专业风', '浅底深字、商务内敛，像一场正式面试'], ['default', '深紫默认', '沿用普通通话的深色星空风']] as const).map(([v, label, desc]) => (
+                                        <button key={v} onClick={() => patchJhSettings({ api: { ...jhSettings.api, interviewSkin: v } })}
+                                            className={`text-left rounded-2xl px-3 py-2.5 border transition active:scale-[0.98] ${jhSettings.api.interviewSkin === v ? 'border-sky-500 bg-sky-50' : 'border-slate-200 bg-slate-50'}`}>
+                                            <div className={`text-xs font-bold ${jhSettings.api.interviewSkin === v ? 'text-sky-600' : 'text-slate-700'}`}>{label}</div>
+                                            <div className="text-[10px] text-slate-400 mt-0.5 leading-tight">{desc}</div>
+                                        </button>
+                                    ))}
+                                </div>
+                                <div className="text-[10px] text-slate-400 mt-1 px-1">只改语音面试（openCallWithChar）的配色，不影响普通通话</div>
                             </div>
                             <div>
                                 <button onClick={() => patchJhSettings({ api: { ...jhSettings.api, audioAnalysis: !jhSettings.api.audioAnalysis } })}
