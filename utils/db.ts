@@ -2935,6 +2935,39 @@ export const DB = {
   },
 
   /**
+   * 在单个 readonly 事务里用游标逐条同步消费整表。onItem 不能返回 Promise；每次 cursor
+   * success 都只持有当前记录，适合边剥图边写备份分片，同时保留 getAll 的单事务快照语义。
+   */
+  streamRawStoreData: async (
+      storeName: string,
+      onItem: (item: any) => void,
+  ): Promise<void> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(storeName)) return;
+      return new Promise((resolve, reject) => {
+          const tx = db.transaction(storeName, 'readonly');
+          const req = tx.objectStore(storeName).openCursor();
+          let callbackError: unknown;
+
+          req.onsuccess = () => {
+              const cursor = req.result;
+              if (!cursor || callbackError) return;
+              try {
+                  onItem(cursor.value);
+                  cursor.continue();
+              } catch (error) {
+                  callbackError = error;
+                  try { tx.abort(); } catch { /* transaction may already be closing */ }
+              }
+          };
+          req.onerror = () => reject(req.error || tx.error || new Error('streamRawStoreData cursor failed'));
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(callbackError || tx.error || new Error('streamRawStoreData tx failed'));
+          tx.onabort = () => reject(callbackError || tx.error || new Error('streamRawStoreData tx aborted'));
+      });
+  },
+
+  /**
    * 游标分批读整表：每攒够 batchSize 条回调一次 onBatch(batch)，回调内消费完即释放，
    * 绝不像 getRawStoreData 那样把整表一次性 getAll 进内存。导出大 store 时用它，把读取
    * 峰值从「整个 store」降到「一个 batch」。

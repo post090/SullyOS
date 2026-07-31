@@ -28,6 +28,9 @@ import { isPromptBuildSkipped, isSystemMessageMergeEnabled } from './devDebug';
 import { mergeSystemMessages } from './systemMessageMerge';
 import { injectWorldbookDepthEntries, resolveWorldbookEntries } from './worldbook';
 import { normalizeTranslationLangLabel } from './translationLang';
+import { cleanApiMessages, flattenImageContentParts } from './promptMessageCleanup';
+
+export { cleanApiMessages, flattenImageContentParts } from './promptMessageCleanup';
 
 export interface UserListeningContext {
     songName: string;
@@ -161,44 +164,6 @@ export function deriveRecentTrackSwitchForChar(
     if (!record.charIds.includes(charId)) return null;
     if (Date.now() - record.at > TRACK_CHANGE_FRESH_MS) return null;
     return { songName: record.previousSong.name, artists: record.previousSong.artists };
-}
-
-/**
- * 剥离历史里旧的双语标签: `%%BILINGUAL%%` 形态整条在标记处截断 (只留原文侧),
- * `<翻译>` XML 形态只留 <原文>。导出仅为单测 — 引用头绝不能混入 %%BILINGUAL%%
- * (见 chatPrompts.buildMessageHistory 的引用摘要清洗), 否则截断会吃掉用户的实际回复。
- */
-export function cleanApiMessages(apiMessages: Array<{ role: string; content: any }>): Array<{ role: string; content: any }> {
-    return apiMessages.map((msg: any) => {
-        if (typeof msg.content !== 'string') return msg;
-        let c: string = msg.content;
-        if (c.toLowerCase().includes('%%bilingual%%')) {
-            const idx = c.toLowerCase().indexOf('%%bilingual%%');
-            c = c.substring(0, idx).trim();
-        }
-        if (c.includes('<翻译>')) {
-            c = c.replace(/<翻译>\s*<原文>([\s\S]*?)<\/原文>\s*<译文>[\s\S]*?<\/译文>\s*<\/翻译>/g, '$1').trim();
-        }
-        return { ...msg, content: c };
-    });
-}
-
-/**
- * 把 buildMessageHistory 产出的多模态图片消息压平成纯文本：保留 text 部分
- * （里面已带 `[User sent an image]` 占位与时间戳），丢弃 image_url 部分。
- * 与 buildMessageHistory 的"图片数据已丢失"分支产出完全同形。
- * 导出仅为单测。
- */
-export function flattenImageContentParts(apiMessages: Array<{ role: string; content: any }>): Array<{ role: string; content: any }> {
-    return apiMessages.map((msg) => {
-        if (!Array.isArray(msg.content)) return msg;
-        const text = msg.content
-            .filter((part: any) => part?.type === 'text')
-            .map((part: any) => part.text || '')
-            .join('\n')
-            .trim();
-        return { ...msg, content: text || '[图片]' };
-    });
 }
 
 /**

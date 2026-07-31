@@ -1773,15 +1773,49 @@ export interface CustomCreatorPart {
 // --- SONGWRITING APP TYPES ---
 export type SongMood = 'happy' | 'sad' | 'romantic' | 'angry' | 'chill' | 'epic' | 'nostalgic' | 'dreamy';
 export type SongGenre = 'pop' | 'rock' | 'ballad' | 'rap' | 'folk' | 'electronic' | 'jazz' | 'rnb' | 'free';
+export type LyricCoWritingStyle =
+    | 'adaptive'
+    | 'mandopop'
+    | 'guofeng'
+    | 'opera-wave'
+    | 'cantopop'
+    | 'folk'
+    | 'indie-rock'
+    | 'hiphop'
+    | 'rnb'
+    | 'vocaloid'
+    | 'dark-waltz'
+    | 'anime-op'
+    | 'anime-ed'
+    | 'denpa-kawaii'
+    | 'jpop'
+    | 'city-pop'
+    | 'jrock'
+    | 'kpop'
+    | 'k-rnb'
+    | 'western-pop'
+    | 'edm'
+    | 'alt-pop'
+    | 'funk-disco'
+    | 'pop-punk'
+    | 'musical';
 
 export interface SongLine {
     id: string;
     authorId: string; // 'user' or charId
     content: string;
     section: 'intro' | 'verse' | 'pre-chorus' | 'chorus' | 'bridge' | 'outro' | 'free';
+    /** Stable position inside a fixed/custom lyric template. Legacy lines fall back to array order. */
+    slotIndex?: number;
     annotation?: string; // AI guidance note on this line
     timestamp: number;
     isDraft?: boolean; // true = not selected as final lyrics, kept as draft record
+}
+
+export interface SongTemplateSection {
+    section: SongLine['section'];
+    lines: number;
+    chars: string;
 }
 
 export interface SongComment {
@@ -1857,6 +1891,7 @@ export interface SongSheet {
     bpm?: number;
     key?: string; // e.g. "C major", "A minor"
     collaboratorId: string; // the character guiding the user
+    theme?: string; // 歌曲主题/主旨（记忆宫殿注入文本用，可选）
     lines: SongLine[];
     comments: SongComment[];
     status: 'draft' | 'completed';
@@ -1875,6 +1910,13 @@ export interface SongSheet {
     // Lyric structure template chosen at creation. Drives the structure-guide
     // banner shown in the write view so user/char don't write randomly.
     lyricTemplate?: string;
+    // User-authored structure used when lyricTemplate === 'custom'.
+    customLyricTemplate?: SongTemplateSection[];
+    // Writing grammar used by the AI lyric editor. This is intentionally
+    // separate from audio genre: one genre can be co-written in many styles.
+    lyricCoWritingStyle?: LyricCoWritingStyle;
+    // Optional user-uploaded artwork. Usually a blobref: token.
+    coverImage?: string;
 }
 
 // --- DATE APP TYPES ---

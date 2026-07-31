@@ -1,14 +1,26 @@
 
-import { extractLlmContent } from '../utils/llmContent';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useOS } from '../context/OSContext';
-import { useBackGuard } from '../hooks/useBackGuard';
-import { SongSheet, SongLine, SongComment, SongMood, SongGenre, SongAudio, MusicProvider, AppID } from '../types';
-import { SONG_GENRES, SONG_MOODS, SECTION_LABELS, COVER_STYLES, SongPrompts, LYRIC_TEMPLATES, getLyricTemplate } from '../utils/songPrompts';
+import { SongSheet, SongLine, SongComment, SongMood, SongGenre, SongAudio, MusicProvider, SongTemplateSection, LyricCoWritingStyle, AppID } from '../types';
+import {
+    SONG_GENRES,
+    SONG_MOODS,
+    SECTION_LABELS,
+    COVER_STYLES,
+    SongPrompts,
+    LYRIC_TEMPLATES,
+    LYRIC_CO_WRITING_STYLES,
+    LYRIC_STYLE_CATEGORIES,
+    getLyricTemplate,
+    getLyricCoWritingStyle,
+    extractGeneratedLyricLine,
+    type LyricStyleCategory,
+} from '../utils/songPrompts';
 import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
 import { ContextBuilder } from '../utils/context';
 import { safeResponseJson, extractJson } from '../utils/safeApi';
 import { DB } from '../utils/db';
+import { putImageBlob, useBlobRefUrl } from '../utils/blobRef';
 import {
     synthesizeSong,
     buildAceStepTags,
@@ -34,7 +46,8 @@ import {
     Check, PencilSimple,
     Sparkle as SparkleP, Butterfly, Feather, Lightning, MicrophoneStage,
     MusicNotes, Wind, Cookie, UsersThree, Heart, Diamond, MusicNoteSimple,
-    HeartStraight,
+    HeartStraight, UploadSimple, ChatCircleDots, BookOpenText, ArrowsClockwise,
+    Plus, Trash,
 } from '@phosphor-icons/react';
 import { useMusic, type Song as MusicSong } from '../context/MusicContext';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
@@ -76,6 +89,72 @@ function mkLineItem(l: SongLine): TimelineItem { return { kind: 'line', data: l 
 function mkLineItem2(group: { id: string; timestamp: number; reaction?: SongComment; details: SongComment[] }): TimelineItem { return { kind: 'feedback', data: group }; }
 function mkPendingItem(l: SongLine): TimelineItem { return { kind: 'pending', data: l }; }
 
+type LyricSlot = {
+    index: number;
+    section: SongLine['section'];
+    chars: string;
+    sectionOccurrence: number;
+    lineInSection: number;
+};
+
+type PaperTheme = {
+    background: string;
+    ink: string;
+    muted: string;
+    rule: string;
+    accent: string;
+    sheet: string;
+};
+
+const PAPER_THEMES: Record<string, PaperTheme> = {
+    'kraft-paper': { background: '#ead7b6', ink: '#49392a', muted: '#8a7056', rule: 'rgba(113,82,51,.18)', accent: '#a6634a', sheet: 'rgba(255,248,232,.72)' },
+    'old-photo':   { background: '#e9dfc8', ink: '#494137', muted: '#887b68', rule: 'rgba(92,77,57,.16)', accent: '#a87958', sheet: 'rgba(255,252,239,.74)' },
+    'ink-wash':    { background: '#dce0e2', ink: '#293136', muted: '#69747a', rule: 'rgba(42,53,60,.14)', accent: '#596d77', sheet: 'rgba(250,252,252,.72)' },
+    'dried-rose':  { background: '#ead9d9', ink: '#543b42', muted: '#916f78', rule: 'rgba(108,65,77,.14)', accent: '#a96679', sheet: 'rgba(255,248,248,.72)' },
+    'midnight':    { background: '#1e2025', ink: '#f0e9df', muted: '#b7ada2', rule: 'rgba(255,255,255,.12)', accent: '#d8a9b8', sheet: 'rgba(34,37,43,.82)' },
+    'linen':       { background: '#eeece6', ink: '#3f3d39', muted: '#817d75', rule: 'rgba(77,73,66,.13)', accent: '#827b91', sheet: 'rgba(255,255,252,.75)' },
+    'tea-stain':   { background: '#eee0bd', ink: '#4d412f', muted: '#8d7756', rule: 'rgba(110,83,44,.15)', accent: '#a77645', sheet: 'rgba(255,249,229,.72)' },
+    'forest':      { background: '#d9e1d8', ink: '#2f4033', muted: '#6e806f', rule: 'rgba(45,75,52,.14)', accent: '#668267', sheet: 'rgba(248,253,247,.72)' },
+};
+
+const getPaperTheme = (styleId: string): PaperTheme => {
+    if (!styleId.startsWith('custom:')) return PAPER_THEMES[styleId] || PAPER_THEMES.linen;
+    const palette = styleId.slice('custom:'.length).split('-');
+    const from = palette[0] || '#f4c2cf';
+    const via = palette[1] || '#cfc3e8';
+    const to = palette[2] || '#9bcbf8';
+    return {
+        background: `linear-gradient(145deg, ${from} 0%, ${via} 52%, ${to} 100%)`,
+        ink: '#2f2a38',
+        muted: 'rgba(47,42,56,.62)',
+        rule: 'rgba(47,42,56,.13)',
+        accent: via,
+        sheet: 'rgba(255,255,255,.68)',
+    };
+};
+
+const buildLyricSlots = (song: SongSheet): LyricSlot[] => {
+    const structure = song.lyricTemplate === 'custom'
+        ? (song.customLyricTemplate || [])
+        : getLyricTemplate(song.lyricTemplate).structure;
+    const occurrences: Record<string, number> = {};
+    const slots: LyricSlot[] = [];
+    structure.forEach(section => {
+        const occurrence = occurrences[section.section] || 0;
+        occurrences[section.section] = occurrence + 1;
+        for (let i = 0; i < section.lines; i++) {
+            slots.push({
+                index: slots.length,
+                section: section.section,
+                chars: section.chars,
+                sectionOccurrence: occurrence,
+                lineInSection: i,
+            });
+        }
+    });
+    return slots;
+};
+
 // --- Main App ---
 
 const SongwritingApp: React.FC = () => {
@@ -91,10 +170,16 @@ const SongwritingApp: React.FC = () => {
     const [tempSubtitle, setTempSubtitle] = useState('');
     const [tempGenre, setTempGenre] = useState<SongGenre>('pop');
     const [tempMood, setTempMood] = useState<SongMood>('happy');
+    const [tempLyricStyle, setTempLyricStyle] = useState<LyricCoWritingStyle>('adaptive');
+    const [tempLyricStyleCategory, setTempLyricStyleCategory] = useState<LyricStyleCategory>('chinese');
     const [tempCollaboratorId, setTempCollaboratorId] = useState('');
     const [partnerGroupId, setPartnerGroupId] = useState(GROUP_FILTER_ALL); // 创作伙伴页的分组筛选
     const [tempCoverStyle, setTempCoverStyle] = useState(COVER_STYLES[0]?.id || 'dawn-blush');
     const [tempTemplate, setTempTemplate] = useState<string>('free');
+    const [tempCustomSections, setTempCustomSections] = useState<SongTemplateSection[]>([
+        { section: 'verse', lines: 4, chars: '8-12' },
+        { section: 'chorus', lines: 4, chars: '6-10' },
+    ]);
     const [showStructureBanner, setShowStructureBanner] = useState(true);
     const [customCoverFrom, setCustomCoverFrom] = useState('#FB7185');
     const [customCoverVia, setCustomCoverVia] = useState('#A855F7');
@@ -102,11 +187,16 @@ const SongwritingApp: React.FC = () => {
 
     // Write View State
     const [inputText, setInputText] = useState('');
-    const [currentSection, setCurrentSection] = useState<SongLine['section']>('verse');
+    const [currentSection, setCurrentSection] = useState<string>('verse');
     const [isTyping, setIsTyping] = useState(false);
     const [lastTokenUsage, setLastTokenUsage] = useState<number | null>(null);
     const [showStructureGuide, setShowStructureGuide] = useState(false);
+    const [showLyricStylePicker, setShowLyricStylePicker] = useState(false);
+    const [lyricStyleCategory, setLyricStyleCategory] = useState<LyricStyleCategory>('chinese');
     const [expandedFeedbackIds, setExpandedFeedbackIds] = useState<Record<string, boolean>>({});
+    const [workMode, setWorkMode] = useState<'notebook' | 'chat'>('notebook');
+    const [lineDrafts, setLineDrafts] = useState<Record<number, string>>({});
+    const [generatingSlotIndex, setGeneratingSlotIndex] = useState<number | null>(null);
 
     // Pending candidate lines (not yet committed to song)
     const [pendingLines, setPendingLines] = useState<SongLine[]>([]);
@@ -144,28 +234,18 @@ const SongwritingApp: React.FC = () => {
     const [playProgress, setPlayProgress] = useState(0);
     const [playDuration, setPlayDuration] = useState(0);
     // Cover confirm modal — opens between ❤︎ click and music-app jump
-    type CoverMode = 'char' | 'user' | 'dual';
+    type CoverMode = 'char' | 'user' | 'dual' | 'upload';
     const [showCoverConfirm, setShowCoverConfirm] = useState(false);
     const [coverMode, setCoverMode] = useState<CoverMode>('char');
     const [dualCoverUrl, setDualCoverUrl] = useState<string | null>(null);
     const [isBuildingDual, setIsBuildingDual] = useState(false);
-
-    // 系统返回手势：先关各弹窗，再按 partner→create、其余→书架回退，最后才关 App
-    useBackGuard([
-        [showCoverConfirm, () => setShowCoverConfirm(false)],
-        [showShareModal, () => setShowShareModal(false)],
-        [showPreviewModal, () => setShowPreviewModal(false)],
-        [showCustomPrompt, () => setShowCustomPrompt(false)],
-        [showStructureGuide, () => setShowStructureGuide(false)],
-        [view === 'partner', () => setView('create')],
-        [view === 'preview', () => { setView('shelf'); setActiveSong(null); }],
-        [view !== 'shelf', () => setView('shelf')],
-    ]);
     // 冷却已关闭 — 后端撑得住, 留 0 让所有 cooldownSecsLeft > 0 分支自然成 dead code。
     const COOLDOWN_MS = 0;
     const [cooldownSecsLeft, setCooldownSecsLeft] = useState(0);
 
     const scrollRef = useRef<HTMLDivElement>(null);
+    const coverUploadRef = useRef<HTMLInputElement>(null);
+    const uploadedCoverUrl = useBlobRefUrl(activeSong?.coverImage);
 
     // Long press for mobile delete
     const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -291,18 +371,28 @@ const SongwritingApp: React.FC = () => {
             createdAt: Date.now(),
             lastActiveAt: Date.now(),
             lyricTemplate: tempTemplate || 'free',
+            lyricCoWritingStyle: tempLyricStyle,
+            customLyricTemplate: tempTemplate === 'custom'
+                ? tempCustomSections.map(section => ({ ...section }))
+                : undefined,
         };
         addSong(newSong);
         setActiveSong(newSong);
+        setWorkMode('notebook');
+        setLineDrafts({});
         setView('write');
         resetTempState();
     };
 
     const resetTempState = () => {
-        setTempTitle(''); setTempSubtitle(''); setTempGenre('pop'); setTempMood('happy');
+        setTempTitle(''); setTempSubtitle(''); setTempGenre('pop'); setTempMood('happy'); setTempLyricStyle('adaptive'); setTempLyricStyleCategory('chinese');
         setTempCollaboratorId(''); setTempCoverStyle(COVER_STYLES[0]?.id || 'dawn-blush');
         setCustomCoverFrom('#FB7185'); setCustomCoverVia('#A855F7'); setCustomCoverTo('#2563EB');
         setTempTemplate('free');
+        setTempCustomSections([
+            { section: 'verse', lines: 4, chars: '8-12' },
+            { section: 'chorus', lines: 4, chars: '6-10' },
+        ]);
     };
 
     const handleDeleteSong = (id: string) => {
@@ -325,6 +415,7 @@ const SongwritingApp: React.FC = () => {
         setLastTokenUsage(null);
 
         let updatedSong = { ...activeSong };
+        const requestTime = Date.now();
 
         // If user wrote lyrics, add as a pending candidate (not committed yet)
         if (addAsLine && userMessage.trim()) {
@@ -332,10 +423,22 @@ const SongwritingApp: React.FC = () => {
                 id: `line-${Date.now()}`,
                 authorId: 'user',
                 content: userMessage.trim(),
-                section: currentSection,
+                section: currentSection as SongLine['section'],
                 timestamp: Date.now(),
             };
             setPendingLines(prev => [...prev, newLine]);
+        } else if (userMessage.trim()) {
+            // Discussion is a real, persistent conversation, but it never mutates lyrics.
+            const userComment: SongComment = {
+                id: `chat-user-${requestTime}`,
+                authorId: 'user',
+                type: 'reaction',
+                content: userMessage.trim(),
+                timestamp: requestTime,
+            };
+            updatedSong = { ...updatedSong, comments: [...updatedSong.comments, userComment] };
+            setActiveSong(updatedSong);
+            await updateSong(updatedSong.id, { comments: updatedSong.comments });
         }
 
         try {
@@ -346,7 +449,7 @@ const SongwritingApp: React.FC = () => {
                 content: m.content
             }));
 
-            await injectMemoryPalace(collaborator, undefined, `${updatedSong.title || ''} ${updatedSong.subtitle || ''} ${userMessage}`.trim() || undefined);
+            await injectMemoryPalace(collaborator, undefined, `${updatedSong.title || ''} ${updatedSong.theme || ''} ${userMessage}`.trim() || undefined);
             const systemPrompt = SongPrompts.buildMentorSystemPrompt(collaborator, userProfile, updatedSong, msgContext);
             let userPrompt = SongPrompts.buildUserMessage(updatedSong, userMessage, currentSection);
             if (requestedType) {
@@ -366,7 +469,12 @@ const SongwritingApp: React.FC = () => {
             // Include last few song comments as conversation history
             const recentSongComments = updatedSong.comments.slice(-6);
             for (const c of recentSongComments) {
-                apiMessages.push({ role: 'assistant', content: JSON.stringify({ type: 'feedback', reaction: c.content.substring(0, 50), feedback: c.content }) });
+                apiMessages.push({
+                    role: c.authorId === 'user' ? 'user' : 'assistant',
+                    content: c.authorId === 'user'
+                        ? c.content
+                        : JSON.stringify({ type: 'feedback', reaction: c.content.substring(0, 50), feedback: c.content }),
+                });
             }
 
             apiMessages.push({ role: 'user', content: userPrompt });
@@ -381,7 +489,7 @@ const SongwritingApp: React.FC = () => {
                 const data = await safeResponseJson(response);
                 if (data.usage?.total_tokens) setLastTokenUsage(data.usage.total_tokens);
 
-                const rawContent = extractLlmContent(data).trim();
+                const rawContent = data.choices[0].message.content.trim();
                 const parsed = extractJson(rawContent);
 
                 const newComments: SongComment[] = [];
@@ -445,7 +553,7 @@ const SongwritingApp: React.FC = () => {
                                     id: `line-${baseTime}-ex${i}`,
                                     authorId: collaborator.id,
                                     content: parsed.example_lines[i],
-                                    section: currentSection,
+                                    section: currentSection as SongLine['section'],
                                     annotation: '示范参考',
                                     timestamp: baseTime + 10 + i,
                                 });
@@ -531,12 +639,9 @@ const SongwritingApp: React.FC = () => {
 
     const handleDiscuss = async () => {
         const text = inputText.trim();
-        if (!text) {
-            await handleSendToAI('我想讨论一下接下来怎么写，有什么建议吗？', false, 'discussion');
-        } else {
-            setInputText('');
-            await handleSendToAI(text, false, 'discussion');
-        }
+        if (!text) return;
+        setInputText('');
+        await handleSendToAI(text, false, 'discussion');
     };
 
     // --- Delete Line ---
@@ -614,6 +719,166 @@ const SongwritingApp: React.FC = () => {
         setEditingLineId(null);
     };
 
+    const lineAtSlot = useCallback((song: SongSheet, slotIndex: number): SongLine | undefined => {
+        const activeLines = song.lines.filter(line => !line.isDraft);
+        return activeLines.find(line => line.slotIndex === slotIndex)
+            || activeLines.find((line, fallbackIndex) => line.slotIndex === undefined && fallbackIndex === slotIndex);
+    }, []);
+
+    const saveNotebookLine = useCallback(async (
+        slot: LyricSlot,
+        content: string,
+        authorId: string = 'user',
+    ) => {
+        if (!activeSong) return;
+        const nextContent = content.trim();
+        const existing = lineAtSlot(activeSong, slot.index);
+        let nextLines: SongLine[];
+
+        if (!nextContent) {
+            nextLines = existing
+                ? activeSong.lines.filter(line => line.id !== existing.id)
+                : activeSong.lines;
+        } else if (existing) {
+            nextLines = activeSong.lines.map(line => line.id === existing.id
+                ? {
+                    ...line,
+                    content: nextContent,
+                    authorId,
+                    section: slot.section,
+                    slotIndex: slot.index,
+                    annotation: authorId === 'user' ? undefined : line.annotation,
+                }
+                : line);
+        } else {
+            nextLines = [
+                ...activeSong.lines,
+                {
+                    id: `line-${Date.now()}-${slot.index}`,
+                    authorId,
+                    content: nextContent,
+                    section: slot.section,
+                    slotIndex: slot.index,
+                    timestamp: Date.now(),
+                },
+            ];
+        }
+        nextLines = [...nextLines].sort((a, b) => {
+            if (!!a.isDraft !== !!b.isDraft) return a.isDraft ? 1 : -1;
+            const aOrder = a.slotIndex ?? Number.MAX_SAFE_INTEGER;
+            const bOrder = b.slotIndex ?? Number.MAX_SAFE_INTEGER;
+            return aOrder === bOrder ? a.timestamp - b.timestamp : aOrder - bOrder;
+        });
+
+        const updated = { ...activeSong, lines: nextLines };
+        setActiveSong(updated);
+        setLineDrafts(prev => ({ ...prev, [slot.index]: nextContent }));
+        await updateSong(updated.id, { lines: nextLines });
+    }, [activeSong, lineAtSlot, updateSong]);
+
+    const handleGenerateNotebookLine = useCallback(async (slot: LyricSlot) => {
+        if (!activeSong || !collaborator || generatingSlotIndex !== null) return;
+        if (!apiConfig.baseUrl || !apiConfig.apiKey) {
+            addToast('请先在设置里配置 AI 模型。', 'error');
+            return;
+        }
+
+        setGeneratingSlotIndex(slot.index);
+        try {
+            // Overlay any text that is still focused so C sees the complete notebook,
+            // including edits that have not blurred yet.
+            let snapshotLines = [...activeSong.lines];
+            Object.entries(lineDrafts).forEach(([rawIndex, rawContent]) => {
+                const index = Number(rawIndex);
+                const content = rawContent.trim();
+                if (!content) return;
+                const existing = lineAtSlot({ ...activeSong, lines: snapshotLines }, index);
+                const targetSlot = buildLyricSlots(activeSong)[index]
+                    || { index, section: currentSection as SongLine['section'], chars: '不限', sectionOccurrence: 0, lineInSection: index };
+                if (existing) {
+                    snapshotLines = snapshotLines.map(line => line.id === existing.id
+                        ? { ...line, content, section: targetSlot.section, slotIndex: index }
+                        : line);
+                } else {
+                    snapshotLines.push({
+                        id: `draft-context-${index}`,
+                        authorId: 'user',
+                        content,
+                        section: targetSlot.section,
+                        slotIndex: index,
+                        timestamp: Date.now() + index,
+                    });
+                }
+            });
+
+            const snapshot = { ...activeSong, lines: snapshotLines };
+            await injectMemoryPalace(
+                collaborator,
+                undefined,
+                `${snapshot.title} 第${slot.index + 1}句 ${snapshot.lines.map(line => line.content).join(' ')}`.trim(),
+            );
+            const systemPrompt = SongPrompts.buildMentorSystemPrompt(collaborator, userProfile, snapshot, []);
+            const existing = lineAtSlot(snapshot, slot.index);
+            const request = [
+                `请为歌词本的第 ${slot.index + 1} 句${existing ? '重新写一个版本' : '写一句歌词'}。`,
+                `位置：${SECTION_LABELS[slot.section]?.label || slot.section}，建议字数：${slot.chars} 字。`,
+                '你必须阅读上方整本歌词，承接前后语义与押韵。',
+                '只返回 inspiration JSON，example_lines 必须恰好只有一句，不要修改其他句子。',
+            ].join('\n');
+            const userPrompt = SongPrompts.buildUserMessage(snapshot, request, slot.section);
+            let generated: string | null = null;
+            for (let attempt = 0; attempt < 2 && !generated; attempt += 1) {
+                const retryInstruction = attempt === 0
+                    ? ''
+                    : '\n\n【格式纠错】上一次响应不是可用的单句歌词。重新输出一个完整 inspiration JSON；example_lines 只能包含一个纯歌词字符串，禁止输出截断 JSON、字段说明或额外正文。';
+                const response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },
+                    body: JSON.stringify({
+                        model: apiConfig.model,
+                        messages: [
+                            { role: 'system', content: systemPrompt },
+                            { role: 'user', content: userPrompt + retryInstruction },
+                        ],
+                        temperature: attempt === 0 ? 0.9 : 0.65,
+                        max_tokens: 500,
+                    }),
+                });
+                if (!response.ok) throw new Error(`API Error: ${response.status}`);
+                const data = await safeResponseJson(response);
+                const raw = data.choices?.[0]?.message?.content?.trim() || '';
+                generated = extractGeneratedLyricLine(raw);
+            }
+            if (!generated) throw new Error('C 连续两次没有返回完整歌词，已拦截异常内容，请再试一次');
+            await saveNotebookLine(slot, generated, collaborator.id);
+            addToast(existing ? `第 ${slot.index + 1} 句已刷新` : `第 ${slot.index + 1} 句已生成`, 'success');
+        } catch (error: any) {
+            addToast(`生成失败: ${error?.message || error}`, 'error');
+        } finally {
+            setGeneratingSlotIndex(null);
+        }
+    }, [
+        activeSong, collaborator, generatingSlotIndex, apiConfig, addToast, lineDrafts,
+        lineAtSlot, currentSection, userProfile, saveNotebookLine,
+    ]);
+
+    const updateCustomTemplateSection = (
+        index: number,
+        updates: Partial<SongTemplateSection>,
+    ) => {
+        setTempCustomSections(prev => prev.map((section, i) => i === index
+            ? { ...section, ...updates }
+            : section));
+    };
+
+    const updateActiveLyricStyle = async (style: LyricCoWritingStyle) => {
+        if (!activeSong) return;
+        const updated = { ...activeSong, lyricCoWritingStyle: style };
+        setActiveSong(updated);
+        await updateSong(updated.id, { lyricCoWritingStyle: style });
+        addToast(`C 已切换为「${getLyricCoWritingStyle(style).label}」共创方式`, 'success');
+    };
+
     // --- Completion ---
     const handleComplete = async () => {
         if (!activeSong || !collaborator) return;
@@ -621,19 +886,34 @@ const SongwritingApp: React.FC = () => {
 
         setIsCompleting(true);
         setShowPreviewModal(true);
-        setCompletionReview('正在让导师评价...');
+        setCompletionReview('正在等搭档写评语...');
 
         try {
+            await injectMemoryPalace(
+                collaborator,
+                undefined,
+                `${activeSong.title} ${activeSong.theme || ''} ${activeSong.lines.map(line => line.content).join(' ')}`.trim(),
+                userProfile.name,
+            );
+            const systemPrompt = SongPrompts.buildCompletionSystemPrompt(collaborator, userProfile);
             const prompt = SongPrompts.buildCompletionPrompt(collaborator, userProfile, activeSong);
             const response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },
-                body: JSON.stringify({ model: apiConfig.model, messages: [{ role: 'user', content: prompt }], temperature: 0.7, max_tokens: 500 })
+                body: JSON.stringify({
+                    model: apiConfig.model,
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: prompt },
+                    ],
+                    temperature: 0.7,
+                    max_tokens: 500,
+                })
             });
 
             if (response.ok) {
                 const data = await safeResponseJson(response);
-                setCompletionReview(extractLlmContent(data).trim());
+                setCompletionReview(data.choices[0].message.content.trim());
             } else {
                 setCompletionReview('(评价生成失败，但不影响保存)');
             }
@@ -947,7 +1227,7 @@ const SongwritingApp: React.FC = () => {
                 name: activeSong.title || '未命名',
                 artists: authorNames,
                 album: '一起写的歌',
-                albumPic: collaborator?.avatar || '',
+                albumPic: activeSong.coverImage || collaborator?.avatar || '',
                 duration: audioMeta.durationSec ?? finalLines.length * 5,
                 fee: 0,
                 local: true,
@@ -1173,10 +1453,32 @@ const SongwritingApp: React.FC = () => {
             addToast('歌还没生成出来', 'info');
             return;
         }
-        // Reset modal state — pre-pick char avatar, no dual cached
-        setCoverMode('char');
+        // Prefer the user's artwork when this song already has one.
+        setCoverMode(activeSong.coverImage ? 'upload' : 'char');
         setDualCoverUrl(null);
         setShowCoverConfirm(true);
+    };
+
+    const handleCoverUpload = async (file: File) => {
+        if (!activeSong) return;
+        if (!file.type.startsWith('image/')) {
+            addToast('请选择图片文件', 'error');
+            return;
+        }
+        if (file.size > 12 * 1024 * 1024) {
+            addToast('图片请控制在 12MB 以内', 'error');
+            return;
+        }
+        try {
+            const coverImage = await putImageBlob(file);
+            const updated = { ...activeSong, coverImage };
+            setActiveSong(updated);
+            await updateSong(updated.id, { coverImage });
+            setCoverMode('upload');
+            addToast('封面已放进歌词本', 'success');
+        } catch {
+            addToast('封面保存失败', 'error');
+        }
     };
 
     /** Remove the song from local album (un-like). Closes modal. */
@@ -1214,6 +1516,8 @@ const SongwritingApp: React.FC = () => {
                 setIsBuildingDual(false);
                 albumPic = built || collaborator?.avatar || '';
             }
+        } else if (coverMode === 'upload') {
+            albumPic = activeSong.coverImage || collaborator?.avatar || '';
         }
 
         const durationSec = activeSong.audio.durationSec
@@ -1343,7 +1647,12 @@ const SongwritingApp: React.FC = () => {
                                     return (
                                         <div key={song.id} className="relative group">
                                             <div
-                                                onClick={() => { setActiveSong(song); setView('write'); }}
+                                                onClick={() => {
+                                                    setActiveSong(song);
+                                                    setLineDrafts({});
+                                                    setWorkMode('notebook');
+                                                    setView('write');
+                                                }}
                                                 className="flex items-stretch cursor-pointer active:scale-[0.99] transition-transform rounded-lg overflow-hidden border border-stone-200/80 bg-white shadow-sm"
                                             >
                                                 {/* Mini cover spine */}
@@ -1556,10 +1865,85 @@ const SongwritingApp: React.FC = () => {
                         </div>
                     </div>
 
-                    {/* 04 — 情绪 */}
+                    {/* 04 — C 的共创风格 */}
                     <div className="space-y-2">
                         <div className="flex items-center gap-2 pl-1">
                             <span className="font-bold italic" style={{ fontFamily: 'Georgia, serif', color: MusicC.accent, fontSize: 18, letterSpacing: '0.05em' }}>04</span>
+                            <CrossStar size={7} color={MusicC.sakura} delay={0.4} />
+                            <label className="text-[11px] font-bold" style={{ color: MusicC.primary }}>C 的共创风格</label>
+                            <span className="text-[9px] tracking-[0.24em]" style={{ color: MusicC.faint, fontFamily: 'Georgia, serif' }}>CO-WRITING</span>
+                        </div>
+                        <p className="text-[10px] pl-1" style={{ color: MusicC.muted }}>
+                            决定 C 怎么写和怎么审歌词，与上面的音乐曲风可以自由混搭
+                        </p>
+                        <div
+                            className="grid grid-cols-4 p-1 rounded-xl gap-1"
+                            style={{ background: 'rgba(255,255,255,.52)', border: `1px solid ${MusicC.faint}35` }}
+                        >
+                            {LYRIC_STYLE_CATEGORIES.map(category => {
+                                const active = tempLyricStyleCategory === category.id;
+                                return (
+                                    <button
+                                        key={category.id}
+                                        onClick={() => setTempLyricStyleCategory(category.id)}
+                                        className="px-1 py-1.5 rounded-lg text-[9px] font-semibold transition-all truncate"
+                                        style={active
+                                            ? { color: 'white', background: MusicC.primary, boxShadow: `0 2px 8px ${MusicC.glow}35` }
+                                            : { color: MusicC.muted }}
+                                        title={category.label}
+                                    >
+                                        {category.shortLabel}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        <div className="grid grid-cols-3 gap-1.5">
+                            {LYRIC_CO_WRITING_STYLES
+                                .filter(style => style.category === 'adaptive' || style.category === tempLyricStyleCategory)
+                                .map(style => {
+                                const active = tempLyricStyle === style.id;
+                                return (
+                                    <button
+                                        key={style.id}
+                                        onClick={() => setTempLyricStyle(style.id)}
+                                        className="px-2 py-2 rounded-xl text-[10px] font-medium transition-all active:scale-95 truncate"
+                                        style={active ? {
+                                            background: `linear-gradient(135deg, ${MusicC.sakura}, ${MusicC.lavender})`,
+                                            color: 'white',
+                                            boxShadow: `0 3px 12px ${MusicC.sakura}45`,
+                                            border: '1px solid transparent',
+                                        } : {
+                                            background: 'rgba(255,255,255,0.7)',
+                                            color: MusicC.primary,
+                                            border: `1px solid ${MusicC.faint}50`,
+                                        }}
+                                        title={style.label}
+                                    >
+                                        {style.shortLabel}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        <div
+                            className="rounded-xl px-3 py-2.5 text-[10px] leading-relaxed"
+                            style={{
+                                color: MusicC.muted,
+                                background: `linear-gradient(135deg, ${MusicC.glow}16, rgba(255,255,255,.55))`,
+                                border: `1px solid ${MusicC.faint}40`,
+                            }}
+                        >
+                            <span className="font-bold" style={{ color: MusicC.primary }}>
+                                {getLyricCoWritingStyle(tempLyricStyle).label}
+                            </span>
+                            {' · '}
+                            {getLyricCoWritingStyle(tempLyricStyle).desc}
+                        </div>
+                    </div>
+
+                    {/* 05 — 情绪 */}
+                    <div className="space-y-2">
+                        <div className="flex items-center gap-2 pl-1">
+                            <span className="font-bold italic" style={{ fontFamily: 'Georgia, serif', color: MusicC.accent, fontSize: 18, letterSpacing: '0.05em' }}>05</span>
                             <CrossStar size={7} color={MusicC.glow} delay={0.3} />
                             <label className="text-[11px] font-bold" style={{ color: MusicC.primary }}>情绪</label>
                             <span className="text-[9px] tracking-[0.3em]" style={{ color: MusicC.faint, fontFamily: 'Georgia, serif' }}>MOOD</span>
@@ -1592,10 +1976,10 @@ const SongwritingApp: React.FC = () => {
                         </div>
                     </div>
 
-                    {/* 05 — 歌词结构 */}
+                    {/* 06 — 歌词结构 */}
                     <div className="space-y-2">
                         <div className="flex items-center gap-2 pl-1">
-                            <span className="font-bold italic" style={{ fontFamily: 'Georgia, serif', color: MusicC.accent, fontSize: 18, letterSpacing: '0.05em' }}>05</span>
+                            <span className="font-bold italic" style={{ fontFamily: 'Georgia, serif', color: MusicC.accent, fontSize: 18, letterSpacing: '0.05em' }}>06</span>
                             <CrossStar size={7} color={MusicC.sakura} delay={0.9} />
                             <label className="text-[11px] font-bold" style={{ color: MusicC.primary }}>歌词结构</label>
                             <span className="text-[9px] tracking-[0.3em]" style={{ color: MusicC.faint, fontFamily: 'Georgia, serif' }}>LYRIC STRUCTURE</span>
@@ -1634,7 +2018,87 @@ const SongwritingApp: React.FC = () => {
                                     </button>
                                 );
                             })}
+                            <button
+                                onClick={() => setTempTemplate('custom')}
+                                className="text-left p-3 rounded-2xl transition-all active:scale-[0.98] relative overflow-hidden"
+                                style={tempTemplate === 'custom' ? {
+                                    background: `linear-gradient(135deg, ${MusicC.glow}25, ${MusicC.sakura}15)`,
+                                    border: `1.5px solid ${MusicC.accent}80`,
+                                    boxShadow: `0 3px 14px ${MusicC.glow}30`,
+                                } : {
+                                    background: 'rgba(255,255,255,0.7)',
+                                    border: `1px solid ${MusicC.faint}40`,
+                                }}
+                            >
+                                <div className="flex items-center gap-1.5 mb-1">
+                                    <span className="text-[14px] leading-none" style={{ color: MusicC.accent }}>⌘</span>
+                                    <span className="text-[12px] font-bold" style={{ color: MusicC.primary }}>高级自定义</span>
+                                    <span className="text-[9px] ml-auto" style={{ color: MusicC.muted }}>
+                                        {tempCustomSections.reduce((sum, section) => sum + section.lines, 0)} 句
+                                    </span>
+                                </div>
+                                <div className="text-[10px] leading-snug" style={{ color: MusicC.muted }}>
+                                    自己决定段落、句数与每句字数
+                                </div>
+                            </button>
                         </div>
+                        {tempTemplate === 'custom' && (
+                            <div
+                                className="mt-3 rounded-2xl px-3 py-3 space-y-2"
+                                style={{ background: 'rgba(255,255,255,.58)', border: `1px solid ${MusicC.faint}45` }}
+                            >
+                                {tempCustomSections.map((section, index) => (
+                                    <div key={`${section.section}-${index}`} className="grid grid-cols-[1fr_64px_76px_28px] gap-2 items-center">
+                                        <select
+                                            value={section.section}
+                                            onChange={event => updateCustomTemplateSection(index, { section: event.target.value as SongLine['section'] })}
+                                            className="min-w-0 rounded-lg bg-white/80 px-2 py-2 text-[11px] outline-none"
+                                            style={{ color: MusicC.primary, border: `1px solid ${MusicC.faint}45` }}
+                                        >
+                                            {Object.entries(SECTION_LABELS)
+                                                .filter(([key]) => key !== 'free')
+                                                .map(([key, info]) => <option key={key} value={key}>{info.label}</option>)}
+                                        </select>
+                                        <label className="relative">
+                                            <input
+                                                type="number"
+                                                min={1}
+                                                max={16}
+                                                value={section.lines}
+                                                onChange={event => updateCustomTemplateSection(index, { lines: Math.max(1, Math.min(16, Number(event.target.value) || 1)) })}
+                                                className="w-full rounded-lg bg-white/80 pl-2 pr-5 py-2 text-[11px] outline-none"
+                                                style={{ color: MusicC.primary, border: `1px solid ${MusicC.faint}45` }}
+                                            />
+                                            <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[9px]" style={{ color: MusicC.muted }}>句</span>
+                                        </label>
+                                        <input
+                                            value={section.chars}
+                                            onChange={event => updateCustomTemplateSection(index, { chars: event.target.value })}
+                                            placeholder="如 7-10"
+                                            className="w-full rounded-lg bg-white/80 px-2 py-2 text-[11px] outline-none"
+                                            style={{ color: MusicC.primary, border: `1px solid ${MusicC.faint}45` }}
+                                            aria-label="每句字数"
+                                        />
+                                        <button
+                                            onClick={() => setTempCustomSections(prev => prev.filter((_, i) => i !== index))}
+                                            disabled={tempCustomSections.length <= 1}
+                                            className="w-7 h-7 rounded-full flex items-center justify-center disabled:opacity-25"
+                                            style={{ color: MusicC.muted }}
+                                            aria-label="删除段落"
+                                        >
+                                            <Trash size={13} />
+                                        </button>
+                                    </div>
+                                ))}
+                                <button
+                                    onClick={() => setTempCustomSections(prev => [...prev, { section: 'verse', lines: 4, chars: '8-12' }])}
+                                    className="w-full flex items-center justify-center gap-1.5 py-2 text-[10px] rounded-xl"
+                                    style={{ color: MusicC.primary, border: `1px dashed ${MusicC.faint}70` }}
+                                >
+                                    <Plus size={12} /> 添加一个段落
+                                </button>
+                            </div>
+                        )}
                     </div>
                 </div>
 
@@ -1743,7 +2207,7 @@ const SongwritingApp: React.FC = () => {
                                     </div>
                                     <div className="text-left flex-1 min-w-0">
                                         <div className="font-bold text-[13px]" style={{ color: MusicC.primary }}>{c.name}</div>
-                                        <div className="text-[10px] truncate leading-snug mt-0.5" style={{ color: MusicC.muted }}>{c.description || '将作为你的音乐导师'}</div>
+                                        <div className="text-[10px] truncate leading-snug mt-0.5" style={{ color: MusicC.muted }}>{c.description || '将作为你的音乐共创搭档'}</div>
                                     </div>
                                     {active && (
                                         <div className="w-6 h-6 rounded-full flex items-center justify-center shrink-0"
@@ -1823,9 +2287,9 @@ const SongwritingApp: React.FC = () => {
                         <div className="rounded-2xl p-4 shizuku-glass" style={{ border: `1px solid ${MusicC.faint}40` }}>
                             <div className="grid grid-cols-3 gap-3">
                                 {[
-                                    { label: '起点色', color: customCoverFrom, position: 'from' as const },
-                                    { label: '中间色', color: customCoverVia, position: 'via' as const },
-                                    { label: '终点色', color: customCoverTo,  position: 'to' as const   }
+                                    { label: '起点色', color: customCoverFrom, position: 'from' },
+                                    { label: '中间色', color: customCoverVia, position: 'via' },
+                                    { label: '终点色', color: customCoverTo,  position: 'to'   }
                                 ].map(item => (
                                     <label key={item.label} className="space-y-1.5">
                                         <span className="block text-[10px]" style={{ color: MusicC.muted }}>{item.label}</span>
@@ -1833,7 +2297,7 @@ const SongwritingApp: React.FC = () => {
                                             <input
                                                 type="color"
                                                 value={item.color}
-                                                onChange={(e) => updateCustomCoverColor(item.position, e.target.value)}
+                                                onChange={(e) => updateCustomCoverColor(item.position as 'from' | 'via' | 'to', e.target.value)}
                                                 className="w-full h-full opacity-0 cursor-pointer"
                                             />
                                         </div>
@@ -1887,12 +2351,13 @@ const SongwritingApp: React.FC = () => {
     // --- Preview View (completed songs) ---
     if (view === 'preview' && activeSong) {
         const style = getCoverVisual(activeSong.coverStyle);
+        const paper = getPaperTheme(activeSong.coverStyle);
         const genreInfo = SONG_GENRES.find(g => g.id === activeSong.genre);
         const moodInfo = SONG_MOODS.find(m => m.id === activeSong.mood);
 
         let currentSec = '';
         return (
-            <div className="h-full w-full bg-[#F5F0E8] flex flex-col font-sans relative overflow-hidden">
+            <div className="h-full w-full flex flex-col font-sans relative overflow-hidden" style={{ background: paper.background, color: paper.ink }}>
                 {/* Cover / Title Page */}
                 <div className={`${style.className} ${style.textClass} relative shrink-0`} style={{ ...style.style, minHeight: 'calc(220px + var(--safe-top))', paddingTop: 'var(--safe-top)' }}>
                     <button onClick={() => { setView('shelf'); setActiveSong(null); }} className="absolute left-4 p-2 rounded-full bg-black/10 hover:bg-black/20 transition-colors z-10" style={{ top: 'calc(var(--safe-top) + 1rem)' }}>
@@ -1930,18 +2395,18 @@ const SongwritingApp: React.FC = () => {
                             <div key={line.id}>
                                 {showSection && (
                                     <div className="mt-8 mb-4 first:mt-0 flex items-center gap-3">
-                                        <div className="w-6 h-[1px] bg-stone-300" />
-                                        <span className="text-[9px] text-stone-400 uppercase tracking-[0.2em] font-medium">{SECTION_LABELS[line.section]?.label || line.section}</span>
-                                        <div className="flex-1 h-[1px] bg-stone-200/60" />
+                                        <div className="w-6 h-[1px]" style={{ background: paper.rule }} />
+                                        <span className="text-[9px] uppercase tracking-[0.2em] font-medium" style={{ color: paper.muted }}>{SECTION_LABELS[line.section]?.label || line.section}</span>
+                                        <div className="flex-1 h-[1px]" style={{ background: paper.rule }} />
                                     </div>
                                 )}
-                                <p className="text-[15px] text-stone-600 leading-[2.2] py-0" style={{ fontFamily: 'Georgia, "Noto Serif SC", serif' }}>{line.content}</p>
+                                <p className="text-[15px] leading-[2.2] py-0" style={{ color: paper.ink, fontFamily: 'Georgia, "Noto Serif SC", serif' }}>{line.content}</p>
                             </div>
                         );
                     })}
                     {/* End mark */}
                     <div className="flex justify-center mt-10 mb-4">
-                        <div className="w-8 h-[1px] bg-stone-300" />
+                        <div className="w-8 h-[1px]" style={{ background: paper.rule }} />
                     </div>
                 </div>
 
@@ -2248,24 +2713,57 @@ const SongwritingApp: React.FC = () => {
                                         </div>
                                     )
                                 )}
+                                {coverMode === 'upload' && (
+                                    uploadedCoverUrl ? (
+                                        <img src={uploadedCoverUrl} alt="" className="w-full h-full object-cover" />
+                                    ) : (
+                                        <button
+                                            onClick={() => coverUploadRef.current?.click()}
+                                            className="w-full h-full flex flex-col items-center justify-center gap-2"
+                                            style={{ background: `linear-gradient(135deg, ${MusicC.bgDeep}, ${MusicC.soft})`, color: MusicC.primary }}
+                                        >
+                                            <UploadSimple size={24} />
+                                            <span className="text-[11px]">上传图片</span>
+                                        </button>
+                                    )
+                                )}
                                 {/* 黑胶反光 */}
                                 <div className="absolute inset-0 pointer-events-none"
                                     style={{ background: 'linear-gradient(45deg, transparent 40%, rgba(255,255,255,0.18) 50%, transparent 60%)' }} />
                             </div>
                         </div>
 
-                        {/* 三个候选缩略图 */}
-                        <div className="grid grid-cols-3 gap-2">
+                        <input
+                            ref={coverUploadRef}
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={event => {
+                                const file = event.target.files?.[0];
+                                if (file) handleCoverUpload(file);
+                                event.currentTarget.value = '';
+                            }}
+                        />
+
+                        {/* 封面来源 */}
+                        <div className="grid grid-cols-4 gap-2">
                             {([
                                 { id: 'char' as CoverMode, label: collaborator?.name || '搭档', src: collaborator?.avatar || '' },
                                 { id: 'user' as CoverMode, label: userProfile?.name || '我', src: userProfile?.avatar || '' },
                                 { id: 'dual' as CoverMode, label: '合影', src: dualCoverUrl || '' },
+                                { id: 'upload' as CoverMode, label: uploadedCoverUrl ? '我的图片' : '上传', src: uploadedCoverUrl || '' },
                             ]).map(opt => {
                                 const active = opt.id === coverMode;
                                 return (
                                     <button
                                         key={opt.id}
-                                        onClick={() => setCoverMode(opt.id)}
+                                        onClick={() => {
+                                            if (opt.id === 'upload' && !uploadedCoverUrl) {
+                                                coverUploadRef.current?.click();
+                                            } else {
+                                                setCoverMode(opt.id);
+                                            }
+                                        }}
                                         className="rounded-xl p-2 border transition-all active:scale-95 flex flex-col items-center gap-1"
                                         style={active ? {
                                             background: `linear-gradient(135deg, ${MusicC.primary}, ${MusicC.accent})`,
@@ -2292,6 +2790,7 @@ const SongwritingApp: React.FC = () => {
                                                     ) : (
                                                         <SparkleP size={14} weight="fill" color="white" />
                                                     ))}
+                                                    {opt.id === 'upload' && <UploadSimple size={16} color="white" />}
                                                 </div>
                                             )}
                                         </div>
@@ -2300,6 +2799,15 @@ const SongwritingApp: React.FC = () => {
                                 );
                             })}
                         </div>
+                        {coverMode === 'upload' && uploadedCoverUrl && (
+                            <button
+                                onClick={() => coverUploadRef.current?.click()}
+                                className="w-full text-[10px] py-1.5 underline underline-offset-4"
+                                style={{ color: MusicC.muted }}
+                            >
+                                换一张图片
+                            </button>
+                        )}
 
                         {/* 元信息 */}
                         <div className="rounded-xl px-3 py-2 text-[11px] leading-relaxed"
@@ -2622,379 +3130,456 @@ const SongwritingApp: React.FC = () => {
         );
     }
 
-    // --- Write View ---
+    // --- Lyric notebook workspace ---
     if (view === 'write' && activeSong) {
         const genreInfo = SONG_GENRES.find(g => g.id === activeSong.genre);
-
-        // Interleave lines, feedback groups, and pending candidates by timestamp for display
-        const lineItems = activeSong.lines.map(mkLineItem);
-        const fbItems = feedbackGroups.map(mkLineItem2);
-        const pendingItems = pendingLines.map(mkPendingItem);
-        const timeline = [...lineItems, ...fbItems, ...pendingItems].sort((a, b) => a.data.timestamp - b.data.timestamp);
+        const coWritingStyle = getLyricCoWritingStyle(activeSong.lyricCoWritingStyle);
+        const paper = getPaperTheme(activeSong.coverStyle);
+        const fixedSlots = buildLyricSlots(activeSong);
+        const activeLines = activeSong.lines
+            .filter(line => !line.isDraft)
+            .map((line, fallbackIndex) => ({ line, index: line.slotIndex ?? fallbackIndex }))
+            .sort((a, b) => a.index - b.index);
+        const isFreeNotebook = fixedSlots.length === 0;
+        const nextFreeIndex = activeLines.length
+            ? Math.max(...activeLines.map(item => item.index)) + 1
+            : 0;
+        const notebookSlots: LyricSlot[] = isFreeNotebook
+            ? [
+                ...activeLines.map(({ line, index }) => ({
+                    index,
+                    section: line.section,
+                    chars: '不限',
+                    sectionOccurrence: 0,
+                    lineInSection: index,
+                })),
+                {
+                    index: nextFreeIndex,
+                    section: currentSection as SongLine['section'],
+                    chars: '不限',
+                    sectionOccurrence: 0,
+                    lineInSection: nextFreeIndex,
+                },
+            ]
+            : fixedSlots;
+        const filledCount = notebookSlots.filter(slot => !!lineAtSlot(activeSong, slot.index)?.content.trim()).length;
+        const discussionSuggestions = filledCount === 0
+            ? [
+                '先聊聊这首歌最想留下的一个画面',
+                '一起定下叙述者是谁、在对谁说话',
+                '这首歌的情绪应该从哪里走到哪里',
+            ]
+            : [
+                '目前哪一句最像整首歌的核心',
+                '副歌的 Hook 够不够集中、好记',
+                '主歌有没有真的推进人物或事件',
+                '相邻几句的字数和呼吸是否顺口',
+                '现在的意象有没有跑出同一个世界',
+                `当前${SECTION_LABELS[currentSection]?.label || '段落'}应该承担什么作用`,
+                coWritingStyle.id === 'adaptive'
+                    ? '这首歌更适合往哪一种写法继续'
+                    : `这几句是否真的符合「${coWritingStyle.shortLabel}」的写法`,
+            ];
+        const discussionPlaceholder = `可以和 ${collaborator?.name || 'C'} 聊：${
+            discussionSuggestions[(filledCount + activeSong.comments.length) % discussionSuggestions.length]
+        }……`;
+        const paperBackground = `radial-gradient(circle at 14% 10%, rgba(255,255,255,.24) 0 1px, transparent 1.5px), radial-gradient(circle at 80% 35%, rgba(70,55,45,.05) 0 1px, transparent 1.5px), ${paper.background}`;
 
         return (
-            <div className="h-full w-full bg-[#F5F0E8] flex flex-col font-sans relative overflow-hidden">
-                <ConfirmDialog isOpen={!!confirmDialog} title={confirmDialog?.title || ''} message={confirmDialog?.message || ''} variant={confirmDialog?.variant} confirmText={confirmDialog?.confirmText} onConfirm={confirmDialog?.onConfirm || (() => {})} onCancel={() => setConfirmDialog(null)} />
+            <div
+                className="h-full w-full flex flex-col font-sans relative overflow-hidden transition-colors duration-500"
+                style={{ background: paperBackground, color: paper.ink }}
+            >
+                <ConfirmDialog
+                    isOpen={!!confirmDialog}
+                    title={confirmDialog?.title || ''}
+                    message={confirmDialog?.message || ''}
+                    variant={confirmDialog?.variant}
+                    confirmText={confirmDialog?.confirmText}
+                    onConfirm={confirmDialog?.onConfirm || (() => {})}
+                    onCancel={() => setConfirmDialog(null)}
+                />
 
-                {/* Header */}
-                <div className="border-b border-stone-200/80 shrink-0 z-20 bg-[#F5F0E8]" style={{ paddingTop: 'var(--safe-top)' }}>
-                    <div className="h-12 flex items-center justify-between px-4">
-                        <button onClick={handlePause} className="p-2 -ml-2 rounded-full hover:bg-stone-200/50 text-stone-500 active:scale-90 transition-transform">
+                <div
+                    className="shrink-0 z-30"
+                    style={{
+                        paddingTop: 'var(--safe-top)',
+                        background: paper.sheet,
+                        borderBottom: `1px solid ${paper.rule}`,
+                        backdropFilter: 'blur(18px)',
+                        WebkitBackdropFilter: 'blur(18px)',
+                    }}
+                >
+                    <div className="h-14 flex items-center justify-between px-4">
+                        <button
+                            onClick={handlePause}
+                            className="p-2 -ml-2 rounded-full active:scale-90 transition-transform"
+                            style={{ color: paper.muted }}
+                            aria-label="返回歌词本书架"
+                        >
                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" /></svg>
                         </button>
-                        <div className="text-center">
-                            <div className="font-medium text-sm text-stone-700 truncate max-w-[160px]" style={{ fontFamily: 'Georgia, "Noto Serif SC", serif' }}>{activeSong.title}</div>
-                            <div className="text-[10px] text-stone-400 flex items-center justify-center gap-1">
-                                {genreInfo?.label}
-                                {lastTokenUsage && <span className="ml-1 opacity-50">· {lastTokenUsage}t</span>}
+                        <div className="text-center min-w-0 px-3">
+                            <div className="font-semibold text-[15px] truncate max-w-[190px]" style={{ fontFamily: 'Georgia, "Noto Serif SC", serif' }}>
+                                {activeSong.title}
+                            </div>
+                            <div className="text-[9px] tracking-[.24em] uppercase mt-0.5" style={{ color: paper.muted }}>
+                                {genreInfo?.label} · {filledCount}/{isFreeNotebook ? Math.max(filledCount, 1) : notebookSlots.length} lines
                             </div>
                         </div>
-                        <div className="flex gap-1">
-                            <button onClick={() => setShowStructureGuide(!showStructureGuide)} className={`p-2 rounded-full transition-colors ${showStructureGuide ? 'bg-stone-200 text-stone-600' : 'text-stone-400 hover:bg-stone-200/50'}`} title="结构指南">
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 5.25h.008v.008H12v-.008Z" /></svg>
-                            </button>
-                            <button onClick={handleComplete} className="p-2 rounded-full text-stone-500 hover:bg-stone-200/50 transition-colors" title="完成">
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" /></svg>
-                            </button>
-                        </div>
+                        <button
+                            onClick={handleComplete}
+                            className="px-3 py-1.5 rounded-full text-[11px] font-semibold active:scale-95 transition-transform"
+                            style={{ color: paper.ink, border: `1px solid ${paper.rule}`, background: paper.sheet }}
+                        >
+                            收录
+                        </button>
                     </div>
 
-                    {/* Collaborator bar */}
-                    {collaborator && (
-                        <div className="px-4 pb-2 flex items-center gap-2">
-                            <img src={collaborator.avatar} className="w-6 h-6 rounded-full object-cover" />
-                            <span className="text-[11px] text-stone-400">{collaborator.name} 共写中</span>
-                        </div>
-                    )}
-                </div>
-
-                {/* Structure Guide (collapsible) — 先优先显示当前 song 的歌词模板 */}
-                {showStructureGuide && (() => {
-                    const tpl = getLyricTemplate(activeSong.lyricTemplate);
-                    const writtenBySection = activeSong.lines.filter(l => !l.isDraft).reduce<Record<string, number>>((acc, l) => {
-                        acc[l.section] = (acc[l.section] || 0) + 1;
-                        return acc;
-                    }, {});
-                    return (
-                        <div className="bg-white border-b border-stone-200/80 p-4 z-10">
-                            {tpl.id !== 'free' && tpl.structure.length > 0 ? (
-                                <>
-                                    <div className="flex items-center justify-between mb-3">
-                                        <div className="flex items-center gap-1.5">
-                                            <span className="text-[14px] leading-none" style={{ fontFamily: 'Georgia, serif' }}>{tpl.icon}</span>
-                                            <h3 className="text-[10px] font-medium text-stone-500 uppercase tracking-[0.2em]">{tpl.label} · 推荐结构</h3>
-                                        </div>
-                                        <span className="text-[9px] text-stone-400">已写 {activeSong.lines.filter(l => !l.isDraft).length} 句</span>
-                                    </div>
-                                    <p className="text-[10px] text-stone-400 mb-3 italic">{tpl.desc}</p>
-                                    <div className="space-y-1.5">
-                                        {tpl.structure.map((sec, i) => {
-                                            const written = writtenBySection[sec.section] || 0;
-                                            // count this section's slot — distribute writes across repeat sections
-                                            const sectionSlotIdx = tpl.structure.slice(0, i + 1).filter(s => s.section === sec.section).length - 1;
-                                            const sectionTotal = tpl.structure.filter(s => s.section === sec.section).length;
-                                            const writtenForSlot = sectionTotal === 1 ? written : Math.min(sec.lines, Math.max(0, written - sectionSlotIdx * sec.lines));
-                                            const fullyWritten = writtenForSlot >= sec.lines;
-                                            return (
-                                                <div key={i} className="flex items-center gap-2 py-0.5">
-                                                    <span className="text-[9px] tabular-nums w-4 text-stone-300">{i + 1}.</span>
-                                                    <SectionBadge section={sec.section} small />
-                                                    <span className="text-[10px] text-stone-500">{sec.lines} 句 · {sec.chars} 字</span>
-                                                    <div className="flex-1" />
-                                                    <span className={`text-[9px] tabular-nums ${fullyWritten ? 'text-emerald-500 font-semibold' : 'text-stone-400'}`}>
-                                                        {writtenForSlot}/{sec.lines}{fullyWritten && ' ✓'}
-                                                    </span>
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                    <p className="text-[10px] text-stone-400 mt-3 border-t border-stone-100 pt-2">
-                                        提示：点底部「段落」按钮切换章节，跟着模板填就行。AI 也会按这个结构提建议。
-                                    </p>
-                                </>
-                            ) : (
-                                <>
-                                    <h3 className="text-[10px] font-medium text-stone-400 uppercase tracking-[0.15em] mb-2">歌曲结构</h3>
-                                    <div className="space-y-1.5">
-                                        {Object.entries(SECTION_LABELS).map(([key, info]) => (
-                                            <div key={key} className="flex items-center gap-2">
-                                                <SectionBadge section={key} small />
-                                                <span className="text-[10px] text-stone-400">{info.desc}</span>
-                                            </div>
-                                        ))}
-                                    </div>
-                                    <p className="text-[10px] text-stone-400 mt-2 border-t border-stone-100 pt-2">
-                                        常见结构：主歌 → 导歌 → 副歌 → 主歌 → 导歌 → 副歌 → 桥段 → 副歌
-                                    </p>
-                                </>
-                            )}
-                        </div>
-                    );
-                })()}
-
-                {/* Timeline Content */}
-                <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3 no-scrollbar pb-48 relative z-10" ref={scrollRef} onClick={() => longPressLineId && setLongPressLineId(null)}>
-                    {timeline.length === 0 && (
-                        <div className="text-center py-20">
-                            <div className="w-12 h-[1px] bg-stone-300 mx-auto mb-6" />
-                            <p className="text-sm text-stone-500" style={{ fontFamily: 'Georgia, "Noto Serif SC", serif' }}>写下第一句</p>
-                            <p className="text-xs text-stone-400 mt-2">像在纸上慢慢落笔</p>
-                            <div className="w-12 h-[1px] bg-stone-300 mx-auto mt-6" />
-                        </div>
-                    )}
-
-                    {timeline.map(item => {
-                        if (item.kind === 'line') {
-                            const line = item.data;
-                            const isUser = line.authorId === 'user';
-                            const author = isUser ? null : characters.find(c => c.id === line.authorId);
-
-                            // --- Draft line rendering ---
-                            if (line.isDraft) {
-                                return (
-                                    <div key={line.id} className="group relative opacity-60 hover:opacity-80 transition-opacity">
-                                        <div className="p-3 rounded-lg bg-stone-100/60 border border-stone-200 border-dashed">
-                                            <div className="flex items-center gap-2 mb-1.5">
-                                                <SectionBadge section={line.section} small />
-                                                <span className="text-[9px] text-stone-400 tracking-wider">
-                                                    {isUser ? '我' : author?.name}
-                                                </span>
-                                                <span className="text-[9px] bg-stone-200 text-stone-500 px-1.5 rounded">草稿</span>
-                                                {line.annotation && (
-                                                    <span className="text-[9px] bg-stone-100 text-stone-400 px-1.5 rounded">{line.annotation}</span>
-                                                )}
-                                            </div>
-                                            <p className="text-sm text-stone-400 leading-relaxed" style={{ fontFamily: 'Georgia, "Noto Serif SC", serif' }}>{line.content}</p>
-                                            <div className="flex gap-2 mt-2 pt-1.5 border-t border-stone-200/60">
-                                                <button
-                                                    onClick={() => handleRestoreDraft(line.id)}
-                                                    className="flex-1 py-1 text-[10px] text-stone-600 bg-white border border-stone-200 rounded hover:bg-stone-50 active:scale-[0.98] transition-all"
-                                                >
-                                                    恢复为歌词
-                                                </button>
-                                                <button
-                                                    onClick={() => handleDeleteLine(line.id)}
-                                                    className="px-3 py-1 text-[10px] text-stone-400 hover:text-red-400 transition-colors"
-                                                >
-                                                    删除
-                                                </button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                );
-                            }
-
-                            if (editingLineId === line.id) {
-                                return (
-                                    <div key={line.id} className="bg-white p-3 rounded-lg border border-stone-300">
-                                        <div className="flex items-center gap-2 mb-2">
-                                            <SectionBadge section={line.section} small />
-                                            <span className="text-[10px] text-stone-400">编辑中</span>
-                                        </div>
-                                        <textarea value={editLineContent} onChange={e => setEditLineContent(e.target.value)} className="w-full bg-stone-50 rounded p-2 text-sm resize-none focus:outline-none text-stone-700 border border-stone-200" rows={2} style={{ fontFamily: 'Georgia, "Noto Serif SC", serif' }} />
-                                        <div className="flex gap-2 mt-2">
-                                            <button onClick={saveEditLine} className="px-3 py-1 bg-stone-700 text-stone-50 text-xs rounded font-medium">保存</button>
-                                            <button onClick={() => setEditingLineId(null)} className="px-3 py-1 bg-stone-100 text-stone-500 text-xs rounded">取消</button>
-                                        </div>
-                                    </div>
-                                );
-                            }
-
-                            return (
-                                <div key={line.id} className="group relative"
-                                    onTouchStart={(e) => handleLineTouchStart(e, line.id)}
-                                    onTouchMove={handleLineTouchMove}
-                                    onTouchEnd={handleLineTouchEnd}
-                                    onContextMenu={(e) => { e.preventDefault(); setLongPressLineId(line.id); }}
-                                >
-                                    <div className={`p-3 rounded-lg ${isUser ? 'bg-white border border-stone-200' : 'bg-amber-50/50 border border-amber-100/80'}`}>
-                                        <div className="flex items-center gap-2 mb-1.5">
-                                            <SectionBadge section={line.section} small />
-                                            <span className="text-[9px] text-stone-400 tracking-wider">
-                                                {isUser ? '我' : author?.name}
-                                            </span>
-                                            {line.annotation && (
-                                                <span className="text-[9px] bg-stone-100 text-stone-500 px-1.5 rounded">{line.annotation}</span>
-                                            )}
-                                        </div>
-                                        <p className="text-sm text-stone-600 leading-relaxed" style={{ fontFamily: 'Georgia, "Noto Serif SC", serif' }}>{line.content}</p>
-                                    </div>
-                                    {/* Hover actions (desktop) */}
-                                    <div className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 flex gap-0.5 transition-opacity">
-                                        <button onClick={() => startEditLine(line)} className="p-1 bg-white rounded text-stone-400 hover:text-stone-600 border border-stone-200"><PencilSimple size={12} /></button>
-                                        <button onClick={() => handleDeleteLine(line.id)} className="p-1 bg-white rounded text-stone-400 hover:text-red-400 text-[10px] border border-stone-200">×</button>
-                                    </div>
-                                    {/* Long press context menu (mobile) */}
-                                    {longPressLineId === line.id && (
-                                        <div className="absolute top-0 right-0 z-20 bg-white rounded-lg shadow-lg border border-stone-200 py-1 min-w-[100px]">
-                                            <button onClick={() => { startEditLine(line); setLongPressLineId(null); }} className="w-full text-left px-3 py-2 text-xs text-stone-600 hover:bg-stone-50 active:bg-stone-100">编辑</button>
-                                            <button onClick={() => { handleDeleteLine(line.id); setLongPressLineId(null); }} className="w-full text-left px-3 py-2 text-xs text-red-500 hover:bg-red-50 active:bg-red-100">删除</button>
-                                        </div>
-                                    )}
-                                </div>
-                            );
-                        }
-
-                        // Pending candidate line
-                        if (item.kind === 'pending') {
-                            const line = item.data;
-                            const isUser = line.authorId === 'user';
-                            const author = isUser ? null : characters.find(c => c.id === line.authorId);
-
-                            return (
-                                <div key={line.id} className="relative">
-                                    <div className={`p-3 rounded-lg border-2 border-dashed ${isUser ? 'border-amber-300 bg-amber-50/30' : 'border-violet-300 bg-violet-50/30'}`}>
-                                        <div className="flex items-center gap-2 mb-1.5">
-                                            <SectionBadge section={line.section} small />
-                                            <span className="text-[9px] text-stone-400 tracking-wider">
-                                                {isUser ? '我' : author?.name}
-                                            </span>
-                                            <span className={`text-[9px] px-1.5 rounded ${isUser ? 'bg-amber-100 text-amber-600' : 'bg-violet-100 text-violet-600'}`}>
-                                                {isUser ? '待确认' : '示范参考'}
-                                            </span>
-                                        </div>
-                                        <p className="text-sm text-stone-600 leading-relaxed" style={{ fontFamily: 'Georgia, "Noto Serif SC", serif' }}>{line.content}</p>
-                                        <div className="flex gap-2 mt-2.5 pt-2 border-t border-stone-200/60">
-                                            <button
-                                                onClick={() => handleAcceptPending(line.id)}
-                                                className="flex-1 py-1.5 bg-stone-700 text-stone-50 text-xs rounded font-medium active:scale-[0.98] transition-transform"
-                                            >
-                                                收录
-                                            </button>
-                                            <button
-                                                onClick={() => handleDismissPending(line.id)}
-                                                className="flex-1 py-1.5 bg-stone-100 text-stone-500 text-xs rounded active:scale-[0.98] transition-transform"
-                                            >
-                                                不要
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            );
-                        }
-
-                        // Feedback Card
-                        const feedback = item.data as { id: string; timestamp: number; reaction?: SongComment; details: SongComment[] };
-                        const lead = feedback.reaction || feedback.details[0];
-                        const commentAuthor = characters.find(c => c.id === lead?.authorId);
-                        const isExpanded = !!expandedFeedbackIds[feedback.id];
-                        const detailMeta: Record<string, { label: string }> = {
-                            guidance: { label: '引导' },
-                            teaching: { label: '拆解' },
-                            suggestion: { label: '建议' },
-                            praise: { label: '鼓励' },
-                        };
-
-                        return (
-                            <div key={feedback.id} className="mx-2 group/fb relative">
-                                <div className="rounded-lg bg-white border border-stone-200 p-3.5">
-                                    <div className="flex items-start gap-2.5">
-                                        {commentAuthor && <img src={commentAuthor.avatar} className="w-7 h-7 rounded-full object-cover shrink-0" />}
-                                        <div className="flex-1">
-                                            <p className="text-[10px] text-stone-400 mb-1">{commentAuthor?.name || '搭档'} 说</p>
-                                            <p className="text-sm text-stone-600 leading-relaxed whitespace-pre-wrap">{lead?.content || '我在这里，陪你一起把下一句写出来。'}</p>
-                                        </div>
-                                    </div>
-                                    {/* Delete feedback button */}
-                                    <button
-                                        onClick={() => handleDeleteFeedback(feedback.id)}
-                                        className="absolute top-2 right-2 opacity-0 group-hover/fb:opacity-100 p-1 bg-white rounded text-stone-400 hover:text-red-400 text-[10px] border border-stone-200 transition-opacity"
-                                        title="删除这条反馈"
-                                    >×</button>
-                                    {feedback.details.length > 0 && (
-                                        <div className="mt-3">
-                                            <button onClick={() => toggleFeedback(feedback.id)} className="text-[10px] text-stone-400 border border-stone-200 px-2.5 py-0.5 rounded hover:bg-stone-50 transition-colors">
-                                                {isExpanded ? '收起' : '展开细节'}
-                                            </button>
-                                            {isExpanded && (
-                                                <div className="mt-3 space-y-2 border-t border-stone-100 pt-3">
-                                                    {feedback.details.map(detail => {
-                                                        const meta = detailMeta[detail.type] || { label: '补充' };
-                                                        return (
-                                                            <div key={detail.id} className="bg-stone-50 rounded p-2.5">
-                                                                <p className="text-[9px] text-stone-400 mb-1 uppercase tracking-wider">{meta.label}</p>
-                                                                <p className="text-xs text-stone-500 leading-6 whitespace-pre-wrap">{detail.content}</p>
-                                                            </div>
-                                                        );
-                                                    })}
-                                                </div>
-                                            )}
-                                        </div>
-                                    )}
+                    <div className="px-4 pb-3 flex items-center gap-3">
+                        {collaborator && (
+                            <div className="flex items-center gap-2 min-w-0 flex-1">
+                                <img src={collaborator.avatar} className="w-7 h-7 rounded-full object-cover" alt="" />
+                                <div className="min-w-0">
+                                    <div className="text-[10px] truncate" style={{ color: paper.muted }}>{collaborator.name} 正在看这本歌词</div>
+                                    <div className="text-[9px] truncate opacity-70">{activeSong.subtitle || '每次只改你点到的那一句'}</div>
                                 </div>
                             </div>
-                        );
-                    })}
-
-                    {isTyping && (
-                        <div className="flex gap-2 items-center">
-                            {collaborator && <img src={collaborator.avatar} className="w-6 h-6 rounded-full object-cover" />}
-                            <div className="flex gap-1.5 py-2.5 px-4 bg-white rounded-lg border border-stone-200">
-                                <div className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce" />
-                                <div className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '75ms' }} />
-                                <div className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                            </div>
-                        </div>
-                    )}
-                </div>
-
-                {/* Input Area */}
-                <div className="absolute bottom-0 w-full bg-[#F5F0E8]/95 backdrop-blur-sm border-t border-stone-200/80 z-30 pb-safe">
-                    {/* Section Selector */}
-                    <div className="flex gap-1.5 px-4 py-2 overflow-x-auto no-scrollbar border-b border-stone-200/60">
-                        {Object.entries(SECTION_LABELS).map(([key, info]) => (
-                            <button key={key} onClick={() => setCurrentSection(key as SongLine['section'])} className={`px-2.5 py-1 rounded text-[10px] whitespace-nowrap transition-all ${currentSection === key ? 'bg-stone-700 text-stone-50 font-medium' : 'text-stone-400 hover:bg-stone-200/50'}`}>
-                                {info.label}
-                            </button>
-                        ))}
-                    </div>
-
-                    {/* Quick Actions */}
-                    <div className="flex gap-2 px-4 py-1.5 border-b border-stone-200/60 items-center">
-                        <button onClick={handleAskForHelp} disabled={isTyping} className="px-2.5 py-1 rounded text-[10px] text-stone-500 hover:bg-stone-200/50 disabled:opacity-40 transition-colors">
-                            求灵感
+                        )}
+                        <button
+                            onClick={() => {
+                                if (coWritingStyle.category !== 'adaptive') {
+                                    setLyricStyleCategory(coWritingStyle.category);
+                                }
+                                setShowLyricStylePicker(prev => !prev);
+                                setShowStructureGuide(false);
+                            }}
+                            className="text-[10px] px-2.5 py-1.5 rounded-full shrink-0"
+                            style={{ color: paper.muted, border: `1px solid ${paper.rule}` }}
+                            title="切换 C 写歌词时采用的风格规则"
+                        >
+                            C · {coWritingStyle.shortLabel}
                         </button>
                         <button
-                            onClick={handleDiscuss}
-                            disabled={isTyping}
-                            className={`px-2.5 py-1 rounded text-[10px] disabled:opacity-40 transition-all ${inputText.trim() ? 'text-blue-600 bg-blue-50 hover:bg-blue-100 font-medium' : 'text-stone-500 hover:bg-stone-200/50'}`}
-                            title={inputText.trim() ? '把输入框的内容作为讨论发送（不计入歌词）' : '开始讨论创作方向'}
+                            onClick={() => {
+                                setShowStructureGuide(prev => !prev);
+                                setShowLyricStylePicker(false);
+                            }}
+                            className="text-[10px] px-2.5 py-1.5 rounded-full shrink-0"
+                            style={{ color: paper.muted, border: `1px solid ${paper.rule}` }}
                         >
-                            {inputText.trim() ? '仅聊聊' : '聊聊'}
+                            模板
                         </button>
-                        {inputText.trim() && (
-                            <span className="text-[9px] text-stone-400 ml-auto pr-1">发送→歌词 · 仅聊聊→讨论</span>
+                    </div>
+
+                    <div className="px-4 pb-3">
+                        <div
+                            className="grid grid-cols-2 p-1 rounded-2xl"
+                            style={{ background: 'rgba(0,0,0,.055)' }}
+                        >
+                            <button
+                                onClick={() => setWorkMode('notebook')}
+                                className="flex items-center justify-center gap-2 py-2 rounded-xl text-[11px] font-semibold transition-all duration-300"
+                                style={workMode === 'notebook'
+                                    ? { background: paper.sheet, color: paper.ink, boxShadow: '0 2px 10px rgba(0,0,0,.08)' }
+                                    : { color: paper.muted }}
+                            >
+                                <BookOpenText size={14} weight={workMode === 'notebook' ? 'fill' : 'regular'} />
+                                写歌词
+                            </button>
+                            <button
+                                onClick={() => setWorkMode('chat')}
+                                className="flex items-center justify-center gap-2 py-2 rounded-xl text-[11px] font-semibold transition-all duration-300"
+                                style={workMode === 'chat'
+                                    ? { background: paper.sheet, color: paper.ink, boxShadow: '0 2px 10px rgba(0,0,0,.08)' }
+                                    : { color: paper.muted }}
+                            >
+                                <ChatCircleDots size={14} weight={workMode === 'chat' ? 'fill' : 'regular'} />
+                                讨论
+                                {feedbackGroups.length > 0 && <span className="opacity-55">{feedbackGroups.length}</span>}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                {showLyricStylePicker && (
+                    <div
+                        className="shrink-0 z-20 px-4 py-3"
+                        style={{ background: paper.sheet, borderBottom: `1px solid ${paper.rule}` }}
+                    >
+                        <div className="flex gap-1.5 overflow-x-auto no-scrollbar pb-2">
+                            {LYRIC_STYLE_CATEGORIES.map(category => {
+                                const active = category.id === lyricStyleCategory;
+                                return (
+                                    <button
+                                        key={category.id}
+                                        onClick={() => setLyricStyleCategory(category.id)}
+                                        className="shrink-0 px-2.5 py-1 rounded-full text-[9px] font-semibold transition-all"
+                                        style={active
+                                            ? { color: '#fff', background: paper.ink }
+                                            : { color: paper.muted }}
+                                    >
+                                        {category.shortLabel}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        <div className="flex gap-2 overflow-x-auto no-scrollbar pb-2">
+                            {LYRIC_CO_WRITING_STYLES
+                                .filter(style => style.category === 'adaptive' || style.category === lyricStyleCategory)
+                                .map(style => {
+                                const active = style.id === coWritingStyle.id;
+                                return (
+                                    <button
+                                        key={style.id}
+                                        onClick={() => updateActiveLyricStyle(style.id)}
+                                        className="shrink-0 px-3 py-1.5 rounded-full text-[9px] transition-all"
+                                        style={active
+                                            ? { color: '#fff', background: paper.accent, border: '1px solid transparent' }
+                                            : { color: paper.muted, border: `1px solid ${paper.rule}` }}
+                                    >
+                                        {style.shortLabel}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        <p className="text-[9px] leading-relaxed px-1" style={{ color: paper.muted }}>
+                            <span className="font-semibold" style={{ color: paper.ink }}>{coWritingStyle.label}</span>
+                            {' · '}
+                            {coWritingStyle.desc}
+                        </p>
+                    </div>
+                )}
+
+                {showStructureGuide && (
+                    <div
+                        className="shrink-0 z-20 px-5 py-3 flex gap-2 overflow-x-auto no-scrollbar"
+                        style={{ background: paper.sheet, borderBottom: `1px solid ${paper.rule}` }}
+                    >
+                        {isFreeNotebook ? (
+                            <span className="text-[10px]" style={{ color: paper.muted }}>自由模板 · 随时添加新句</span>
+                        ) : (
+                            (activeSong.lyricTemplate === 'custom'
+                                ? activeSong.customLyricTemplate || []
+                                : getLyricTemplate(activeSong.lyricTemplate).structure
+                            ).map((section, index) => (
+                                <span
+                                    key={`${section.section}-${index}`}
+                                    className="shrink-0 px-2.5 py-1 rounded-full text-[9px]"
+                                    style={{ color: paper.muted, border: `1px solid ${paper.rule}` }}
+                                >
+                                    {SECTION_LABELS[section.section]?.label} · {section.lines}句 × {section.chars}字
+                                </span>
+                            ))
                         )}
                     </div>
+                )}
 
-                    {/* Text Input */}
-                    <div className="p-3 flex gap-2 items-end">
-                        <textarea
-                            value={inputText}
-                            onChange={e => setInputText(e.target.value)}
-                            placeholder="写下一句词，或直接点「聊聊」聊创作……"
-                            className="flex-1 bg-white border border-stone-200 rounded-lg px-4 py-3 text-sm text-stone-700 outline-none resize-none max-h-32 placeholder:text-stone-300 focus:border-stone-400 transition-colors"
-                            rows={1}
-                            style={{ minHeight: '44px', fontFamily: 'Georgia, "Noto Serif SC", serif' }}
-                            onKeyDown={e => {
-                                if (e.key === 'Enter' && !e.shiftKey) {
-                                    e.preventDefault();
-                                    handleSend();
-                                }
+                {workMode === 'notebook' ? (
+                    <div className="flex-1 overflow-y-auto no-scrollbar px-3.5 py-4 pb-10">
+                        {isFreeNotebook && (
+                            <div className="flex gap-1.5 overflow-x-auto no-scrollbar pb-3 px-1">
+                                {Object.entries(SECTION_LABELS).map(([key, info]) => (
+                                    <button
+                                        key={key}
+                                        onClick={() => setCurrentSection(key)}
+                                        className="shrink-0 px-2.5 py-1 rounded-full text-[9px] transition-all"
+                                        style={currentSection === key
+                                            ? { color: '#fff', background: paper.accent }
+                                            : { color: paper.muted, border: `1px solid ${paper.rule}` }}
+                                    >
+                                        下一句 · {info.label}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+
+                        <div
+                            className="relative max-w-2xl mx-auto rounded-[24px] overflow-hidden"
+                            style={{
+                                background: paper.sheet,
+                                boxShadow: '0 18px 50px rgba(54,43,37,.13), inset 0 1px 0 rgba(255,255,255,.45)',
+                                border: `1px solid ${paper.rule}`,
                             }}
-                        />
-                        <button
-                            onClick={handleSend}
-                            disabled={isTyping || !inputText.trim()}
-                            className={`w-10 h-10 rounded-lg flex items-center justify-center active:scale-95 transition-all shrink-0 ${inputText.trim() ? 'bg-stone-700 text-stone-50' : 'bg-stone-200 text-stone-400'}`}
-                            title="发送为歌词"
                         >
-                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4"><path d="M3.478 2.404a.75.75 0 0 0-.926.941l2.432 7.905H13.5a.75.75 0 0 1 0 1.5H4.984l-2.432 7.905a.75.75 0 0 0 .926.94 60.519 60.519 0 0 0 18.445-8.986.75.75 0 0 0 0-1.218A60.517 60.517 0 0 0 3.478 2.404Z" /></svg>
-                        </button>
-                    </div>
-                </div>
+                            <div className="px-6 pt-7 pb-5 text-center">
+                                <div className="text-[9px] tracking-[.42em] uppercase" style={{ color: paper.muted }}>lyric notebook</div>
+                                <h2 className="text-[22px] mt-2 leading-tight" style={{ fontFamily: 'Georgia, "Noto Serif SC", serif' }}>{activeSong.title}</h2>
+                                {activeSong.subtitle && <p className="text-[11px] mt-2 italic" style={{ color: paper.muted }}>{activeSong.subtitle}</p>}
+                                <div className="w-10 h-px mx-auto mt-5" style={{ background: paper.rule }} />
+                            </div>
 
-                {/* Completion Preview Modal */}
+                            <div className="px-4 pb-8">
+                                {notebookSlots.map(slot => {
+                                    const line = lineAtSlot(activeSong, slot.index);
+                                    const value = lineDrafts[slot.index] ?? line?.content ?? '';
+                                    const charCount = Array.from(value.trim()).length;
+                                    const sectionStart = slot.lineInSection === 0;
+                                    const isGenerating = generatingSlotIndex === slot.index;
+                                    return (
+                                        <div key={slot.index}>
+                                            {sectionStart && (
+                                                <div className="flex items-center gap-3 pt-5 pb-2 px-2">
+                                                    <span className="text-[9px] tracking-[.28em] uppercase font-semibold" style={{ color: paper.muted }}>
+                                                        {SECTION_LABELS[slot.section]?.label || slot.section}
+                                                        {slot.sectionOccurrence > 0 ? ` ${slot.sectionOccurrence + 1}` : ''}
+                                                    </span>
+                                                    <div className="h-px flex-1" style={{ background: paper.rule }} />
+                                                </div>
+                                            )}
+                                            <div
+                                                className="group grid grid-cols-[28px_1fr_42px] gap-2 items-center px-2 min-h-[54px]"
+                                                style={{ borderBottom: `1px solid ${paper.rule}` }}
+                                            >
+                                                <div className="text-[10px] tabular-nums text-center" style={{ color: paper.muted }}>
+                                                    {String(slot.index + 1).padStart(2, '0')}
+                                                </div>
+                                                <div className="relative min-w-0">
+                                                    <textarea
+                                                        value={value}
+                                                        onChange={event => setLineDrafts(prev => ({ ...prev, [slot.index]: event.target.value }))}
+                                                        onBlur={() => {
+                                                            if (value.trim() !== (line?.content || '').trim()) saveNotebookLine(slot, value, 'user');
+                                                        }}
+                                                        onKeyDown={event => {
+                                                            if (event.key === 'Enter' && !event.shiftKey) {
+                                                                event.preventDefault();
+                                                                event.currentTarget.blur();
+                                                            }
+                                                        }}
+                                                        rows={1}
+                                                        placeholder={`第 ${slot.index + 1} 句 · ${slot.chars === '不限' ? '随心写' : `建议 ${slot.chars} 字`}`}
+                                                        className="w-full bg-transparent resize-none outline-none py-4 pr-10 text-[15px] leading-6 placeholder:opacity-35"
+                                                        style={{ color: paper.ink, fontFamily: 'Georgia, "Noto Serif SC", serif' }}
+                                                        aria-label={`第 ${slot.index + 1} 句歌词`}
+                                                    />
+                                                    <span className="absolute right-0 bottom-1.5 text-[8px] tabular-nums" style={{ color: paper.muted }}>
+                                                        {charCount}{slot.chars !== '不限' ? `/${slot.chars}` : ''}
+                                                    </span>
+                                                    {line && (
+                                                        <span className="absolute right-0 top-1 text-[8px]" style={{ color: paper.muted }}>
+                                                            {line.authorId === 'user' ? '我' : collaborator?.name || 'C'}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <button
+                                                    onClick={() => handleGenerateNotebookLine(slot)}
+                                                    disabled={generatingSlotIndex !== null}
+                                                    className="w-9 h-9 rounded-full flex items-center justify-center active:scale-90 transition-all disabled:opacity-45"
+                                                    style={{ color: paper.ink, border: `1px solid ${paper.rule}`, background: 'rgba(255,255,255,.24)' }}
+                                                    title={line ? `让 ${collaborator?.name || 'C'} 重写第 ${slot.index + 1} 句` : `让 ${collaborator?.name || 'C'} 生成第 ${slot.index + 1} 句`}
+                                                    aria-label={line ? '刷新这一句' : '生成这一句'}
+                                                >
+                                                    {isGenerating
+                                                        ? <ArrowsClockwise size={14} className="animate-spin" />
+                                                        : line
+                                                            ? <ArrowsClockwise size={14} />
+                                                            : <SparkleP size={14} weight="fill" />}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+
+                            <div className="px-6 pb-7 flex items-center justify-between text-[9px]" style={{ color: paper.muted }}>
+                                <span>{collaborator?.name || 'C'} 会读到整本歌词，但只改你点到的句子</span>
+                                <span>{filledCount} 句已写</span>
+                            </div>
+                        </div>
+                    </div>
+                ) : (
+                    <>
+                        <div className="flex-1 overflow-y-auto no-scrollbar px-4 py-5 pb-28" ref={scrollRef}>
+                            {feedbackGroups.length === 0 && (
+                                <div className="h-full flex flex-col items-center justify-center text-center px-10 pb-16">
+                                    {collaborator && <img src={collaborator.avatar} className="w-14 h-14 rounded-full object-cover mb-5 opacity-90" alt="" />}
+                                    <p className="text-[14px]" style={{ fontFamily: 'Georgia, "Noto Serif SC", serif' }}>这里专心讨论，不会碰你的歌词</p>
+                                    <p className="text-[10px] mt-2 leading-5" style={{ color: paper.muted }}>可以问结构、请点评、讨论押韵，写词请回到「写歌词」。</p>
+                                </div>
+                            )}
+                            <div className="space-y-4 max-w-2xl mx-auto">
+                                {feedbackGroups.map(group => {
+                                    const lead = group.reaction || group.details[0];
+                                    if (!lead) return null;
+                                    const isUserMessage = lead.authorId === 'user';
+                                    const details = group.details.filter(detail => detail.id !== lead.id);
+                                    const expanded = !!expandedFeedbackIds[group.id];
+                                    return (
+                                        <div key={group.id} className={`flex gap-2.5 ${isUserMessage ? 'justify-end' : 'justify-start'}`}>
+                                            {!isUserMessage && collaborator && <img src={collaborator.avatar} className="w-7 h-7 rounded-full object-cover shrink-0 mt-1" alt="" />}
+                                            <div className={`max-w-[82%] ${isUserMessage ? 'items-end' : 'items-start'} flex flex-col`}>
+                                                <div
+                                                    className={`px-4 py-3 text-[13px] leading-6 ${isUserMessage ? 'rounded-[18px_18px_5px_18px]' : 'rounded-[18px_18px_18px_5px]'}`}
+                                                    style={isUserMessage
+                                                        ? { background: paper.accent, color: '#fff' }
+                                                        : { background: paper.sheet, color: paper.ink, border: `1px solid ${paper.rule}` }}
+                                                >
+                                                    <p className="whitespace-pre-wrap">{lead.content}</p>
+                                                    {!isUserMessage && details.length > 0 && expanded && (
+                                                        <div className="mt-3 pt-3 space-y-2" style={{ borderTop: `1px solid ${paper.rule}` }}>
+                                                            {details.map(detail => (
+                                                                <p key={detail.id} className="text-[11px] whitespace-pre-wrap" style={{ color: paper.muted }}>{detail.content}</p>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                <div className="flex items-center gap-2 mt-1.5 px-1">
+                                                    {!isUserMessage && details.length > 0 && (
+                                                        <button onClick={() => toggleFeedback(group.id)} className="text-[9px]" style={{ color: paper.muted }}>
+                                                            {expanded ? '收起' : `展开 ${details.length} 条细节`}
+                                                        </button>
+                                                    )}
+                                                    <button onClick={() => handleDeleteFeedback(group.id)} className="text-[9px] opacity-0 group-hover:opacity-100" style={{ color: paper.muted }}>删除</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                                {isTyping && (
+                                    <div className="flex items-center gap-2.5">
+                                        {collaborator && <img src={collaborator.avatar} className="w-7 h-7 rounded-full object-cover" alt="" />}
+                                        <div className="px-4 py-3 rounded-[18px_18px_18px_5px] flex gap-1.5" style={{ background: paper.sheet, border: `1px solid ${paper.rule}` }}>
+                                            {[0, 1, 2].map(index => <span key={index} className="w-1.5 h-1.5 rounded-full animate-bounce" style={{ background: paper.muted, animationDelay: `${index * 90}ms` }} />)}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        <div
+                            className="absolute bottom-0 left-0 right-0 z-30 pb-safe"
+                            style={{ background: paper.sheet, borderTop: `1px solid ${paper.rule}`, backdropFilter: 'blur(18px)', WebkitBackdropFilter: 'blur(18px)' }}
+                        >
+                            <div className="p-3 flex gap-2 items-end">
+                                <textarea
+                                    value={inputText}
+                                    onChange={event => setInputText(event.target.value)}
+                                    placeholder={discussionPlaceholder}
+                                    rows={1}
+                                    className="flex-1 rounded-2xl px-4 py-3 text-[13px] outline-none resize-none max-h-28 placeholder:opacity-45"
+                                    style={{ minHeight: 44, background: paper.sheet, color: paper.ink, border: `1px solid ${paper.rule}` }}
+                                    onKeyDown={event => {
+                                        if (event.key === 'Enter' && !event.shiftKey) {
+                                            event.preventDefault();
+                                            handleDiscuss();
+                                        }
+                                    }}
+                                />
+                                <button
+                                    onClick={handleDiscuss}
+                                    disabled={isTyping || !inputText.trim()}
+                                    className="w-11 h-11 rounded-full flex items-center justify-center shrink-0 active:scale-90 transition-transform disabled:opacity-35"
+                                    style={{ background: paper.accent, color: '#fff' }}
+                                    aria-label="发送讨论"
+                                >
+                                    <ChatCircleDots size={17} weight="fill" />
+                                </button>
+                            </div>
+                        </div>
+                    </>
+                )}
+
                 <Modal isOpen={showPreviewModal} title="完成创作" onClose={() => setShowPreviewModal(false)}>
                     <div className="space-y-4">
                         <div className="bg-stone-50 border border-stone-200 p-4 rounded-lg">
@@ -3014,7 +3599,6 @@ const SongwritingApp: React.FC = () => {
             </div>
         );
     }
-
 
     return null;
 };

@@ -1,5 +1,5 @@
 
-import { CharacterProfile, UserProfile, DailySchedule, ScheduleSlot, Message } from '../types';
+import { CharacterProfile, UserProfile, DailySchedule, ScheduleSlot, Message, Emoji } from '../types';
 import { ContextBuilder } from './context';
 import { DB } from './db';
 import { safeResponseJson, extractContent, extractJson } from './safeApi';
@@ -8,24 +8,17 @@ import { injectMemoryPalace } from './memoryPalace/pipeline';
 import { replacePromptPlaceholders } from '../components/chat/ChatConstants';
 import { getDailyScheduleForChar } from './dailySchedule';
 import { getScheduleDateKey, getScheduleWallClock } from './scheduleTime';
+import { loadCharacterContextRange } from './chatContextRange';
+import { ChatPrompts } from './chatPrompts';
+import { cleanApiMessages, flattenImageContentParts } from './promptMessageCleanup';
+import { getFlowNarrativeKey, isScheduleFeatureOn } from './scheduleFeature';
+
+export { getFlowNarrativeKey, isScheduleFeatureOn } from './scheduleFeature';
 
 interface ApiConfig {
     baseUrl: string;
     apiKey: string;
     model: string;
-}
-
-/**
- * 日程 / 情绪 buff 总开关判定。
- * - 显式为 true / false 时直接使用。
- * - undefined 时走向后兼容：老用户若已选了 scheduleStyle，视为开启；否则默认关闭。
- * 任何副 API 调用、情绪评估、日程注入之前都应先过此闸门。
- */
-export function isScheduleFeatureOn(char: Pick<CharacterProfile, 'scheduleFeatureEnabled' | 'scheduleStyle'> | null | undefined): boolean {
-    if (!char) return false;
-    if (char.scheduleFeatureEnabled === true) return true;
-    if (char.scheduleFeatureEnabled === false) return false;
-    return !!char.scheduleStyle;
 }
 
 /**
@@ -43,30 +36,32 @@ export function isScheduleFeatureOn(char: Pick<CharacterProfile, 'scheduleFeatur
  *   不当 slot 主语、不作每一段独白的主线
  */
 /**
- * 把过滤后的聊天历史拍成一段文本，喂给日程生成 prompt。
- * 注意：与 chat 主链路一样以 hideBeforeMessageId 过滤后的列表为准；这里只负责格式化。
+ * 用私聊主链路的同一套消息语义化与清理规则，把聊天历史拍成日程 prompt：
+ * - 家园 / 交换日记等卡片保留完整可读正文；
+ * - HTML 卡片只保留可见文字摘要；
+ * - 双语历史只留原文侧；
+ * - 图片丢掉 base64，只留占位文本。
  * 空数组返回空串，prompt builder 会跳过该段。
  */
-function formatChatHistoryForSchedule(
+export function formatChatHistoryForSchedule(
     messages: Message[],
     char: CharacterProfile,
     user: UserProfile,
+    emojis: Emoji[] = [],
 ): string {
     if (!messages || messages.length === 0) return '';
-    const lines = messages.map(m => {
-        const d = getScheduleWallClock(char, new Date(m.timestamp));
-        const mm = String(d.getMonth() + 1).padStart(2, '0');
-        const dd = String(d.getDate()).padStart(2, '0');
-        const hh = String(d.getHours()).padStart(2, '0');
-        const mi = String(d.getMinutes()).padStart(2, '0');
-        const ts = `${mm}-${dd} ${hh}:${mi}`;
-        const sender = m.role === 'user' ? user.name : char.name;
-        // 图片/音频等非文本消息退化成占位符，避免把 base64 塞进 prompt
-        let content: string;
-        if (m.type === 'image') content = '[图片]';
-        else if ((m as any).type === 'audio' || (m as any).type === 'voice') content = '[语音]';
-        else content = typeof m.content === 'string' ? m.content : '';
-        return `[${ts}] ${sender}: ${content}`;
+    const { apiMessages } = ChatPrompts.buildMessageHistory(
+        messages,
+        Math.max(1, messages.length),
+        char,
+        user,
+        emojis,
+    );
+    const cleaned = cleanApiMessages(flattenImageContentParts(apiMessages));
+    const lines = cleaned.map(m => {
+        const sender = m.role === 'user' ? user.name : m.role === 'assistant' ? char.name : '系统';
+        const content = typeof m.content === 'string' ? m.content : '';
+        return `${sender}: ${content}`;
     });
     return `\n## 最近的聊天记录（与「${user.name}」）\n${lines.join('\n')}\n`;
 }
@@ -276,12 +271,6 @@ ${chatHistoryBlock ? `**重要：上面给了你最近和「${user.name}」的�
 /**
  * 根据当前小时数返回 flowNarrative 的 key。
  */
-export function getFlowNarrativeKey(hour: number): 'morning' | 'afternoon' | 'evening' {
-    if (hour < 12) return 'morning';
-    if (hour < 18) return 'afternoon';
-    return 'evening';
-}
-
 export async function generateDailyScheduleForChar(
     char: CharacterProfile,
     userProfile: UserProfile,
@@ -308,30 +297,35 @@ export async function generateDailyScheduleForChar(
         if (prev) coverImage = prev;
     } catch {}
 
-    // ── 上下文对齐 chat：复用同一份 buildCoreContext(true) + 记忆宫殿注入 + 同样的历史过滤 ──
-    // 用户痛点：日程之前完全看不到聊天上下文，结果"早晨说char要去上班"被忽略，安排成在家刷手机。
-    // 这里走的链路要和 useChatAI.ts 主链路（构造 systemPrompt 前那段）保持一致，
-    // 否则日程/聊天/情绪三处会出现信息差。
-    const limit = char.contextLimit || 500;
-    const recentMessages: Message[] = await DB.getRecentMessagesByCharId(char.id, limit).catch(e => {
-        console.warn('[Schedule] load history failed, falling back to empty:', e);
-        return [] as Message[];
-    });
-    // hideBeforeMessageId 与 chat 端 ChatPrompts.buildMessageHistory 同款过滤
-    const filteredMessages = recentMessages.filter(m => !char.hideBeforeMessageId || m.id >= char.hideBeforeMessageId);
+    // ── 上下文范围对齐私聊 ──
+    // adaptive/manual、记忆宫殿水位线、用户断点全部复用同一读取器。
+    const historyMessages: Message[] = await loadCharacterContextRange(char)
+        .then(snapshot => snapshot.messages)
+        .catch(async e => {
+            console.warn('[Schedule] load private-chat context range failed, falling back to recent history:', e);
+            return DB.getRecentMessagesByCharId(char.id, char.contextLimit || 500, true).catch(() => [] as Message[]);
+        });
+    const emojis = await DB.getEmojis().catch(() => [] as Emoji[]);
 
-    // 记忆宫殿：与 useChatAI.ts:573 相同的调用形态，结果会挂到 char.memoryPalaceInjection 上，
+    // 记忆宫殿：与私聊主链路相同，结果会挂到 char.memoryPalaceInjection 上，
     // 由下面的 buildCoreContext 自动读取注入。
     try {
-        await injectMemoryPalace(char as any, filteredMessages, undefined, userProfile?.name);
+        await injectMemoryPalace(char as any, historyMessages, undefined, userProfile?.name);
     } catch (e) {
         console.warn('[Schedule] memory palace inject failed (non-fatal):', e);
     }
 
-    // chat 主链路传 true（含详细记忆）；日程之前传的是 false，统一改成 true。
-    const baseContext = ContextBuilder.buildCoreContext(char, userProfile, true);
+    // 含详细记忆，并让关键词世界书使用与私聊相同的消息窗口激活。
+    const baseContext = ContextBuilder.buildCoreContext(
+        char,
+        userProfile,
+        true,
+        undefined,
+        undefined,
+        { worldbookMessages: historyMessages },
+    );
 
-    const chatHistoryBlock = formatChatHistoryForSchedule(filteredMessages, char, userProfile);
+    const chatHistoryBlock = formatChatHistoryForSchedule(historyMessages, char, userProfile, emojis);
 
     const dayOfWeek = ['日', '一', '二', '三', '四', '五', '六'][now.getDay()];
 

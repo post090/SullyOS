@@ -158,10 +158,11 @@ export const isMedPlanDueToday = (plan: MedPlan, today: string = lifeToday()): b
         if (plan.endDate && today > plan.endDate) return false;
     }
     const interval = Math.max(1, plan.intervalDays || 1);
-    if (interval === 1) return true;
     const anchor = plan.startDate || getLocalDateKey(new Date(plan.createdAt));
     const diff = diffDays(anchor, today);
-    return diff >= 0 && diff % interval === 0;
+    if (diff < 0) return false;
+    if (interval === 1) return true;
+    return diff % interval === 0;
 };
 
 /** 频率的展示文案 */

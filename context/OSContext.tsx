@@ -7,8 +7,8 @@ import { extractImagesInPlace, deepCloneForExport } from '../utils/backupExport'
 import { isBlobRef, getBlobForRef, migrateDataUrlToRef, migrateAppearancePresetBlobRefs, resolveBlobRefsDeep, BLOBREF_PREFIX, deleteBlobRefIfUnreferenced, invalidateBlobRefUrlCache } from '../utils/blobRef';
 import { LEGACY_DEFAULT_WALLPAPER, isLegacyDefaultWallpaper, shouldPreserveLegacyDefaultWallpaper } from '../utils/wallpaperCompat';
 import { migrateSharkpanAssets } from '../utils/sharkpanAssetMigration';
-import { writeV2Backup, assembleV2Backup, type BackupManifest, type ZipFileWriter, type ZipFileReader } from '../utils/backupFormat';
-import { encodeVectorsForBackup } from '../utils/memoryPalace/db';
+import { createV2ArrayFieldWriter, writeV2Backup, assembleV2Backup, type BackupManifest, type ZipFileWriter, type ZipFileReader } from '../utils/backupFormat';
+import { encodeVectorsForBackup, encodeVectorsForBackupChunked } from '../utils/memoryPalace/db';
 import { ProactiveChat, getMissCount, incrementMissCount, resetMissCount, MISS_THRESHOLD, getNoResponseCount, incrementNoResponseCount, resetNoResponseCount } from '../utils/proactiveChat';
 import { replacePromptPlaceholders } from '../components/chat/ChatConstants';
 import { isInTimeWindow } from '../utils/timeWindow';
@@ -87,11 +87,17 @@ type JSZipFileLike = {
   async(type: 'uint8array'): Promise<Uint8Array>;
 };
 
+type JSZipWriteOptions = {
+  base64?: boolean;
+  compression?: 'STORE' | 'DEFLATE';
+  compressionOptions?: { level?: number };
+};
+
 type JSZipLike = {
-  folder: (name: string) => { file: (name: string, data: string, options?: { base64?: boolean }) => void } | null;
+  folder: (name: string) => { file: (name: string, data: string, options?: JSZipWriteOptions) => void } | null;
   file: {
     (name: string): JSZipFileLike | null;
-    (name: string, data: string | Uint8Array, options?: { base64?: boolean }): void;
+    (name: string, data: string | Uint8Array, options?: JSZipWriteOptions): void;
   };
   generateAsync: (
     options: {
@@ -307,6 +313,7 @@ interface OSContextType {
   apiPresets: ApiPreset[];
   addApiPreset: (name: string, config: APIConfig) => void;
   savePresets: (presets: ApiPreset[]) => void; // 批量覆写（站点视图的增删改用）
+  updateApiPreset: (id: string, name: string, config: APIConfig) => void;
   removeApiPreset: (id: string) => void;
 
   // 实时配置 (天气、新闻、Notion等)
@@ -3218,6 +3225,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   };
   const saveModels = (models: string[]) => { setAvailableModels(models); localStorage.setItem('os_available_models', JSON.stringify(models)); };
   const addApiPreset = (name: string, config: APIConfig) => { setApiPresets(prev => { const next = [...prev, { id: Date.now().toString(), name, config }]; localStorage.setItem('os_api_presets', JSON.stringify(next)); return next; }); };
+  const updateApiPreset = (id: string, name: string, config: APIConfig) => { setApiPresets(prev => { const next = prev.map(p => p.id === id ? { ...p, name, config } : p); localStorage.setItem('os_api_presets', JSON.stringify(next)); return next; }); };
   const removeApiPreset = (id: string) => { setApiPresets(prev => { const next = prev.filter(p => p.id !== id); localStorage.setItem('os_api_presets', JSON.stringify(next)); return next; }); };
   const savePresets = (presets: ApiPreset[]) => { setApiPresets(presets); localStorage.setItem('os_api_presets', JSON.stringify(presets)); };
   const addCharacter = async () => {
@@ -3726,7 +3734,8 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                   const ext = extMatch[1] === 'jpeg' ? 'jpg' : extMatch[1];
                   const filename = `asset_${Date.now()}_${assetCount++}.${ext}`;
                   const base64Data = value.split(',')[1];
-                  assetsFolder?.file(filename, base64Data, { base64: true });
+                  // JPEG/PNG/WebP/GIF 本身已压缩，再跑 DEFLATE 只会浪费手机 CPU；直接存储。
+                  assetsFolder?.file(filename, base64Data, { base64: true, compression: 'STORE' });
                   const path = `assets/${filename}`;
                   assetDedupMap.set(value, path);
                   return path;
@@ -4054,6 +4063,71 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               return result;
           };
 
+          // 纯文字备份的低内存路径：store 通过单事务 IDB 游标逐条读取，剥图后立即序列化进 ZIP 分片，
+          // 不再 getAll 整表驻留。gallery/messages 中即使有大量 base64 图片，峰值也只是一条记录。
+          const textOnlyFieldByStore: Record<string, string> = {
+              characters: 'characters',
+              character_groups: 'characterGroups',
+              messages: 'messages',
+              themes: 'customThemes',
+              emojis: 'savedEmojis',
+              emoji_categories: 'emojiCategories',
+              gallery: 'galleryImages',
+              diaries: 'diaries',
+              tasks: 'tasks',
+              anniversaries: 'anniversaries',
+              room_todos: 'roomTodos',
+              room_notes: 'roomNotes',
+              groups: 'groups',
+              journal_stickers: 'savedJournalStickers',
+              social_posts: 'socialPosts',
+              courses: 'courses',
+              games: 'games',
+              worldbooks: 'worldbooks',
+              novels: 'novels',
+              songs: 'songs',
+              bank_transactions: 'bankTransactions',
+              xhs_activities: 'xhsActivities',
+              xhs_stock: 'xhsStockImages',
+              quizzes: 'quizSessions',
+              guidebook: 'guidebookSessions',
+              scheduled_messages: 'scheduledMessages',
+              handbook: 'handbooks',
+              trackers: 'trackers',
+              tracker_entries: 'trackerEntries',
+              hotnews_snapshots: 'hotNewsSnapshots',
+              memory_nodes: 'memoryNodes',
+              memory_links: 'memoryLinks',
+              topic_boxes: 'topicBoxes',
+              anticipations: 'anticipations',
+              event_boxes: 'eventBoxes',
+              room_plates: 'roomPlates',
+              digest_reports: 'digestReports',
+              daily_schedule: 'dailySchedules',
+              memory_batches: 'memoryBatches',
+              pixel_home_assets: 'pixelHomeAssets',
+              pixel_home_layouts: 'pixelHomeLayouts',
+              vr_novels: 'vrNovels',
+              vr_annotations: 'vrAnnotations',
+              cc_custom_parts: 'customCreatorParts',
+              vr_letters: 'vrLetters',
+              vr_settings: 'vrSettings',
+              vr_scripts: 'vrScripts',
+              vr_plays: 'vrStagedPlays',
+              vr_presets: 'vrPresets',
+              worlds: 'worlds',
+              world_episodes: 'worldEpisodes',
+              life_records: 'lifeRecords',
+              med_plans: 'medPlans',
+              life_record_settings: 'lifeRecordSettings',
+          };
+          const prewrittenStores: BackupManifest['stores'] = {};
+          const textOnlyShardLimits = {
+              maxLen: 4 * 1024 * 1024,
+              maxItems: 500,
+              hardMaxLen: 256 * 1024 * 1024,
+          };
+
           // 向量二进制旁路（#2）：memory_vectors 归一化拼成 bin + 索引（逻辑在 encodeVectorsForBackup，
           // 那边有 ensureFloat32 统一 Uint8Array / Float32Array / 遗留 number[] 三态），导出收尾交给
           // writeV2Backup 落进 zip——不进 backupData、不当普通数组分片，避开 number[] 进 JSON 的膨胀。
@@ -4066,6 +4140,36 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                   message: `正在打包: ${storeName} ...`,
                   progress: (currentStep / totalSteps) * 100
               });
+
+              // 4500+ 条记忆若仍是早期 number[] 存储，getAll 会先在 JS 堆里膨胀成数百 MB。
+              // 两遍游标逐条扫描只常驻最终 Float32 紧凑 bin；格式仍是原来的单 bin + index。
+              if (storeName === 'memory_vectors' && mode === 'text_only') {
+                  vectorPayload = await encodeVectorsForBackupChunked(async (onBatch) => {
+                      await DB.streamRawStoreData(storeName, item => onBatch([item]));
+                  });
+                  await new Promise(resolve => setTimeout(resolve, 0));
+                  continue;
+              }
+
+              // 纯文字模式的普通数组 store：逐条剥图后立刻写分片。这里 continue 后不会再把
+              // processedData 挂到 backupData，因此已处理的整表不会一直留到最终压缩阶段。
+              const textOnlyField = mode === 'text_only' ? textOnlyFieldByStore[storeName] : undefined;
+              if (textOnlyField) {
+                  const writer = createV2ArrayFieldWriter(
+                      zip as unknown as ZipFileWriter,
+                      textOnlyField,
+                      {
+                          limits: textOnlyShardLimits,
+                          onYield: () => new Promise<void>(resolve => setTimeout(resolve, 0)),
+                      },
+                  );
+                  await DB.streamRawStoreData(storeName, (item) => {
+                      const processedItem = noImageStores.has(storeName) ? item : stripBase64(item);
+                      writer.appendSync([processedItem]);
+                  });
+                  prewrittenStores[textOnlyField] = await writer.finish();
+                  continue;
+              }
 
               let rawData = await DB.getRawStoreData(storeName);
               let processedData: any;
@@ -4231,9 +4335,9 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               await new Promise(resolve => setTimeout(resolve, 10));
           }
 
-          // 进度条停在 70% 让用户看到接下来的"压缩中 X%"实际推进，而不是
-          // 卡在 95% 干等。level 9 压几十 MB 数据可能要好几秒。
-          setSysOperation({ status: 'processing', message: '正在生成压缩包（最高压缩级别）...', progress: 70 });
+          // 进度条停在 70% 让用户看到接下来的"压缩中 X%"实际推进，而不是卡在 95% 干等。
+          // text_only 用 level 6；媒体/全量仍用 level 9，具体见 generateAsync 配置。
+          setSysOperation({ status: 'processing', message: '正在生成压缩包...', progress: 70 });
 
           // --- v2 分片序列化（替代老的单根 data.json）---
           // 不再把所有数据拼成一根 data.json：单根字符串逼近 ~512M 会确定性 RangeError。
@@ -4249,6 +4353,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                   createdAt: Date.now(),
                   assetCount,
                   vectors: vectorPayload,
+                  prewrittenStores,
                   onYield: () => new Promise<void>(r => setTimeout(r, 0)),
               },
           );
@@ -4257,7 +4362,13 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           // 条从 70% 平滑爬到 99%，用户能确切看到"在动"。
           let lastReportedPercent = -10;
           const content = await zip.generateAsync(
-              { type: "blob", streamFiles: true, compression: "DEFLATE", compressionOptions: { level: 9 } },
+              {
+                  type: "blob",
+                  streamFiles: true,
+                  compression: "DEFLATE",
+                  // 纯文字备份优先手机稳定性；6 级体积差很小，但比 9 级明显省时省内存。
+                  compressionOptions: { level: mode === 'text_only' ? 6 : 9 },
+              },
               (metadata) => {
                   const p = metadata.percent;
                   if (p - lastReportedPercent >= 5 || p >= 99) {
@@ -4840,6 +4951,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     apiPresets,
     addApiPreset,
     savePresets,
+    updateApiPreset,
     removeApiPreset,
     realtimeConfig,
     updateRealtimeConfig,

@@ -23,7 +23,7 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
   label-by-size:
-    name: 按改动规模贴大小标签
+    name: 按改动规模贴大小标签（不含测试）
     # 排在 scope 标签之后，避免两个 job 同时写标签互相覆盖
     needs: [label-by-files]
     runs-on: ubuntu-latest
@@ -36,7 +36,7 @@ jobs:
       pull-requests: write
 
     steps:
-      - name: 统计增删行数并贴标签
+      - name: 统计增删行数并贴标签（只算测试以外的改动）
         # https://github.com/CodelyTV/pr-size-labeler
         uses: codelytv/pr-size-labeler@4ec67706cd878fbc1c8db0a5dcd28b6bb412e85a # v1.10.3
         with:
@@ -53,8 +53,25 @@ jobs:
           # 超大 PR 只贴标签，不拦合并
           fail_if_xl: 'false'
           message_if_xl: ''
-          # 构建产物和锁文件不算进改动规模，不然一次 pnpm install 就直接顶到 XL
+          # 这个标签衡量的是「需要人肉 review 的实现改动有多大」，所以下面几类都不计入：
+          #   1. 构建产物和锁文件 —— 不然一次 pnpm install 就直接顶到 XL
+          #   2. 测试文件 —— 补测试是好事，不该让 PR 因为测试写得多就被贴成大 PR
+          # 匹配规则是 action 内部的 bash `[[ $filename == $pattern ]]`（见 src/github.sh），
+          # 注意它是普通字符串通配、不是 pathname 展开，所以 `*` 会跨 `/`：
+          # `*.test.ts` 能盖住 utils/memoryPalace/embedding.test.ts 这种嵌套路径，不用写 `**`。
           files_to_ignore: |
             "pnpm-lock.yaml"
             "public/*.bundle.js"
             "dist/*"
+            "*.test.ts"
+            "*.test.tsx"
+            "*.spec.ts"
+            "*.spec.tsx"
+            "test/*"
+            "*/test/*"
+            "tests/*"
+            "*/tests/*"
+            "__tests__/*"
+            "*/__tests__/*"
+            "test-setup.ts"
+            "vitest.config.ts"

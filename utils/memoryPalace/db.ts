@@ -241,6 +241,66 @@ export function encodeVectorsForBackup(
     return { bin, index };
 }
 
+type RawBackupVector = {
+    memoryId?: string;
+    charId?: string;
+    dimensions?: number;
+    model?: string;
+    vector?: unknown;
+};
+
+/**
+ * 低内存向量备份编码：调用方提供一个可重复执行的分批扫描器，本函数第一遍只统计总字节数
+ * 和索引，第二遍才把每批字节拷进最终 bin。这样 4500+ 条旧 number[] 向量不会与最终 bin
+ * 同时整表驻留；峰值约为「最终紧凑 bin + 一个小批次」，备份格式仍与旧版完全一致。
+ *
+ * 两遍之间若数据发生变化会中止并给出明确错误，避免生成索引与 bin 错位的损坏备份。
+ */
+export async function encodeVectorsForBackupChunked(
+    scanBatches: (onBatch: (batch: RawBackupVector[]) => void) => Promise<void>,
+): Promise<{ bin: Uint8Array; index: VectorBackupIndexEntry[] }> {
+    const index: VectorBackupIndexEntry[] = [];
+    let totalBytes = 0;
+
+    await scanBatches((batch) => {
+        const encoded = encodeVectorsForBackup(batch);
+        for (const entry of encoded.index) {
+            index.push({ ...entry, byteOffset: entry.byteOffset + totalBytes });
+        }
+        totalBytes += encoded.bin.byteLength;
+    });
+
+    const bin = new Uint8Array(totalBytes);
+    let byteCursor = 0;
+    let indexCursor = 0;
+
+    await scanBatches((batch) => {
+        const encoded = encodeVectorsForBackup(batch);
+        if (byteCursor + encoded.bin.byteLength > bin.byteLength) {
+            throw new Error('备份期间记忆向量发生变化，请等待记忆宫殿处理完成后重试。');
+        }
+        for (const entry of encoded.index) {
+            const expected = index[indexCursor++];
+            if (!expected
+                || expected.memoryId !== entry.memoryId
+                || expected.charId !== entry.charId
+                || expected.dimensions !== entry.dimensions
+                || expected.model !== entry.model
+                || expected.byteOffset !== byteCursor + entry.byteOffset
+                || expected.byteLength !== entry.byteLength) {
+                throw new Error('备份期间记忆向量发生变化，请等待记忆宫殿处理完成后重试。');
+            }
+        }
+        bin.set(encoded.bin, byteCursor);
+        byteCursor += encoded.bin.byteLength;
+    });
+
+    if (byteCursor !== totalBytes || indexCursor !== index.length) {
+        throw new Error('备份期间记忆向量发生变化，请等待记忆宫殿处理完成后重试。');
+    }
+    return { bin, index };
+}
+
 /** 编码为 IndexedDB 存储形态（Uint8Array of Float32 raw bytes） */
 function vecForStorage(vec: number[] | Float32Array | Uint8Array): Uint8Array {
     if (vec instanceof Uint8Array) return vec;

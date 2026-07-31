@@ -103,6 +103,10 @@ describe('isMedPlanDueToday 药盒频率', () => {
         expect(isMedPlanDueToday(mkPlan(), '2026-07-06')).toBe(true);
     });
 
+    it('补记日期早于计划创建日时，不把尚未存在的计划算作待服', () => {
+        expect(isMedPlanDueToday(mkPlan(), '2026-06-30')).toBe(false);
+    });
+
     it('隔天吃：锚点日起偶数天差才到期', () => {
         const p = mkPlan({ intervalDays: 2, startDate: '2026-07-01' });
         expect(isMedPlanDueToday(p, '2026-07-01')).toBe(true);

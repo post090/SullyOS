@@ -140,6 +140,58 @@ const SectionHead: React.FC<{ theme: ModuleTheme; cn: string; en?: string }> = (
     </div>
 );
 
+const RecordDateBar: React.FC<{
+    theme: ModuleTheme;
+    date: string;
+    today: string;
+    onChange: (date: string) => void;
+}> = ({ theme, date, today, onChange }) => {
+    const isToday = date === today;
+    const isYesterday = date === lifeAddDays(today, -1);
+    const label = isToday ? '今天' : isYesterday ? '昨天' : fmtCN(date);
+    return (
+        <div className="rounded-[10px] px-3.5 py-3"
+            style={{ background: theme.paper, border: `1px solid ${theme.soft}`, boxShadow: `0 8px 20px -18px ${theme.accent}66` }}>
+            <div className="flex items-center gap-2">
+                <div className="min-w-0 flex-1">
+                    <div className="text-[8px] font-semibold mb-0.5" style={{ color: theme.accent, letterSpacing: '0.28em' }}>记录日期</div>
+                    <div className="text-[12px] font-bold" style={{ color: INK, fontFamily: SERIF }}>
+                        {label}{!isToday && <span className="text-[9px] font-normal ml-1.5" style={{ color: theme.accent }}>补记模式</span>}
+                    </div>
+                </div>
+                <button type="button" aria-label="前一天" onClick={() => onChange(lifeAddDays(date, -1))}
+                    className="w-7 h-7 rounded-full text-[15px] active:scale-90 transition-transform"
+                    style={{ color: theme.accent, border: `1px solid ${theme.soft}`, background: '#ffffff88' }}>‹</button>
+                <input
+                    type="date"
+                    value={date}
+                    max={today}
+                    onChange={(event) => {
+                        const next = event.target.value;
+                        if (next) onChange(next > today ? today : next);
+                    }}
+                    className="min-w-0 w-[118px] bg-white/70 rounded-[6px] px-2 py-1.5 text-[10px] outline-none"
+                    style={{ color: INK, border: `1px solid ${theme.soft}`, fontFamily: SERIF }}
+                />
+                <button type="button" aria-label="后一天" disabled={isToday}
+                    onClick={() => onChange(lifeAddDays(date, 1) > today ? today : lifeAddDays(date, 1))}
+                    className="w-7 h-7 rounded-full text-[15px] active:scale-90 transition-transform disabled:opacity-25"
+                    style={{ color: theme.accent, border: `1px solid ${theme.soft}`, background: '#ffffff88' }}>›</button>
+            </div>
+            {!isToday && (
+                <div className="flex items-center justify-between gap-2 mt-2 pt-2" style={{ borderTop: `1px dashed ${theme.soft}` }}>
+                    <span className="text-[9px]" style={{ color: FADE, fontFamily: SERIF }}>新增内容会记到 {fmtCN(date)}</span>
+                    <button type="button" onClick={() => onChange(today)}
+                        className="text-[9px] font-bold px-2.5 py-1 rounded-full active:scale-95 transition-transform"
+                        style={{ color: theme.deep, background: `${theme.accent}12`, border: `1px solid ${theme.accent}44`, fontFamily: SERIF }}>
+                        回到今天
+                    </button>
+                </div>
+            )}
+        </div>
+    );
+};
+
 const inkInputCls = 'bg-transparent border-0 outline-none text-xs px-1 py-1.5 transition-colors placeholder:text-slate-300';
 const inkInputStyle = (theme: ModuleTheme): React.CSSProperties => ({
     borderBottom: `1px solid ${theme.soft}`, fontFamily: SERIF, color: INK, borderRadius: 0,
@@ -216,6 +268,19 @@ const LifeRecordPanel: React.FC = () => {
     const [showRestore, setShowRestore] = useState(false);
 
     const today = useLocalDateKey();
+    const [recordDate, setRecordDate] = useState(today);
+    const recordDateLabel = recordDate === today
+        ? '今日'
+        : recordDate === lifeAddDays(today, -1)
+            ? '昨日'
+            : fmtCN(recordDate);
+    const recordMonthLabel = recordDate.slice(0, 7) === today.slice(0, 7)
+        ? '本月累计'
+        : `${parseInt(recordDate.slice(0, 4), 10)}年${parseInt(recordDate.slice(5, 7), 10)}月累计`;
+
+    useEffect(() => {
+        setRecordDate(current => current > today ? today : current);
+    }, [today]);
 
     const reload = async () => {
         const [r, p, s, t] = await Promise.all([
@@ -371,11 +436,11 @@ const LifeRecordPanel: React.FC = () => {
     const [planStart, setPlanStart] = useState(today);
     const [planEnd, setPlanEnd] = useState(today);
 
-    const todayMeds = useMemo(
-        () => effectiveRecords.filter(r => r.module === 'med' && r.date === today),
-        [effectiveRecords, today],
+    const dayMeds = useMemo(
+        () => effectiveRecords.filter(r => r.module === 'med' && r.date === recordDate),
+        [effectiveRecords, recordDate],
     );
-    const duePlans = useMemo(() => plans.filter(p => isMedPlanDueToday(p, today)), [plans, today]);
+    const duePlans = useMemo(() => plans.filter(p => isMedPlanDueToday(p, recordDate)), [plans, recordDate]);
     const longtermPlans = useMemo(() => plans.filter(p => (p.planKind || 'longterm') === 'longterm'), [plans]);
     const coursePlans = useMemo(() => plans.filter(p => p.planKind === 'course'), [plans]);
 
@@ -395,7 +460,7 @@ const LifeRecordPanel: React.FC = () => {
     };
 
     const planTakenRecord = (p: MedPlan) =>
-        todayMeds.find(r => (r.payload.planId && r.payload.planId === p.id) || r.payload.name === p.name);
+        dayMeds.find(r => (r.payload.planId && r.payload.planId === p.id) || r.payload.name === p.name);
 
     const handleTogglePlanTaken = async (p: MedPlan) => {
         const taken = planTakenRecord(p);
@@ -403,8 +468,8 @@ const LifeRecordPanel: React.FC = () => {
             await DB.deleteLifeRecord(taken.id);
             await reload();
         } else {
-            await addUserRecord('med', 'taken', { name: p.name, planId: p.id, time: p.time });
-            addToast(`已打卡：${p.name}`, 'success');
+            await addUserRecord('med', 'taken', { name: p.name, planId: p.id, time: p.time }, { date: recordDate });
+            addToast(recordDate === today ? `已打卡：${p.name}` : `已补记：${fmtCN(recordDate)} ${p.name}`, 'success');
         }
     };
 
@@ -434,34 +499,34 @@ const LifeRecordPanel: React.FC = () => {
     // ─── 记账（银行同一本账） ───
     const [txAmount, setTxAmount] = useState('');
     const [txNote, setTxNote] = useState('');
-    const todayTxs = useMemo(() => txs.filter(t => t.dateStr === today), [txs, today]);
-    const todayTotal = useMemo(() => todayTxs.reduce((s, t) => s + t.amount, 0), [todayTxs]);
+    const dayTxs = useMemo(() => txs.filter(t => t.dateStr === recordDate), [txs, recordDate]);
+    const dayTotal = useMemo(() => dayTxs.reduce((s, t) => s + t.amount, 0), [dayTxs]);
     const monthTotal = useMemo(() => {
-        const monthKey = today.slice(0, 7);
+        const monthKey = recordDate.slice(0, 7);
         return txs.filter(t => (t.dateStr || '').startsWith(monthKey)).reduce((s, t) => s + t.amount, 0);
-    }, [txs, today]);
+    }, [txs, recordDate]);
 
     const handleAddTx = async () => {
         const amount = parseFloat(txAmount);
         if (isNaN(amount) || amount <= 0 || !txNote.trim()) { addToast('请填写金额和用途哦', 'error'); return; }
         await DB.saveTransaction({
             id: newId('tx-life'), amount, category: 'general',
-            note: txNote.trim(), timestamp: Date.now(), dateStr: today,
+            note: txNote.trim(), timestamp: Date.now(), dateStr: recordDate,
         });
         setTxAmount(''); setTxNote('');
         await reload();
-        addToast('记账成功', 'success');
+        addToast(recordDate === today ? '记账成功' : `已补记到 ${fmtCN(recordDate)}`, 'success');
     };
 
     // ─── 锻炼 ───
     const [exActivity, setExActivity] = useState('');
     const [exDuration, setExDuration] = useState('');
     const exerciseRecords = useMemo(() => effectiveRecords.filter(r => r.module === 'exercise'), [effectiveRecords]);
-    const todayExercise = useMemo(() => exerciseRecords.filter(r => r.date === today), [exerciseRecords, today]);
-    const weekStart = useMemo(() => weekStartOf(today), [today]);
+    const weekStart = useMemo(() => weekStartOf(recordDate), [recordDate]);
+    const weekEnd = useMemo(() => lifeAddDays(weekStart, 6), [weekStart]);
     const weekSessions = useMemo(
-        () => exerciseRecords.filter(r => r.date >= weekStart && r.date <= today).length,
-        [exerciseRecords, weekStart, today],
+        () => exerciseRecords.filter(r => r.date >= weekStart && r.date <= weekEnd).length,
+        [exerciseRecords, weekStart, weekEnd],
     );
     const weekGoal = settings?.exerciseWeeklyGoal || 0;
     const weekDots = useMemo(() => {
@@ -478,9 +543,9 @@ const LifeRecordPanel: React.FC = () => {
         await addUserRecord('exercise', 'session', {
             activity: exActivity.trim(),
             ...(exDuration.trim() ? { duration: exDuration.trim() } : {}),
-        });
+        }, { date: recordDate });
         setExActivity(''); setExDuration('');
-        addToast('已记录锻炼', 'success');
+        addToast(recordDate === today ? '已记录锻炼' : `已补记：${fmtCN(recordDate)} 锻炼`, 'success');
     };
 
     if (!loaded) return <div className="py-16 text-center text-xs text-slate-300" style={{ fontFamily: SERIF }}>翻开记事簿…</div>;
@@ -505,6 +570,15 @@ const LifeRecordPanel: React.FC = () => {
                         />
                     ))}
                 </div>
+            )}
+
+            {tab !== 'period' && visibleModules.includes(tab) && (
+                <RecordDateBar
+                    theme={THEMES[tab]}
+                    date={recordDate}
+                    today={today}
+                    onChange={setRecordDate}
+                />
             )}
 
             {visibleModules.length === 0 && (
@@ -662,10 +736,10 @@ const LifeRecordPanel: React.FC = () => {
             {tab === 'med' && visibleModules.includes('med') && (
                 <>
                     <LabelCard theme={THEMES.med}>
-                        <SectionHead theme={THEMES.med} cn="今日待服" en="PHARMACY · TODAY" />
+                        <SectionHead theme={THEMES.med} cn={`${recordDateLabel}待服`} en={`PHARMACY · ${recordDate === today ? 'TODAY' : recordDate}`} />
                         {duePlans.length === 0 ? (
                             <p className="text-[11px] text-center py-3" style={{ color: FADE, fontFamily: SERIF }}>
-                                {plans.filter(p => p.enabled).length === 0 ? '药盒还是空的——先在下面放一样进去' : '按频率，今天不用吃药 ❧'}
+                                {plans.filter(p => p.enabled).length === 0 ? '药盒还是空的——先在下面放一样进去' : `按频率，${recordDate === today ? '今天' : '这一天'}不用吃药 ❧`}
                             </p>
                         ) : (
                             <div className="space-y-2">
@@ -704,10 +778,10 @@ const LifeRecordPanel: React.FC = () => {
                                 })}
                             </div>
                         )}
-                        {todayMeds.filter(r => !r.payload.planId).length > 0 && (
+                        {dayMeds.filter(r => !r.payload.planId).length > 0 && (
                             <div className="mt-3 pt-3" style={{ borderTop: `1px dashed ${THEMES.med.soft}` }}>
                                 <div className="text-[9px] mb-1.5" style={{ color: FADE, letterSpacing: '0.2em' }}>计划之外</div>
-                                {todayMeds.filter(r => !r.payload.planId).map(r => (
+                                {dayMeds.filter(r => !r.payload.planId).map(r => (
                                     <div key={r.id} className="flex items-center justify-between text-[11px] py-1" style={{ fontFamily: SERIF }}>
                                         <span style={{ color: INK }}>{r.payload.name}<span className="text-[9px]" style={{ color: FAINT }}>{recordedByLabel(r)}</span></span>
                                         <button onClick={() => removeRecord(r)} className="px-1.5 text-slate-300 hover:text-rose-400">✕</button>
@@ -793,14 +867,14 @@ const LifeRecordPanel: React.FC = () => {
                         <SectionHead theme={THEMES.expense} cn="记账" en="LEDGER" />
                         <div className="flex items-stretch px-1">
                             <div className="flex-1">
-                                <div className="text-[9px] mb-0.5" style={{ color: FADE, letterSpacing: '0.25em' }}>今日支出</div>
+                                <div className="text-[9px] mb-0.5" style={{ color: FADE, letterSpacing: '0.25em' }}>{recordDateLabel}支出</div>
                                 <div style={{ fontFamily: SERIF, color: THEMES.expense.accent }}>
-                                    <span className="text-[34px] font-bold leading-none tabular-nums">{todayTotal}</span>
+                                    <span className="text-[34px] font-bold leading-none tabular-nums">{dayTotal}</span>
                                 </div>
                             </div>
                             <span className="w-px mx-3" style={{ background: THEMES.expense.soft }} />
                             <div className="text-right flex flex-col justify-end pb-1">
-                                <div className="text-[9px] mb-0.5" style={{ color: FADE, letterSpacing: '0.25em' }}>本月累计</div>
+                                <div className="text-[9px] mb-0.5" style={{ color: FADE, letterSpacing: '0.16em' }}>{recordMonthLabel}</div>
                                 <div className="text-sm font-bold tabular-nums" style={{ fontFamily: SERIF, color: INK }}>{monthTotal}</div>
                             </div>
                         </div>
@@ -821,14 +895,14 @@ const LifeRecordPanel: React.FC = () => {
                     </LedgerCard>
 
                     <LedgerCard theme={THEMES.expense}>
-                        <SectionHead theme={THEMES.expense} cn="今日流水" en="ENTRIES" />
-                        {todayTxs.length === 0 ? (
+                        <SectionHead theme={THEMES.expense} cn={`${recordDateLabel}流水`} en="ENTRIES" />
+                        {dayTxs.length === 0 ? (
                             <p className="text-[11px] text-center py-4" style={{ color: FADE, fontFamily: SERIF }}>
-                                今日账面清白 ❧
+                                {recordDate === today ? '今日' : '当日'}账面清白 ❧
                             </p>
                         ) : (
                             <div>
-                                {todayTxs.map(t => (
+                                {dayTxs.map(t => (
                                     <div key={t.id} className="flex items-center gap-2 py-2 text-[11px]"
                                         style={{ fontFamily: SERIF, borderBottom: `1px dashed ${THEMES.expense.soft}` }}>
                                         <span className="flex-1 truncate" style={{ color: INK }}>{t.note || '未备注'}</span>
@@ -876,7 +950,7 @@ const LifeRecordPanel: React.FC = () => {
                         {/* 本周进度 */}
                         <div className="mt-3">
                             <div className="flex items-center justify-between text-[10px] mb-1.5" style={{ fontFamily: SERIF }}>
-                                <span style={{ color: FADE }}>本周进度（周一起）</span>
+                                <span style={{ color: FADE }}>{recordDate === today ? '本周进度' : `${fmtCN(recordDate)}所在周`}（周一起）</span>
                                 <span style={{ color: THEMES.exercise.deep, fontWeight: 700 }}>
                                     {weekSessions}{weekGoal > 0 ? ` / ${weekGoal} 次` : ' 次'}{weekGoal > 0 && weekSessions >= weekGoal ? ' · 已达标 ✓' : ''}
                                 </span>
@@ -894,8 +968,8 @@ const LifeRecordPanel: React.FC = () => {
                                             style={d.done
                                                 ? { background: THEMES.exercise.accent, boxShadow: `0 2px 6px -2px ${THEMES.exercise.accent}` }
                                                 : { border: `1px solid ${THEMES.exercise.soft}`, background: d.future ? 'transparent' : '#ffffff90', opacity: d.future ? 0.4 : 1 }} />
-                                        <span className="text-[8px]" style={{ color: d.date === today ? THEMES.exercise.accent : FAINT, fontFamily: SERIF }}>
-                                            {d.date === today ? '今' : d.label}
+                                        <span className="text-[8px]" style={{ color: d.date === recordDate || d.date === today ? THEMES.exercise.accent : FAINT, fontFamily: SERIF }}>
+                                            {d.date === recordDate ? (d.date === today ? '今' : '选') : d.date === today ? '今' : d.label}
                                         </span>
                                     </div>
                                 ))}
@@ -904,7 +978,7 @@ const LifeRecordPanel: React.FC = () => {
                     </TicketCard>
 
                     <TicketCard theme={THEMES.exercise}>
-                        <SectionHead theme={THEMES.exercise} cn="今日打卡" en="CHECK-IN" />
+                        <SectionHead theme={THEMES.exercise} cn={`${recordDateLabel}打卡`} en={`CHECK-IN · ${recordDate === today ? 'TODAY' : recordDate}`} />
                         <div className="flex items-end gap-2.5">
                             <input value={exActivity} onChange={e => setExActivity(e.target.value)} placeholder="项目（跑步 / 瑜伽…）"
                                 className={`flex-1 min-w-0 ${inkInputCls}`} style={inkInputStyle(THEMES.exercise)} />

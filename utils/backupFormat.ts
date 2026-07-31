@@ -55,7 +55,11 @@ export interface BackupManifest {
 
 /** 写端：往 zip 里塞文本文件，或二进制（Uint8Array）文件。二进制直写，绝不经 base64 大字符串。 */
 export interface ZipFileWriter {
-    file(name: string, data: string | Uint8Array, options?: { base64?: boolean }): void;
+    file(name: string, data: string | Uint8Array, options?: {
+        base64?: boolean;
+        compression?: 'STORE' | 'DEFLATE';
+        compressionOptions?: { level?: number };
+    }): void;
 }
 
 /** 读端：按名取文件，能按类型 async 出文本或字节；取不到返回 null */
@@ -86,6 +90,96 @@ export interface WriteV2Options {
      *  写进 memory_vectors.bin（二进制直写）+ .index.json，并在 manifest.vectors 记 count/byteLength。
      *  传了这个就不要再把 memoryVectors 放进 backupData（否则会被当普通数组又分片一遍）。 */
     vectors?: { bin: Uint8Array; index: VectorIndexEntry[] };
+    /**
+     * 已由调用方增量写进 zip 的数组字段。大数据量导出可用 createV2ArrayFieldWriter 一批批写，
+     * 不必先把整个 store 攒进 backupData；writeV2Backup 收尾时会把这些统计合进 manifest。
+     */
+    prewrittenStores?: Record<string, { parts: number; count: number }>;
+}
+
+export interface V2ArrayFieldWriter {
+    /** 同步追加，供单个 IndexedDB 游标事务内使用；不能在事务回调里 await。 */
+    appendSync(items: any[]): void;
+    /** 追加一批记录；调用返回后，调用方即可释放这批原始对象。 */
+    append(items: any[]): Promise<void>;
+    /** 冲掉最后不足一片的缓冲并返回 manifest 统计；每个 writer 只能 finish 一次。 */
+    finish(): Promise<{ parts: number; count: number }>;
+}
+
+/**
+ * 增量数组分片写入器。与 writeV2Backup 的普通数组路径使用同一套序列化/阈值规则，
+ * 但允许调用方从 IndexedDB 游标分批喂数据，峰值内存只与单批和单片大小有关。
+ */
+export function createV2ArrayFieldWriter(
+    zip: ZipFileWriter,
+    field: string,
+    options: Pick<WriteV2Options, 'limits' | 'onYield'> = {},
+): V2ArrayFieldWriter {
+    const limits = options.limits || DEFAULT_SHARD_LIMITS;
+    const onYield = options.onYield;
+    let buf: string[] = [];
+    let bufLen = 0;
+    let parts = 0;
+    let writtenCount = 0;
+    let inputIndex = 0;
+    let finished = false;
+
+    const flush = () => {
+        if (buf.length === 0) return;
+        zip.file(shardFileName(field, parts), '[' + buf.join(',') + ']');
+        parts++;
+        buf = [];
+        bufLen = 0;
+    };
+
+    const pushOne = (item: any): number => {
+        if (finished) throw new Error(`备份分片 ${field} 已结束，不能继续写入。`);
+        let s: string;
+        try {
+            s = JSON.stringify(item);
+        } catch (e: any) {
+            throw new Error(`备份序列化失败（${field} 第 ${inputIndex} 条）：${e?.message || e}`);
+        }
+        inputIndex++;
+        // JSON.stringify(undefined) === undefined；与旧 v1 JSON 语义一致地跳过空洞。
+        if (s === undefined) return 0;
+        if (s.length > limits.hardMaxLen) {
+            throw new Error(
+                `备份中有单条记录过大（${field}，约 ${Math.round(s.length / 1048576)}M 字符），` +
+                `超出安全上限，已中止导出以免生成损坏的备份包。`,
+            );
+        }
+        let flushes = 0;
+        // 单条超过软上限时让它独占一片，避免与前一批记录粘成更大的临时字符串。
+        if (s.length >= limits.maxLen && buf.length > 0) { flush(); flushes++; }
+        buf.push(s);
+        bufLen += s.length;
+        writtenCount++;
+        if (bufLen >= limits.maxLen || buf.length >= limits.maxItems) { flush(); flushes++; }
+        return flushes;
+    };
+
+    const appendSync = (items: any[]) => {
+        for (const item of items) pushOne(item);
+    };
+
+    const append = async (items: any[]) => {
+        for (const item of items) {
+            const flushes = pushOne(item);
+            if (flushes > 0 && onYield) await onYield();
+        }
+    };
+
+    const finish = async () => {
+        if (finished) throw new Error(`备份分片 ${field} 被重复结束。`);
+        const hadBufferedItems = buf.length > 0;
+        flush();
+        if (hadBufferedItems && onYield) await onYield();
+        finished = true;
+        return { parts, count: writtenCount };
+    };
+
+    return { appendSync, append, finish };
 }
 
 /**
@@ -101,50 +195,19 @@ export async function writeV2Backup(
 ): Promise<BackupManifest> {
     const limits = options.limits || DEFAULT_SHARD_LIMITS;
     const onYield = options.onYield;
-    const manifestStores: Record<string, { parts: number; count: number }> = {};
+    const manifestStores: Record<string, { parts: number; count: number }> = {
+        ...(options.prewrittenStores || {}),
+    };
 
     const shardArrayField = async (field: string, arr: any[]) => {
-        let buf: string[] = [];
-        let bufLen = 0;
-        let parts = 0;
-        let writtenCount = 0; // 实际写进分片的条数：可能 < arr.length（下面会跳过序列化成 undefined 的空洞）
-        const flush = () => {
-            if (buf.length === 0) return;
-            zip.file(shardFileName(field, parts), '[' + buf.join(',') + ']');
-            parts++;
-            buf = [];
-            bufLen = 0;
-        };
-        for (let i = 0; i < arr.length; i++) {
-            let s: string;
-            try {
-                s = JSON.stringify(arr[i]);
-            } catch (e: any) {
-                throw new Error(`备份序列化失败（${field} 第 ${i} 条）：${e?.message || e}`);
-            }
-            // JSON.stringify(undefined) === undefined；跳过空洞（putItems 释放后的占位等不会进这里，
-            // 但 backupData 的稀疏数组保险起见跳过），保持与 v1「JSON 丢弃 undefined」一致。
-            if (s === undefined) continue;
-            if (s.length > limits.hardMaxLen) {
-                throw new Error(
-                    `备份中有单条记录过大（${field}，约 ${Math.round(s.length / 1048576)}M 字符），` +
-                    `超出安全上限，已中止导出以免生成损坏的备份包。`,
-                );
-            }
-            // 单条就超软上限：先把已攒的 flush 掉，让这条独占一片（Finding 5）
-            if (s.length >= limits.maxLen && buf.length > 0) flush();
-            buf.push(s);
-            bufLen += s.length;
-            writtenCount++;
-            if (bufLen >= limits.maxLen || buf.length >= limits.maxItems) {
-                flush();
-                if (onYield) await onYield();
-            }
+        if (Object.prototype.hasOwnProperty.call(manifestStores, field)) {
+            throw new Error(`备份字段 ${field} 同时走了增量写入和普通写入，已中止以免生成重复分片。`);
         }
-        flush();
-        // count 用「实际写入条数」而非 arr.length：上面跳过了序列化成 undefined 的空洞，若仍按
-        // arr.length 记，导入端「拼出条数 === count」自洽校验会对一个本来合法的备份误判损坏 abort。
-        manifestStores[field] = { parts, count: writtenCount };
+        const writer = createV2ArrayFieldWriter(zip, field, { limits, onYield });
+        await writer.append(arr);
+        // count 用「实际写入条数」而非 arr.length：writer 会跳过 JSON.stringify(undefined)
+        // 得到的空洞，避免导入端「拼出条数 === count」校验误判损坏。
+        manifestStores[field] = await writer.finish();
     };
 
     // 一遍扫 backupData：数组字段分片（写完释放），其余非数组字段进 metadata。
@@ -165,7 +228,9 @@ export async function writeV2Backup(
     // index 是小 JSON。manifest.vectors 记 count/byteLength 供导入端校验。
     let vectorsMeta: { count: number; byteLength: number } | undefined;
     if (options.vectors) {
-        zip.file(VECTOR_BIN_FILE, options.vectors.bin);
+        // embedding 浮点字节近似随机数据，DEFLATE 几乎压不小，却会在手机上消耗大量 CPU/内存。
+        // 直接 STORE 保持字节无损，索引和其它 JSON 仍走外层压缩。
+        zip.file(VECTOR_BIN_FILE, options.vectors.bin, { compression: 'STORE' });
         zip.file(VECTOR_INDEX_FILE, JSON.stringify(options.vectors.index));
         vectorsMeta = { count: options.vectors.index.length, byteLength: options.vectors.bin.byteLength };
     }

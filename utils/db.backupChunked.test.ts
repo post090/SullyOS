@@ -85,3 +85,51 @@ describe('getStoreDataChunked（游标分批读）', () => {
         ).resolves.toBeUndefined();
     });
 });
+
+describe('streamRawStoreData（单事务逐条读）', () => {
+    it('结果与 getAll 完全一致，并保持主键顺序', async () => {
+        await seedGallery([9, 2, 7, 1].map(id => ({ id, url: `img_${id}` })));
+        const expected = await DB.getRawStoreData('gallery');
+        const actual: any[] = [];
+        await DB.streamRawStoreData('gallery', item => actual.push(item));
+        expect(actual).toEqual(expected);
+        expect(actual.map(item => item.id)).toEqual([1, 2, 7, 9]);
+    });
+
+    it('扫描期间发起的写事务会等快照读完，新记录不会混进本次导出', async () => {
+        await seedGallery(Array.from({ length: 20 }, (_, i) => ({ id: i + 1, url: `u${i}` })));
+        const seen: number[] = [];
+        let queuedWrite: Promise<void> | undefined;
+        await DB.streamRawStoreData('gallery', (item) => {
+            seen.push(item.id);
+            if (!queuedWrite) {
+                queuedWrite = (async () => {
+                    const db = await openDB();
+                    await new Promise<void>((resolve, reject) => {
+                        const tx = db.transaction('gallery', 'readwrite');
+                        tx.objectStore('gallery').put({ id: 999, url: 'late' });
+                        tx.oncomplete = () => resolve();
+                        tx.onerror = () => reject(tx.error);
+                    });
+                })();
+            }
+        });
+        await queuedWrite;
+
+        expect(seen).toEqual(Array.from({ length: 20 }, (_, i) => i + 1));
+        expect((await DB.getRawStoreData('gallery')).map(item => item.id)).toContain(999);
+    });
+
+    it('同步消费回调报错会中止事务并把原错误抛回调用方', async () => {
+        await seedGallery([{ id: 1 }, { id: 2 }]);
+        await expect(DB.streamRawStoreData('gallery', item => {
+            if (item.id === 2) throw new Error('serialize failed');
+        })).rejects.toThrow('serialize failed');
+    });
+
+    it('store 不存在时直接返回', async () => {
+        await expect(DB.streamRawStoreData('__nonexistent_store__', () => {
+            throw new Error('不该被调用');
+        })).resolves.toBeUndefined();
+    });
+});

@@ -433,6 +433,9 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       saveLocalAlbum(next);
       return next;
     });
+    // Keep the queue object in sync too. MusicApp downloads from `current`,
+    // so a stale queue entry would otherwise keep the pre-regeneration asset key.
+    setQueueState(prev => prev.map(item => item.id === song.id ? song : item));
   }, []);
   const removeLocalSong = useCallback((songId: number) => {
     setLocalAlbumSongs(prev => {

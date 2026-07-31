@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import JSZip from 'jszip';
 import {
-    writeV2Backup, assembleV2Backup, shardFileName,
+    createV2ArrayFieldWriter, writeV2Backup, assembleV2Backup, shardFileName,
     BACKUP_FORMAT_VERSION, type BackupManifest, type ShardLimits,
 } from './backupFormat';
 
@@ -25,14 +25,32 @@ class FakeFile {
 }
 class FakeZip {
     files = new Map<string, string | Uint8Array>();
+    fileOptions = new Map<string, {
+        base64?: boolean;
+        compression?: 'STORE' | 'DEFLATE';
+        compressionOptions?: { level?: number };
+    } | undefined>();
     file(name: string): FakeFile | null;
-    file(name: string, data: string | Uint8Array, options?: { base64?: boolean }): void;
-    file(name: string, data?: string | Uint8Array): FakeFile | null | void {
+    file(name: string, data: string | Uint8Array, options?: {
+        base64?: boolean;
+        compression?: 'STORE' | 'DEFLATE';
+        compressionOptions?: { level?: number };
+    }): void;
+    file(
+        name: string,
+        data?: string | Uint8Array,
+        options?: {
+            base64?: boolean;
+            compression?: 'STORE' | 'DEFLATE';
+            compressionOptions?: { level?: number };
+        },
+    ): FakeFile | null | void {
         if (data === undefined) {
             if (!this.files.has(name)) return null;
             return new FakeFile(this.files.get(name)!);
         }
         this.files.set(name, data);
+        this.fileOptions.set(name, options);
     }
 }
 
@@ -91,6 +109,39 @@ describe('backupFormat v2 往返', () => {
 
         const data = await assembleV2Backup(zip, manifest);
         expect(data.messages).toEqual(messages); // 顺序 + 内容完全一致
+    });
+
+    it('游标批次可增量写入同一字段，收尾 manifest 能完整往返且无需整表数组', async () => {
+        const zip = new FakeZip();
+        const limits: ShardLimits = { maxLen: 1 << 30, maxItems: 3, hardMaxLen: 1 << 30 };
+        const writer = createV2ArrayFieldWriter(zip, 'messages', { limits });
+        await writer.append([{ id: 1 }, { id: 2 }]);
+        await writer.append([{ id: 3 }, undefined, { id: 4 }]);
+        await writer.append([{ id: 5 }]);
+        const messagesMeta = await writer.finish();
+
+        expect(messagesMeta).toEqual({ parts: 2, count: 5 });
+        const manifest = await writeV2Backup(
+            zip,
+            { timestamp: 123, theme: { name: 'low-memory' } },
+            { prewrittenStores: { messages: messagesMeta } },
+        );
+        const data = await assembleV2Backup(zip, manifest);
+        expect(data.messages).toEqual([{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }, { id: 5 }]);
+        expect(data.theme).toEqual({ name: 'low-memory' });
+    });
+
+    it('同一字段不能同时走增量写入与普通数组写入，避免重复分片', async () => {
+        const zip = new FakeZip();
+        const writer = createV2ArrayFieldWriter(zip, 'messages');
+        await writer.append([{ id: 1 }]);
+        const messagesMeta = await writer.finish();
+
+        await expect(writeV2Backup(
+            zip,
+            { messages: [{ id: 2 }] },
+            { prewrittenStores: { messages: messagesMeta } },
+        )).rejects.toThrow(/同时走了增量写入和普通写入/);
     });
 
     it('单条超软上限：该条独占一片（Finding 5），仍能完整往返', async () => {
@@ -193,6 +244,7 @@ describe('backupFormat v2 向量二进制旁路', () => {
         ]);
         const manifest = await writeV2Backup(zip, { memoryNodes: [{ id: 'm1' }] }, { vectors: payload });
         expect(manifest.vectors).toEqual({ count: 3, byteLength: 3 * 4 * 4 });
+        expect(zip.fileOptions.get('stores/memory_vectors.bin')).toMatchObject({ compression: 'STORE' });
         // 向量不进 stores（走旁路）
         expect(manifest.stores.memoryVectors).toBeUndefined();
 

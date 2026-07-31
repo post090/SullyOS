@@ -355,6 +355,16 @@ const CheckPhone: React.FC = () => {
     const customApps = targetChar?.phoneState?.customApps || [];
     const contacts = targetChar?.phoneState?.contacts || [];
     const allowFictional = targetChar?.phoneState?.allowFictionalContacts !== false;
+    // Keep the contact-chat scroll effect tied to this conversation's actual
+    // content. `records` is normalized into a fresh array on every render, so
+    // depending on the array itself makes unrelated renders snap the user back
+    // to the bottom while they are reading older messages.
+    const selectedContactRecordDetail = selectedContact
+        ? records.find(r => r.type === 'chat' && (
+            r.contactId === selectedContact.id
+            || normName(r.title) === normName(selectedContact.name)
+        ))?.detail
+        : undefined;
     // 智能体 App：偷看到的 AI 会话 / 角色卡
     const aiSessions = targetChar?.phoneState?.aiAgent?.sessions || [];
     const aiCards = targetChar?.phoneState?.aiAgent?.cards || [];
@@ -417,7 +427,7 @@ const CheckPhone: React.FC = () => {
             const container = contactEndRef.current.parentElement;
             if (container) container.scrollTop = container.scrollHeight;
         }
-    }, [activeAppId, selectedContact?.id, records, isLoading]);
+    }, [activeAppId, selectedContact?.id, selectedContactRecordDetail, isLoading]);
 
     // 智能体会话：续写 / 进入时滚到底
     useEffect(() => {
