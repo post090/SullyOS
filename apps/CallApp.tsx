@@ -1573,7 +1573,7 @@ const CallApp: React.FC = () => {
                   className="w-full flex items-center justify-between bg-slate-50 rounded-2xl px-4 py-3 active:scale-[0.98] transition-transform">
                   <div className="text-left">
                     <div className="text-xs font-bold text-slate-700">关闭角色语音播放</div>
-                    <div className="text-[10px] text-slate-400 mt-0.5">只看文字、不放声音；通话里还能用「外放」临时切回来</div>
+                    <div className="text-[10px] text-slate-400 mt-0.5">只看文字，<b>不生成语音</b>（不发合成请求，省 token/流量）；通话里还能用「外放」临时切回来</div>
                   </div>
                   <div className={`w-11 h-6 rounded-full p-0.5 transition-colors shrink-0 ${callSettings.mutePlayback ? 'bg-violet-500' : 'bg-slate-300'}`}>
                     <div className={`w-5 h-5 bg-white rounded-full shadow transition-transform ${callSettings.mutePlayback ? 'translate-x-5' : ''}`} />

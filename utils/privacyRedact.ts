@@ -74,7 +74,7 @@ const RULES: RedactRule[] = [
  * @param opts.realNames 需要替换的真实姓名列表（如用户姓名）；空串/单字忽略，防止误伤
  * @param opts.nameMode 姓名档位：fixed=固定「候选人」（默认）/ pinyin=拼音缩写 / off=真名不替换
  */
-export function redactPrivacy(raw: string, opts: { realNames?: string[]; nameMode?: NameRedactMode; redactPii?: boolean; customTerms?: string[]; customTermMode?: 'hide' | 'initial' } = {}): RedactResult {
+export function redactPrivacy(raw: string, opts: { realNames?: string[]; nameMode?: NameRedactMode; redactPii?: boolean; customTerms?: string[]; customTermMode?: 'hide' | 'initial' | 'pinyin' } = {}): RedactResult {
     let text = raw;
     const hits: RedactHit[] = [];
 
@@ -115,7 +115,11 @@ export function redactPrivacy(raw: string, opts: { realNames?: string[]; nameMod
         for (const term of terms) {
             if (!text.includes(term)) continue;
             customCount += text.split(term).length - 1;
-            const replacement = mode === 'initial' ? `${Array.from(term)[0]}**` : '[已隐藏]';
+            const replacement = mode === 'initial'
+                ? `${Array.from(term)[0]}**`
+                : mode === 'pinyin'
+                    ? (pinyinAbbr(term, false) || '[已隐藏]')
+                    : '[已隐藏]';
             text = text.split(term).join(replacement);
         }
         if (customCount > 0) hits.push({ label: '自定义词', count: customCount });

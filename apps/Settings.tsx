@@ -2430,6 +2430,11 @@ const Settings: React.FC = () => {
                             {localSttProvider === 'cloud' && (
                                 <>
                                     <div>
+                                        <label className="text-[9px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1 block">API Key（硅基流动只需填这个）</label>
+                                        <input type="text" spellCheck={false} value={localSttKey} onChange={(e) => setLocalSttKey(e.target.value)} placeholder="sk-… 填了就能用" className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-4 py-2.5 text-sm font-mono focus:bg-white transition-all" />
+                                        <p className="text-[10px] text-slate-400 mt-1 pl-1">🆓 用硅基流动就只填这一个 Key，<b>站点和模型都不用管</b>（默认走 SenseVoice 免费版）。用别的服务再在下面选站/改模型。</p>
+                                    </div>
+                                    <div>
                                         <label className="text-[9px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1 block">API 站（选了自动填 URL+Key）</label>
                                         <GlassSelect compact
                                             value={stations.find(s => s.key === stationKey(localSttBaseUrl, localSttKey))?.key || ''}

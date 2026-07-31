@@ -106,9 +106,13 @@ export function buildPositionPromptLine(p: JobPosition, allPositions: JobPositio
     }
     const wd = waitingDays(p);
     if (wd) parts.push(`等反馈第 ${wd} 天`);
-    if (p.projectName) parts.push(`项目：${p.projectName}`);
-    if (p.location) parts.push(`地点：${p.location}`);
-    if (p.nextStep) parts.push(`下一步：${p.nextStep}`);
+    if (p.projectName) parts.push(`项目：${codifyCompanies(p.projectName, allPositions)}`);
+    if (p.location) parts.push(`地点：${codifyCompanies(p.location, allPositions)}`);
+    if (p.nextStep) {
+        // 下一步多为自由文本（可能写真实公司名/人名），同 JD/笔记一样先脱敏再代号化
+        const ns = codifyCompanies(redactPrivacy(p.nextStep).text, allPositions).replace(/\s+/g, ' ').trim();
+        parts.push(`下一步：${ns}`);
+    }
     const jd = jdDigestForPrompt(p, allPositions);
     if (jd) parts.push(`JD 摘要：${jd}`);
     const notes = (p.notes || '').trim();

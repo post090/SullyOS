@@ -40,6 +40,7 @@ type PdfJsLike = {
 };
 type MammothLike = {
     extractRawText: (input: { arrayBuffer: ArrayBuffer }) => Promise<{ value: string }>;
+    convertToHtml: (input: { arrayBuffer: ArrayBuffer }) => Promise<{ value: string }>;
 };
 
 let pdfjsPromise: Promise<PdfJsLike> | null = null;
@@ -85,6 +86,55 @@ const loadMammoth = async (): Promise<MammothLike> => {
         });
     }
     return mammothPromise;
+};
+
+// ─── 简历提取结构化（离线确定性，不联网不花 token）───
+// 旧版直接 items.map(str).join(' ') 把整页拼成一大块，换行/分段/条目全丢。
+// 用 pdfjs 每个 text item 的 hasEOL（行尾标记）重建换行；同行内只在两侧都是
+// ASCII 字母/数字时补空格（避免给中文插入多余空格）。
+const buildPdfPageText = (items: any[]): string => {
+    const lines: string[] = [];
+    let cur = '';
+    for (const it of items) {
+        const s = typeof it?.str === 'string' ? it.str : '';
+        if (s) {
+            if (cur && /[A-Za-z0-9]$/.test(cur) && /^[A-Za-z0-9]/.test(s)) cur += ' ';
+            cur += s;
+        }
+        if (it?.hasEOL) { lines.push(cur); cur = ''; }
+    }
+    if (cur) lines.push(cur);
+    return lines.join('\n');
+};
+
+// 整理提取文本：行内多空白折叠、行首项目符号归一成 markdown 列表、连续空行压一行。
+const tidyExtractedText = (raw: string): string => {
+    const lines = raw.split(/\r?\n/).map(l => l.replace(/[ \t]+/g, ' ').trim());
+    const out: string[] = [];
+    for (const l of lines) {
+        if (!l) { if (out.length && out[out.length - 1] !== '') out.push(''); continue; }
+        const m = l.match(/^[•·▪‣◦\-*]\s*(.+)/);
+        out.push(m ? `- ${m[1]}` : l);
+    }
+    while (out.length && out[0] === '') out.shift();
+    while (out.length && out[out.length - 1] === '') out.pop();
+    return out.join('\n');
+};
+
+// DOCX 结构（标题/列表/加粗）→ 轻量 markdown；先行内后块级，最后去残余标签+解码实体。
+const htmlToMarkdown = (html: string): string => {
+    let s = html;
+    s = s.replace(/<(strong|b)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_m, _t, c) => `**${c}**`);
+    s = s.replace(/<(em|i)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_m, _t, c) => `*${c}*`);
+    s = s.replace(/<h1\b[^>]*>([\s\S]*?)<\/h1>/gi, (_m, c) => `\n# ${c}\n`);
+    s = s.replace(/<h2\b[^>]*>([\s\S]*?)<\/h2>/gi, (_m, c) => `\n## ${c}\n`);
+    s = s.replace(/<h3\b[^>]*>([\s\S]*?)<\/h3>/gi, (_m, c) => `\n### ${c}\n`);
+    s = s.replace(/<li\b[^>]*>([\s\S]*?)<\/li>/gi, (_m, c) => `\n- ${c}`);
+    s = s.replace(/<\/(p|div|tr|ul|ol|table|h4|h5|h6)>/gi, '\n');
+    s = s.replace(/<br\s*\/?>/gi, '\n');
+    s = s.replace(/<[^>]+>/g, '');
+    s = s.replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&quot;/gi, '"').replace(/&#39;/gi, "'");
+    return tidyExtractedText(s);
 };
 
 // ─── 轻量 Markdown 渲染（文档流用；无公式需求，不拉 KaTeX）───────
@@ -268,8 +318,9 @@ const JobHuntApp: React.FC = () => {
     const [impPii, setImpPii] = useState(true);
     const [impName, setImpName] = useState(true);
     const [impNameMode, setImpNameMode] = useState<NameRedactMode>('fixed');
+    const [impCustom, setImpCustom] = useState(true); // 公司/学校/项目名打码总开关（默认开）
     const [impCustomTerms, setImpCustomTerms] = useState('');
-    const [impCustomMode, setImpCustomMode] = useState<'hide' | 'initial'>('hide');
+    const [impCustomMode, setImpCustomMode] = useState<'hide' | 'initial' | 'pinyin'>('hide');
     // 脱敏预览 · 可编辑正文 + Markdown 渲染/编辑态切换
     const [previewEditText, setPreviewEditText] = useState('');
     const [previewMdMode, setPreviewMdMode] = useState(false);
@@ -988,6 +1039,7 @@ const JobHuntApp: React.FC = () => {
         setImpPii(true);
         setImpName(true);
         setImpNameMode(jhSettings.redactMode.name);
+        setImpCustom(true);
         setImpCustomTerms('');
         setImpCustomMode('hide');
         setPendingImport(pending);
@@ -1010,19 +1062,25 @@ const JobHuntApp: React.FC = () => {
                 for (let i = 1; i <= pageCount; i++) {
                     const page = await pdf.getPage(i);
                     const content = await page.getTextContent();
-                    parts.push(content.items.map((it: any) => it.str).join(' '));
+                    parts.push(buildPdfPageText(content.items));
                 }
-                text = parts.join('\u000a');
+                text = tidyExtractedText(parts.join('\n\n'));
                 if (text.replace(/\s/g, '').length < 50) throw new Error('这份 PDF 像是扫描件，提取不到文字，换个文本版试试');
             } else if (ext === 'docx') {
                 format = 'docx';
                 const mammoth = await loadMammoth();
                 const buf = await file.arrayBuffer();
-                const result = await mammoth.extractRawText({ arrayBuffer: buf });
-                text = result.value || '';
+                // 优先 convertToHtml 保留标题/列表/加粗结构→ markdown；失败则回退纯文本
+                try {
+                    const html = (await mammoth.convertToHtml({ arrayBuffer: buf })).value || '';
+                    const md = htmlToMarkdown(html);
+                    text = md.trim() || tidyExtractedText((await mammoth.extractRawText({ arrayBuffer: buf })).value || '');
+                } catch {
+                    text = tidyExtractedText((await mammoth.extractRawText({ arrayBuffer: buf })).value || '');
+                }
             } else {
                 format = 'txt';
-                text = await file.text();
+                text = tidyExtractedText(await file.text());
             }
             if (!text.trim()) throw new Error('没提取到内容');
             openImportOptions({ name, format, rawText: text });
@@ -1050,7 +1108,7 @@ const JobHuntApp: React.FC = () => {
     // 生成脱敏预览：按打码选项跑 redactPrivacy，进入可编辑预览
     const runRedactPreview = useCallback(() => {
         if (!pendingImport) return;
-        const terms = impCustomTerms.split(/[\s,，、]+/).map(t => t.trim()).filter(Boolean);
+        const terms = impCustom ? impCustomTerms.split(/[\s,，、]+/).map(t => t.trim()).filter(Boolean) : [];
         const result = redactPrivacy(pendingImport.rawText, {
             realNames: impName ? [userProfile.name] : [],
             nameMode: impName ? impNameMode : 'off',
@@ -1062,7 +1120,7 @@ const JobHuntApp: React.FC = () => {
         setPreviewEditText(result.text);
         setPreviewMdMode(false);
         setPendingImport(null);
-    }, [pendingImport, impCustomTerms, impName, impNameMode, impPii, impCustomMode, userProfile]);
+    }, [pendingImport, impCustom, impCustomTerms, impName, impNameMode, impPii, impCustomMode, userProfile]);
 
     // 粘贴导入：同样过脱敏预览闸
     const handlePasteImport = useCallback(() => {
@@ -1321,17 +1379,26 @@ const JobHuntApp: React.FC = () => {
                         </div>
                     )}
                     <div className="mt-3 pt-3 border-t border-slate-100">
-                        <div className="text-sm font-semibold text-slate-700">公司名 / 学校名 / 项目名等</div>
-                        <div className="text-[11px] text-slate-400 mb-2">这些没法自动认出来，填上要隐去的词（逗号、顿号或换行分隔），预览里还能手动补改。</div>
-                        <textarea value={impCustomTerms} onChange={e => setImpCustomTerms(e.target.value)} rows={2}
-                            placeholder="如：字节跳动，清华大学，商家增长项目"
-                            className="w-full bg-slate-100 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-sky-200" />
-                        <div className="flex gap-2 mt-2">
-                            {([['hide', '完全隐去'], ['initial', '保留首字（如 字**）']] as const).map(([v, label]) => (
-                                <button key={v} onClick={() => setImpCustomMode(v)}
-                                    className={`px-3 py-1.5 text-[11px] font-bold rounded-lg border transition-all active:scale-95 ${impCustomMode === v ? 'bg-sky-50 text-sky-600 border-sky-200' : 'bg-white text-slate-500 border-slate-200'}`}>{label}</button>
-                            ))}
-                        </div>
+                        <label className="flex items-start gap-3 py-1 cursor-pointer">
+                            <input type="checkbox" checked={impCustom} onChange={e => setImpCustom(e.target.checked)} className="mt-0.5 w-4 h-4 accent-sky-500" />
+                            <div className="flex-1">
+                                <div className="text-sm font-semibold text-slate-700">公司名 / 学校名 / 项目名等</div>
+                                <div className="text-[11px] text-slate-400">这些没法自动认出来，填上要隐去的词（逗号、顿号或换行分隔），预览里还能手动补改。</div>
+                            </div>
+                        </label>
+                        {impCustom && (
+                            <div className="pl-7 mt-1.5">
+                                <textarea value={impCustomTerms} onChange={e => setImpCustomTerms(e.target.value)} rows={2}
+                                    placeholder="如：字节跳动，清华大学，商家增长项目"
+                                    className="w-full bg-slate-100 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-sky-200" />
+                                <div className="flex flex-wrap gap-2 mt-2">
+                                    {([['hide', '完全隐去'], ['initial', '保留首字（如 字**）'], ['pinyin', '拼音缩写（如 ZJTD）']] as const).map(([v, label]) => (
+                                        <button key={v} onClick={() => setImpCustomMode(v)}
+                                            className={`px-3 py-1.5 text-[11px] font-bold rounded-lg border transition-all active:scale-95 ${impCustomMode === v ? 'bg-sky-50 text-sky-600 border-sky-200' : 'bg-white text-slate-500 border-slate-200'}`}>{label}</button>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                     </div>
                     <div className="mt-3 text-[11px] text-amber-600 bg-amber-50 rounded-xl px-3 py-2 leading-relaxed">
                         打码越多越稳妥，但公司 / 学校 / 项目被隐去后，AI 做竞争力分析时会不了解你背景的含金量，结论可能更笼统。
@@ -1515,7 +1582,7 @@ const JobHuntApp: React.FC = () => {
                                     className="w-full flex items-center justify-between bg-slate-50 rounded-2xl px-4 py-3 active:scale-[0.98] transition-transform">
                                     <div className="text-left">
                                         <div className="text-xs font-bold text-slate-700">关闭角色语音播放（语音面试）</div>
-                                        <div className="text-[10px] text-slate-400 mt-0.5">面试官只出文字、不放声音；通话里还能用「外放」临时切回来</div>
+                                        <div className="text-[10px] text-slate-400 mt-0.5">面试官只出文字，<b>不生成语音</b>（不发合成请求，省 token/流量）；通话里还能用「外放」临时切回来</div>
                                     </div>
                                     <div className={`w-11 h-6 rounded-full p-0.5 transition-colors shrink-0 ${jhSettings.api.mutePlayback ? 'bg-sky-500' : 'bg-slate-300'}`}>
                                         <div className={`w-5 h-5 bg-white rounded-full shadow transition-transform ${jhSettings.api.mutePlayback ? 'translate-x-5' : ''}`} />
@@ -2247,7 +2314,13 @@ const JobHuntApp: React.FC = () => {
                             </div>
                         )}
                         {notes.length > 0 && noteGroups.every(g => g.notes.length === 0) && (
-                            <div className="text-center text-slate-300 text-xs py-6">没有符合条件的笔记</div>
+                            <div className="text-center py-6">
+                                <div className="text-slate-300 text-xs">没有符合条件的笔记</div>
+                                {(noteSearch || noteKindFilter.size > 0 || noteTagFilter.size > 0) && (
+                                    <button onClick={() => { setNoteSearch(''); setNoteKindFilter(new Set()); setNoteTagFilter(new Set()); }}
+                                        className="mt-2 text-[11px] text-sky-500 underline">清除筛选</button>
+                                )}
+                            </div>
                         )}
                         <div className="space-y-3">
                             {noteGroups.map(group => (
@@ -2700,23 +2773,29 @@ const JobHuntApp: React.FC = () => {
                         </div>
                         <div className="space-y-3 text-[12px] leading-relaxed text-slate-600">
                             <div>
-                                <div className="font-bold text-slate-700 mb-0.5">① 代号制：真实公司名永不发给 AI</div>
-                                发给 AI 的只有你设的代号（A厂/Z2 这种）。真实公司名、HR 名只存在本机数据库，从不进任何提示词。
+                                <div className="font-bold text-slate-700 mb-0.5">① 代号制：真实公司名默认不发给 AI</div>
+                                发给 AI 的是你设的代号（A厂/Z2 这种），真名、HR 名存在本机、不进提示词。⚠ 前提是你<b>给这家公司设过代号</b>；没登记、或在别处手写了真名，就保护不到。
                             </div>
                             <div>
                                 <div className="font-bold text-slate-700 mb-0.5">② 本地脱敏管线（全离线）</div>
-                                简历/对话/笔记发出前，手机号、邮箱、身份证、银行卡、住址都会在本机打码；公司名拼音化用的是打包进 APK 的离线拼音库，不联网。
+                                简历/对话/笔记发出前，手机号、邮箱、身份证、银行卡、住址按规则在本机打码，公司名拼音化用离线库、不联网。⚠ 它<b>靠规则匹配</b>：格式规整的基本能抓住，但混在自由文本里的真实姓名、未登记公司名<b>可能识别不全</b>。
                             </div>
                             <div>
-                                <div className="font-bold text-slate-700 mb-0.5">③ JD / 笔记：脱敏 + 截断后才注入</div>
-                                岗位 JD 和笔记发给 AI 前会先过脱敏（手机/邮箱/真实公司名）并只取摘要，不会整段原文上云。
+                                <div className="font-bold text-slate-700 mb-0.5">③ 岗位字段与笔记：脱敏 + 截断后才注入</div>
+                                JD、岗位笔记发给 AI 前先脱敏、只取摘要，不整段上云；「项目 / 地点 / 下一步」等短字段也会过一遍脱敏。⚠ 但仍<b>别在这些地方写真名</b>最保险。
                             </div>
                             <div>
                                 <div className="font-bold text-slate-700 mb-0.5">④ 四档模糊强度（设置里可选）</div>
                                 拼音首字母（隐私高、辨识中）→ 完整拼音缩写（辨识高、但可能被反推）→ 自定义 → 不脱敏。默认用拼音首字母+去重。
                             </div>
+                            <div>
+                                <div className="font-bold text-slate-700 mb-0.5">⑤ 做不到的地方（请知悉）</div>
+                                · 脱敏是本机规则化处理，<b>不能保证 100%</b> 挡住所有敏感信息，尤其你手写进正文/字段的真名。<br />
+                                · 内容一旦发给 AI，如何传输/存储/使用取决于你选的 <b>API 服务商</b>，本机无法管控。<br />
+                                · 最稳做法：真名和隐私信息尽量<b>只用代号</b>，别写进字段和正文。
+                            </div>
                             <div className="text-[11px] text-slate-400 pt-1 border-t border-slate-100">
-                                简而言之：真实公司名/HR名/真实姓名永远不会离开你的手机。
+                                我们尽量让真名只留在本机，但<b>无法 100% 保证</b>——敏感信息请尽量只用代号。
                             </div>
                         </div>
                     </div>

@@ -114,6 +114,9 @@ const JobHuntPanelModal: React.FC<JobHuntPanelModalProps> = ({
                                 开启后 {char.name} 在单聊里能看到你的岗位进展和笔记，
                                 还能帮你建卡 / 记笔记 / 更新阶段。关闭则完全不注入。
                             </p>
+                            <p className="text-[10px] text-amber-500 mt-1 leading-relaxed">
+                                建议只在相关场景开启；长期开着会过多分散 {char.name} 的注意力。
+                            </p>
                         </div>
                         <button
                             onClick={() => onToggleJobHunt(!enabled)}
