@@ -351,6 +351,27 @@ const resolveTranscriptionUrl = (baseUrl: string): string => {
 
 const DEFAULT_CLOUD_STT_BASE = 'https://api.siliconflow.cn/v1';
 
+/**
+ * 云端 STT 走 WebView 的 getUserMedia。排查记录：RECORD_AUDIO 已由 speech-recognition 插件
+ * 声明、用户在系统设置里也授了、Capacitor 的 BridgeWebChromeClient.onPermissionRequest 也会
+ * grant AUDIO_CAPTURE —— 三样都齐，但部分机型 WebView 首次 getUserMedia 仍会秒拒
+ * NotAllowedError。根因是那一刻 App 进程并没真正握住 RECORD_AUDIO（系统里显示“已允许”≠
+ * 运行时已授予）。这里在录音前用原生插件主动请求一次 RECORD_AUDIO，把权限当场落到进程上，
+ * 再交给 getUserMedia。非原生环境（普通浏览器）直接跳过，交给浏览器自身的权限流程。
+ */
+const ensureNativeMicPermission = async (): Promise<void> => {
+  if (!isNative()) return;
+  try {
+    const { SpeechRecognition } = await import('@capacitor-community/speech-recognition');
+    let st: string | undefined;
+    try { st = (await SpeechRecognition.checkPermissions())?.speechRecognition; } catch { st = undefined; }
+    if (st !== 'granted') {
+      // 请求本身失败也不拦（个别 ROM 返回非标准状态），继续交给 getUserMedia 实测
+      try { await SpeechRecognition.requestPermissions(); } catch { /* noop */ }
+    }
+  } catch { /* 插件缺失/加载失败都不拦，让 getUserMedia 去实测 */ }
+};
+
 const startCloud = async (lang: string, cb: SttCallbacks, cfg: SttProviderConfig): Promise<SttSession> => {
   // Base URL 留空 → 默认 SiliconFlow（与设置页文案一致）
   const url = resolveTranscriptionUrl(cfg.baseUrl?.trim() || DEFAULT_CLOUD_STT_BASE);
@@ -359,14 +380,22 @@ const startCloud = async (lang: string, cb: SttCallbacks, cfg: SttProviderConfig
     throw new Error('当前环境不支持录音（MediaRecorder 不可用）');
   }
 
+  // 关键修复：录音前先确保原生 RECORD_AUDIO 真正落到进程上，规避“设置里已允许、
+  // getUserMedia 仍秒拒 NotAllowed”的机型坑。
+  await ensureNativeMicPermission();
+
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true }).catch((err: any) => {
     // 不能把所有失败都说成"权限被拒绝"（以前的 bug：用户明明授了权，却因
     // 设备无麦/被占用等报"权限被拒绝"）。按错误名区分，给准确可操作文案。
     const name = err?.name || '';
-    if (/NotAllowed|Security/i.test(name)) throw new Error('麦克风权限被拒绝，去系统设置里允许一下');
-    if (/NotFound|Overconstrained/i.test(name)) throw new Error('没找到可用麦克风（设备无麦风/被禁用）');
-    if (/NotReadable|AbortError/i.test(name)) throw new Error('麦克风被其它应用占用了，关掉那边再试');
-    throw new Error(`无法开启录音（${name || '未知错误'}）`);
+    // 探针：把真实错误名 + 运行环境带出来。历史上这里统一说成“权限被拒绝”掩盖了真因，
+    // 导致反复改都定位不到；保留可读文案的同时把 [名字/平台/是否安全上下文] 附在末尾。
+    const secure = typeof window !== 'undefined' && (window as any).isSecureContext === false ? '/insecure' : '';
+    const diag = ` [${name || 'Unknown'}${isNative() ? '/native' : '/web'}${secure}]`;
+    if (/NotAllowed|Security/i.test(name)) throw new Error('麦克风权限被拒绝，去系统设置里允许一下' + diag);
+    if (/NotFound|Overconstrained/i.test(name)) throw new Error('没找到可用麦克风（设备无麦风/被禁用）' + diag);
+    if (/NotReadable|AbortError/i.test(name)) throw new Error('麦克风被其它应用占用了，关掉那边再试' + diag);
+    throw new Error(`无法开启录音（${name || '未知错误'}）` + diag);
   });
 
   // ── 实时音量：AnalyserNode 取时域 RMS，~100ms 一次推给 UI 画波形 ──
