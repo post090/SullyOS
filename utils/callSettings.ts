@@ -14,7 +14,9 @@ export interface CallSettings {
     stt: CallApiRef | null;
     /** 音频理解模型（一体转写用；null = 未配置，一体模式不可用） */
     audio: CallApiRef | null;
-    /** 转写方式：stt = 录音走 STT 接口；audioModel = 录音直接交音频模型转写 */
+    /** 音频转写模式：off=只用 STT，不用音频模型；follow=录音交全局主对话模型转写（模型需支持音频）；dedicated=用下面单独配的音频模型转写 */
+    audioMode: 'off' | 'follow' | 'dedicated';
+    /** 转写方式：stt = 录音走 STT 接口；audioModel = 录音直接交音频模型转写（与 audioMode 同步保留，兼容旧数据） */
     transcribeMode: 'stt' | 'audioModel';
     /** 关闭角色语音播放：只看文字、不放 TTS 声音（持久默认，通话内仍可用「外放」临时切换） */
     mutePlayback: boolean;
@@ -23,18 +25,25 @@ export interface CallSettings {
 export const CALL_SETTINGS_KEY = 'os_call_settings';
 
 export const DEFAULT_CALL_SETTINGS: CallSettings = {
-    stt: null, audio: null, transcribeMode: 'stt', mutePlayback: false,
+    stt: null, audio: null, audioMode: 'off', transcribeMode: 'stt', mutePlayback: false,
 };
 
 export const loadCallSettings = (): CallSettings => {
     let raw: any = {};
     try { raw = JSON.parse(localStorage.getItem(CALL_SETTINGS_KEY) || '{}') || {}; } catch { raw = {}; }
+    const audio = raw.audio?.baseUrl ? raw.audio : null;
+    // 旧数据迁移：没有 audioMode 时，从 transcribeMode + 是否配了音频模型推断
+    const audioMode: CallSettings['audioMode'] = (raw.audioMode === 'follow' || raw.audioMode === 'dedicated' || raw.audioMode === 'off')
+        ? raw.audioMode
+        : (raw.transcribeMode === 'audioModel' ? (audio ? 'dedicated' : 'follow') : 'off');
     return {
         ...DEFAULT_CALL_SETTINGS,
         ...raw,
         stt: raw.stt?.baseUrl ? raw.stt : null,
-        audio: raw.audio?.baseUrl ? raw.audio : null,
-        transcribeMode: raw.transcribeMode === 'audioModel' ? 'audioModel' : 'stt',
+        audio,
+        audioMode,
+        // transcribeMode 跟 audioMode 对齐：off → stt，其余 → audioModel（保留字段供旧逻辑读）
+        transcribeMode: audioMode === 'off' ? 'stt' : 'audioModel',
         mutePlayback: !!raw.mutePlayback,
     };
 };

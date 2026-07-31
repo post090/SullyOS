@@ -20,7 +20,8 @@ import { buildTaskSupervisionContext } from '../utils/taskContextInjector';
 import { DB } from '../utils/db';
 import { ChatPrompts } from '../utils/chatPrompts';
 import { Message, ChatTheme, AppID, CallAutoStartConfig, JobNote, JobSession, JobChatMessage } from '../types';
-import { analyzeAnswerAudio, AnswerAudioAnalysis, paceLabel } from '../utils/interviewAudioAnalysis';
+import { analyzeAnswerAudio, AnswerAudioAnalysis, paceLabel, buildInputAudioPart } from '../utils/interviewAudioAnalysis';
+import { loadMusicControl } from '../context/MusicContext';
 import { CallSettings, loadCallSettings, saveCallSettings } from '../utils/callSettings';
 import ApiConnectionPicker from '../components/os/ApiConnectionPicker';
 import { PRESET_THEMES } from '../components/chat/ChatConstants';
@@ -299,6 +300,13 @@ const CallApp: React.FC = () => {
   const { closeApp, openApp, characters, activeCharacterId, addToast, logSystemError, apiConfig, userProfile, customThemes, suspendCall, suspendedCall, clearSuspendedCall, updateCharacter, characterGroups, callAutoStart, consumeCallAutoStart } = useOS();
 
   const [viewMode, setViewMode] = useState<ViewMode>('role-select');
+  // 进正式通话（in-call）：把正在放的音乐淡出暂停；离开通话（挂断/返回）时之前在放就淡入恢复。
+  // 用模块级出口，不依赖 MusicProvider 层级（同 __musicHooks 思路）。
+  useEffect(() => {
+    if (viewMode !== 'in-call') return;
+    loadMusicControl()?.pauseForCall();
+    return () => { loadMusicControl()?.resumeAfterCall(); };
+  }, [viewMode]);
   // 语音面试/场景通话：当前生效的场景配置（拼场景 prompt / 覆盖 LLM·STT·TTS / 顶部小字），挂断即清
   const [activeScene, setActiveScene] = useState<CallAutoStartConfig | null>(null);
   // 面试音频说话状态分析：每轮结果累积（挂断汇总复盘）+ 最新一条浮条（可点收）
@@ -309,12 +317,13 @@ const CallApp: React.FC = () => {
   // 一轮语音的自动发送协调（仅面试/场景通话 activeScene 走）：等 STT 转写 + 音频分析都就绪再一起发
   const utterRef = useRef<{
     active: boolean;
-    mode: 'off' | 'twoTrack' | 'oneShot';
+    mode: 'off' | 'twoTrack' | 'oneShot' | 'followAudio';
     sttText: string | null;
     audioText: string | null;
     analysis: AnswerAudioAnalysis | null;
     audioSettled: boolean;
     sent: boolean;
+    blob: Blob | null;
   } | null>(null);
   const [selectedCharId, setSelectedCharId] = useState<string>(activeCharacterId || characters[0]?.id || '');
   const ROLES_PER_PAGE = 6;
@@ -586,7 +595,7 @@ const CallApp: React.FC = () => {
       if (activeScene) {
         const aa0 = activeScene.audioAnalysis;
         const analysisOn = !!(aa0?.enabled && aa0.api?.baseUrl && aa0.api.apiKey && aa0.api.model);
-        utterRef.current = { active: true, mode: analysisOn ? (aa0!.transcribeMode === 'audioModel' ? 'oneShot' : 'twoTrack') : 'off', sttText: null, audioText: null, analysis: null, audioSettled: false, sent: false };
+        utterRef.current = { active: true, mode: !analysisOn ? 'off' : aa0!.mode === 'follow' ? 'followAudio' : aa0!.transcribeMode === 'audioModel' ? 'oneShot' : 'twoTrack', sttText: null, audioText: null, analysis: null, audioSettled: false, sent: false, blob: null };
         setSttPhase('listening');
       } else {
         utterRef.current = null;
@@ -602,8 +611,8 @@ const CallApp: React.FC = () => {
         if (p.mode === 'oneShot') {
           if (!p.audioSettled) return;                 // 一体：等音频模型转写+分析
           text = (p.audioText || p.sttText || '').trim();
-        } else if (p.mode === 'twoTrack') {
-          if (p.sttText == null || !p.audioSettled) return; // 双轨：等 STT 转写 + 分析都到
+        } else if (p.mode === 'twoTrack' || p.mode === 'followAudio') {
+          if (p.sttText == null || !p.audioSettled) return; // 双轨/跟随全局：等 STT 转写 + 音频都就绪
           text = (p.sttText || '').trim();
         } else {
           if (p.sttText == null) return;               // 不用音频理解：只等 STT 转写
@@ -612,8 +621,9 @@ const CallApp: React.FC = () => {
         p.sent = true; p.active = false;
         setSttPhase(null);
         if (!text) { addToast('没听清你说的话，再说一遍？', 'info'); return; }
-        const note = p.analysis ? buildStatusNote(p.analysis) : undefined;
-        void handleTurn(text, note);
+        // 跟随全局：不出状态标注，把音频原样带进一次调用；其余模式带表达状态标注
+        const note = (p.mode !== 'followAudio' && p.analysis) ? buildStatusNote(p.analysis) : undefined;
+        void handleTurn(text, note, p.mode === 'followAudio' ? (p.blob || undefined) : undefined);
       };
       sttSessionRef.current = await startStt('zh-CN', {
         onPartial: () => { /* 语音走自动发送，不再往输入框灌字 */ },
@@ -629,8 +639,15 @@ const CallApp: React.FC = () => {
         onRecognizing: () => { setSttRecognizing(true); setSttPhase(prev => (prev === 'listening' ? 'transcribing' : prev)); },
         onAudioBlob: (blob) => {
           const p = utterRef.current;
+          // 跟随全局·一次调用：不另调分析模型，存下音频，等转写就绪一起塞进主模型回复请求
+          if (p && p.active && p.mode === 'followAudio') {
+            p.blob = blob;
+            p.audioSettled = true;
+            maybeAutoSend();
+            return;
+          }
           const aa = activeScene?.audioAnalysis;
-          // 面试/场景通话且开了音频理解（双轨/一体/跟随全局）：分析说话状态，完成后触发自动发送
+          // 面试/场景通话且开了独立音频理解（双轨/一体）：分析说话状态，完成后触发自动发送
           if (p && p.active && p.mode !== 'off' && aa?.api?.baseUrl && aa.api.apiKey && aa.api.model) {
             const lastQ = [...bubbles].reverse().find(b => b.role === 'assistant')?.text || '';
             const want = p.mode === 'oneShot';
@@ -647,12 +664,17 @@ const CallApp: React.FC = () => {
               .catch(() => { p.audioSettled = true; maybeAutoSend(); }); // 分析失败也放行，不卡发送
             return;
           }
-          // 普通通话（无 activeScene）一体模式：录音直接交音频模型转写进输入框（不做状态分析）
-          const ca = callSettings.audio;
-          if (!activeScene && callSettings.transcribeMode === 'audioModel' && ca?.apiKey) {
-            analyzeAnswerAudio(blob, { baseUrl: ca.baseUrl, apiKey: ca.apiKey, model: ca.model }, '', true)
-              .then(res => { if (res.transcript) setDraftInput(res.transcript); })
-              .catch(() => { /* STT 转写还在跑，静默 */ });
+          // 普通通话（无 activeScene）：按音频转写模式决定要不要拿录音转写进输入框（不做状态分析）
+          if (!activeScene && callSettings.audioMode !== 'off') {
+            // dedicated=用单独配的音频模型；follow=用全局主对话模型（模型需支持音频输入）
+            const src = callSettings.audioMode === 'dedicated'
+              ? callSettings.audio
+              : (apiConfig?.apiKey ? { baseUrl: apiConfig.baseUrl, apiKey: apiConfig.apiKey, model: apiConfig.model } : null);
+            if (src?.apiKey && src.baseUrl && src.model) {
+              analyzeAnswerAudio(blob, { baseUrl: src.baseUrl, apiKey: src.apiKey, model: src.model }, '', true)
+                .then(res => { if (res.transcript) setDraftInput(res.transcript); })
+                .catch(() => { /* STT 转写还在跑，静默 */ });
+            }
           }
         },
         onEnd: () => {
@@ -1034,7 +1056,7 @@ const CallApp: React.FC = () => {
   const handleHangup = () => {
     setShowHangupConfirm(true);
   };
-  const buildHistoryMessages = async (input: string, skipDbId?: number) => {
+  const buildHistoryMessages = async (input: string, skipDbId?: number, audioBlob?: Blob): Promise<Array<{ role: string; content: any }>> => {
     if (!selectedChar?.id) return [{ role: 'user', content: input }];
     const limit = selectedChar.contextLimit || 500;
     const allMsgs = await DB.getRecentMessagesByCharId(selectedChar.id, limit);
@@ -1051,9 +1073,16 @@ const CallApp: React.FC = () => {
     const lastMsg = filtered[filtered.length - 1];
     const timeGapHint = ChatPrompts.getTimeGapHint(lastMsg, Date.now());
     const finalInput = timeGapHint ? `${input}\n\n${timeGapHint}` : input;
+    if (audioBlob) {
+      // 跟随全局·一次调用：把音频跟转写文字一起塞进最后一条 user 消息（多模态），让主模型自己听。
+      try {
+        const part = await buildInputAudioPart(audioBlob);
+        return [...history, { role: 'user', content: [{ type: 'text', text: finalInput }, { type: 'input_audio', input_audio: { data: part.data, format: part.format } }] }];
+      } catch { /* 音频转码失败：退回纯文字，不阻断这轮 */ }
+    }
     return [...history, { role: 'user', content: finalInput }];
   };
-  const requestAssistantReply = async (input: string, skipDbId?: number): Promise<string> => {
+  const requestAssistantReply = async (input: string, skipDbId?: number, audioBlob?: Blob): Promise<string> => {
     const apiOv = activeScene?.apiOverride;
     const baseUrl = (apiOv?.baseUrl || apiConfig.baseUrl)?.replace(/\/+$/, '');
     if (!baseUrl) throw new Error('请先在设置里配置聊天 API URL');
@@ -1078,7 +1107,7 @@ const CallApp: React.FC = () => {
     const systemPrompt = selectedChar
       ? buildCallPrompt(userName, selectedChar.name, coreContext, voiceLang || undefined, resolveCharTimeZone(selectedChar))
       : buildCallPrompt(userName, undefined, undefined, voiceLang || undefined);
-    const messages = await buildHistoryMessages(input, skipDbId);
+    const messages = await buildHistoryMessages(input, skipDbId, audioBlob);
     // 通话场景重试 toast：同一通通话只提示一次，避免刷屏
     let retryToastShown = false;
     const callStreamHooks = {
@@ -1129,7 +1158,7 @@ const CallApp: React.FC = () => {
     audioRef.current.pause();
     setCallState('listening');
   };
-  const handleTurn = async (overrideText?: string, statusNote?: string) => {
+  const handleTurn = async (overrideText?: string, statusNote?: string, audioBlob?: Blob) => {
     const minimaxApiKey = resolveMiniMaxApiKey(apiConfig);
     const voiceId = resolveVoiceId();
     if (isListeningRef.current) {
@@ -1162,7 +1191,7 @@ const CallApp: React.FC = () => {
     let turnLeadEmotion: string | undefined;
     try {
       setCallState('thinking');
-      const rawReply = await requestAssistantReply(modelInput, userDbId);
+      const rawReply = await requestAssistantReply(modelInput, userDbId, audioBlob);
       turnLeadEmotion = extractLeadingEmotion(rawReply);
       assistantText = sanitizeAssistantOutput(rawReply);
     } catch (err: any) {
@@ -1640,28 +1669,27 @@ const CallApp: React.FC = () => {
                   <div className="text-[10px] text-slate-400 mt-1 px-1">选的站要支持 /audio/transcriptions；不设则用系统设置里的全局 STT</div>
                 </div>
                 <div>
-                  <div className="text-xs font-bold text-slate-500 mb-1.5">音频理解模型（可选）</div>
-                  <ApiConnectionPicker value={callSettings.audio} onChange={v => patchCallSettings({ audio: v ? { ...v } : null })} compact hint={null} />
-                  <div className="text-[10px] text-slate-400 mt-1 px-1">支持音频输入的多模态模型；配了才能选下面的「一体」转写</div>
-                </div>
-                <div>
-                  <div className="text-xs font-bold text-slate-500 mb-1.5">转写方式</div>
+                  <div className="text-xs font-bold text-slate-500 mb-1.5">音频理解（把录音转写进输入框）</div>
                   <div className="space-y-1.5">
                     {([
-                      ['stt', 'STT 转写（默认）', '录完上传 STT 接口出字，快而稳'] as const,
-                      ['audioModel', '一体（音频模型）', '录音直接交音频理解模型转写进输入框，出字较慢'] as const,
-                    ]).map(([v, label, desc]) => {
-                      const disabled = v === 'audioModel' && !callSettings.audio?.apiKey;
-                      return (
-                        <button key={v} disabled={disabled}
-                          onClick={() => patchCallSettings({ transcribeMode: v })}
-                          className={`w-full text-left px-3 py-2 rounded-xl border transition-all active:scale-[0.99] disabled:opacity-40 ${callSettings.transcribeMode === v ? 'bg-violet-50 border-violet-200 ring-1 ring-violet-100' : 'bg-white border-slate-200'}`}>
-                          <div className={`text-xs font-bold ${callSettings.transcribeMode === v ? 'text-violet-600' : 'text-slate-600'}`}>{label}</div>
-                          <div className="text-[10px] text-slate-400 mt-0.5">{disabled ? '先在上面配个音频理解模型' : desc}</div>
-                        </button>
-                      );
-                    })}
+                      ['off', '不使用（默认走 STT）', '录音只走上面的云端 STT 转写，不动音频模型'] as const,
+                      ['follow', '跟随全局（主模型自带音频理解）', '录音交全局主对话模型转写，需该模型支持音频输入'] as const,
+                      ['dedicated', '独立音频模型', '单独指定一个音频模型来转写（在下方配置）'] as const,
+                    ]).map(([v, label, desc]) => (
+                      <button key={v}
+                        onClick={() => patchCallSettings({ audioMode: v, transcribeMode: v === 'off' ? 'stt' : 'audioModel' })}
+                        className={`w-full text-left px-3 py-2 rounded-xl border transition-all active:scale-[0.99] ${callSettings.audioMode === v ? 'bg-violet-50 border-violet-200 ring-1 ring-violet-100' : 'bg-white border-slate-200'}`}>
+                        <div className={`text-xs font-bold ${callSettings.audioMode === v ? 'text-violet-600' : 'text-slate-600'}`}>{label}</div>
+                        <div className="text-[10px] text-slate-400 mt-0.5">{desc}</div>
+                      </button>
+                    ))}
                   </div>
+                  {callSettings.audioMode === 'dedicated' && (
+                    <div className="mt-2">
+                      <ApiConnectionPicker value={callSettings.audio} onChange={v => patchCallSettings({ audio: v ? { ...v } : null })} compact hint={null} />
+                      <div className="text-[10px] text-slate-400 mt-1 px-1">选支持音频输入的多模态模型；没配好会回退到 STT 转写</div>
+                    </div>
+                  )}
                 </div>
                 <button onClick={() => { const next = !callSettings.mutePlayback; patchCallSettings({ mutePlayback: next }); setIsSpeakerOn(!next); if (next && isAudioPlaying) pauseAudio(); }}
                   className="w-full flex items-center justify-between bg-slate-50 rounded-2xl px-4 py-3 active:scale-[0.98] transition-transform">
@@ -1777,11 +1805,15 @@ const CallApp: React.FC = () => {
     : callState === 'connecting' ? '正在建立加密通讯…'
     : callState === 'error' ? '通讯出现波动'
     : '通讯连接稳定';
-  const analyzeLabel = displayCallState === 'speaking' ? { cn: '说话中', en: 'SPEAKING' }
+  const analyzeLabel = sttPhase === 'analyzing' ? { cn: '理解中', en: 'UNDERSTANDING' }
+    : (sttPhase === 'listening' || sttPhase === 'transcribing') ? { cn: '聆听中', en: 'LISTENING' }
+    : displayCallState === 'speaking' ? { cn: '说话中', en: 'SPEAKING' }
     : displayCallState === 'thinking' ? { cn: '思考中', en: 'VOICE ANALYZING' }
     : displayCallState === 'connecting' ? { cn: '接通中', en: 'CONNECTING' }
     : displayCallState === 'error' ? { cn: '连接异常', en: 'SIGNAL ERROR' }
     : { cn: '聆听中', en: 'LISTENING' };
+  // 倾听/理解/思考/接通 都算“加载中”，给个明显的转圈提示（面试白蓝皮肤没有波形动画，尤其需要）
+  const isBusy = !!sttPhase || displayCallState === 'thinking' || displayCallState === 'connecting';
   return (
     <div className={`h-full w-full relative flex flex-col overflow-hidden ${isProLight ? 'sully-call-prolight bg-[#eef4fd] text-slate-800' : 'bg-[#0a0613] text-white'}`}>
       {isProLight && (
@@ -1873,9 +1905,12 @@ const CallApp: React.FC = () => {
         </div>
         {/* analyzing status + waveform */}
         <div className={`${isProLight ? 'mt-2 gap-1' : 'mt-5 gap-2'} flex flex-col items-center`}>
-          <div className="text-center leading-tight">
-            <div className="text-sm text-white/85">{analyzeLabel.cn}{waveActive ? '…' : ''}</div>
-            {!isProLight && <div className="text-[9px] tracking-[0.3em] text-white/35 mt-0.5">{analyzeLabel.en}</div>}
+          <div className="text-center leading-tight flex items-center justify-center gap-2">
+            {isBusy && <span className="inline-block w-3.5 h-3.5 rounded-full border-2 border-white/25 animate-spin shrink-0" style={{ borderTopColor: accentColor }} />}
+            <div>
+              <div className="text-sm text-white/85">{analyzeLabel.cn}{(waveActive || isBusy) ? '…' : ''}</div>
+              {!isProLight && <div className="text-[9px] tracking-[0.3em] text-white/35 mt-0.5">{analyzeLabel.en}</div>}
+            </div>
           </div>
           {!isProLight && (
             <div className="flex items-center justify-center gap-[3px] h-7">

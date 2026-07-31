@@ -188,6 +188,20 @@ export const loadMusicPlaybackSnapshot = (): MusicPlaybackSnapshot | null => __m
 let __musicHooks: PostProcessMusicHooks | null = null;
 export const loadMusicHooks = (): PostProcessMusicHooks | null => __musicHooks;
 
+/**
+ * 模块级音乐“音量协调”出口 — 给通话、听语音条等场景用，避免 CallApp/Chat 依赖 MusicProvider 层级（同 __musicHooks 思路）：
+ *   duck/unduck：听语音条时把音乐平滑降为背景音 / 恢复；
+ *   pauseForCall/resumeAfterCall：进正式通话淡出暂停，通话结束之前在放就淡入恢复。
+ */
+export interface MusicControlHooks {
+  duck: () => void;
+  unduck: () => void;
+  pauseForCall: () => void;
+  resumeAfterCall: () => void;
+}
+let __musicControl: MusicControlHooks | null = null;
+export const loadMusicControl = (): MusicControlHooks | null => __musicControl;
+
 const saveCfg = (cfg: MusicCfg) => {
   try { localStorage.setItem(LS_CFG_KEY, JSON.stringify(cfg)); } catch {}
 };
@@ -871,6 +885,54 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const a = audioRef.current; if (!a || !duration) return;
     a.currentTime = Math.max(0, Math.min(duration, duration * pct));
   }, [duration]);
+
+  // ── 音量协调（ducking / 进通话暂停恢复）──
+  const fadeRef = useRef<number | null>(null);
+  const duckFromRef = useRef<number | null>(null);   // duck 前的原音量（只在首次 duck 记）
+  const pausedForCallRef = useRef<boolean>(false);    // 进通话前是否在放（决定通话结束要不要恢复）
+  const clampVol = (v: number) => Math.max(0, Math.min(1, v));
+  // 把音频元素音量在 ms 内步进渐变到 target；pauseAtEnd 时渐变到 0 后暂停。
+  const fadeVolume = useCallback((target: number, ms = 400, pauseAtEnd = false) => {
+    const a = audioRef.current; if (!a) return;
+    if (fadeRef.current) { clearInterval(fadeRef.current); fadeRef.current = null; }
+    const from = a.volume; const steps = 20; let i = 0;
+    fadeRef.current = window.setInterval(() => {
+      i++; a.volume = clampVol(from + (target - from) * i / steps);
+      if (i >= steps) {
+        if (fadeRef.current) { clearInterval(fadeRef.current); fadeRef.current = null; }
+        a.volume = clampVol(target);
+        if (pauseAtEnd && !a.paused) a.pause();
+      }
+    }, Math.max(16, ms / steps));
+  }, []);
+  const duck = useCallback(() => {
+    const a = audioRef.current; if (!a || a.paused) return;
+    if (duckFromRef.current == null) duckFromRef.current = a.volume || 1;
+    fadeVolume(Math.min(duckFromRef.current * 0.22, 0.22), 300);
+  }, [fadeVolume]);
+  const unduck = useCallback(() => {
+    const a = audioRef.current; if (!a) return;
+    const to = duckFromRef.current == null ? 1 : duckFromRef.current;
+    duckFromRef.current = null;
+    fadeVolume(to, 450);
+  }, [fadeVolume]);
+  const pauseForCall = useCallback(() => {
+    const a = audioRef.current; if (!a) return;
+    pausedForCallRef.current = !a.paused; // 记住进通话前是否在放
+    if (!a.paused) fadeVolume(0, 260, true); // 淡出并暂停
+  }, [fadeVolume]);
+  const resumeAfterCall = useCallback(() => {
+    const a = audioRef.current; if (!a) return;
+    if (!pausedForCallRef.current) return; // 进通话前本来就没在放，不打扰
+    pausedForCallRef.current = false;
+    const to = duckFromRef.current == null ? 1 : duckFromRef.current;
+    a.play().then(() => fadeVolume(to, 450)).catch(() => { /* autoplay 被拦：等用户手动点 */ });
+  }, [fadeVolume]);
+  // 写到模块级出口，供 CallApp / Chat 无 React 依赖调用
+  useEffect(() => {
+    __musicControl = { duck, unduck, pauseForCall, resumeAfterCall };
+    return () => { __musicControl = null; };
+  }, [duck, unduck, pauseForCall, resumeAfterCall]);
 
   // Media Session handlers (锁屏播放/暂停/上下首)
   useEffect(() => {

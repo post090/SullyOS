@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useLayoutEffect, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useOS } from '../context/OSContext';
+import { loadMusicControl } from '../context/MusicContext';
 import { useBackGuard } from '../hooks/useBackGuard';
 import { DB } from '../utils/db';
 import { Message, MessageType, MemoryFragment, Emoji, EmojiCategory, DailySchedule, ScheduleSlot, TaskV2, AppID } from '../types';
@@ -491,11 +492,13 @@ const Chat: React.FC = () => {
         if (playingMsgId === msgId) {
             audio.pause();
             setPlayingMsgId(null);
+            loadMusicControl()?.unduck();
             return;
         }
         audio.src = data.url;
-        audio.onended = () => setPlayingMsgId(null);
-        audio.play().catch(() => {});
+        audio.onended = () => { setPlayingMsgId(null); loadMusicControl()?.unduck(); };
+        loadMusicControl()?.duck();
+        audio.play().catch(() => { loadMusicControl()?.unduck(); });
         setPlayingMsgId(msgId);
     };
 
@@ -652,7 +655,7 @@ const Chat: React.FC = () => {
             // Auto-play
             if (!chatAudioRef.current) chatAudioRef.current = new Audio();
             chatAudioRef.current.src = blobUrl;
-            chatAudioRef.current.onended = () => setPlayingMsgId(null);
+            chatAudioRef.current.onended = () => { setPlayingMsgId(null); loadMusicControl()?.unduck(); };
             // ⚠️ 修复：之前是 .catch(() => {}) 静默吞播放失败——如果 blob 是 JSON 错误体
             // （上游 200 + JSON 被当音频缓存的"中毒"场景），用户看到语音条但无声，毫无报错。
             // 现在 catch 里：(1) addToast 提示用户；(2) 释放这个 blob 的 URL + 从持久化库删掉，
@@ -660,11 +663,13 @@ const Chat: React.FC = () => {
             chatAudioRef.current.play().catch((playErr) => {
                 console.error('[voice] audio.play() failed:', playErr, 'blob.type=', blob?.type || 'none', 'size=', blob?.size ?? 0);
                 addToast('语音播放失败，可能是合成返回了无效内容，请重试或换条文本', 'error');
+                loadMusicControl()?.unduck();
                 try {
                     URL.revokeObjectURL(blobUrl);
                     voiceBlobUrlsRef.current.delete(blobUrl);
                 } catch { /* ignore */ }
             });
+            loadMusicControl()?.duck();
             setPlayingMsgId(msg.id);
         } catch (err: any) {
             addToast(`语音生成失败: ${err?.message || '未知错误'}`, 'error');

@@ -247,8 +247,8 @@ export interface CallAutoStartConfig {
   sttOverride?: { baseUrl?: string; apiKey?: string; model?: string };
   /** 覆盖 TTS 服务商（密钥沿用全局） */
   ttsProviderOverride?: TtsProvider;
-  /** 音频说话状态分析（面试专用）：开关 + 分析用 API + 转写方式 */
-  audioAnalysis?: { enabled: boolean; api?: Partial<APIConfig>; transcribeMode?: 'stt' | 'audioModel' };
+  /** 音频说话状态分析（面试专用）：开关 + 分析用 API + 转写方式 + 模式（follow=跟随全局主模型一次调用 / dedicated=独立音频模型） */
+  audioAnalysis?: { enabled: boolean; api?: Partial<APIConfig>; transcribeMode?: 'stt' | 'audioModel'; mode?: 'follow' | 'dedicated' };
   /** 关闭角色语音播放：只看文字、不放 TTS 声音（面试/场景通话把该场景的持久设置带进来，种下通话的「外放」初值） */
   mutePlayback?: boolean;
   /** 通话皮肤：'proLight'=白蓝专业风（面试默认），缺省沿用深紫默认皮肤 */

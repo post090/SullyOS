@@ -827,9 +827,15 @@ public class SullyNativeRuntimeService extends Service {
             NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (manager != null) {
                 try { manager.notify("sully-fg", NOTIFICATION_ID, generic); } catch (Exception ignored) {}
+                // Drop the no-tag form left over from before the call took the anchor —
+                // (tag, id) are distinct identities, so otherwise both 31090 notifications co-exist.
+                try { manager.cancel(NOTIFICATION_ID); } catch (Exception ignored) {}
             }
             return;
         }
+        // Anchoring the no-tag form: drop any tagged form left over from a previous call period.
+        NotificationManager mgr = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (mgr != null) { try { mgr.cancel("sully-fg", NOTIFICATION_ID); } catch (Exception ignored) {} }
         startForegroundTyped(NOTIFICATION_ID, generic, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
     }
 
@@ -845,6 +851,8 @@ public class SullyNativeRuntimeService extends Service {
             null
         );
         try { manager.notify("sully-fg", NOTIFICATION_ID, generic); } catch (Exception ignored) {}
+        // Same (tag, id) dedupe: drop the no-tag form so only the tagged alongside copy remains.
+        try { manager.cancel(NOTIFICATION_ID); } catch (Exception ignored) {}
     }
 
     private void startForegroundCompatWithCall(String charName, long startedAtMs) {

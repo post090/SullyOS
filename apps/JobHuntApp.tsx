@@ -864,11 +864,11 @@ const JobHuntApp: React.FC = () => {
                             : selectedChar.chatApiOverride?.baseUrl ? selectedChar.chatApiOverride
                             : (apiConfig?.baseUrl ? { baseUrl: apiConfig.baseUrl, apiKey: apiConfig.apiKey, model: apiConfig.model } : null);
                         return g?.baseUrl
-                            ? { enabled: true, api: { baseUrl: g.baseUrl, apiKey: g.apiKey, model: g.model }, transcribeMode: jhSettings.api.transcribeMode }
+                            ? { enabled: true, api: { baseUrl: g.baseUrl, apiKey: g.apiKey, model: g.model }, transcribeMode: jhSettings.api.transcribeMode, mode: 'follow' as const }
                             : undefined;
                     }
                     return jhSettings.api.audio?.baseUrl
-                        ? { enabled: true, api: { baseUrl: jhSettings.api.audio.baseUrl, apiKey: jhSettings.api.audio.apiKey, model: jhSettings.api.audio.model }, transcribeMode: jhSettings.api.transcribeMode }
+                        ? { enabled: true, api: { baseUrl: jhSettings.api.audio.baseUrl, apiKey: jhSettings.api.audio.apiKey, model: jhSettings.api.audio.model }, transcribeMode: jhSettings.api.transcribeMode, mode: 'dedicated' as const }
                         : undefined;
                 })(),
                 mutePlayback: jhSettings.api.mutePlayback,

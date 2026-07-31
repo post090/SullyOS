@@ -163,3 +163,12 @@ export async function analyzeAnswerAudio(
 /** pace → 中文标签（UI 浮条 / 表达复盘用）。 */
 export const paceLabel = (p: AnswerAudioAnalysis['pace']): string =>
     p === 'slow' ? '语速偏慢' : p === 'fast' ? '语速偏快' : '语速适中';
+
+/**
+ * 录音 blob → OpenAI 兼容 input_audio 内容块所需的 { data(base64), format }（含 webm→WAV 本地转码）。
+ * 给「跟随全局·一次调用」把音频直接塞进主模型回复请求复用，与 analyzeAnswerAudio 同一套格式。
+ */
+export const buildInputAudioPart = async (blob: Blob): Promise<{ data: string; format: string }> => {
+    const sendBlob = await toModelFriendlyAudio(blob);
+    return { data: await blobToBase64(sendBlob), format: mimeToFormat(sendBlob.type) };
+};
