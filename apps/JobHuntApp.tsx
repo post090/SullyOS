@@ -2027,8 +2027,8 @@ const JobHuntApp: React.FC = () => {
                             </div>
                         </div>
 
-                        {/* 竞争力档案卡 — 灯塔与潮汐 */}
-                        <div className="rounded-2xl border border-slate-200/70 shadow-sm p-4 bg-gradient-to-b from-sky-50/70 via-white to-amber-50/40 relative overflow-hidden">
+                        {/* 竞争力档案卡 — 扁平缩略，点开看全量「灯塔与潮汐」 */}
+                        <div className="rounded-2xl border border-slate-200/70 shadow-sm px-4 py-3 bg-white">
                             <div className="flex items-center gap-2">
                                 <span className="text-sm font-bold text-slate-800">竞争力档案</span>
                                 <button onClick={() => { setProfDirection(jobProfile?.direction || ''); setShowProfileEdit(true); }} className="ml-auto text-xs text-sky-500 font-semibold flex items-center gap-1 active:scale-95 transition-transform"><PencilSimple className="w-3.5 h-3.5" />编辑</button>
@@ -2038,16 +2038,18 @@ const JobHuntApp: React.FC = () => {
                                 if (!st.hasAny) return (
                                     <div className="text-xs text-slate-400 mt-1.5 leading-relaxed">还没建立档案。到「笔记本」导入简历点「解析进档案」，或在单聊里让角色帮你沉淀；也可以点右上「编辑」手动填。</div>
                                 );
+                                const dir = (jobProfile?.direction || '').trim();
+                                const topEdge = jobProfile?.strengths[0]?.text || '';
                                 return (
-                                    <>
-                                        <div className="text-[11px] text-slate-500 mt-1.5">{st.line}</div>
-                                        {renderProfileTide(jobProfile, true)}
-                                        {(st.s > 3 || st.g > 3) && (
-                                            <div className="text-center mt-1">
-                                                <button onClick={() => setShowProfileDetail(true)} className="text-[11px] text-sky-500 font-semibold active:scale-95 transition-transform">查看全部（竞争 {st.s} · 改进 {st.g}）→</button>
-                                            </div>
+                                    <button onClick={() => setShowProfileDetail(true)} className="w-full text-left mt-1.5 active:opacity-70 transition-opacity">
+                                        <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                                            <span className="truncate">{st.line}</span>
+                                            <span className="ml-auto shrink-0 text-sky-400">›</span>
+                                        </div>
+                                        {(dir || topEdge) && (
+                                            <div className="text-xs text-slate-600 mt-1 truncate">{dir ? `方向：${dir}` : `竞争点：${topEdge}`}</div>
                                         )}
-                                    </>
+                                    </button>
                                 );
                             })()}
                         </div>
@@ -2472,29 +2474,32 @@ const JobHuntApp: React.FC = () => {
                             </div>
                             <div>
                                 <div className="text-xs text-slate-500 font-semibold mb-1.5">竞争点</div>
-                                <div className="flex flex-wrap gap-1.5 mb-2">
+                                <div className="space-y-1.5 mb-2">
                                     {base.strengths.map(s => (
-                                        <span key={s.id} className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 flex items-center gap-1">
-                                            {s.text}<button onClick={() => delEdge(s.id)} className="text-emerald-400 hover:text-rose-400 font-bold">×</button>
-                                        </span>
+                                        <div key={s.id} className="flex items-start gap-2 bg-slate-50 border border-slate-200/70 rounded-lg px-3 py-2">
+                                            <span className="flex-1 text-sm text-slate-700 leading-snug">{s.text}</span>
+                                            <button onClick={() => delEdge(s.id)} className="shrink-0 mt-0.5 text-slate-300 hover:text-rose-400 font-bold">×</button>
+                                        </div>
                                     ))}
-                                    {base.strengths.length === 0 && <span className="text-[11px] text-slate-300">还没有，加一条</span>}
+                                    {base.strengths.length === 0 && <div className="text-[11px] text-slate-300 px-1">还没有，加一条</div>}
                                 </div>
                                 <div className="flex gap-2">
                                     <input value={profNewEdge} onChange={e => setProfNewEdge(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addEdge(); }} placeholder="加一条竞争点"
-                                        className="flex-1 bg-slate-100 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-200" />
-                                    <button onClick={addEdge} className="px-3 rounded-xl bg-emerald-500 text-white text-sm font-semibold active:scale-95 transition-transform">加</button>
+                                        className="flex-1 bg-slate-100 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-sky-200" />
+                                    <button onClick={addEdge} className="px-4 rounded-xl bg-sky-600 text-white text-sm font-semibold active:scale-95 transition-transform">加</button>
                                 </div>
                             </div>
                             <div>
                                 <div className="text-xs text-slate-500 font-semibold mb-1.5">改进点</div>
-                                <div className="flex flex-wrap gap-1.5 mb-2">
+                                <div className="space-y-1.5 mb-2">
                                     {base.gaps.map(g => (
-                                        <span key={g.id} className="text-[11px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 flex items-center gap-1">
-                                            {g.kind === 'resume' ? '简历·' : '策略·'}{g.text}<button onClick={() => delGap(g.id)} className="text-amber-400 hover:text-rose-400 font-bold">×</button>
-                                        </span>
+                                        <div key={g.id} className="flex items-start gap-2 bg-slate-50 border border-slate-200/70 rounded-lg px-3 py-2">
+                                            <span className="shrink-0 mt-0.5 text-[10px] font-semibold text-slate-400">{g.kind === 'resume' ? '简历' : '策略'}</span>
+                                            <span className="flex-1 text-sm text-slate-700 leading-snug">{g.text}</span>
+                                            <button onClick={() => delGap(g.id)} className="shrink-0 mt-0.5 text-slate-300 hover:text-rose-400 font-bold">×</button>
+                                        </div>
                                     ))}
-                                    {base.gaps.length === 0 && <span className="text-[11px] text-slate-300">还没有，加一条</span>}
+                                    {base.gaps.length === 0 && <div className="text-[11px] text-slate-300 px-1">还没有，加一条</div>}
                                 </div>
                                 <div className="flex gap-2">
                                     <select value={profNewGapKind} onChange={e => setProfNewGapKind(e.target.value as 'strategy' | 'resume')}
@@ -2503,8 +2508,8 @@ const JobHuntApp: React.FC = () => {
                                         <option value="resume">简历</option>
                                     </select>
                                     <input value={profNewGap} onChange={e => setProfNewGap(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addGap(); }} placeholder="加一条改进点"
-                                        className="flex-1 bg-slate-100 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-200" />
-                                    <button onClick={addGap} className="px-3 rounded-xl bg-amber-500 text-white text-sm font-semibold active:scale-95 transition-transform">加</button>
+                                        className="flex-1 bg-slate-100 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-sky-200" />
+                                    <button onClick={addGap} className="px-4 rounded-xl bg-sky-600 text-white text-sm font-semibold active:scale-95 transition-transform">加</button>
                                 </div>
                             </div>
                         </div>

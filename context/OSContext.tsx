@@ -386,6 +386,8 @@ interface OSContextType {
   // Logs
   systemLogs: SystemLog[];
   clearLogs: () => void;
+  // 主动把一条错误推进全局 SYSTEM ERROR 横幅（非 fetch 拦截能捕获的错误，如麦克风 getUserMedia 失败）
+  logSystemError: (source: string, message: string, detail?: string) => void;
 
   // Navigation Logic
   registerBackHandler: (handler: () => boolean) => () => void; // Returns unregister function
@@ -1586,6 +1588,18 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   }, []);
 
   const clearLogs = () => setSystemLogs([]);
+
+  // 外部主动上报：把一条错误归入同一套全局 SYSTEM ERROR 横幅 + 系统日志终端，不另造弹窗。
+  const logSystemError = useCallback((source: string, message: string, detail?: string) => {
+    setSystemLogs(prev => [{
+      id: `log-${Date.now()}`,
+      timestamp: Date.now(),
+      type: 'error',
+      source,
+      message,
+      detail: detail || '',
+    }, ...prev.slice(0, 49)]);
+  }, []);
 
   useEffect(() => {
     const loadSettings = async () => {
@@ -4993,6 +5007,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     sysOperation,
     systemLogs,
     clearLogs,
+    logSystemError,
     registerBackHandler,
     handleBack,
     suspendedCall,

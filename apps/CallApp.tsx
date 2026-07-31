@@ -296,7 +296,7 @@ ${getVoicePromptOverride(getTtsProvider()) ?? (getTtsProvider() === 'fishaudio' 
   return [coreContext, timeContext, callPrompt, voiceLangPrompt].filter(Boolean).join('\n\n');
 };
 const CallApp: React.FC = () => {
-  const { closeApp, openApp, characters, activeCharacterId, addToast, showError, apiConfig, userProfile, customThemes, suspendCall, suspendedCall, clearSuspendedCall, updateCharacter, characterGroups, callAutoStart, consumeCallAutoStart } = useOS();
+  const { closeApp, openApp, characters, activeCharacterId, addToast, logSystemError, apiConfig, userProfile, customThemes, suspendCall, suspendedCall, clearSuspendedCall, updateCharacter, characterGroups, callAutoStart, consumeCallAutoStart } = useOS();
 
   const [viewMode, setViewMode] = useState<ViewMode>('role-select');
   // 语音面试/场景通话：当前生效的场景配置（拼场景 prompt / 覆盖 LLM·STT·TTS / 顶部小字），挂断即清
@@ -615,9 +615,9 @@ const CallApp: React.FC = () => {
       sttSessionRef.current = null;
       // native 端的异常 e.message 可能是对象（Capacitor 原生 Error），String 兜底防渲染成 [object Object]。
       const raw = (e && (e.message || String(e))) || '无法启动语音输入';
-      // 麦克风起不来（权限/设备/占用）走「系统错误」全文弹窗——诊断探针 [名字/平台/安全上下文]
-      // 那截关键信息在单行 toast 里会被截断看不全，改用可完整阅读的错误弹窗。
-      showError('麦克风打不开', typeof raw === 'string' ? raw : String(raw));
+      // 麦克风起不来（权限/设备/占用）归入原有的全局 SYSTEM ERROR 横幅（点开系统日志终端看全文，
+      // 包括诊断探针 [名字/平台/安全上下文]），不另造弹窗。
+      logSystemError('麦克风', typeof raw === 'string' ? raw : String(raw));
     }
   };
   // 下载某条通话语音（优先把 blob/远端拉成文件下载，CORS 拉不到就开链接让用户自己存）
