@@ -13,6 +13,16 @@
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
 
+    <!-- 语音输入（通话/模拟面试）走 WebView 的 getUserMedia。Capacitor 的
+         BridgeWebChromeClient.onPermissionRequest 对 AUDIO_CAPTURE 会用
+         RequestMultiplePermissions 一次性申请 RECORD_AUDIO + MODIFY_AUDIO_SETTINGS，
+         且要求「全部授予」才 grant，任一返回 false 即 deny。MODIFY_AUDIO_SETTINGS 是
+         安装期 normal 权限：不在 manifest 声明就会被系统直接判 denied，于是即便
+         RECORD_AUDIO 已授权，getUserMedia 仍秒抛 NotAllowedError。两者都在此声明，
+         经清单合并进最终 APK（RECORD_AUDIO 虽由 speech-recognition 插件也声明，仍显式列出自证）。 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
     <application>
         <receiver
             android:name="com.sullyos.nativeruntime.SullyNativeRuntimeBootReceiver"
