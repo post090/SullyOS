@@ -2280,12 +2280,12 @@ const MessageItem = React.memo(({
                     </div>
                 )}
                 <div className="flex justify-center my-6 px-10 w-full" {...interactionProps}>
-                    <div className="flex items-center gap-1.5 bg-slate-200/40 backdrop-blur-md text-slate-500 px-3 py-1 rounded-full shadow-sm border border-white/20 select-none cursor-pointer active:scale-95 transition-transform">
+                    <div className="flex items-start gap-1.5 bg-slate-200/40 backdrop-blur-md text-slate-500 px-3.5 py-2 rounded-2xl shadow-sm border border-white/20 select-none cursor-pointer active:scale-95 transition-transform">
                         {/* Optional Icon based on content */}
                         <img src={displayText.includes('任务') ? 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/2728.png' :
                         displayText.includes('纪念日') || displayText.includes('Event') ? 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f4c5.png' :
-                        displayText.includes('转账') ? 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f4b0.png' : 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f514.png'} alt="" className="w-4 h-4" />
-                        <span className="text-[10px] font-medium tracking-wide">{displayText}</span>
+                        displayText.includes('转账') ? 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f4b0.png' : 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f514.png'} alt="" className="w-4 h-4 shrink-0 mt-0.5" />
+                        <span className="text-[10px] font-medium tracking-wide leading-relaxed">{displayText}</span>
                     </div>
                 </div>
             </div>

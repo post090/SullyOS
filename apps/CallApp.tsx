@@ -296,7 +296,7 @@ ${getVoicePromptOverride(getTtsProvider()) ?? (getTtsProvider() === 'fishaudio' 
   return [coreContext, timeContext, callPrompt, voiceLangPrompt].filter(Boolean).join('\n\n');
 };
 const CallApp: React.FC = () => {
-  const { closeApp, openApp, characters, activeCharacterId, addToast, apiConfig, userProfile, customThemes, suspendCall, suspendedCall, clearSuspendedCall, updateCharacter, characterGroups, callAutoStart, consumeCallAutoStart } = useOS();
+  const { closeApp, openApp, characters, activeCharacterId, addToast, showError, apiConfig, userProfile, customThemes, suspendCall, suspendedCall, clearSuspendedCall, updateCharacter, characterGroups, callAutoStart, consumeCallAutoStart } = useOS();
 
   const [viewMode, setViewMode] = useState<ViewMode>('role-select');
   // 语音面试/场景通话：当前生效的场景配置（拼场景 prompt / 覆盖 LLM·STT·TTS / 顶部小字），挂断即清
@@ -613,9 +613,11 @@ const CallApp: React.FC = () => {
       setIsListening(false);
       setSttRecognizing(false);
       sttSessionRef.current = null;
-      // native 端的异常 e.message 可能是对象（Capacitor 原生 Error），String 兜底防 toast 渲染成 [object Object]。
+      // native 端的异常 e.message 可能是对象（Capacitor 原生 Error），String 兜底防渲染成 [object Object]。
       const raw = (e && (e.message || String(e))) || '无法启动语音输入';
-      addToast(typeof raw === 'string' ? raw : String(raw), 'error');
+      // 麦克风起不来（权限/设备/占用）走「系统错误」全文弹窗——诊断探针 [名字/平台/安全上下文]
+      // 那截关键信息在单行 toast 里会被截断看不全，改用可完整阅读的错误弹窗。
+      showError('麦克风打不开', typeof raw === 'string' ? raw : String(raw));
     }
   };
   // 下载某条通话语音（优先把 blob/远端拉成文件下载，CORS 拉不到就开链接让用户自己存）
@@ -1749,9 +1751,9 @@ const CallApp: React.FC = () => {
           <span style={{ color: accentColor }}>✦</span>
         </div>
         {/* name block */}
-        <div className="pt-7 text-center">
+        <div className={`${isProLight ? 'pt-4' : 'pt-7'} text-center`}>
           <div className="text-sm" style={{ color: `${accentColor}cc`, textShadow: `0 0 12px ${accentColor}` }}>❀</div>
-          <h1 className="mt-0.5 font-serif text-[2.6rem] leading-none tracking-wide text-white" style={{ textShadow: `0 0 26px ${accentColor}aa, 0 0 6px ${accentColor}66` }}>{selectedChar?.name || '未选择'}</h1>
+          <h1 className={`mt-0.5 font-serif ${isProLight ? 'text-[2rem]' : 'text-[2.6rem]'} leading-none tracking-wide text-white`} style={{ textShadow: `0 0 26px ${accentColor}aa, 0 0 6px ${accentColor}66` }}>{selectedChar?.name || '未选择'}</h1>
           <div className="mt-2.5 text-[11px] tracking-[0.25em] text-white/55">{connSub}</div>
           <div className="mt-1.5 text-lg tabular-nums font-extralight tracking-[0.2em]" style={{ color: accentColor }}>{formatDuration(elapsedSeconds)}</div>
           {activeScene?.sceneLabel && (
@@ -1768,8 +1770,8 @@ const CallApp: React.FC = () => {
       </div>
       {/* portrait + aura —— 键盘弹起时（body.ios-keyboard-open）整块收起，把可视区让给消息+输入框，
           避免大头像把输入框顶出键盘上方的可视区（见 index.html 的 .sully-call-hero 规则）。 */}
-      <div className="sully-call-hero pt-3 pb-1 flex flex-col items-center justify-center">
-        <div className="relative w-40 h-40">
+      <div className={`sully-call-hero ${isProLight ? 'pt-1 pb-0.5' : 'pt-3 pb-1'} flex flex-col items-center justify-center`}>
+        <div className={`relative ${isProLight ? 'w-24 h-24' : 'w-40 h-40'}`}>
           <div className={`absolute -inset-3 rounded-full blur-xl ${waveActive ? 'animate-pulse' : ''}`} style={{ background: `radial-gradient(closest-side, ${accentColor}, transparent)`, opacity: waveActive ? 0.8 : 0.4 }} />
           <div className="absolute -inset-1 rounded-full" style={{ boxShadow: `0 0 0 1px ${accentColor}55, inset 0 0 24px ${accentColor}33` }} />
           <div className={`absolute inset-0 rounded-full border ${displayCallState === 'speaking' ? 'animate-ping' : 'opacity-40'}`} style={{ borderColor: `${accentColor}66` }} />
@@ -1778,7 +1780,7 @@ const CallApp: React.FC = () => {
             : <div className="relative z-10 w-full h-full rounded-full flex items-center justify-center text-4xl font-serif" style={{ backgroundColor: `${accentColor}55` }}>{selectedChar?.name?.[0] || '角'}</div>}
         </div>
         {/* analyzing status + waveform */}
-        <div className="mt-5 flex flex-col items-center gap-2">
+        <div className={`${isProLight ? 'mt-3' : 'mt-5'} flex flex-col items-center gap-2`}>
           <div className="text-center leading-tight">
             <div className="text-sm text-white/85">{analyzeLabel.cn}{waveActive ? '…' : ''}</div>
             <div className="text-[9px] tracking-[0.3em] text-white/35 mt-0.5">{analyzeLabel.en}</div>

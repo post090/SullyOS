@@ -922,7 +922,10 @@ ${!shouldGenerateTodo ? `(系统: 今日待办已存在，无需生成，请忽�
             setObservationText(cached.description);
             setAiBubble({ text: cached.reaction, visible: true });
             
-            const contentToCheck = `[${userProfile.name}]在[${char.name}]的${item.name}上看到了：${cached.description}。[${char.name}]表示：${cached.reaction}`;
+            const desc = (cached.description || '').trim();
+            // description 可能自带末尾句号，别再硬加一个「。」凑成双句号；只在没有句末标点时补。
+            const descTail = /[。！？!?….]$/.test(desc) ? '' : '。';
+            const contentToCheck = `[${userProfile.name}]在[${char.name}]的${item.name}上看到了：${desc}${descTail}[${char.name}]表示：${cached.reaction}`;
             const recentMsgs = await DB.getMessagesByCharId(char.id);
             const isDuplicate = recentMsgs.slice(-50).some(m => m.role === 'system' && m.content === contentToCheck);
 

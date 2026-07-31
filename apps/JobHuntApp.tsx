@@ -23,7 +23,7 @@ import { startStt, isSttSupported, SttSession, SttProviderConfig } from '../util
 import {
     ReadCvLogo, PaperPlaneTilt, Microphone, Plus, CaretLeft, Notebook, Briefcase,
     ChatsCircle, FileText, Trash, SpeakerHigh, StopCircle, X, CircleNotch, UploadSimple,
-    GearSix, Plugs, Question, ShieldCheck, PencilSimple,
+    GearSix, Plugs, Question, ShieldCheck, PencilSimple, Compass,
 } from '@phosphor-icons/react';
 import { RealtimeContextManager, defaultRealtimeConfig } from '../utils/realtimeContext';
 import { getDailyScheduleForChar } from '../utils/dailySchedule';
@@ -276,6 +276,73 @@ type SttPhase = 'idle' | 'starting' | 'listening' | 'recognizing';
 // 不像 localStorage 标记要等异步迁移跑完才写入
 let jobMigrationRunning = false;
 
+// ─── 竞争力档案：灯塔与潮汐视图 ───────────────────────────
+// 中心圆=你+方向；上方竞争点(海蓝绿)、下方改进点(暖沙)，各自沿中心潮线左右交错浮出。
+// 高级感靠中心线+潮汐圆点+留白，不用卡片侧边彩色竖条。
+const computeProfileStats = (p: JobProfile | null) => {
+    const s = p?.strengths.length || 0;
+    const g = p?.gaps.length || 0;
+    const hasDir = !!(p?.direction && p.direction.trim());
+    const parts: string[] = [hasDir ? '方向清晰' : '方向待定'];
+    if (s) parts.push(`${s} 项竞争力`);
+    if (g) parts.push(`${g} 项待补`);
+    if (s && g) parts.push(g > s ? '重心在补短板' : (s >= g * 2 ? '优势明显' : '攻守均衡'));
+    return { s, g, hasDir, hasAny: hasDir || s > 0 || g > 0, line: parts.join(' · ') };
+};
+
+const TideChip: React.FC<{ text: string; tone: 'sea' | 'sand'; tag?: string }> = ({ text, tone, tag }) => (
+    <div className={`rounded-2xl px-3 py-1.5 text-[11px] leading-snug shadow-sm border ${tone === 'sea' ? 'bg-emerald-50 text-emerald-800 border-emerald-200/70' : 'bg-amber-50 text-amber-800 border-amber-200/70'}`}>
+        {tag && <span className={`font-semibold mr-1 ${tone === 'sea' ? 'text-emerald-500/80' : 'text-amber-500/80'}`}>{tag}·</span>}{text}
+    </div>
+);
+
+// 一行=一枚浪花：左/右交错贴向中心潮线，中点一个潮汐圆点接在线上
+const TideRow: React.FC<{ children: React.ReactNode; side: 'left' | 'right'; tone: 'sea' | 'sand' }> = ({ children, side, tone }) => (
+    <div className="relative grid grid-cols-2 items-center">
+        {side === 'left'
+            ? <><div className="flex justify-end pr-4">{children}</div><div /></>
+            : <><div /><div className="flex justify-start pl-4">{children}</div></>}
+        <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-2 h-2 rounded-full ring-2 ring-white shadow-sm" style={{ background: tone === 'sea' ? '#34d399' : '#fbbf24' }} />
+    </div>
+);
+
+const renderProfileTide = (p: JobProfile | null, compact: boolean) => {
+    const strengths = p?.strengths || [];
+    const gaps = p?.gaps || [];
+    const sList = compact ? strengths.slice(0, 3) : strengths;
+    const gList = compact ? gaps.slice(0, 3) : gaps;
+    const dir = (p?.direction || '').trim();
+    return (
+        <div className="relative py-1">
+            {/* 中心潮线 */}
+            <div className="absolute left-1/2 -translate-x-1/2 top-3 bottom-3 w-px bg-gradient-to-b from-emerald-200/60 via-sky-300/50 to-amber-200/60" />
+            {/* 上：竞争点 */}
+            {sList.length > 0 && (
+                <div className="space-y-2 mb-2">
+                    {!compact && <div className="text-center text-[10px] tracking-[0.2em] text-emerald-500/70 mb-1">竞争点 · 已上岸的浪</div>}
+                    {sList.map((s, i) => <TideRow key={s.id} side={i % 2 ? 'right' : 'left'} tone="sea"><TideChip text={s.text} tone="sea" /></TideRow>)}
+                </div>
+            )}
+            {/* 中心圆：你 + 方向 */}
+            <div className="relative flex justify-center my-1.5">
+                <div className="w-[78px] h-[78px] rounded-full p-[2px] shadow-md bg-gradient-to-br from-sky-500 via-sky-400 to-amber-200">
+                    <div className="w-full h-full rounded-full bg-white flex flex-col items-center justify-center px-1.5">
+                        <Compass className="w-5 h-5 text-sky-500" weight="duotone" />
+                        <span className="text-[9px] text-slate-500 mt-0.5 text-center leading-tight line-clamp-2">{dir || '设定方向'}</span>
+                    </div>
+                </div>
+            </div>
+            {/* 下：改进点 */}
+            {gList.length > 0 && (
+                <div className="space-y-2 mt-2">
+                    {!compact && <div className="text-center text-[10px] tracking-[0.2em] text-amber-500/70 mb-1">改进点 · 待涨的潮</div>}
+                    {gList.map((g, i) => <TideRow key={g.id} side={i % 2 ? 'right' : 'left'} tone="sand"><TideChip text={g.text} tone="sand" tag={g.kind === 'resume' ? '简历' : '策略'} /></TideRow>)}
+                </div>
+            )}
+        </div>
+    );
+};
+
 const JobHuntApp: React.FC = () => {
     const { closeApp, characters, activeCharacterId, setActiveCharacterId, openApp, apiConfig, addToast, userProfile, memoryPalaceConfig, realtimeConfig, updateCharacter, openCallWithChar } = useOS();
 
@@ -355,6 +422,7 @@ const JobHuntApp: React.FC = () => {
     const [showCharPicker, setShowCharPicker] = useState(false);
     // C3 驾驶舱：竞争力档案编辑 + 模拟练习入口
     const [showProfileEdit, setShowProfileEdit] = useState(false);
+    const [showProfileDetail, setShowProfileDetail] = useState(false);
     const [showPracticeSetup, setShowPracticeSetup] = useState(false);
     const [profDirection, setProfDirection] = useState('');
     const [profNewEdge, setProfNewEdge] = useState('');
@@ -1456,17 +1524,6 @@ const JobHuntApp: React.FC = () => {
             <div className="w-full bg-white rounded-t-3xl p-5 max-h-[80%] overflow-y-auto" onClick={e => e.stopPropagation()} style={{ paddingBottom: 'max(1.25rem, var(--safe-bottom))' }}>
                 <div className="font-bold text-slate-800 mb-4">工作台设置</div>
                 <div className="space-y-5">
-                    <div>
-                        <div className="text-xs font-bold text-slate-500 mb-2">文档流字号</div>
-                        <div className="flex gap-2">
-                            {([[0.9, '小'], [1, '标准'], [1.1, '大'], [1.2, '特大']] as const).map(([v, label]) => (
-                                <button key={v} onClick={() => patchJhSettings({ zoom: v })}
-                                    className={`px-3.5 py-2 text-xs font-bold rounded-xl border transition-all active:scale-95 ${jhSettings.zoom === v ? 'bg-sky-50 text-sky-600 border-sky-200 ring-1 ring-sky-100' : 'bg-white text-slate-500 border-slate-200'}`}>
-                                    {label}
-                                </button>
-                            ))}
-                        </div>
-                    </div>
                     <button onClick={() => patchJhSettings({ typewriter: !jhSettings.typewriter })}
                         className="w-full flex items-center justify-between bg-slate-50 rounded-2xl px-4 py-3 active:scale-[0.98] transition-transform">
                         <div className="text-left">
@@ -1477,42 +1534,6 @@ const JobHuntApp: React.FC = () => {
                             <div className={`w-5 h-5 bg-white rounded-full shadow transition-transform ${jhSettings.typewriter ? 'translate-x-5' : ''}`} />
                         </div>
                     </button>
-                    <div>
-                        <div className="text-xs font-bold text-slate-500 mb-1">回复自动朗读</div>
-                        <div className="text-[10px] text-slate-400 mb-2">需要角色已配音色；没配音色会静默跳过</div>
-                        <div className="flex gap-2">
-                            {([['off', '关闭'], ['interview', '仅面试读题'], ['all', '所有回复']] as const).map(([v, label]) => (
-                                <button key={v} onClick={() => patchJhSettings({ autoSpeak: v })}
-                                    className={`px-3.5 py-2 text-xs font-bold rounded-xl border transition-all active:scale-95 ${jhSettings.autoSpeak === v ? 'bg-sky-50 text-sky-600 border-sky-200 ring-1 ring-sky-100' : 'bg-white text-slate-500 border-slate-200'}`}>
-                                    {label}
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-                    <div>
-                        <button onClick={() => patchJhSettings({ autoMemorySync: !jhSettings.autoMemorySync })}
-                            className="w-full flex items-center justify-between bg-slate-50 rounded-2xl px-4 py-3 active:scale-[0.98] transition-transform">
-                            <div className="text-left">
-                                <div className="text-xs font-bold text-slate-700">离开会话自动沉淀记忆</div>
-                                <div className="text-[10px] text-slate-400 mt-0.5">退出聊天时静默把新内容喂进记忆宫殿（先代号化+脱敏）</div>
-                            </div>
-                            <div className={`w-11 h-6 rounded-full p-0.5 transition-colors shrink-0 ${jhSettings.autoMemorySync ? 'bg-violet-500' : 'bg-slate-300'}`}>
-                                <div className={`w-5 h-5 bg-white rounded-full shadow transition-transform ${jhSettings.autoMemorySync ? 'translate-x-5' : ''}`} />
-                            </div>
-                        </button>
-                        {jhSettings.autoMemorySync && (
-                            <div className="flex items-center gap-2 mt-2 px-1">
-                                <span className="text-[11px] text-slate-500 shrink-0">新消息满</span>
-                                {[4, 6, 10, 16].map(v => (
-                                    <button key={v} onClick={() => patchJhSettings({ syncThreshold: v })}
-                                        className={`px-2.5 py-1 text-[11px] font-bold rounded-lg border transition-all active:scale-95 ${jhSettings.syncThreshold === v ? 'bg-violet-50 text-violet-600 border-violet-200' : 'bg-white text-slate-400 border-slate-200'}`}>
-                                        {v} 条
-                                    </button>
-                                ))}
-                                <span className="text-[11px] text-slate-500">才沉淀</span>
-                            </div>
-                        )}
-                    </div>
                     <div>
                         <div className="text-xs font-bold text-slate-500 mb-1">模拟面试出题素材</div>
                         <div className="text-[10px] text-slate-400 mb-2">出题时给面试官看什么额外材料（都会先脱敏/代号化）</div>
@@ -2006,28 +2027,29 @@ const JobHuntApp: React.FC = () => {
                             </div>
                         </div>
 
-                        {/* 竞争力档案卡 */}
-                        <div className="bg-white rounded-2xl border border-slate-200/70 shadow-sm p-4">
+                        {/* 竞争力档案卡 — 灯塔与潮汐 */}
+                        <div className="rounded-2xl border border-slate-200/70 shadow-sm p-4 bg-gradient-to-b from-sky-50/70 via-white to-amber-50/40 relative overflow-hidden">
                             <div className="flex items-center gap-2">
                                 <span className="text-sm font-bold text-slate-800">竞争力档案</span>
                                 <button onClick={() => { setProfDirection(jobProfile?.direction || ''); setShowProfileEdit(true); }} className="ml-auto text-xs text-sky-500 font-semibold flex items-center gap-1 active:scale-95 transition-transform"><PencilSimple className="w-3.5 h-3.5" />编辑</button>
                             </div>
-                            {jobProfile?.direction && <div className="text-xs text-slate-600 mt-1.5">方向：{jobProfile.direction}</div>}
-                            {(jobProfile?.strengths.length || 0) > 0 && (
-                                <div className="mt-2">
-                                    <div className="text-[11px] text-slate-400 mb-1">竞争点</div>
-                                    <div className="flex flex-wrap gap-1.5">{jobProfile!.strengths.map(s => <span key={s.id} className="text-[11px] px-2 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200/70 leading-snug">{s.text}</span>)}</div>
-                                </div>
-                            )}
-                            {(jobProfile?.gaps.length || 0) > 0 && (
-                                <div className="mt-2">
-                                    <div className="text-[11px] text-slate-400 mb-1">改进点</div>
-                                    <div className="flex flex-wrap gap-1.5">{jobProfile!.gaps.map(g => <span key={g.id} className="text-[11px] px-2 py-1 rounded-lg bg-amber-50 text-amber-700 border border-amber-200/70 leading-snug"><span className="text-amber-500/80 font-semibold">{g.kind === 'resume' ? '简历·' : '策略·'}</span>{g.text}</span>)}</div>
-                                </div>
-                            )}
-                            {!jobProfile?.direction && !(jobProfile?.strengths.length) && !(jobProfile?.gaps.length) && (
-                                <div className="text-xs text-slate-400 mt-1.5 leading-relaxed">还没建立档案。到「笔记本」导入简历点「解析进档案」，或在单聊里让角色帮你沉淀；也可以点右上「编辑」手动填。</div>
-                            )}
+                            {(() => {
+                                const st = computeProfileStats(jobProfile);
+                                if (!st.hasAny) return (
+                                    <div className="text-xs text-slate-400 mt-1.5 leading-relaxed">还没建立档案。到「笔记本」导入简历点「解析进档案」，或在单聊里让角色帮你沉淀；也可以点右上「编辑」手动填。</div>
+                                );
+                                return (
+                                    <>
+                                        <div className="text-[11px] text-slate-500 mt-1.5">{st.line}</div>
+                                        {renderProfileTide(jobProfile, true)}
+                                        {(st.s > 3 || st.g > 3) && (
+                                            <div className="text-center mt-1">
+                                                <button onClick={() => setShowProfileDetail(true)} className="text-[11px] text-sky-500 font-semibold active:scale-95 transition-transform">查看全部（竞争 {st.s} · 改进 {st.g}）→</button>
+                                            </div>
+                                        )}
+                                    </>
+                                );
+                            })()}
                         </div>
 
                         {/* 下一步清单 */}
@@ -2406,6 +2428,21 @@ const JobHuntApp: React.FC = () => {
                     </div>
                 )}
             </div>
+
+            {/* 竞争力档案详情（灯塔与潮汐全量图，只读+入口编辑） */}
+            {showProfileDetail && (
+                <div className="absolute inset-0 z-50 bg-black/30 flex items-end" onClick={() => setShowProfileDetail(false)}>
+                    <div className="w-full bg-gradient-to-b from-sky-50 via-white to-amber-50/60 rounded-t-3xl p-5 max-h-[85%] overflow-y-auto" onClick={e => e.stopPropagation()} style={{ paddingBottom: 'max(1.25rem, var(--safe-bottom))' }}>
+                        <div className="flex items-center gap-2 mb-1">
+                            <span className="font-bold text-slate-800">竞争力档案</span>
+                            <button onClick={() => { setShowProfileDetail(false); setProfDirection(jobProfile?.direction || ''); setShowProfileEdit(true); }} className="ml-auto text-xs text-sky-500 font-semibold flex items-center gap-1 active:scale-95 transition-transform"><PencilSimple className="w-3.5 h-3.5" />编辑</button>
+                            <button onClick={() => setShowProfileDetail(false)} className="text-slate-400 active:scale-95 transition-transform"><X className="w-5 h-5" /></button>
+                        </div>
+                        <div className="text-[11px] text-slate-500 mb-1">{computeProfileStats(jobProfile).line}</div>
+                        {renderProfileTide(jobProfile, false)}
+                    </div>
+                </div>
+            )}
 
             {/* 竞争力档案编辑弹窗（手改条目标 source:'user'，AI 重新解析不覆盖） */}
             {showProfileEdit && (() => {
