@@ -137,9 +137,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.date.outputs.date }}-${{ github.run_number }}
-          name: SullyOS ${{ steps.date.outputs.date }}
+          name: SullyOS-NuiAPK ${{ steps.date.outputs.date }}
           body: |
-            SullyOS debug build (${{ steps.date.outputs.date }})
+            SullyOS-NuiAPK debug build (${{ steps.date.outputs.date }})
 
             ## 本次更新
             ${{ github.event.inputs.release_notes }}

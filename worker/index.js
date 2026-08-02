@@ -2632,7 +2632,7 @@ export default {
         const t = setTimeout(() => c.abort(), 10000);
         try {
           const r = await fetch('https://api.bgm.tv/calendar', {
-            headers: { 'User-Agent': 'SullyOS/1.0 (https://github.com/post090/SullyOS)' },
+            headers: { 'User-Agent': 'SullyOS/1.0 (https://github.com/post090/SullyOS-NuiAPK)' },
             signal: c.signal,
           });
           if (!r.ok) return jsonResponse({ error: `Bangumi HTTP ${r.status}` }, { status: 502, origin });
@@ -2755,7 +2755,7 @@ export default {
         const upstream = await fetch(target.toString(), {
           method: 'GET',
           headers: {
-            'User-Agent': 'Mozilla/5.0 (compatible; SullyOS-RSSBot/1.0; +https://github.com/post090/SullyOS)',
+            'User-Agent': 'Mozilla/5.0 (compatible; SullyOS-RSSBot/1.0; +https://github.com/post090/SullyOS-NuiAPK)',
             'Accept': 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*',
           },
           redirect: 'follow',
