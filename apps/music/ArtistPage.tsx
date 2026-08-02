@@ -1,11 +1,11 @@
 /**
- * 歌手页 — 网易云风格：头像 + 名字 + 简介 + 热门歌曲 + 专辑墙。
- * 按歌手 id 进入（一首歌多个歌手时各自成页），数据 /artists + /artist/songs + /artist/album 并发拉取。
+ * 歌手页 — 网易云风格：头像 + 名字 + 简介 + 歌曲/专辑页签。
+ * 热门歌曲用 SongRow 统一样式；超 50 首底部有「播放全部」→ 全屏纯歌单。
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useOS } from '../../context/OSContext';
 import { useMusic, musicApi, toHttps, Song } from '../../context/MusicContext';
-import { C, Sparkle, MizuHeader, BokehBg, MiniPlayer, ArtistLinks } from './MusicUI';
+import { C, Sparkle, MizuHeader, BokehBg, MiniPlayer, SongRow } from './MusicUI';
 import { Play, ChatCircleDots } from '@phosphor-icons/react';
 import type { AlbumSource } from './AlbumDetailPage';
 
@@ -23,6 +23,7 @@ interface Props {
   onOpenAlbum: (album: AlbumSource) => void;
   onOpenArtist: (id: number, name: string) => void;
   onOpenComments?: (song: Song) => void;
+  onMore?: (song: Song) => void;
 }
 
 const fmtTime = (s: number) => {
@@ -52,7 +53,7 @@ const mapAlbum = (a: any): AlbumSource => ({
   trackCount: a.size,
 });
 
-const ArtistPage: React.FC<Props> = ({ artistId, artistName, onBack, onOpenPlayer, onOpenAlbum, onOpenArtist, onOpenComments }) => {
+const ArtistPage: React.FC<Props> = ({ artistId, artistName, onBack, onOpenPlayer, onOpenAlbum, onOpenArtist, onOpenComments, onMore }) => {
   const { addToast } = useOS();
   const { cfg, playSong, current, playing, togglePlay, nextSong, prevSong } = useMusic();
   const toastRef = useRef(addToast);
@@ -65,17 +66,24 @@ const ArtistPage: React.FC<Props> = ({ artistId, artistName, onBack, onOpenPlaye
   const [musicSize, setMusicSize] = useState<number | null>(null);
   const [albumSize, setAlbumSize] = useState<number | null>(null);
   const [hotSongs, setHotSongs] = useState<Song[]>([]);
+  const [allSongs, setAllSongs] = useState<Song[]>([]);
   const [albums, setAlbums] = useState<AlbumSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [descExpanded, setDescExpanded] = useState(false);
+  const [tab, setTab] = useState<'songs' | 'albums'>('songs');
+  const [showAllSongs, setShowAllSongs] = useState(false);
+  const [loadingAll, setLoadingAll] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setHotSongs([]);
+    setAllSongs([]);
     setAlbums([]);
     setAvatar('');
     setBriefDesc('');
+    setShowAllSongs(false);
+    setTab('songs');
     (async () => {
       const [infoR, songsR, albumsR] = await Promise.allSettled([
         musicApi.artist(cfgRef.current, artistId),
@@ -120,12 +128,99 @@ const ArtistPage: React.FC<Props> = ({ artistId, artistName, onBack, onOpenPlaye
     onOpenPlayer();
   }, [hotSongs, playSong, onOpenPlayer]);
 
+  // 加载全部歌曲（全屏歌单页用，limit 拉满 200）
+  const loadAllSongs = useCallback(async () => {
+    if (allSongs.length > 0) { setShowAllSongs(true); return; }
+    setLoadingAll(true);
+    try {
+      const r = await musicApi.artistSongs(cfgRef.current, artistId, 200);
+      const list = r?.songs || r?.hotSongs || [];
+      if (Array.isArray(list)) setAllSongs(list.map(mapTrack));
+      setShowAllSongs(true);
+    } catch (e: any) {
+      toastRef.current(`加载全部歌曲失败：${e?.message || ''}`, 'error');
+    } finally {
+      setLoadingAll(false);
+    }
+  }, [artistId, allSongs.length]);
+
+  // 全屏歌单页：播放全部
+  const playAllFromFull = useCallback(() => {
+    if (!allSongs.length) return;
+    playSong(allSongs[0], { replaceQueue: allSongs, startIdx: 0 });
+    onOpenPlayer();
+  }, [allSongs, playSong, onOpenPlayer]);
+
   const descLimit = 60;
   const descLong = briefDesc.length > descLimit;
   const sizeLabel = useMemo(() => {
     if (musicSize == null) return null;
     return `${musicSize} 首歌${albumSize != null ? ` · ${albumSize} 张专辑` : ''}`;
   }, [musicSize, albumSize]);
+
+  // ── 全屏纯歌单页（类似网易云，点「播放全部」进入） ──
+  if (showAllSongs) {
+    return (
+      <div className="flex flex-col h-full relative"
+        style={{ background: `linear-gradient(180deg, ${C.bg} 0%, ${C.bgDeep} 100%)` }}>
+        <BokehBg />
+        <MizuHeader title="All Songs" onBack={() => setShowAllSongs(false)} />
+        <div className="flex-1 overflow-y-auto relative z-10 shizuku-scrollbar pb-24">
+          {/* 播放全部条 */}
+          <div className="px-4 py-3 flex items-center gap-3">
+            <button
+              onClick={playAllFromFull}
+              className="px-4 py-2 rounded-2xl text-xs text-white flex items-center gap-1.5 transition-all active:scale-95"
+              style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, boxShadow: `0 3px 15px ${C.primary}30` }}
+            >
+              <Play size={11} weight="fill" /> 播放全部
+            </button>
+            <span className="text-[10px]" style={{ color: C.muted }}>共 {allSongs.length} 首</span>
+            {loadingAll && (
+              <span className="inline-block w-3 h-3 border-2 rounded-full animate-spin ml-auto"
+                style={{ borderColor: `${C.faint}40`, borderTopColor: C.primary }} />
+            )}
+          </div>
+          {/* 歌曲列表（SongRow 统一样式） */}
+          <div className="px-1">
+            {allSongs.map(s => (
+              <SongRow
+                key={s.id}
+                name={s.name}
+                artists={s.artists}
+                album={s.album}
+                albumPic={s.albumPic}
+                duration={fmtTime(s.duration)}
+                isVip={s.fee === 1}
+                isActive={current?.id === s.id}
+                onClick={() => {
+                  const startIdx = allSongs.findIndex(x => x.id === s.id);
+                  playSong(s, { replaceQueue: allSongs, startIdx: startIdx >= 0 ? startIdx : 0 });
+                  onOpenPlayer();
+                }}
+                onMore={onMore ? () => onMore(s) : undefined}
+              />
+            ))}
+            {allSongs.length === 0 && !loadingAll && (
+              <div className="text-center text-[10px] py-8" style={{ color: C.faint }}>暂无歌曲</div>
+            )}
+          </div>
+        </div>
+        {current && (
+          <MiniPlayer
+            name={current.name}
+            artists={current.artists}
+            albumPic={current.albumPic}
+            playing={playing}
+            onTap={onOpenPlayer}
+            onPrev={prevSong}
+            onToggle={togglePlay}
+            onNext={nextSong}
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-full relative"
@@ -161,11 +256,6 @@ const ArtistPage: React.FC<Props> = ({ artistId, artistName, onBack, onOpenPlaye
               <div className="text-[10px] mt-0.5 truncate" style={{ color: C.muted }}>
                 {sizeLabel || '歌手'}
               </div>
-              <div className="flex items-center gap-1.5 mt-1.5">
-                <span className="text-[9px] px-2 py-0.5 rounded-full shizuku-glass" style={{ color: C.primary }}>
-                  {hotSongs.length} 首热门
-                </span>
-              </div>
             </div>
           </div>
         </div>
@@ -186,115 +276,124 @@ const ArtistPage: React.FC<Props> = ({ artistId, artistName, onBack, onOpenPlaye
           </div>
         )}
 
-        {/* 热门歌曲 */}
-        <div className="px-4 mt-4">
-          <div className="flex items-center gap-2 mb-1.5 px-1">
-            <span className="text-[10px] tracking-[0.2em] uppercase font-semibold" style={{ color: C.muted }}>
-              热门歌曲
-            </span>
+        {/* 页签：歌曲 / 专辑 */}
+        <div className="px-4 mt-3 flex gap-2">
+          <button
+            onClick={() => setTab('songs')}
+            className="px-3 py-1.5 rounded-full text-[11px] font-bold transition-all active:scale-95"
+            style={tab === 'songs'
+              ? { background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, color: 'white', boxShadow: `0 2px 8px ${C.glow}30` }
+              : { background: 'rgba(255,255,255,0.4)', color: C.muted }}
+          >
+            歌曲{hotSongs.length > 0 ? ` ${hotSongs.length}` : ''}
+          </button>
+          <button
+            onClick={() => setTab('albums')}
+            className="px-3 py-1.5 rounded-full text-[11px] font-bold transition-all active:scale-95"
+            style={tab === 'albums'
+              ? { background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, color: 'white', boxShadow: `0 2px 8px ${C.glow}30` }
+              : { background: 'rgba(255,255,255,0.4)', color: C.muted }}
+          >
+            专辑{albumSize != null ? ` ${albumSize}` : (albums.length > 0 ? ` ${albums.length}` : '')}
+          </button>
+        </div>
+
+        {/* 歌曲 tab */}
+        {tab === 'songs' && (
+          <div className="mt-3">
+            {/* 播放热门条 */}
             {hotSongs.length > 0 && (
-              <button
-                onClick={playAll}
-                className="ml-auto px-2.5 py-1 rounded-full text-[10px] text-white flex items-center gap-1 transition-all active:scale-95"
-                style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, boxShadow: `0 2px 8px ${C.glow}30` }}
-              >
-                <Play size={9} weight="fill" /> 播放
-              </button>
+              <div className="px-4 pb-2 flex items-center gap-2">
+                <button
+                  onClick={playAll}
+                  className="px-3 py-1.5 rounded-2xl text-[11px] text-white flex items-center gap-1 transition-all active:scale-95"
+                  style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, boxShadow: `0 2px 8px ${C.glow}30` }}
+                >
+                  <Play size={10} weight="fill" /> 播放热门
+                </button>
+                <span className="text-[10px]" style={{ color: C.faint }}>前 {hotSongs.length} 首</span>
+              </div>
             )}
-          </div>
-          <div className="space-y-0.5">
-            {hotSongs.map((s, i) => {
-              const active = current?.id === s.id;
-              return (
-                <div key={s.id} className="rounded-xl"
-                  style={{ background: active ? 'rgba(255,255,255,0.55)' : undefined }}>
-                  <div className="flex items-center gap-1 px-2 pt-1.5">
-                    <button
-                      onClick={() => playAt(s)}
-                      className="flex-1 flex items-center gap-2.5 min-w-0 text-left"
-                    >
-                      <span className="text-[9px] w-6 text-center shrink-0 tabular-nums"
-                        style={{ color: active ? C.primary : C.faint }}>
-                        {active ? '▶' : i + 1}
-                      </span>
-                      <img src={s.albumPic} alt="" className="w-9 h-9 rounded-lg object-cover shrink-0"
-                        style={{ border: `1px solid ${C.faint}25` }} />
-                      <span className="text-[12px] truncate"
-                        style={{ color: active ? C.primary : C.text, fontWeight: active ? 600 : 400 }}>
-                        {s.name}
-                      </span>
-                      {s.fee === 1 && (
-                        <span className="text-[8px] px-1 rounded shrink-0" style={{ color: C.vip, border: `1px solid ${C.vip}50` }}>VIP</span>
-                      )}
-                      <span className="text-[9px] shrink-0 tabular-nums ml-auto" style={{ color: C.faint }}>{fmtTime(s.duration)}</span>
-                    </button>
-                    {onOpenComments && (
-                      <button
-                        onClick={() => onOpenComments(s)}
-                        className="p-2 shrink-0 transition-transform active:scale-90"
-                        style={{ color: C.faint }}
-                        title="看这首歌的评论区"
-                      >
-                        <ChatCircleDots size={15} />
-                      </button>
-                    )}
-                  </div>
-                  <div className="pl-[88px] pr-2 pb-1.5 -mt-0.5">
-                    <ArtistLinks
-                      artists={s.artists}
-                      artistIds={s.artistIds}
-                      onOpenArtist={onOpenArtist}
-                      style={{ fontSize: '9.5px' }}
-                    />
-                  </div>
+            {/* 歌曲列表（SongRow 统一样式） */}
+            <div className="px-1">
+              {hotSongs.map(s => (
+                <SongRow
+                  key={s.id}
+                  name={s.name}
+                  artists={s.artists}
+                  album={s.album}
+                  albumPic={s.albumPic}
+                  duration={fmtTime(s.duration)}
+                  isVip={s.fee === 1}
+                  isActive={current?.id === s.id}
+                  onClick={() => playAt(s)}
+                  onMore={onMore ? () => onMore(s) : undefined}
+                />
+              ))}
+              {loading && (
+                <div className="text-center text-[10px] py-4" style={{ color: C.faint }}>
+                  <span className="inline-block w-3 h-3 border-2 rounded-full animate-spin align-middle"
+                    style={{ borderColor: `${C.faint}40`, borderTopColor: C.primary }} />
+                  <span className="ml-2 align-middle">加载歌手资料中…</span>
                 </div>
-              );
-            })}
-            {loading && (
-              <div className="text-center text-[10px] py-4" style={{ color: C.faint }}>
-                <span className="inline-block w-3 h-3 border-2 rounded-full animate-spin align-middle"
-                  style={{ borderColor: `${C.faint}40`, borderTopColor: C.primary }} />
-                <span className="ml-2 align-middle">加载歌手资料中…</span>
+              )}
+            </div>
+            {/* 超 50 首时底部「播放全部」按钮 → 全屏歌单页 */}
+            {musicSize != null && musicSize > 50 && (
+              <div className="px-4 mt-3 pb-4">
+                <button
+                  onClick={loadAllSongs}
+                  disabled={loadingAll}
+                  className="w-full py-2.5 rounded-2xl text-xs font-bold text-white flex items-center justify-center gap-1.5 transition-all active:scale-[0.98] disabled:opacity-50"
+                  style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, boxShadow: `0 3px 15px ${C.primary}30` }}
+                >
+                  {loadingAll ? (
+                    <span className="inline-block w-3 h-3 border-2 rounded-full animate-spin" style={{ borderColor: 'rgba(255,255,255,0.3)', borderTopColor: 'white' }} />
+                  ) : (
+                    <><Play size={11} weight="fill" /> 播放全部 {musicSize} 首</>
+                  )}
+                </button>
               </div>
             )}
           </div>
-        </div>
+        )}
 
-        {/* 专辑墙 */}
-        {albums.length > 0 && (
-          <div className="px-4 mt-4">
-            <div className="flex items-center gap-2 mb-1.5 px-1">
-              <span className="text-[10px] tracking-[0.2em] uppercase font-semibold" style={{ color: C.muted }}>
-                专辑
-              </span>
-            </div>
-            <div className="grid grid-cols-3 gap-2.5">
-              {albums.map(a => (
-                <button
-                  key={a.id}
-                  onClick={() => onOpenAlbum(a)}
-                  className="text-left group"
-                >
-                  <div className="relative rounded-xl overflow-hidden"
-                    style={{ boxShadow: `0 2px 12px ${C.glow}25` }}>
-                    {a.coverImgUrl ? (
-                      <img src={a.coverImgUrl} alt=""
-                        className="w-full aspect-square object-cover transition-transform group-active:scale-95" />
-                    ) : (
-                      <div className="w-full aspect-square flex items-center justify-center"
-                        style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.accent})` }}>
-                        <Play size={18} weight="fill" color="white" />
-                      </div>
-                    )}
-                    <div className="absolute -top-0.5 -right-0.5"><Sparkle size={7} color={C.glow} delay={0.4} /></div>
-                  </div>
-                  <div className="text-[10px] mt-1 leading-snug line-clamp-2" style={{ color: C.text }}>
-                    {a.name}
-                  </div>
-                  <div className="text-[9px]" style={{ color: C.faint }}>{a.trackCount ?? ''}首</div>
-                </button>
-              ))}
-            </div>
+        {/* 专辑 tab */}
+        {tab === 'albums' && (
+          <div className="px-4 mt-3">
+            {albums.length > 0 ? (
+              <div className="grid grid-cols-3 gap-2.5">
+                {albums.map(a => (
+                  <button
+                    key={a.id}
+                    onClick={() => onOpenAlbum(a)}
+                    className="text-left group"
+                  >
+                    <div className="relative rounded-xl overflow-hidden"
+                      style={{ boxShadow: `0 2px 12px ${C.glow}25` }}>
+                      {a.coverImgUrl ? (
+                        <img src={a.coverImgUrl} alt=""
+                          className="w-full aspect-square object-cover transition-transform group-active:scale-95" />
+                      ) : (
+                        <div className="w-full aspect-square flex items-center justify-center"
+                          style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.accent})` }}>
+                          <Play size={18} weight="fill" color="white" />
+                        </div>
+                      )}
+                      <div className="absolute -top-0.5 -right-0.5"><Sparkle size={7} color={C.glow} delay={0.4} /></div>
+                    </div>
+                    <div className="text-[10px] mt-1 leading-snug line-clamp-2" style={{ color: C.text }}>
+                      {a.name}
+                    </div>
+                    <div className="text-[9px]" style={{ color: C.faint }}>{a.trackCount ?? ''}首</div>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center text-[10px] py-8" style={{ color: C.faint }}>
+                {loading ? '加载专辑中…' : '暂无专辑'}
+              </div>
+            )}
           </div>
         )}
       </div>

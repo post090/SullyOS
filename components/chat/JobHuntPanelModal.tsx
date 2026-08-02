@@ -117,6 +117,9 @@ const JobHuntPanelModal: React.FC<JobHuntPanelModalProps> = ({
                             <p className="text-[10px] text-amber-500 mt-1 leading-relaxed">
                                 建议只在相关场景开启；长期开着会过多分散 {char.name} 的注意力。
                             </p>
+                            <p className="text-[10px] text-amber-500 mt-0.5 leading-relaxed">
+                                工具调用模式下，{char.name} 查看工作台 / 笔记 / 落库会产生多轮工具调用，会消耗较高 Token。
+                            </p>
                         </div>
                         <button
                             onClick={() => onToggleJobHunt(!enabled)}

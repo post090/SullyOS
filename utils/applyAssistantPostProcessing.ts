@@ -1442,31 +1442,52 @@ ${lines.join(String.fromCharCode(10))}
     }
     aiContent = stripMemoTags(aiContent);
 
-    // 5.9d Handle Job Hunt directives (上岸计划：岗位卡/求职笔记增删改)
+    // 5.9d Handle Job Hunt directives (上岸计划：岗位卡/求职笔记增删改 + 查看/搜索)
     // 仅 jobHuntEnabled 角色才会被教这套标签；但与备忘录同款保险：检测到就执行。
-    // 同一轮回复的所有指令合并落一张聚合 job_card（metadata.jobCards 数组），
-    // 避免 AI 一次建四张卡刷屏七条胶囊；MessageItem 的 job-event 聚合卡渲染。
-    if (/\[\[JOB_(?:SET|UPDATE|ROUND|INTERVIEW|WAITING|DEL|NOTE|NOTE_EDIT|NOTE_DEL|EDGE_ADD|EDGE_DEL|GAP_ADD|GAP_DEL|DIRECTION):/.test(aiContent)) {
+    // 编辑类：同一轮所有指令合并落一张聚合 job_card（metadata.jobCards 数组），不刷屏。
+    // 查看类：结果全文单独落一条 system 消息（AI 下轮历史可见 = 回灌 tool result）。
+    if (/\[\[JOB_(?:VIEW|SEARCH|NOTE_READ|SET|UPDATE|ROUND|INTERVIEW|WAITING|DEL|NOTE|NOTE_EDIT|NOTE_DEL|EDGE_ADD|EDGE_DEL|GAP_ADD|GAP_DEL|DIRECTION)(?:\]|\:)/.test(aiContent)) {
         try {
             const { parseJobHuntCommands } = await import('./jobHuntParser');
             const { applyJobDirectives, describeJobBatch } = await import('./jobDirectives');
             const parsedJob = parseJobHuntCommands(aiContent);
             aiContent = parsedJob.cleanText;
-            const { cards, rejected } = await applyJobDirectives(parsedJob, char.id);
-            if (cards.length > 0) {
+            const { cards, rejected, toolResults } = await applyJobDirectives(parsedJob, char.id);
+            // 查看类结果：全文回灌给 AI（下轮历史可见 = tool result）
+            if (toolResults.length > 0) {
                 try {
                     await DB.saveMessage({
                         charId: char.id,
                         role: 'system',
                         type: 'job_card',
-                        content: describeJobBatch(cards, char.name),
-                        metadata: { source: 'job-event', charName: char.name, charAvatar: char.avatar, jobCards: cards },
+                        content: toolResults.join('\n\n---\n\n'),
+                        metadata: { source: 'job-view-result', charName: char.name, charAvatar: char.avatar, isViewResult: true },
+                    });
+                } catch (msgErr) {
+                    console.warn('💼 [JobHunt] saveMessage for view result failed:', msgErr);
+                }
+            }
+            // 编辑类：聚合卡（同一轮合并一张，不刷屏）
+            const editCards = cards.filter(c => c.jobKind !== 'view' && c.jobKind !== 'note_read' && c.jobKind !== 'search');
+            if (editCards.length > 0) {
+                try {
+                    await DB.saveMessage({
+                        charId: char.id,
+                        role: 'system',
+                        type: 'job_card',
+                        content: describeJobBatch(editCards, char.name),
+                        metadata: { source: 'job-event', charName: char.name, charAvatar: char.avatar, jobCards: editCards },
                     });
                 } catch (msgErr) {
                     console.warn('💼 [JobHunt] saveMessage for job_card failed:', msgErr);
                 }
-                addToast(`💼 ${char.name} 更新了求职工作台（${cards.length} 项）`, 'success');
-                // 刷新消息列表让卡片马上可见（与备忘录不同：job_card 不是隐藏系统日志）
+                addToast(`💼 ${char.name} 更新了求职工作台（${editCards.length} 项）`, 'success');
+            } else if (cards.length > 0) {
+                // 只有查看类，没有编辑类 → 轻提示
+                addToast(`💼 ${char.name} 查看了求职工作台`, 'info');
+            }
+            // 刷新消息列表让卡片/结果马上可见
+            if (cards.length > 0 || toolResults.length > 0) {
                 try {
                     const latest = await DB.getRecentMessagesByCharId(char.id, 200);
                     setMessages(latest);

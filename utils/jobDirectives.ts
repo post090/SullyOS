@@ -133,7 +133,7 @@ export function buildPositionPromptLine(p: JobPosition, allPositions: JobPositio
 
 /** 一张 job_card 消息的 metadata.jobCard 结构 */
 export interface JobCardPayload {
-    jobKind: 'update' | 'set' | 'round' | 'interview_time' | 'waiting' | 'delete' | 'note' | 'note_edit' | 'note_del' | 'edge_add' | 'edge_del' | 'gap_add' | 'gap_del' | 'direction';
+    jobKind: 'update' | 'set' | 'edit' | 'round' | 'interview_time' | 'waiting' | 'delete' | 'note' | 'note_edit' | 'note_del' | 'edge_add' | 'edge_del' | 'gap_add' | 'gap_del' | 'direction' | 'view' | 'note_read' | 'search';
     /** update/set/round/interview_time/waiting/delete：岗位代号 */
     code?: string;
     stage?: string;
@@ -144,6 +144,9 @@ export interface JobCardPayload {
     /** set：被改的字段中文标签 + 值摘要；waiting 也用 valuePreview 写状态文案 */
     fieldLabel?: string;
     valuePreview?: string;
+    /** edit：被改的长字段标签（jd/notes）+ 旧片段摘要 + 新片段摘要 */
+    oldSnippetPreview?: string;
+    newSnippetPreview?: string;
     /** round：环节展示（面试/笔试 · 第几轮 · 状态） */
     roundKindLabel?: string;
     roundIndex?: number;
@@ -157,6 +160,12 @@ export interface JobCardPayload {
     title?: string;
     /** 笔记摘要（截断，点卡片弹全文时从 DB 按 noteId 取） */
     preview?: string;
+    /** view/search：返回结果文本（回灌给 AI + 卡片展开可见） */
+    resultText?: string;
+    /** view/search：命中的岗位/笔记条数 */
+    hitCount?: number;
+    /** search：搜索关键词 */
+    keyword?: string;
 }
 
 const FIELD_LABEL: Record<JobSettableField, string> = {
@@ -164,75 +173,62 @@ const FIELD_LABEL: Record<JobSettableField, string> = {
 };
 
 /**
- * 求职模式 prompt 注入块：岗位列表 + 近期笔记标题（AI 能看见才能改/删）+ 指令教学。
- * 无岗位无笔记也返回教学段（开关已开 = 用户想让角色帮忙管理，AI 得知道能力存在）。
+ * 求职模式 prompt 注入块（极简摘要版）：
+ * 只给岗位代号+阶段 + 笔记标题列表 + 下一场面试 + 精简教学。
+ * 不含 JD / notes 正文 / 简历 / 档案详情 → 聊求职不分散注意力，需要详情用 [[JOB_VIEW]]。
+ * 岗位代号和笔记标题是精确匹配的前提，必须注入。
  */
 export async function buildJobHuntPromptBlock(): Promise<string> {
     let positions: JobPosition[] = [];
     let notes: JobNote[] = [];
-    let profile: JobProfile | null = null;
-    let resumes: JobResume[] = [];
     try { positions = await DB.getJobPositions(); } catch { /* 表还没建等场景，静默 */ }
     try { notes = await DB.getJobNotes(); } catch { /* 同上 */ }
-    try { profile = await DB.getJobProfile(); } catch { /* 同上 */ }
-    try { resumes = await DB.getJobResumes(); } catch { /* 同上 */ }
-
-    // 单聊注入档位（用户级全局设置；读失败用默认：档案开、简历摘要、岗位开）
-    let inject: { resume: 'none' | 'raw' | 'digest'; profile: boolean; positions: boolean; notes: boolean } = { resume: 'digest', profile: true, positions: true, notes: true };
-    try { inject = loadJhSettings().inject; } catch { /* 用默认 */ }
 
     const lines: string[] = ['### 【求职工作台 · 上岸计划】'];
-    lines.push(`你在帮用户推进求职。以下是工作台当前状态（公司都是代号，真实公司名你看不到也不需要知道）：`);
-    // 竞争力档案段（用户级单份；永远不含真名/真实公司）
-    if (inject.profile && profile && (profile.direction || profile.strengths.length || profile.gaps.length)) {
-        lines.push('【候选人竞争力档案】');
-        if (profile.direction) lines.push(`求职方向：${profile.direction}`);
-        if (profile.strengths.length) lines.push(`竞争点：${profile.strengths.map(s => s.text).join('；')}`);
-        const gapS = profile.gaps.filter(g => g.kind === 'strategy').map(g => g.text);
-        const gapR = profile.gaps.filter(g => g.kind === 'resume').map(g => g.text);
-        if (gapS.length) lines.push(`求职策略层改进：${gapS.join('；')}`);
-        if (gapR.length) lines.push(`简历写法层改进：${gapR.join('；')}`);
-    }
+    lines.push('你在帮用户推进求职（公司都是代号，真实公司名你看不到也不需要知道）。');
 
-    // 简历段：none 不注入 / raw 脱敏原文~1500 字 / digest 结构化摘要~600 字
-    if (inject.resume === 'digest' && profile?.resumeDigest) {
-        lines.push('【简历摘要】');
-        lines.push(profile.resumeDigest.slice(0, 600));
-    } else if (inject.resume === 'raw' && resumes[0]?.rawText) {
-        lines.push('【简历原文（已脱敏）】');
-        lines.push(resumes[0].rawText.slice(0, 1500));
-    }
-
-    // 岗位段
-    if (inject.positions) {
-        const active = positions.filter(p => p.stage !== 'rejected');
-        if (active.length > 0) {
-            lines.push('【在推进的岗位】');
-            active.forEach(p => {
-                lines.push(buildPositionPromptLine(p, positions));
+    // 岗位：只列代号+阶段（一行），AI 日常编辑直接拿代号用
+    const active = positions.filter(p => p.stage !== 'rejected');
+    if (active.length > 0) {
+        const posLine = active.map(p => `${p.code}(${STAGE_LABEL[p.stage] || p.stage})`).join('、');
+        lines.push(`在推进：${posLine}`);
+        // 下一场面试
+        const nextTs = active.reduce((min: number | null, p) => {
+            const ts = nextInterviewTs(p);
+            return ts && (min === null || ts < min) ? ts : min;
+        }, null);
+        if (nextTs) {
+            const days = Math.ceil((nextTs - Date.now()) / (24 * 3600 * 1000));
+            // 找到是哪个岗位的面试
+            const owner = active.find(p => {
+                const ts = nextInterviewTs(p);
+                return ts && Math.abs(ts - nextTs) < 60000;
             });
-        } else {
-            lines.push('【在推进的岗位】暂无建档岗位（用户聊到新投递时你可以用指令帮 ta 建卡）。');
+            const hint = days <= 0 ? '就在今天' : days === 1 ? '就在明天' : `还有 ${days} 天`;
+            lines.push(`下一场面试：${fmtJobTime(nextTs)}（${owner ? `${owner.code} ` : ''}${hint}）`);
         }
+    } else {
+        lines.push('暂无建档岗位。用户聊到新投递时可以用 [[JOB_UPDATE]] 建卡。');
     }
-    if (inject.notes && notes.length > 0) {
-        // 只注入标题 + 类型 + 更新时间（不含正文，成本极低），按最近更新排序，全部塞过去，
-        // 让 AI 知道笔记本里有哪些条目、能按标题 JOB_NOTE_EDIT / JOB_NOTE_DEL 精准操作。
+
+    // 笔记：只列标题+类型（精确匹配需要知道标题）
+    if (notes.length > 0) {
         const sorted = [...notes].sort((a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt));
-        lines.push('【笔记本条目】（可用 JOB_NOTE_EDIT / JOB_NOTE_DEL 按标题操作）');
-        sorted.forEach(n => {
-            const upd = n.updatedAt ?? n.createdAt;
-            lines.push(`- [${NOTE_KIND_LABEL[n.kind] || n.kind}] ${n.title}（最后更新：${relTimeLabel(upd)}）`);
-        });
+        const noteLine = sorted.slice(0, 15).map(n => `[${NOTE_KIND_LABEL[n.kind] || n.kind}]${n.title}`).join('、');
+        lines.push(`笔记：${noteLine}${sorted.length > 15 ? `（等共${sorted.length}条）` : ''}`);
     }
+
+    lines.push('');
+    lines.push('查看详情/JD/档案/笔记全文用 [[JOB_VIEW]]，搜索用 [[JOB_SEARCH:关键词]]，读笔记用 [[JOB_NOTE_READ:完整标题]]。');
     lines.push('');
     lines.push(JOB_COMMAND_GUIDE);
+
     // AI 改动权限：把用户关掉的操作明确告知，避免 AI 反复发被拒指令、浪费 token
     try {
         const perms = loadJhSettings().aiPerms;
         const banned: string[] = [];
         if (!perms.posProgress) banned.push('改岗位阶段/进展、环节轮次、面试时间、等反馈状态');
-        if (!perms.posFields) banned.push('改岗位名/项目/JD/地点/下一步等字段');
+        if (!perms.posFields) banned.push('改岗位名/项目/地点/下一步等短字段');
         if (!perms.posSalary) banned.push('查看或改动薪资');
         if (!perms.posDelete) banned.push('删除岗位卡');
         if (!perms.noteCreate) banned.push('新建笔记');
@@ -248,15 +244,136 @@ export async function buildJobHuntPromptBlock(): Promise<string> {
 }
 
 /**
+ * JOB_VIEW 返回结果文本（回灌给 AI + 卡片展开可见）：
+ * 全量岗位详情（含 JD 摘要 / notes 摘要 / 环节 / 时间）+ 笔记标题列表 + 简历/档案 + 完整教学。
+ * 受 inject 档位控制（resume/profile/positions/notes）。
+ */
+export async function buildJobViewResult(): Promise<string> {
+    let positions: JobPosition[] = [];
+    let notes: JobNote[] = [];
+    let profile: JobProfile | null = null;
+    let resumes: JobResume[] = [];
+    try { positions = await DB.getJobPositions(); } catch { /* 静默 */ }
+    try { notes = await DB.getJobNotes(); } catch { /* 同上 */ }
+    try { profile = await DB.getJobProfile(); } catch { /* 同上 */ }
+    try { resumes = await DB.getJobResumes(); } catch { /* 同上 */ }
+
+    let inject: { resume: 'none' | 'raw' | 'digest'; profile: boolean; positions: boolean; notes: boolean } = { resume: 'digest', profile: true, positions: true, notes: true };
+    try { inject = loadJhSettings().inject; } catch { /* 用默认 */ }
+
+    const lines: string[] = ['【工作台快照】'];
+
+    // 竞争力档案
+    if (inject.profile && profile && (profile.direction || profile.strengths.length || profile.gaps.length)) {
+        lines.push('【候选人竞争力档案】');
+        if (profile.direction) lines.push(`求职方向：${profile.direction}`);
+        if (profile.strengths.length) lines.push(`竞争点：${profile.strengths.map(s => s.text).join('；')}`);
+        const gapS = profile.gaps.filter(g => g.kind === 'strategy').map(g => g.text);
+        const gapR = profile.gaps.filter(g => g.kind === 'resume').map(g => g.text);
+        if (gapS.length) lines.push(`求职策略层改进：${gapS.join('；')}`);
+        if (gapR.length) lines.push(`简历写法层改进：${gapR.join('；')}`);
+    }
+
+    // 简历
+    if (inject.resume === 'digest' && profile?.resumeDigest) {
+        lines.push('【简历摘要】');
+        lines.push(profile.resumeDigest.slice(0, 600));
+    } else if (inject.resume === 'raw' && resumes[0]?.rawText) {
+        lines.push('【简历原文（已脱敏）】');
+        lines.push(resumes[0].rawText.slice(0, 1500));
+    }
+
+    // 岗位详情
+    if (inject.positions) {
+        const active = positions.filter(p => p.stage !== 'rejected');
+        if (active.length > 0) {
+            lines.push('【岗位详情】');
+            active.forEach(p => { lines.push(buildPositionPromptLine(p, positions)); });
+        } else {
+            lines.push('【岗位详情】暂无建档岗位。');
+        }
+    }
+
+    // 笔记标题
+    if (inject.notes && notes.length > 0) {
+        const sorted = [...notes].sort((a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt));
+        lines.push('【笔记本条目】');
+        sorted.forEach(n => {
+            const upd = n.updatedAt ?? n.createdAt;
+            const preview = n.content.replace(/[#*`>]/g, '').replace(/\s+/g, ' ').slice(0, 80);
+            lines.push(`- [${NOTE_KIND_LABEL[n.kind] || n.kind}] ${n.title}（${relTimeLabel(upd)}）${preview ? `：${preview}…` : ''}`);
+        });
+    }
+
+    return lines.join('\n');
+}
+
+/**
+ * JOB_SEARCH 返回结果：在岗位（title/project/location/next/notes/jd）和笔记（title/content）里搜关键词，
+ * 返回匹配列表（不含全文），上限 10 条。
+ */
+export async function buildJobSearchResult(keyword: string): Promise<{ text: string; hitCount: number }> {
+    let positions: JobPosition[] = [];
+    let notes: JobNote[] = [];
+    try { positions = await DB.getJobPositions(); } catch { /* 静默 */ }
+    try { notes = await DB.getJobNotes(); } catch { /* 同上 */ }
+    const kw = (keyword || '').trim().toLowerCase();
+    if (!kw) return { text: '搜索关键词为空。', hitCount: 0 };
+
+    const lines: string[] = [`【搜索「${keyword}」结果】`];
+    let count = 0;
+    const limit = 10;
+
+    // 岗位命中：搜 title/projectName/location/nextStep/notes/jd
+    for (const p of positions) {
+        if (count >= limit) break;
+        const hayFields = [p.title, p.projectName, p.location, p.nextStep, p.notes, p.jd].filter(Boolean).join(' ').toLowerCase();
+        if (hayFields.includes(kw)) {
+            const hitField = [
+                p.title && p.title.toLowerCase().includes(kw) ? '岗位名' : '',
+                p.projectName && p.projectName.toLowerCase().includes(kw) ? '项目' : '',
+                p.location && p.location.toLowerCase().includes(kw) ? '地点' : '',
+                p.nextStep && p.nextStep.toLowerCase().includes(kw) ? '下一步' : '',
+                p.notes && p.notes.toLowerCase().includes(kw) ? '岗位笔记' : '',
+                p.jd && p.jd.toLowerCase().includes(kw) ? 'JD' : '',
+            ].filter(Boolean).join('/');
+            lines.push(`- 岗位 ${p.code} · ${p.title || p.code} · ${STAGE_LABEL[p.stage] || p.stage}（命中：${hitField}）`);
+            count++;
+        }
+    }
+
+    // 笔记命中：搜 title/content
+    for (const n of notes) {
+        if (count >= limit) break;
+        const hay = `${n.title} ${n.content}`.toLowerCase();
+        if (hay.includes(kw)) {
+            const hitField = n.title.toLowerCase().includes(kw) ? '标题' : '正文';
+            lines.push(`- 笔记[${NOTE_KIND_LABEL[n.kind] || n.kind}] ${n.title}（命中：${hitField}）`);
+            count++;
+        }
+    }
+
+    const total = positions.length + notes.length;
+    if (count === 0) {
+        lines.push(`未命中（共扫了 ${positions.length} 个岗位、${notes.length} 条笔记）。`);
+    } else if (count >= limit) {
+        lines.push(`…命中较多，仅显示前 ${limit} 条，请细化关键词。`);
+    }
+    return { text: lines.join('\n'), hitCount: count };
+}
+
+/**
  * 把 parseJobHuntCommands 的结果落库，返回每条成功指令对应的 job_card payload。
  * 与备忘录同款容错：单条失败跳过不拦其余；删除/编辑找不到目标记入 rejected。
+ * 查看类（view/search/noteRead）结果合并到 toolResults（回灌给 AI + 挂折叠卡片）。
  */
 export async function applyJobDirectives(
     parsed: JobParseResult,
     charId: string,
-): Promise<{ cards: JobCardPayload[]; rejected: string[] }> {
+): Promise<{ cards: JobCardPayload[]; rejected: string[]; toolResults: string[] }> {
     const cards: JobCardPayload[] = [];
     const rejected: string[] = [];
+    const toolResults: string[] = [];
     const now = Date.now();
 
     // AI 改动权限（纯人类授权，逐项开关）：关掉的类别直接丢弃该批指令。
@@ -264,33 +381,89 @@ export async function applyJobDirectives(
     let perms = { posProgress: true, posFields: true, posSalary: true, posDelete: true, noteCreate: true, noteEdit: true, noteDelete: true, profile: true };
     try { perms = loadJhSettings().aiPerms; } catch { /* 用全开默认 */ }
 
-    // ── 岗位建卡/更新 ──
+    // ── 查看类（不落库，结果合并回灌给 AI + 挂一张折叠卡片，不刷屏） ──
+    const viewParts: string[] = [];
+    if (parsed.view) {
+        try {
+            const text = await buildJobViewResult();
+            viewParts.push(text);
+        } catch (e: any) { rejected.push(`JOB_VIEW: ${e?.message || e}`); }
+    }
+    for (const kw of parsed.searches) {
+        try {
+            const { text, hitCount } = await buildJobSearchResult(kw);
+            viewParts.push(text);
+            // 搜索单独挂一张卡片（有 keyword + hitCount，跟 view 区分）
+            cards.push({ jobKind: 'search', keyword: kw, hitCount, resultText: text });
+        } catch (e: any) { rejected.push(`JOB_SEARCH ${kw}: ${e?.message || e}`); }
+    }
+    for (const title of parsed.noteReads) {
+        try {
+            const all = await DB.getJobNotes();
+            // 精确匹配标题
+            const target = all.find(n => n.title === title);
+            if (!target) {
+                rejected.push(`JOB_NOTE_READ: 找不到标题为「${title}」的笔记`);
+                continue;
+            }
+            const text = `【笔记全文：${target.title}】\n${target.content}`;
+            viewParts.push(text);
+            cards.push({ jobKind: 'note_read', noteId: target.id, title: target.title, preview: target.content.replace(/[#*`>]/g, '').replace(/\s+/g, ' ').slice(0, 120), resultText: text });
+        } catch (e: any) { rejected.push(`JOB_NOTE_READ ${title}: ${e?.message || e}`); }
+    }
+    // VIEW 结果单独挂一张卡片（search/note_read 各自挂了，不合并）
+    if (parsed.view && viewParts.length > 0) {
+        // 只把 VIEW 的结果放进 viewParts[0]（search/note_read 已单独处理）
+        const viewText = viewParts[0]; // buildJobViewResult 的结果
+        cards.unshift({ jobKind: 'view', resultText: viewText });
+    }
+    // 所有查看类结果合并回灌给 AI（下轮历史可见）
+    if (viewParts.length > 0) toolResults.push(...viewParts);
+
+    // ── 岗位建卡/更新（支持键值对 fields） ──
     for (const u of parsed.updates) {
         if (!perms.posProgress) break;
         try {
             const all = await DB.getJobPositions();
             const existing = all.find(p => p.code === u.code);
+            // 从 fields 提取短字段值（权限检查：salary 属薪资权限，其余短字段属字段权限）
+            const f = u.fields || {};
+            const applyFields = (base: JobPosition): JobPosition => {
+                const next: JobPosition = { ...base };
+                if (f.title && perms.posFields) next.title = f.title;
+                if (f.projectName && perms.posFields) next.projectName = f.projectName;
+                if (f.location && perms.posFields) next.location = f.location;
+                if (f.salary && perms.posSalary) next.salary = f.salary;
+                if (f.nextStep) next.nextStep = f.nextStep;
+                // jd / notes 在键值对模式下也支持（一次性录入场景），但属字段权限
+                if (f.jd && perms.posFields) next.jd = f.jd;
+                if (f.notes && perms.posFields) next.notes = f.notes;
+                return next;
+            };
             if (existing) {
-                await DB.saveJobPosition({
+                const updated = applyFields({
                     ...existing,
                     stage: u.stage,
                     nextStep: u.nextStep || existing.nextStep,
                     timeline: [...existing.timeline, { ts: now, stage: u.stage, note: u.nextStep || undefined }],
                     updatedAt: now,
                 });
+                await DB.saveJobPosition(updated);
                 cards.push({ jobKind: 'update', code: u.code, stage: u.stage, stageLabel: STAGE_LABEL[u.stage] || u.stage, nextStep: u.nextStep || undefined, created: false });
             } else {
-                await DB.saveJobPosition({
-                    id: genId('jpos'), code: u.code, title: u.code, stage: u.stage,
+                const created = applyFields({
+                    id: genId('jpos'), code: u.code,
+                    title: f.title || u.code, stage: u.stage,
                     nextStep: u.nextStep || undefined, timeline: [{ ts: now, stage: u.stage }],
                     charId, createdAt: now, updatedAt: now,
                 });
+                await DB.saveJobPosition(created);
                 cards.push({ jobKind: 'update', code: u.code, stage: u.stage, stageLabel: STAGE_LABEL[u.stage] || u.stage, nextStep: u.nextStep || undefined, created: true });
             }
         } catch (e: any) { rejected.push(`JOB_UPDATE ${u.code}: ${e?.message || e}`); }
     }
 
-    // ── 岗位字段编辑（任意可写字段） ──
+    // ── 岗位短字段编辑（title/project/location/salary/stage/next；jd/notes 用 JOB_EDIT） ──
     for (const s of parsed.sets) {
         // stage 属「进展」权限，salary 属「薪资」权限，其余字段属「字段」权限
         const fieldAllowed = s.field === 'stage' ? perms.posProgress : s.field === 'salary' ? perms.posSalary : perms.posFields;
@@ -316,12 +489,6 @@ export async function applyJobDirectives(
                 next.salary = s.value || undefined;
             } else if (s.field === 'nextStep') {
                 next.nextStep = s.value || undefined;
-            } else if (s.field === 'jd') {
-                next.jd = s.value || undefined;
-                valuePreview = s.value.replace(/\s+/g, ' ').slice(0, 40);
-            } else if (s.field === 'notes') {
-                next.notes = s.value || undefined;
-                valuePreview = s.value.replace(/\s+/g, ' ').slice(0, 40);
             }
             await DB.saveJobPosition(next);
             cards.push({
@@ -330,6 +497,30 @@ export async function applyJobDirectives(
                 valuePreview: valuePreview.length > 60 ? `${valuePreview.slice(0, 60)}…` : valuePreview,
             });
         } catch (e: any) { rejected.push(`JOB_SET ${s.code}: ${e?.message || e}`); }
+    }
+
+    // ── 岗位长字段片段替换（jd / notes）：旧片段必须精确出现，否则拒绝 ──
+    for (const ed of parsed.edits) {
+        if (!perms.posFields) break;
+        try {
+            const all = await DB.getJobPositions();
+            const target = all.find(p => p.code === ed.code);
+            if (!target) { rejected.push(`JOB_EDIT: 找不到代号「${ed.code}」`); continue; }
+            const current = (target[ed.field] || '').toString();
+            if (!current.includes(ed.oldSnippet)) {
+                rejected.push(`JOB_EDIT ${ed.code}: 找不到片段「${ed.oldSnippet.slice(0, 30)}…」`);
+                continue;
+            }
+            const updated = current.replace(ed.oldSnippet, ed.newSnippet);
+            await DB.saveJobPosition({ ...target, [ed.field]: updated, updatedAt: now });
+            const snip = (s: string) => s.replace(/\s+/g, ' ').slice(0, 40);
+            cards.push({
+                jobKind: 'edit', code: ed.code,
+                fieldLabel: FIELD_LABEL[ed.field],
+                oldSnippetPreview: snip(ed.oldSnippet),
+                newSnippetPreview: snip(ed.newSnippet),
+            });
+        } catch (e: any) { rejected.push(`JOB_EDIT ${ed.code}: ${e?.message || e}`); }
     }
 
     // ── 环节轮次（同代号同类型同轮次 = 更新，否则新建） ──
@@ -413,44 +604,45 @@ export async function applyJobDirectives(
         } catch (e: any) { rejected.push(`JOB_NOTE ${n.title}: ${e?.message || e}`); }
     }
 
-    // 标题模糊匹配：includes 命中里取 createdAt 最新的一条（与 GUIDE 教学一致）
-    const findNote = (all: JobNote[], titleKey: string): JobNote | undefined => {
-        const key = titleKey.toLowerCase();
-        return all
-            .filter(x => (x.title || '').toLowerCase().includes(key))
-            .sort((a, b) => b.createdAt - a.createdAt)[0];
-    };
+    // 标题精确匹配（不再模糊匹配，防乱改）
+    const findNoteExact = (all: JobNote[], title: string): JobNote | undefined =>
+        all.find(x => x.title === title);
 
-    // ── 笔记编辑（整篇替换） ──
+    // ── 笔记编辑（标题精确匹配 + 旧片段精确替换） ──
     for (const e2 of parsed.noteEdits) {
         if (!perms.noteEdit) break;
         try {
             const all = await DB.getJobNotes();
-            const target = findNote(all, e2.titleKey);
-            if (!target) { rejected.push(`JOB_NOTE_EDIT: 找不到标题含「${e2.titleKey}」的笔记`); continue; }
-            await DB.saveJobNote({ ...target, content: e2.content, updatedAt: now });
+            const target = findNoteExact(all, e2.title);
+            if (!target) { rejected.push(`JOB_NOTE_EDIT: 找不到标题为「${e2.title}」的笔记`); continue; }
+            if (!target.content.includes(e2.oldSnippet)) {
+                rejected.push(`JOB_NOTE_EDIT ${e2.title}: 找不到片段「${e2.oldSnippet.slice(0, 30)}…」`);
+                continue;
+            }
+            const newContent = target.content.replace(e2.oldSnippet, e2.newSnippet);
+            await DB.saveJobNote({ ...target, content: newContent, updatedAt: now });
             cards.push({
                 jobKind: 'note_edit', noteId: target.id, noteKind: target.kind,
                 noteKindLabel: NOTE_KIND_LABEL[target.kind] || target.kind,
-                title: target.title, preview: e2.content.replace(/[#*`>]/g, '').slice(0, 120),
+                title: target.title, preview: newContent.replace(/[#*`>]/g, '').replace(/\s+/g, ' ').slice(0, 120),
             });
-        } catch (err: any) { rejected.push(`JOB_NOTE_EDIT ${e2.titleKey}: ${err?.message || err}`); }
+        } catch (err: any) { rejected.push(`JOB_NOTE_EDIT ${e2.title}: ${err?.message || err}`); }
     }
 
-    // ── 笔记删除 ──
-    for (const key of parsed.noteDeletes) {
+    // ── 笔记删除（标题精确匹配） ──
+    for (const title of parsed.noteDeletes) {
         if (!perms.noteDelete) break;
         try {
             const all = await DB.getJobNotes();
-            const target = findNote(all, key);
-            if (!target) { rejected.push(`JOB_NOTE_DEL: 找不到标题含「${key}」的笔记`); continue; }
+            const target = findNoteExact(all, title);
+            if (!target) { rejected.push(`JOB_NOTE_DEL: 找不到标题为「${title}」的笔记`); continue; }
             await DB.deleteJobNote(target.id);
             cards.push({
                 jobKind: 'note_del', noteKind: target.kind,
                 noteKindLabel: NOTE_KIND_LABEL[target.kind] || target.kind,
                 title: target.title,
             });
-        } catch (err: any) { rejected.push(`JOB_NOTE_DEL ${key}: ${err?.message || err}`); }
+        } catch (err: any) { rejected.push(`JOB_NOTE_DEL ${title}: ${err?.message || err}`); }
     }
 
     // ── 竞争力档案编辑（第八节；写 JobProfile，source:'char'，单份 main） ──
@@ -498,7 +690,7 @@ export async function applyJobDirectives(
         try { window.dispatchEvent(new CustomEvent('sully-job-updated')); } catch { /* 非浏览器环境忽略 */ }
     }
 
-    return { cards, rejected };
+    return { cards, rejected, toolResults };
 }
 
 /** job_card 的历史转述（buildMessageHistory / 归档 / 记忆宫殿读到的文本） */
@@ -509,6 +701,8 @@ export function describeJobCard(card: JobCardPayload | undefined, charName: stri
             return `[系统: ${charName}${card.created ? '为你建了岗位卡' : '更新了岗位进展'} ${card.code} → ${card.stageLabel}${card.nextStep ? `，下一步：${card.nextStep}` : ''}]`;
         case 'set':
             return `[系统: ${charName}更新了岗位 ${card.code} 的${card.fieldLabel}${card.valuePreview ? `：${card.valuePreview}` : ''}]`;
+        case 'edit':
+            return `[系统: ${charName}修改了岗位 ${card.code} 的${card.fieldLabel}：「${card.oldSnippetPreview}」→「${card.newSnippetPreview}」]`;
         case 'round':
             return `[系统: ${charName}更新了岗位 ${card.code} 的${card.roundKindLabel}第${card.roundIndex}轮 → ${card.roundStatusLabel}${card.timeText ? `，时间：${card.timeText}` : ''}]`;
         case 'interview_time':
@@ -523,6 +717,12 @@ export function describeJobCard(card: JobCardPayload | undefined, charName: stri
             return `[系统: ${charName}修改了求职笔记《${card.title}》]`;
         case 'note_del':
             return `[系统: ${charName}删除了求职笔记《${card.title}》]`;
+        case 'view':
+            return `[系统: ${charName}查看了求职工作台全貌]`;
+        case 'note_read':
+            return `[系统: ${charName}读了求职笔记《${card.title}》全文]`;
+        case 'search':
+            return `[系统: ${charName}搜索了求职工作台「${card.keyword}」（命中 ${card.hitCount} 条）]`;
         case 'edge_add':
             return `[系统: ${charName}给你的竞争力档案加了个竞争点：${card.valuePreview}]`;
         case 'edge_del':
@@ -549,6 +749,7 @@ export function describeJobBatch(cards: JobCardPayload[], charName: string): str
         switch (c.jobKind) {
             case 'update': return `${c.created ? '建卡' : '更新'} ${c.code} → ${c.stageLabel}${c.nextStep ? `（下一步：${c.nextStep}）` : ''}`;
             case 'set': return `改 ${c.code} 的${c.fieldLabel}${c.valuePreview ? `：${c.valuePreview}` : ''}`;
+            case 'edit': return `改 ${c.code} 的${c.fieldLabel}片段`;
             case 'round': return `${c.code} ${c.roundKindLabel}第${c.roundIndex}轮 → ${c.roundStatusLabel}${c.timeText ? `（${c.timeText}）` : ''}`;
             case 'interview_time': return `${c.code} 面试时间：${c.timeText}`;
             case 'waiting': return `${c.code} ${c.valuePreview}`;
@@ -556,6 +757,9 @@ export function describeJobBatch(cards: JobCardPayload[], charName: string): str
             case 'note': return `记${c.noteKindLabel}《${c.title}》`;
             case 'note_edit': return `改笔记《${c.title}》`;
             case 'note_del': return `删笔记《${c.title}》`;
+            case 'view': return '查看工作台全貌';
+            case 'note_read': return `读笔记《${c.title}》全文`;
+            case 'search': return `搜索「${c.keyword}」（命中${c.hitCount}条）`;
             case 'edge_add': return `加竞争点：${c.valuePreview}`;
             case 'edge_del': return `删竞争点「${c.valuePreview}」`;
             case 'gap_add': return `加${c.fieldLabel || ''}改进点：${c.valuePreview}`;
@@ -564,6 +768,12 @@ export function describeJobBatch(cards: JobCardPayload[], charName: string): str
             default: return '工作台操作';
         }
     });
+    // 查看类和编辑类混在一批时，文案区分
+    const hasView = cards.some(c => c.jobKind === 'view' || c.jobKind === 'note_read' || c.jobKind === 'search');
+    const hasEdit = cards.some(c => c.jobKind !== 'view' && c.jobKind !== 'note_read' && c.jobKind !== 'search');
+    if (hasView && !hasEdit) {
+        return `[系统: ${charName}查看了求职工作台（${cards.length} 项）：${parts.join('；')}]`;
+    }
     return `[系统: ${charName}更新了求职工作台（${cards.length} 项）：${parts.join('；')}]`;
 }
 

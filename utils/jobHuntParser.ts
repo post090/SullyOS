@@ -1,14 +1,19 @@
 // 上岸计划 · 指令解析（LLM 输出标记 → 结构化落库）
 // 沿用钱包 SPEND 那套「输出标记 → 正则解析 → 落库」的管线：
-//   [[JOB_UPDATE:代号|阶段|下一步]]      → 更新/新建岗位卡
-//   [[JOB_SET:代号|字段|值]]             → 改岗位任意字段（岗位名/项目名/JD/下一步/阶段/笔记）
-//   [[JOB_ROUND:代号|轮次|类型|状态|时间]] → 环节轮次（面试/笔试统一，1~10 轮，每轮独立状态）
-//   [[JOB_INTERVIEW:代号|时间]]           → 面试时间快捷（写 interviewAt）
-//   [[JOB_WAITING:代号]]                  → 开始/结束等反馈（写 waitingSince）
-//   [[JOB_DEL:代号]]                    → 删岗位卡
-//   [[JOB_NOTE:类型|标题|正文]]          → 落笔记本
-//   [[JOB_NOTE_EDIT:标题关键词|新正文]]  → 改笔记（标题模糊匹配最新一条）
-//   [[JOB_NOTE_DEL:标题关键词]]         → 删笔记
+//   [[JOB_VIEW]]                          → 查看工作台全貌（岗位+笔记+教学）
+//   [[JOB_SEARCH:关键词]]                  → 搜索岗位/笔记（返回列表，不含全文）
+//   [[JOB_NOTE_READ:完整标题]]             → 读笔记全文（标题精确匹配）
+//   [[JOB_UPDATE:代号|key:value|key:value]] → 建卡/更新（键值对，一次带全字段）
+//     老三段式 [[JOB_UPDATE:代号|阶段|下一步]] 保留兼容
+//   [[JOB_SET:代号|字段|值]]                → 改短字段（title/project/location/salary/stage/next）
+//   [[JOB_EDIT:代号|字段|旧片段|新片段]]     → 改长字段（jd/notes）局部替换，旧片段精确匹配
+//   [[JOB_ROUND:代号|轮次|类型|状态|时间]]   → 环节轮次
+//   [[JOB_INTERVIEW:代号|时间]]             → 面试时间快捷
+//   [[JOB_WAITING:代号]]                    → 开始/结束等反馈
+//   [[JOB_DEL:代号]]                        → 删岗位卡
+//   [[JOB_NOTE:类型|标题|正文]]             → 落笔记本
+//   [[JOB_NOTE_EDIT:完整标题|旧片段|新片段]] → 改笔记（标题精确+片段替换，旧片段精确匹配）
+//   [[JOB_NOTE_DEL:完整标题]]               → 删笔记（标题精确匹配）
 // 正则全部用 [\s\S] 兜跨行，不写换行字面量（防工具链把它炸成真实换行）。
 
 import { JobNoteKind, JobStage, JobRoundKind, JobRoundStatus } from '../types';
@@ -17,6 +22,8 @@ export interface ParsedJobUpdate {
     code: string;
     stage: JobStage;
     nextStep: string;
+    /** 键值对模式下的额外字段（title/projectName/location/salary/jd/next 等） */
+    fields?: Partial<Record<JobSettableField, string>>;
 }
 
 /** 岗位字段的可写白名单（AI 能改的字段；hrName/companyNameLocal 是真实人名/公司名，AI 看不到也不可写；code 永不入列） */
@@ -26,6 +33,14 @@ export interface ParsedJobSet {
     code: string;
     field: JobSettableField;
     value: string;
+}
+
+/** 长字段片段替换（jd / notes）：旧片段必须精确出现，否则拒绝 */
+export interface ParsedJobEdit {
+    code: string;
+    field: 'jd' | 'notes';
+    oldSnippet: string;
+    newSnippet: string;
 }
 
 export interface ParsedJobNote {
@@ -60,9 +75,17 @@ export interface ParsedJobWaiting {
 export interface JobParseResult {
     /** 去掉所有指令标记后的正文（用于渲染/入库） */
     cleanText: string;
+    /** 查看工作台全貌 */
+    view: boolean;
+    /** 搜索岗位/笔记（返回列表，不含全文） */
+    searches: string[];
+    /** 读笔记全文（标题精确匹配） */
+    noteReads: string[];
     updates: ParsedJobUpdate[];
-    /** 岗位字段编辑（任意可写字段） */
+    /** 岗位短字段编辑（title/project/location/salary/stage/next） */
     sets: ParsedJobSet[];
+    /** 岗位长字段片段替换（jd/notes），旧片段精确匹配 */
+    edits: ParsedJobEdit[];
     /** 环节轮次：新建/更新某轮面试或笔试 */
     rounds: ParsedJobRound[];
     /** 面试时间快捷指令 */
@@ -72,9 +95,9 @@ export interface JobParseResult {
     notes: ParsedJobNote[];
     /** 要删除的岗位代号 */
     positionDeletes: string[];
-    /** 笔记编辑：标题关键词匹配 + 新正文 */
-    noteEdits: { titleKey: string; content: string }[];
-    /** 要删除的笔记标题关键词 */
+    /** 笔记编辑：标题精确匹配 + 旧片段精确替换 */
+    noteEdits: { title: string; oldSnippet: string; newSnippet: string }[];
+    /** 要删除的笔记完整标题（精确匹配） */
     noteDeletes: string[];
     /** 竞争力档案编辑（写 JobProfile，source:'char'） */
     edgeAdds: string[];
@@ -85,11 +108,18 @@ export interface JobParseResult {
     direction?: string;
 }
 
-const JOB_UPDATE_RE = /\[\[JOB_UPDATE:([^|\]]+)\|([^|\]]+)\|([^\]]*)\]\]/g;
+const JOB_VIEW_RE = /\[\[JOB_VIEW\]\]/g;
+const JOB_SEARCH_RE = /\[\[JOB_SEARCH:([^\]]+)\]\]/g;
+const JOB_NOTE_READ_RE = /\[\[JOB_NOTE_READ:([^\]]+)\]\]/g;
+// JOB_UPDATE：代号|内容。内容按 | 分段；第一段含 : → 键值对模式；否则老三段式（阶段|下一步）
+const JOB_UPDATE_RE = /\[\[JOB_UPDATE:([^|\]]+)\|([^\]]*)\]\]/g;
 const JOB_SET_RE = /\[\[JOB_SET:([^|\]]+)\|([^|\]]+)\|([\s\S]*?)\]\]/g;
+// JOB_EDIT：代号|字段(jd/notes)|旧片段|新片段。片段用 [\s\S]*? 非贪婪兜跨行
+const JOB_EDIT_RE = /\[\[JOB_EDIT:([^|\]]+)\|([^|\]]+)\|([\s\S]*?)\|([\s\S]*?)\]\]/g;
 const JOB_NOTE_RE = /\[\[JOB_NOTE:([^|\]]+)\|([^|\]]+)\|([\s\S]*?)\]\]/g;
 const JOB_DEL_RE = /\[\[JOB_DEL:([^\]]+)\]\]/g;
-const JOB_NOTE_EDIT_RE = /\[\[JOB_NOTE_EDIT:([^|\]]+)\|([\s\S]*?)\]\]/g;
+// JOB_NOTE_EDIT：完整标题|旧片段|新片段（三段式，标题精确匹配+片段精确替换）
+const JOB_NOTE_EDIT_RE = /\[\[JOB_NOTE_EDIT:([^|\]]+)\|([\s\S]*?)\|([\s\S]*?)\]\]/g;
 const JOB_NOTE_DEL_RE = /\[\[JOB_NOTE_DEL:([^\]]+)\]\]/g;
 const JOB_ROUND_RE = /\[\[JOB_ROUND:([^|\]]+)\|([^|\]]+)\|([^|\]]+)\|([^|\]]*)\|?([^\]]*)\]\]/g;
 const JOB_INTERVIEW_RE = /\[\[JOB_INTERVIEW:([^|\]]+)\|([^\]]*)\]\]/g;
@@ -195,31 +225,96 @@ export const normalizeGapKind = (raw: string): 'strategy' | 'resume' =>
 export function parseJobHuntCommands(text: string): JobParseResult {
     const updates: ParsedJobUpdate[] = [];
     const sets: ParsedJobSet[] = [];
+    const edits: ParsedJobEdit[] = [];
     const rounds: ParsedJobRound[] = [];
     const interviews: ParsedJobInterview[] = [];
     const waitings: ParsedJobWaiting[] = [];
     const notes: ParsedJobNote[] = [];
     const positionDeletes: string[] = [];
-    const noteEdits: { titleKey: string; content: string }[] = [];
+    const noteEdits: { title: string; oldSnippet: string; newSnippet: string }[] = [];
     const noteDeletes: string[] = [];
     const edgeAdds: string[] = [];
     const edgeDels: string[] = [];
     const gapAdds: { kind: 'strategy' | 'resume'; text: string }[] = [];
     const gapDels: string[] = [];
+    const searches: string[] = [];
+    const noteReads: string[] = [];
+    let view = false;
     let direction: string | undefined;
 
-    let cleanText = text.replace(JOB_UPDATE_RE, (_m, code: string, stage: string, nextStep: string) => {
-        const c = (code || '').trim();
-        if (c) updates.push({ code: c, stage: normalizeJobStage(stage || ''), nextStep: (nextStep || '').trim() });
+    // ── 查看类（不落库，结果回灌给 AI + 挂折叠卡片） ──
+    let cleanText = text.replace(JOB_VIEW_RE, () => {
+        view = true;
+        return '';
+    });
+    cleanText = cleanText.replace(JOB_SEARCH_RE, (_m, kw: string) => {
+        const k = (kw || '').trim();
+        if (k) searches.push(k);
+        return '';
+    });
+    cleanText = cleanText.replace(JOB_NOTE_READ_RE, (_m, title: string) => {
+        const t = (title || '').trim();
+        if (t) noteReads.push(t);
         return '';
     });
 
+    // ── 岗位建卡/更新（支持键值对 + 老三段式兼容） ──
+    cleanText = cleanText.replace(JOB_UPDATE_RE, (_m, code: string, body: string) => {
+        const c = (code || '').trim();
+        if (!c) return '';
+        const segments = (body || '').split('|').map(s => s.trim());
+        // 第一段含冒号 → 键值对模式
+        if (segments.length > 0 && segments[0].includes(':')) {
+            const fields: Partial<Record<JobSettableField, string>> = {};
+            let stage: JobStage = 'applied';
+            let nextStep = '';
+            for (const seg of segments) {
+                const ci = seg.indexOf(':');
+                if (ci < 0) continue;
+                const rawKey = seg.slice(0, ci).trim().toLowerCase();
+                const val = seg.slice(ci + 1).trim();
+                const field = normalizeJobField(rawKey);
+                if (!field || !val) continue;
+                if (field === 'stage') {
+                    stage = normalizeJobStage(val);
+                } else if (field === 'nextStep' || rawKey === 'next') {
+                    nextStep = val;
+                    fields.nextStep = val;
+                } else {
+                    fields[field] = val;
+                }
+            }
+            updates.push({ code: c, stage, nextStep, fields: Object.keys(fields).length > 0 ? fields : undefined });
+        } else {
+            // 老三段式：代号|阶段|下一步
+            const stage = normalizeJobStage(segments[0] || '');
+            const nextStep = (segments[1] || '').trim();
+            updates.push({ code: c, stage, nextStep });
+        }
+        return '';
+    });
+
+    // ── 岗位短字段编辑 ──
     cleanText = cleanText.replace(JOB_SET_RE, (_m, code: string, field: string, value: string) => {
         const c = (code || '').trim();
         const f = normalizeJobField(field || '');
         const v = (value || '').trim();
-        // 阶段字段允许空（本就会回落）；其余字段空值视为无意义丢弃
-        if (c && f && (f === 'stage' || v)) sets.push({ code: c, field: f, value: v });
+        // jd / notes 不允许用 SET（防覆盖丢内容），必须用 JOB_EDIT 片段替换
+        if (c && f && f !== 'jd' && f !== 'notes' && (f === 'stage' || v)) {
+            sets.push({ code: c, field: f, value: v });
+        }
+        return '';
+    });
+
+    // ── 岗位长字段片段替换（jd / notes） ──
+    cleanText = cleanText.replace(JOB_EDIT_RE, (_m, code: string, field: string, oldSnip: string, newSnip: string) => {
+        const c = (code || '').trim();
+        const f = (field || '').trim().toLowerCase();
+        const oldS = (oldSnip || '').trim();
+        const newS = (newSnip || '').trim();
+        if (c && (f === 'jd' || f === 'notes') && oldS) {
+            edits.push({ code: c, field: f, oldSnippet: oldS, newSnippet: newS });
+        }
         return '';
     });
 
@@ -256,16 +351,18 @@ export function parseJobHuntCommands(text: string): JobParseResult {
         return '';
     });
 
-    cleanText = cleanText.replace(JOB_NOTE_EDIT_RE, (_m, titleKey: string, content: string) => {
-        const k = (titleKey || '').trim();
-        const body = (content || '').trim();
-        if (k && body) noteEdits.push({ titleKey: k, content: body });
+    // 笔记编辑（三段式：完整标题|旧片段|新片段）
+    cleanText = cleanText.replace(JOB_NOTE_EDIT_RE, (_m, title: string, oldSnip: string, newSnip: string) => {
+        const t = (title || '').trim();
+        const oldS = (oldSnip || '').trim();
+        const newS = (newSnip || '').trim();
+        if (t && oldS) noteEdits.push({ title: t, oldSnippet: oldS, newSnippet: newS });
         return '';
     });
 
-    cleanText = cleanText.replace(JOB_NOTE_DEL_RE, (_m, titleKey: string) => {
-        const k = (titleKey || '').trim();
-        if (k) noteDeletes.push(k);
+    cleanText = cleanText.replace(JOB_NOTE_DEL_RE, (_m, title: string) => {
+        const t = (title || '').trim();
+        if (t) noteDeletes.push(t);
         return '';
     });
 
@@ -312,20 +409,36 @@ export function parseJobHuntCommands(text: string): JobParseResult {
     // 剥标记后可能留下成串空行，压回最多一个空行
     cleanText = cleanText.replace(/(\s*\r?\n){3,}/g, '\u000a\u000a').trim();
 
-    return { cleanText, updates, sets, rounds, interviews, waitings, notes, positionDeletes, noteEdits, noteDeletes, edgeAdds, edgeDels, gapAdds, gapDels, direction };
+    return { cleanText, view, searches, noteReads, updates, sets, edits, rounds, interviews, waitings, notes, positionDeletes, noteEdits, noteDeletes, edgeAdds, edgeDels, gapAdds, gapDels, direction };
 }
 
-/** 注入 system prompt 的指令说明段（教角色怎么用标记；全套增删改，删除要审慎） */
+/** 注入 system prompt 的指令说明段（教角色怎么用标记；精确匹配优先，删除要审慎） */
 export const JOB_COMMAND_GUIDE = [
-    '【求职工作台指令】对话里出现岗位进展变化或值得沉淀的结论时，你可以在回复末尾追加指令（用户看不到标记本身，会看到一张操作卡片）：',
-    '1. 建卡/更新岗位：[[JOB_UPDATE:代号|阶段|下一步]]。阶段限 watching(观望中)/applied(已投递)/written(笔试)/interview(面试)/offer_talk(沟通Offer，初步通过在聊薪资待遇)/offer(已接受Offer)/rejected(挂了)；「下一步」写一句话行动项，可留空。用户提到新投了岗位可以用它建卡（代号自拟，如 C司）；看上了但还没投的岗位用 watching；已建档的岗位有进展就更新。',
-    '2. 改岗位字段：[[JOB_SET:代号|字段|值]]，一条改一个字段。字段限：title(岗位名)、project(项目名/业务线)、location(工作地点/城市)、salary(薪资，可填范围或单个数，如 15-20k 或 25k)、jd(岗位描述，可多行)、next(下一步)、stage(阶段)、notes(岗位笔记，可多行)。例：用户口述/粘贴了某岗位 JD → [[JOB_SET:C司|jd|这里是整段岗位描述…]]；记岗位笔记 → [[JOB_SET:C司|notes|面试官提到团队在做…]]。只能改已建档的岗位（上面列出的）；真实公司名/HR 名你看不到也不要写。',
-    '3. 环节轮次：[[JOB_ROUND:代号|轮次|类型|状态|时间]]。类型限 interview(面试)/written(笔试)；轮次 1~10；状态限 pending(待安排)/scheduled(待进行)/awaiting(等结果)/passed(通过)/failed(挂了)；时间可省，格式 M-D HH:mm（如 8-2 14:00），填「清除」删时间。例：用户说周四下午两点三面 → [[JOB_ROUND:C司|3|面试|待进行|8-6 14:00]]；二面过了 → [[JOB_ROUND:C司|2|面试|通过]]。同代号同类型同轮次再发即更新该轮。',
-    '4. 面试时间快捷：[[JOB_INTERVIEW:代号|M-D HH:mm]]（只记下一场面试时间，不分轮次时用）/ [[JOB_INTERVIEW:代号|清除]]；等反馈：[[JOB_WAITING:代号]]（开始等）/ [[JOB_WAITING:代号|清除]]（结束等）。',
-    '5. 删岗位卡：[[JOB_DEL:代号]]。仅当用户明确要求删除、或流程彻底结束且用户同意清理时才用，删除要克制。',
-    '6. 记入笔记本：[[JOB_NOTE:类型|标题|正文]]。类型限 eval(面试评价)/resume_advice(简历建议)/analysis(岗位分析)/note(随手记)；正文用 markdown，可多行。只记真正值得回看的结论。',
-    '7. 改笔记：[[JOB_NOTE_EDIT:标题关键词|新正文]]（整篇替换）；删笔记：[[JOB_NOTE_DEL:标题关键词]]。关键词按标题匹配最近一条，只能操作上面列出的笔记；删除同样审慎。',
-    '8. 竞争力档案（帮用户沉淀求职优劣势，聊到相关话题才用）：加竞争点 [[JOB_EDGE_ADD:一句话优势]]；删竞争点 [[JOB_EDGE_DEL:关键词]]；加改进点 [[JOB_GAP_ADD:strategy或resume|一句话]]（strategy=求职策略层，resume=简历写法层）；删改进点 [[JOB_GAP_DEL:关键词]]；设求职方向 [[JOB_DIRECTION:一句话方向]]（改方向=直接发新的覆盖）。删除或覆盖前先跟用户确认。',
-    '9. 隐私铁律：公司一律用代号（如 A厂、B司），绝不写真实公司名；用户的真实姓名、电话、住址等信息绝不写进任何指令或回复。',
-    '10. 这些指令只在聊到求职时才用，日常闲聊不要输出。',
+    '【求职工作台指令】对话里出现岗位进展变化或值得沉淀的结论时，你可以在回复末尾追加指令（用户看不到标记本身，会看到一张操作卡片）。系统摘要里已列出在推进的岗位代号和阶段——日常编辑直接用这些代号，不需要先查看。',
+    '',
+    '【查看类】需要看 JD / 笔记 / 详情时才用，日常编辑不用。',
+    '- 查看工作台全貌（岗位详情+笔记列表+教学）：[[JOB_VIEW]]',
+    '- 搜索岗位/笔记（返回匹配列表，不含全文，上限10条）：[[JOB_SEARCH:关键词]]',
+    '- 读笔记全文（标题必须精确匹配）：[[JOB_NOTE_READ:完整标题]]',
+    '',
+    '【岗位编辑类】',
+    '1. 建卡/批量录入（推荐键值对，一次带全字段）：[[JOB_UPDATE:代号|stage:阶段|title:岗位名|project:项目|location:地点|salary:薪资|next:下一步|jd:岗位描述]]。字段可省，顺序无所谓。阶段限 watching(观望中)/applied(已投递)/written(笔试)/interview(面试)/offer_talk(沟通Offer)/offer(已接受Offer)/rejected(挂了)。例：[[JOB_UPDATE:C司|stage:面试|title:前端工程师|location:北京|salary:25k|next:准备二面]]。老格式 [[JOB_UPDATE:代号|阶段|下一步]] 仍兼容。用户提到新投了岗位就建卡（代号自拟，如 C司）；看上了但还没投用 watching。',
+    '2. 改短字段（覆盖语义，用于 title/project/location/salary/stage/next）：[[JOB_SET:代号|字段|值]]，一条改一个字段。例：[[JOB_SET:C司|salary|28k]]。只能改已建档的岗位。',
+    '3. 改长字段 jd / notes（片段替换，必须精确匹配旧片段）：[[JOB_EDIT:代号|字段|旧片段|新片段]]。旧片段必须在现有内容里精确出现，否则拒绝。例：[[JOB_EDIT:C司|jd|负责前端开发|负责 React 前端开发]]。没看过现有内容写不出旧片段 → 改不了 → 自然需要先 [[JOB_VIEW]] 看一眼。追加内容时找一个锚点片段替换成「锚点+新内容」。',
+    '4. 环节轮次：[[JOB_ROUND:代号|轮次|类型|状态|时间]]。类型限 interview(面试)/written(笔试)；轮次 1~10；状态限 pending(待安排)/scheduled(待进行)/awaiting(等结果)/passed(通过)/failed(挂了)；时间可省，格式 M-D HH:mm（如 8-2 14:00），填「清除」删时间。例：[[JOB_ROUND:C司|3|面试|待进行|8-6 14:00]]。同代号同类型同轮次再发即更新该轮。',
+    '5. 面试时间快捷：[[JOB_INTERVIEW:代号|M-D HH:mm]] / [[JOB_INTERVIEW:代号|清除]]；等反馈：[[JOB_WAITING:代号]]（开始）/ [[JOB_WAITING:代号|清除]]（结束）。',
+    '6. 删岗位卡：[[JOB_DEL:代号]]。仅当用户明确要求删除时才用，删除要克制。',
+    '',
+    '【笔记类】',
+    '7. 记入笔记本：[[JOB_NOTE:类型|标题|正文]]。类型限 eval(面试评价)/resume_advice(简历建议)/analysis(岗位分析)/note(随手记)；正文用 markdown，可多行。只记真正值得回看的结论。',
+    '8. 改笔记（标题精确匹配 + 旧片段精确替换）：[[JOB_NOTE_EDIT:完整标题|旧片段|新片段]]。标题必须精确出现，旧片段必须在正文里精确出现，否则拒绝。例：[[JOB_NOTE_EDIT:C司一面复盘|面试官问了项目|面试官重点问了项目细节和性能优化]]。',
+    '9. 删笔记（标题精确匹配）：[[JOB_NOTE_DEL:完整标题]]。标题必须精确出现，否则拒绝。删除审慎。',
+    '',
+    '【竞争力档案】（聊到相关话题才用）',
+    '10. 加竞争点 [[JOB_EDGE_ADD:一句话优势]]；删竞争点 [[JOB_EDGE_DEL:关键词]]；加改进点 [[JOB_GAP_ADD:strategy或resume|一句话]]（strategy=求职策略层，resume=简历写法层）；删改进点 [[JOB_GAP_DEL:关键词]]；设求职方向 [[JOB_DIRECTION:一句话方向]]（覆盖式）。删除或覆盖前先跟用户确认。',
+    '',
+    '【原则】',
+    '11. 精确匹配：岗位代号、笔记标题、编辑旧片段都必须精确匹配，匹配不上直接拒绝。没看过就写不出精确值 → 自然改不了 → 需要先查看。这是工具设计的安全机制，不是缺陷。',
+    '12. 隐私铁律：公司一律用代号（如 A厂、B司），绝不写真实公司名；用户的真实姓名、电话、住址等信息绝不写进任何指令或回复。',
+    '13. 这些指令只在聊到求职时才用，日常闲聊不要输出。',
 ].join('\u000a');
