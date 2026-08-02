@@ -50,3 +50,15 @@ xiaohongshu-skills-main/
 
 # 本地审计/盘点稿（不入仓库）
 提示词注入审计清单.md
+
+# AGENTS.md：本次是针对 merge 修复的本地临时工作指引，不入仓库
+AGENTS.md
+
+# wrangler 本地开发：.dev.vars 装的是 worker secrets（master key / VAPID 私钥），
+# .wrangler/ 是本地 D1 数据与缓存，两样都不进仓库。
+**/.dev.vars
+**/.dev.vars.*
+!**/.dev.vars.example
+**/.wrangler/
+
+.pnpm-store/

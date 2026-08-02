@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react';
 import { execSync } from 'node:child_process';
 import { bakeVoiceMiddleware } from './server/bake-voice-middleware';
 
-// 构建时抓 git 分支 + short commit，注入到 BuildBadge 显示。
+// 构建时抓 git 分支 + short commit + UTC+8 构建时间，注入到版本信息显示。
 // 非 git 环境（容器、tarball 部署）退化成 'unknown'，不影响构建。
 //
 // 显示规则：
@@ -12,6 +12,12 @@ import { bakeVoiceMiddleware } from './server/bake-voice-middleware';
 //   - VITE_HIDE_BUILD_BADGE=1 强制隐藏（覆盖默认）
 //   - VITE_SHOW_BUILD_BADGE=1 强制显示（在 master 本地调试用）
 const RELEASE_BRANCHES = new Set(['main', 'master']);
+const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
+
+function formatBuildTimeUtc8(date = new Date()): string {
+  const utc8Date = new Date(date.getTime() + UTC8_OFFSET_MS);
+  return `${utc8Date.toISOString().slice(0, 19).replace('T', ' ')} UTC+8`;
+}
 
 function readBranch(): string {
   if (process.env.GITHUB_REF_NAME) return process.env.GITHUB_REF_NAME;
@@ -37,6 +43,7 @@ function readCommit(): string {
 }
 
 const gitInfo = { branch: readBranch(), commit: readCommit() };
+const buildTime = formatBuildTimeUtc8();
 const isReleaseBranch = RELEASE_BRANCHES.has(gitInfo.branch);
 let showBuildBadge = !isReleaseBranch;
 if (process.env.VITE_HIDE_BUILD_BADGE === '1') showBuildBadge = false;
@@ -59,6 +66,7 @@ export default defineConfig({
   define: {
     __BUILD_BRANCH__: JSON.stringify(gitInfo.branch),
     __BUILD_COMMIT__: JSON.stringify(gitInfo.commit),
+    __BUILD_TIME__: JSON.stringify(buildTime),
     __BUILD_BADGE_VISIBLE__: JSON.stringify(showBuildBadge),
   },
   // GitHub Pages 发布时使用相对路径，避免仓库子路径导致资源 404

@@ -2,6 +2,14 @@ name = "sullyos-post-office"
 main = "src/index.ts"
 compatibility_date = "2026-01-01"
 
+# wrangler deploy 会用本地这份配置整体覆盖 Cloudflare 面板上的设置——
+# 不显式写这段，面板里手动开的 Workers Logs（实时日志）会被一起关掉。
+[observability]
+enabled = true
+
+[observability.logs]
+enabled = true
+
 # 彼方虚拟邮局 —— 跨用户漂流信的共享后端。
 #
 # 这是一个【所有用户共用】的后端：客户端默认指向你部署的这一个实例

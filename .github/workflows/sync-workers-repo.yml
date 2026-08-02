@@ -1,0 +1,137 @@
+name: Sync worker bundles to deploy repo
+
+# 把打好的 worker bundle 推到那个「用户 fork 来部署」的小仓库。
+#
+# 为什么要单独一个仓库：用户自部署后端时，原来的流程是打开 218KB 的
+# worker.bundle.js、全选、复制、粘进 Cloudflare 面板——手机上尤其难受，而且每次
+# worker 有更新都要重来一遍。改成 fork 一个只装 bundle + wrangler.toml 的小仓库、
+# 在 CF 面板连上 Git 之后，更新就只剩 GitHub 上点一下「Sync fork」。
+#
+# 一次性准备（都在 GitHub 网页上做得完）：
+#   1. 建一个空仓库，比如 <你的账号>/sullyos-workers
+#   2. 建一个有该仓库 contents:write 权限的 fine-grained PAT
+#   3. 把 PAT 存进本仓库的 Actions secret：WORKERS_REPO_TOKEN
+#   4. 把下面的 TARGET_REPO 改成那个仓库的 owner/name
+#
+# 没配 secret 时这个 workflow 会直接跳过（不报红），所以先合并再配也行。
+
+on:
+  push:
+    branches: [main, master]
+    # 整个 utils 目录都算进来，不逐个点名 worker 用到的文件。bundle 实际会打进
+    # agenticToolFeedback / xhsMcpClient / sanitize / proxyWorker 这些，靠人工维护一份
+    # 清单的话，漏一个不会报错、只会静默给用户同步一个过期的 bundle——正是下面那条
+    # 「从源码重打」想避免的事。放宽的代价只是前端提交也白跑一次构建，而内容没变时
+    # 下面的 git diff 判断不会产生空提交，用户那边不会收到无意义的更新。
+    paths:
+      - 'worker/**'
+      - 'utils/**'
+      - 'types.ts'
+      - '.github/workflows/sync-workers-repo.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-workers-repo
+  cancel-in-progress: true
+
+# 部署仓库的 owner/name 全写：它跟本仓库不在同一个账号下，
+# 界面和文档里给用户的 fork 链接指的也是这个地址。
+env:
+  TARGET_REPO: Tosd0/sullyos-workers
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Skip if deploy repo token is not configured
+        id: guard
+        run: |
+          if [ -z "${{ secrets.WORKERS_REPO_TOKEN }}" ]; then
+            echo "没配 WORKERS_REPO_TOKEN，跳过同步（见本文件顶部说明）。"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install pnpm
+        if: steps.guard.outputs.ready == 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        if: steps.guard.outputs.ready == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        if: steps.guard.outputs.ready == 'true'
+        run: pnpm install --frozen-lockfile
+
+      # 从源码重新打一遍，而不是直接拿仓库里那份已提交的 bundle——避免有人只改了
+      # src 忘了跑 build:workers，把过期的包同步给用户。
+      - name: Build worker bundles
+        if: steps.guard.outputs.ready == 'true'
+        run: pnpm build:workers
+
+      - name: Stage deploy repo contents
+        if: steps.guard.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          # 用户会自部署的 worker 才放进去。post-office 是所有用户共用的后端
+          # （客户端默认指向作者那一个实例），不需要用户各部署一份，故不同步。
+          #
+          # 每行是「目录:入口文件」——mcp-proxy 的入口是手写的 worker.js，不是
+          # build:workers 打出来的 bundle，所以入口名要跟着 wrangler.toml 的 main 走。
+          for entry in amsg:worker.bundle.js instant-push:worker.bundle.js mcp-proxy:worker.js; do
+            name="${entry%%:*}"
+            file="${entry##*:}"
+            src="worker/$name"
+            [ -f "$src/$file" ]         || { echo "缺 $src/$file"; exit 1; }
+            [ -f "$src/wrangler.toml" ] || { echo "缺 $src/wrangler.toml"; exit 1; }
+            mkdir -p "staging/$name"
+            cp "$src/$file"         "staging/$name/$file"
+            cp "$src/wrangler.toml" "staging/$name/wrangler.toml"
+            # 部署仓库里只有打好的入口文件、没有 src/，所以把 main 改写成它。
+            # 本仓库那份 wrangler.toml 不动（instant-push 本地开发仍从 src 构建）。
+            sed -i "s|^main = .*|main = \"$file\"|" "staging/$name/wrangler.toml"
+            grep -q "^main = \"$file\"$" "staging/$name/wrangler.toml" \
+              || { echo "$name 的 wrangler.toml 没有 main 行，改写失败"; exit 1; }
+            # CF 的构建命令：把 D1_DATABASE_ID 构建变量填进 wrangler.toml 的占位符，
+            # 用户就不用去 GitHub 编辑器改那一行了。每个 worker 目录一份，因为
+            # CF 的 Root directory 指到子目录、构建命令的 cwd 就是那里。
+            cp worker/deploy-prepare.sh "staging/$name/deploy-prepare.sh"
+            chmod +x "staging/$name/deploy-prepare.sh"
+          done
+          cp docs/self-deploy-workers.md staging/README.md
+
+      - name: Push to deploy repo
+        if: steps.guard.outputs.ready == 'true'
+        env:
+          TOKEN: ${{ secrets.WORKERS_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          target="https://x-access-token:${TOKEN}@github.com/${TARGET_REPO}.git"
+          git clone --depth 1 "$target" deploy-repo
+          # 先清掉旧内容再铺新的：worker 被删除/改名时目标仓库不该留残骸。
+          # .git 之外全清；用户 fork 后自己改的 wrangler.toml 不受影响（那是他们仓库的事）。
+          find deploy-repo -mindepth 1 -maxdepth 1 -not -name .git -exec rm -rf {} +
+          cp -R staging/. deploy-repo/
+          cd deploy-repo
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "worker bundle 没有变化，不产生空提交。"
+            exit 0
+          fi
+          git commit -m "chore: sync worker bundles from ${{ github.repository }}@${GITHUB_SHA::7}"
+          git push

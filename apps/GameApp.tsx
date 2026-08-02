@@ -7,6 +7,7 @@ import { GameSession, GameTheme, CharacterProfile, GameLog, GameActionOption, Ga
 import { ContextBuilder } from '../utils/context';
 import { extractContent, extractJson } from '../utils/safeApi';
 import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
+import { trackEvent } from '../utils/analytics';
 import Modal from '../components/os/Modal';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
 import { Planet, RocketLaunch, Lightning, LockSimple, DiceFive, Toolbox, FloppyDisk, ArrowsClockwise, DoorOpen } from '@phosphor-icons/react';
@@ -439,6 +440,8 @@ ${recentLog}
             return;
         }
         setIsGeneratingWorld(true);
+        // 只报白名单里的固定风格；用户额外填的灵感是自由文本，一个字都不带
+        trackEvent('用 AI 生成世界观', { style: WORLD_STYLES.includes(worldStyle) ? worldStyle : '其他' });
         try {
             // [鲁棒性] 改用带分隔符的纯文本格式而非 JSON——即使被截断也能干净解析；
             // 不再限制字数，给足 token 防止半路砍断。
@@ -589,7 +592,12 @@ ${playerContext}
             setGames(prev => [newGame, ...prev]);
             setActiveGame(newGame);
             setView('play');
-            
+            trackEvent('创建冒险开团', {
+                theme: newTheme,
+                dice: newDiceDisabled ? '关' : '开',
+                archiveMode: newArchiveMode,
+            });
+
             // Reset form
             setNewTitle('');
             setNewWorld('');
@@ -615,6 +623,7 @@ ${playerContext}
             await DB.saveGame(updated);
             addToast(newVal ? 'SAN 值已锁定' : 'SAN 值已解锁', 'info');
         }
+        trackEvent('切换 SAN 值锁定', { state: newVal ? '锁定' : '解锁' });
     };
 
     // --- Dice Toggle (关闭后行动不再自动骰 D20) ---
@@ -625,6 +634,7 @@ ${playerContext}
         setActiveGame(updated);
         await DB.saveGame(updated);
         addToast(newDisabled ? '已关闭骰子，行动不再骰点' : '已开启骰子', 'info');
+        trackEvent('切换骰子判定', { state: newDisabled ? '关' : '开' });
     };
 
     // --- Gameplay Logic ---
@@ -969,6 +979,7 @@ ${logText}
         
         await handleAction("", true); // isReroll = true
         addToast('正在重新推演命运...', 'info');
+        trackEvent('重新推演上一段剧情');
     };
 
     const handleRollbackLog = async (index: number) => {
@@ -980,6 +991,7 @@ ${logText}
         await DB.saveGame(updated);
         setActiveGame(updated);
         addToast('时间回溯成功', 'success');
+        trackEvent('回退剧情到某条记录');
     };
 
     const handleRestart = async () => {
@@ -1015,6 +1027,7 @@ ${logText}
         setExpandedSummaries(new Set());
         setShowSystemMenu(false);
         addToast('游戏已重置', 'success');
+        trackEvent('重置本局冒险');
     };
 
     // "Leave" just goes back to lobby (Auto-save is handled by DB calls in handleAction)
@@ -1071,6 +1084,7 @@ Output: A concise summary in Chinese (e.g. "探索了地牢并击败了史莱姆
                 });
             }
             addToast('记忆传递完成 (Chat & Memory)', 'success');
+            trackEvent('归档冒险并写进角色记忆');
         } catch (e) {
             console.error(e);
             addToast('归档失败', 'error');
@@ -1137,6 +1151,7 @@ Output: A concise summary in Chinese (e.g. "探索了地牢并击败了史莱姆
                 });
             }
             addToast(`已转发到 ${players.length} 位角色的聊天`, 'success');
+            trackEvent('转发剧情片段到聊天');
             exitSelectMode();
         } catch (e: any) {
             addToast(`转发失败: ${e.message}`, 'error');
@@ -1170,6 +1185,7 @@ Output: A concise summary in Chinese (e.g. "探索了地牢并击败了史莱姆
         if (longPressFired.current) { longPressFired.current = false; return; } // 长按已触发删除，忽略点击
         setActiveGame(g);
         setView('play');
+        trackEvent('打开存档继续冒险');
     };
 
     const confirmDeleteGame = async () => {
@@ -1178,6 +1194,7 @@ Output: A concise summary in Chinese (e.g. "探索了地牢并击败了史莱姆
         setGames(prev => prev.filter(g => g.id !== deleteConfirmId));
         setDeleteConfirmId(null);
         addToast('存档已删除', 'success');
+        trackEvent('删除跑团存档');
     };
 
     // --- Renderers ---
@@ -1532,7 +1549,7 @@ Output: A concise summary in Chinese (e.g. "探索了地牢并击败了史莱姆
                         <button onClick={() => setShowParty(!showParty)} className={`p-2 rounded hover:bg-white/10 active:scale-95 transition-transform ${showParty ? theme.accent : 'opacity-50'}`}>
                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M18 18.72a9.094 9.094 0 0 0 3.741-.479 3 3 0 0 0-4.682-2.72m.94 3.198.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0 1 12 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 0 1 6 18.719m12 0a5.971 5.971 0 0 0-.941-3.197m0 0A5.995 5.995 0 0 0 12 12.75a5.995 5.995 0 0 0-5.058 2.772m0 0a3 3 0 0 0-4.681 2.72 8.986 8.986 0 0 0 3.74.477m.94-3.197a5.971 5.971 0 0 0-.94 3.197M15 6.75a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm6 3a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0Zm-13.5 0a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0Z" /></svg>
                         </button>
-                        <button onClick={() => setShowSystemMenu(true)} className={`p-2 -mr-2 rounded hover:bg-white/10 active:scale-95 transition-transform`}>
+                        <button onClick={() => { setShowSystemMenu(true); trackEvent('打开跑团系统菜单'); }} className={`p-2 -mr-2 rounded hover:bg-white/10 active:scale-95 transition-transform`}>
                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" /></svg>
                         </button>
                     </div>
@@ -1868,7 +1885,7 @@ Output: A concise summary in Chinese (e.g. "探索了地牢并击败了史莱姆
                                     className="w-full h-8 rounded cursor-pointer bg-white border border-slate-200 p-0.5" 
                                 />
                             </div>
-                            <button onClick={() => setUiSettings({ fontSize: 14, color: '' })} className="w-full py-1.5 bg-white border border-slate-200 text-slate-500 text-xs rounded-lg active:scale-95 transition-transform">恢复默认</button>
+                            <button onClick={() => { setUiSettings({ fontSize: 14, color: '' }); trackEvent('恢复默认阅读外观'); }} className="w-full py-1.5 bg-white border border-slate-200 text-slate-500 text-xs rounded-lg active:scale-95 transition-transform">恢复默认</button>
                         </div>
                     </div>
 

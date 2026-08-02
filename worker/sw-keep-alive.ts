@@ -64,8 +64,12 @@ import { installReiSW } from '@rei-standard/amsg-sw';
  *              错误，前台据此把超时文案精确化。
  *  - 1.15.1: 临时加 instant push trace，定位 iOS PWA 后台导致的 SSE Load failed / backup push
  *            / SW inbox 落库时序。
+ *  - 1.16.0: 加 pushsubscriptionchange 监听：浏览器换掉订阅时 best-effort 用旧公钥重订，
+ *            并往 ActiveMsg 库 kv store 写「订阅已变化」标记（主线程据此把新订阅逐条
+ *            写回已排程的远端任务，见 utils/activeMsgRuntime.ts）。onupgradeneeded 补建
+ *            kv store（SW-first 安装时主线程 schema 还没建过）。
  */
-const SW_VERSION = '1.15.1';
+const SW_VERSION = '1.16.0';
 
 const PING_INTERVAL = 15_000;
 const MAX_MANUAL_ALIVE_MS = 5 * 60_000;
@@ -79,6 +83,11 @@ const ACTIVE_MSG_INBOX_STORE = 'inbox';
 const ACTIVE_MSG_OUTBOUND_SESSIONS_STORE = 'outbound_sessions';
 const ACTIVE_MSG_PENDING_TOOL_CALLS_STORE = 'pending_tool_calls';
 const ACTIVE_MSG_REASONING_BUFFER_STORE = 'reasoning_buffer';
+// 主线程 activeMsgStore.ts 的 kv store（记录形状 { id, value }）。SW 只往里写一条
+// 固定 key 的「订阅已变化」标记，key 必须与 utils/activeMsgRuntime.ts 的
+// PUSH_SUBSCRIPTION_CHANGED_KV_ID 保持一致。
+const ACTIVE_MSG_KV_STORE = 'kv';
+const PUSH_SUBSCRIPTION_CHANGED_KV_ID = 'push_subscription_changed_v1';
 
 let pingTimer: number | null = null;
 let manualKeepAliveCount = 0;
@@ -316,6 +325,12 @@ function openInboxDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(ACTIVE_MSG_REASONING_BUFFER_STORE)) {
         db.createObjectStore(ACTIVE_MSG_REASONING_BUFFER_STORE, { keyPath: 'sessionId' });
       }
+      // kv 平时由主线程 activeMsgStore.ts 建；SW-first 安装（主线程还没开过库就先
+      // 收到 push / pushsubscriptionchange）时这里补建，否则订阅变化标记没地方写，
+      // 主线程后续 transaction('kv') 也会 NotFoundError。
+      if (!db.objectStoreNames.contains(ACTIVE_MSG_KV_STORE)) {
+        db.createObjectStore(ACTIVE_MSG_KV_STORE, { keyPath: 'id' });
+      }
     };
   });
 
@@ -403,7 +418,13 @@ async function saveContentToInbox(payload: any) {
       source: payload?.source,
       messageType: payload?.messageType,
       messageSubtype: payload?.messageSubtype,
+      // 任务身份由库盖在 push 顶层 (taskId / taskUuid / recurrenceType / occurrenceMs),
+      // 客户端端的防穿帮闸与任务认领都读这几个——两条排程路径 (用户排 / 角色自排) 走的
+      // 是同一份, 不会像各自往 metadata 抄那样抄漏一个就判错。
       taskId: payload?.taskId ?? null,
+      taskUuid: payload?.taskUuid ?? null,
+      recurrenceType: payload?.recurrenceType ?? null,
+      occurrenceMs: payload?.occurrenceMs ?? null,
       // sessionId / messageIndex 放到 metadata 里, 主线程 flushInboxToChat 反查 reasoning_buffer
       // + 标记是第几条 (第 1 条才挂 metadata.thinkingChain).
       metadata: {
@@ -644,8 +665,57 @@ async function saveIncomingActiveMessage(payload: any) {
   }
 }
 
-// 之前我们自己写 sw.addEventListener('push')，现在全量交由 amsg-sw 的 installReiSW 
+// 之前我们自己写 sw.addEventListener('push')，现在全量交由 amsg-sw 的 installReiSW
 // 在 onBusinessPayload 里回调，所以这里不再需要手写 push 监听。
+
+// ─── pushsubscriptionchange：浏览器换掉了推送订阅 ────────────────────────────
+// 已排程任务体里的 pushSubscription 是排程那一刻冻结的，订阅一换端点，到点推送
+// 全打到作废端点上（静默失联）。这里做两件事，都是 best-effort：
+//   1. 用旧订阅的 applicationServerKey 立刻重订，尽量别让订阅断档；
+//   2. 无论重订成败都往 kv store 写一条固定 key 的「订阅已变化」标记——就算重订
+//      成功，新订阅的端点也和任务体里冻结的不一样，远端任务必须逐条刷新才能继续
+//      送达。主线程 ActiveMsgRuntime 启动 / 收到下面的通知时消费标记（见
+//      utils/activeMsgRuntime.ts 的 refreshPushSubscriptionIfMarked），全部写回
+//      成功才清。
+// TS lib 的 ServiceWorkerGlobalScopeEventMap 还没收这个事件名，监听器手动收敛类型。
+sw.addEventListener('pushsubscriptionchange', (event: Event) => {
+  const e = event as Event & {
+    waitUntil: (promise: Promise<unknown>) => void;
+    oldSubscription?: PushSubscription | null;
+  };
+  traceSw('push-subscription-change', undefined, {
+    hadOldSubscription: Boolean(e.oldSubscription),
+  });
+
+  e.waitUntil((async () => {
+    let resubscribed = false;
+    try {
+      const applicationServerKey = e.oldSubscription?.options?.applicationServerKey;
+      if (applicationServerKey) {
+        await sw.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey });
+        resubscribed = true;
+      }
+    } catch (err) {
+      console.warn('[amsg] pushsubscriptionchange 重订失败（主线程稍后会走完整订阅流程）', err);
+    }
+
+    try {
+      await withInboxTx(ACTIVE_MSG_KV_STORE, 'readwrite', (store) => {
+        store.put({
+          id: PUSH_SUBSCRIPTION_CHANGED_KV_ID,
+          value: { changedAt: Date.now(), resubscribed },
+        });
+      });
+    } catch (err) {
+      // 标记写不进去只能靠日志留痕：下一次订阅相关操作（重开面板 / 重新排程）会
+      // 走 ensurePushSubscription 的自检把订阅本身修好，但远端旧任务要等用户重存。
+      console.warn('[amsg] 写订阅变化标记失败', err);
+    }
+
+    // 页面开着的话立刻处理，不用等下次启动。
+    await notifyClients({ type: 'active-msg-subscription-change', resubscribed });
+  })());
+});
 
 sw.addEventListener('notificationclick', (event: NotificationEvent) => {
   const payload = event.notification.data?.payload || event.notification.data || {};

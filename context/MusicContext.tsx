@@ -1105,7 +1105,8 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // 把整组 musicHooks 写到模块级 slot — useChatAI 和 instant push activeMsgRuntime 都从这里取.
   // current / addListeningPartner 变化时刷新闭包, 保证读到的是最新 React state.
-  // addSongToCharPlaylist 是纯 DB 操作, 与 React state 无关, 但一起打包让出口统一.
+  // addSongToCharPlaylist 直接落 DB, 落完广播 'char-music-profile-updated' 让 OSContext
+  // 把新歌单同步回内存里的角色 (顺带刷主动消息 2.0 的云端快照).
   useEffect(() => {
     __musicHooks = {
       getListeningSnapshot: () => {
@@ -1188,6 +1189,12 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
           const updatedProfile = { ...profile, playlists, updatedAt: now };
           await DB.saveCharacter({ ...targetChar, musicProfile: updatedProfile });
+          // 只落 DB 的话内存里那份角色还是旧歌单: 之后随便哪个 updateCharacter 都会拿旧内存
+          // 合并写回, 把刚加的歌反向抹掉 (情绪 buff 踩过同一个坑); 主动消息 2.0 的云端快照
+          // 也会停在加歌之前, 角色到点还当这首歌没收藏过。交给 OSContext 的监听补这两件事。
+          window.dispatchEvent(new CustomEvent('char-music-profile-updated', {
+            detail: { charId: cid, musicProfile: updatedProfile },
+          }));
           return { playlistTitle: pl.title, created };
         } catch {
           return null;

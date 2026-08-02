@@ -5,6 +5,7 @@ import { DB } from '../utils/db';
 import { Message } from '../types';
 import { Plugs, Power, Trash, Plug } from '@phosphor-icons/react';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
+import { trackEvent } from '../utils/analytics';
 
 const LS = {
   wsUrl: 'qqBridge:wsUrl',
@@ -409,7 +410,7 @@ const QQBridge: React.FC = () => {
               </div>
             </div>
             <button
-              onClick={() => setEnabled(v => !v)}
+              onClick={() => { setEnabled(v => !v); trackEvent('切换 QQ 桥接开关', { action: enabled ? 'off' : 'on' }); }}
               className={`shrink-0 px-4 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all active:scale-95 ${
                 enabled
                   ? 'bg-rose-500 text-white shadow-sm'

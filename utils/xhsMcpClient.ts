@@ -256,6 +256,8 @@ interface McpJsonRpcResponse {
 let mcpRequestIdCounter = 0;
 let mcpSessionId: string | null = null;
 let mcpInitialized = false;
+/** 在途的握手（并发去重用；见 mcpEnsureInitialized）。 */
+let mcpInitPromise: Promise<void> | null = null;
 let mcpDiscoveredTools: { name: string; description?: string }[] = [];
 
 const TOOL_NAME_ALIASES: Record<string, string[]> = {
@@ -404,9 +406,25 @@ const mcpInitialize = async (serverUrl: string): Promise<void> => {
     mcpInitialized = true;
 };
 
+/**
+ * 并发去重的握手：同时进来的调用共用同一次 initialize。
+ *
+ * 直接写 `if (!mcpInitialized) await mcpInitialize()` 是 check-then-act：两个调用会都
+ * 看到 false 各握一次手，后完成的那个把模块级 mcpSessionId 覆盖掉，先发起的那个再拿它
+ * 发 tools/call 就用了别人的 session。worker 到点最多并发跑 8 个任务，两个任务同一分钟
+ * 都用小红书就会踩到。失败时清掉在途 promise，下一次调用可以重新握手。
+ */
+const mcpEnsureInitialized = async (serverUrl: string): Promise<void> => {
+    if (mcpInitialized) return;
+    if (!mcpInitPromise) {
+        mcpInitPromise = mcpInitialize(serverUrl).finally(() => { mcpInitPromise = null; });
+    }
+    await mcpInitPromise;
+};
+
 const mcpCallTool = async (serverUrl: string, toolName: string, args: Record<string, any> = {}): Promise<McpToolResult> => {
     try {
-        if (!mcpInitialized) await mcpInitialize(serverUrl);
+        await mcpEnsureInitialized(serverUrl);
         const resolved = mcpResolveToolName(toolName);
         const adapted = mcpAdaptParams(resolved, args);
         if (resolved !== toolName) console.log(`[MCP] 工具名映射: ${toolName} → ${resolved}`);

@@ -15,6 +15,7 @@ import { getRoomLabel } from '../utils/memoryPalace/types';
 import { buildTaskSupervisionContext } from '../utils/taskContextInjector';
 import { Sparkle, Archive } from '@phosphor-icons/react';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
+import { trackEvent } from '../utils/analytics';
 
 const INTRO_SEEN_KEY = 'journal_app_intro_seen_v4';
 
@@ -170,6 +171,7 @@ const JournalApp: React.FC = () => {
         setMode('write');
         setSelectedDate(date);
         setSelectedStickerId(null); // Reset selection
+        trackEvent('进入日记书写页');
     };
 
     // --- Editor Logic ---
@@ -207,6 +209,7 @@ const JournalApp: React.FC = () => {
         const currentStickers = targetPage?.stickers || [];
         updatePage({ stickers: [...currentStickers, newSticker] }, side);
         setShowStickerPanel(false);
+        trackEvent('往日记页贴一张贴纸', { kind: DEFAULT_STICKERS.includes(url) ? 'default' : 'custom' });
     };
 
     const handleImportStickers = async () => {
@@ -228,6 +231,7 @@ const JournalApp: React.FC = () => {
         setImportText('');
         setShowImportModal(false);
         addToast(`成功添加 ${count} 个贴纸`, 'success');
+        trackEvent('导入自定义贴纸');
     };
 
     const handleDeleteStickerAsset = async () => {
@@ -236,6 +240,7 @@ const JournalApp: React.FC = () => {
             setCustomStickers(prev => prev.filter(s => s.name !== deletingSticker.name));
             setDeletingSticker(null);
             addToast('贴纸已删除', 'success');
+            trackEvent('删除一个自定义贴纸');
         }
     };
 
@@ -316,6 +321,7 @@ const JournalApp: React.FC = () => {
         await loadDiaries(selectedChar.id);
         setDeletingDiary(null);
         addToast('日记已删除', 'success');
+        trackEvent('删除一篇日记');
     };
 
     // --- Interaction Logic (Move, Resize, Delete) ---
@@ -333,6 +339,7 @@ const JournalApp: React.FC = () => {
         const updated = targetPage.stickers.filter(s => s.id !== id);
         updatePage({ stickers: updated }, activeTab);
         setSelectedStickerId(null);
+        trackEvent('从日记页撕掉一张贴纸');
     };
 
     // 3. Pointer Handlers (Move & Resize)
@@ -428,7 +435,8 @@ const JournalApp: React.FC = () => {
         }
 
         setIsThinking(true);
-        saveEntry(); 
+        saveEntry();
+        trackEvent('邀请角色交换日记');
 
         try {
             await injectMemoryPalace(selectedChar, undefined, currentEntry.userPage.text);
@@ -572,6 +580,7 @@ Structure:
         }
 
         setArchivingId(diary.id);
+        trackEvent('归档日记进神经链接');
 
         // 主 API 散文式总结 — 当宫殿没开 / 副 API 缺失 / 提取为空时的 fallback
         const generateProseSummary = async (): Promise<string> => {
@@ -1095,7 +1104,7 @@ ${charPart}
                                 )}
                             </button>
                         )}
-                        <button onClick={saveEntry} className="px-4 py-1.5 bg-white/10 rounded-full text-xs font-bold hover:bg-white/20 active:scale-95 transition-transform">
+                        <button onClick={() => { saveEntry(); trackEvent('保存日记'); }} className="px-4 py-1.5 bg-white/10 rounded-full text-xs font-bold hover:bg-white/20 active:scale-95 transition-transform">
                             保存
                         </button>
                     </div>
@@ -1143,13 +1152,13 @@ ${charPart}
             <div className="shrink-0 bg-[#222] border-t border-white/5 pb-safe pt-2 z-30">
                 <div className="flex justify-center gap-4 mb-4 px-4">
                     <button 
-                        onClick={() => { setActiveTab('user'); setSelectedStickerId(null); }}
+                        onClick={() => { setActiveTab('user'); setSelectedStickerId(null); trackEvent('切换日记页标签', { page: 'user' }); }}
                         className={`flex-1 py-3 rounded-2xl text-xs font-bold uppercase tracking-wider transition-all duration-300 relative overflow-hidden ${activeTab === 'user' ? 'bg-white text-black shadow-lg' : 'bg-white/5 text-white/40 hover:bg-white/10'}`}
                     >
                         My Diary
                     </button>
                     <button 
-                        onClick={() => { setActiveTab('char'); setSelectedStickerId(null); }}
+                        onClick={() => { setActiveTab('char'); setSelectedStickerId(null); trackEvent('切换日记页标签', { page: 'char' }); }}
                         className={`flex-1 py-3 rounded-2xl text-xs font-bold uppercase tracking-wider transition-all duration-300 relative overflow-hidden ${activeTab === 'char' ? 'bg-amber-500 text-white shadow-lg shadow-amber-900/50' : 'bg-white/5 text-white/40 hover:bg-white/10'}`}
                     >
                         {selectedChar?.name || 'Partner'}
@@ -1162,7 +1171,7 @@ ${charPart}
                         {PAPER_STYLES.slice(0, 4).map(s => (
                             <button 
                                 key={s.id} 
-                                onClick={() => updatePage({ paperStyle: s.id }, activeTab)}
+                                onClick={() => { updatePage({ paperStyle: s.id }, activeTab); trackEvent('切换日记纸张样式', { paperStyle: s.id }); }}
                                 className={`w-8 h-8 rounded-full border border-white/10 transition-transform active:scale-90 ${s.css}`}
                                 title={s.name}
                             />
@@ -1177,7 +1186,7 @@ ${charPart}
                         )}
                         
                         <button 
-                            onClick={() => setShowStickerPanel(!showStickerPanel)} 
+                            onClick={() => { setShowStickerPanel(!showStickerPanel); if (!showStickerPanel) trackEvent('打开贴纸面板'); }}
                             className={`w-11 h-11 rounded-full flex items-center justify-center text-xl shadow-lg active:scale-90 transition-transform ${showStickerPanel ? 'bg-white text-black' : 'bg-gradient-to-br from-amber-400 to-orange-500 text-white'}`}
                         >
                             <Sparkle size={24} weight="fill" />
@@ -1188,7 +1197,7 @@ ${charPart}
                 {showStickerPanel && (
                     <div className="bg-[#1a1a1a] border-t border-white/10 p-4 animate-slide-up h-48 overflow-y-auto no-scrollbar">
                         <div className="grid grid-cols-6 gap-3">
-                            <button onClick={() => setShowImportModal(true)} className="flex items-center justify-center bg-white/10 rounded-xl border-2 border-dashed border-white/20 text-white/50 text-xl font-bold hover:bg-white/20 hover:text-white transition-all aspect-square">
+                            <button onClick={() => { setShowImportModal(true); trackEvent('打开自定义贴纸导入弹窗'); }} className="flex items-center justify-center bg-white/10 rounded-xl border-2 border-dashed border-white/20 text-white/50 text-xl font-bold hover:bg-white/20 hover:text-white transition-all aspect-square">
                                 +
                             </button>
                             {DEFAULT_STICKERS.map((s, i) => (

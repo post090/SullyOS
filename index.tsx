@@ -8,6 +8,7 @@ import { ProactiveChat } from './utils/proactiveChat';
 import { VRScheduler } from './utils/vrWorld/scheduler';
 import { installIOSStandaloneWorkaround } from './utils/iosStandalone';
 import { installWakeListener } from './utils/proactivePushConfig';
+import { initAnalytics } from './utils/analytics';
 
 // Register the keep-alive Service Worker early so it's ready before any AI calls
 KeepAlive.init().then(() => {
@@ -21,6 +22,10 @@ KeepAlive.init().then(() => {
 });
 
 installIOSStandaloneWorkaround();
+
+// 使用统计。构建时没配 VITE_UMAMI_* 就整个不生效，自部署实例默认如此。
+// 用户关掉开关、或浏览器开了 DNT，同样在这里就返回，连脚本都不会挂上去。
+initAnalytics();
 
 // 浏览器自动翻译 (Chrome/Edge 等) 会改动 React 托管的 DOM，导致 reconcile 时
 // insertBefore/removeChild 抛 NotFoundError 白屏。挂载前先打护栏。详见该 util 注释。

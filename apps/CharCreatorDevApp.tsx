@@ -4,6 +4,7 @@ import { ArrowLeft, UploadSimple, Trash, Wrench, Warning, FileArrowUp, MoonStars
 import { DB } from '../utils/db';
 import { creatorPartToBlobRefs, loadCreatorPartsForRender } from '../utils/creatorPartsBlob';
 import { buildBuiltinPartsPackZip, type BuiltinPackItem } from '../utils/builtinPartsPack';
+import { trackEvent } from '../utils/analytics';
 import type { CustomCreatorPart } from '../types';
 import type { ParsedPsdPart } from '../utils/psdCreatorImport';
 
@@ -65,6 +66,7 @@ const CharCreatorDevApp: React.FC = () => {
         setName(''); setSrc(''); setTintable(false);
         if (fileRef.current) fileRef.current.value = '';
         await load();
+        trackEvent('单张追加部件', { category: categoryKey });
         addToast?.(`已加入「${labelOf(categoryKey)}」`, 'success');
     };
 
@@ -92,6 +94,7 @@ const CharCreatorDevApp: React.FC = () => {
             addToast?.(plan.skipped
                 ? `已导出 ${plan.manifest.length} 个内置部件（跳过 ${plan.skipped} 个缺类目）`
                 : `已导出 ${plan.manifest.length} 个内置部件`, 'success');
+            trackEvent('导出内置素材包', { source: hint });
         } catch (e) {
             console.error('[CharCreatorDev] 导出内置素材包失败', e);
             addToast?.('导出失败：' + String((e as Error)?.message || e), 'error');
@@ -143,6 +146,7 @@ const CharCreatorDevApp: React.FC = () => {
         }
         setPsdParts([]); setPsdWarnings([]);
         await load();
+        trackEvent('批量加入 PSD 部件到捏人器');
         addToast?.(`已批量加入 ${ready.length} 个部件`, 'success');
     };
 
@@ -206,7 +210,7 @@ const CharCreatorDevApp: React.FC = () => {
                         </div>
                     )}
                     <input ref={psdRef} type="file" accept=".psd" className="hidden" onChange={e => void onPsdFile(e.target.files?.[0])} />
-                    <button onClick={() => psdRef.current?.click()} disabled={psdParsing}
+                    <button onClick={() => { trackEvent('选择 PSD 文件批量导入'); psdRef.current?.click(); }} disabled={psdParsing}
                         className="w-full rounded-lg border border-dashed border-white/30 py-3 text-[11px] text-white/60 active:bg-white/5 disabled:opacity-50">
                         {psdParsing ? '解析中…' : '选择 .psd 文件'}
                     </button>

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Database, DownloadSimple, FilmSlate, Plus, UploadSimple, UsersThree } from '@phosphor-icons/react';
+import { ArrowLeft, Database, DownloadSimple, FilmSlate, Plus, SpinnerGap, Trash, UploadSimple, UsersThree, X } from '@phosphor-icons/react';
 import { useOS } from '../../../context/OSContext';
 import type { StoryTheaterEntry, StoryTheaterMask, StoryTheaterMaskSelection, StoryTheaterPreset } from '../../../types';
 import { DB } from '../../../utils/db';
@@ -21,6 +21,7 @@ import StoryTheaterEditor from './StoryTheaterEditor';
 import StoryTheaterSession from './StoryTheaterSession';
 import StoryVectorMemoryPanel from './StoryVectorMemoryPanel';
 import { StoryAppearanceButton, StoryTheaterThemeProvider } from './StoryTheaterTheme';
+import { deleteStoryTheaterData } from '../../../utils/storyTheaterDeletion';
 
 interface Props {
     onSwitchCompanion: () => void;
@@ -30,7 +31,7 @@ interface Props {
 type View = 'list' | 'editor' | 'session' | 'preset' | 'masks' | 'vectors';
 
 const StoryTheaterContent: React.FC<Props> = ({ onSwitchCompanion, onClose }) => {
-    const { characters, userProfile, addToast } = useOS();
+    const { characters, userProfile, addToast, remoteVectorConfig } = useOS();
     const [view, setView] = useState<View>('list');
     const [entries, setEntries] = useState<StoryTheaterEntry[]>([]);
     const [customPresets, setCustomPresets] = useState<StoryTheaterPreset[]>([]);
@@ -38,6 +39,8 @@ const StoryTheaterContent: React.FC<Props> = ({ onSwitchCompanion, onClose }) =>
     const [activeEntry, setActiveEntry] = useState<StoryTheaterEntry | null>(null);
     const [editingPreset, setEditingPreset] = useState<StoryTheaterPreset | null>(null);
     const [maskLocked, setMaskLocked] = useState(false);
+    const [deletingEntry, setDeletingEntry] = useState<StoryTheaterEntry | null>(null);
+    const [deletingStory, setDeletingStory] = useState(false);
     const importInput = useRef<HTMLInputElement>(null);
     const presets = useMemo(() => withBuiltInStoryPresets(customPresets), [customPresets]);
 
@@ -116,6 +119,28 @@ const StoryTheaterContent: React.FC<Props> = ({ onSwitchCompanion, onClose }) =>
         }
         addToast('原创身份已移出面具箱', 'info');
     }, [activeEntry, addToast]);
+
+    const confirmDeleteEntry = useCallback(async () => {
+        if (!deletingEntry || deletingStory) return;
+        setDeletingStory(true);
+        try {
+            const result = await deleteStoryTheaterData(deletingEntry, remoteVectorConfig);
+            setEntries(current => current.filter(item => item.id !== deletingEntry.id));
+            if (activeEntry?.id === deletingEntry.id) setActiveEntry(null);
+            setDeletingEntry(null);
+            setView('list');
+            addToast(
+                result.remoteVectorDeleteFailures > 0
+                    ? `剧情已删除；${result.remoteVectorDeleteFailures} 条远端向量暂未同步，请检查网络`
+                    : `整个剧情「${deletingEntry.title}」已删除`,
+                result.remoteVectorDeleteFailures > 0 ? 'info' : 'success',
+            );
+        } catch (error: any) {
+            addToast(error?.message || '删除整个剧情失败', 'error');
+        } finally {
+            setDeletingStory(false);
+        }
+    }, [activeEntry?.id, addToast, deletingEntry, deletingStory, remoteVectorConfig]);
 
     const selectMask = useCallback((selection: StoryTheaterMaskSelection) => {
         if (maskLocked) return;
@@ -230,6 +255,7 @@ const StoryTheaterContent: React.FC<Props> = ({ onSwitchCompanion, onClose }) =>
                                 <time className='text-[9px] text-slate-400'>{new Date(item.updatedAt).toLocaleDateString()}</time>
                             </button>
                             {hasVectorArchive && <button onClick={() => { setActiveEntry(item); setView('vectors'); }} className='w-10 h-10 shrink-0 rounded-full bg-white border border-slate-200 grid place-items-center text-violet-600' title='查看本剧情向量记忆' aria-label='查看本剧情向量记忆'><Database size={17} /></button>}
+                            <button onClick={() => setDeletingEntry(item)} className='w-10 h-10 shrink-0 rounded-full grid place-items-center text-rose-400 active:bg-rose-50' title='删除整个剧情' aria-label={`删除剧情 ${item.title}`}><Trash size={17} /></button>
                         </div>;
                     })}</div>}
                 </section>
@@ -242,6 +268,15 @@ const StoryTheaterContent: React.FC<Props> = ({ onSwitchCompanion, onClose }) =>
                 </section>
             </div>
         </main>
+        {deletingEntry && <div className='fixed inset-0 z-[95] flex items-end justify-center overflow-y-auto overscroll-contain bg-slate-950/35' onClick={() => !deletingStory && setDeletingEntry(null)} role='presentation'>
+            <div className='story-safe-sheet w-full sm:max-w-sm rounded-t-[28px] bg-stone-100 px-5 pt-5 shadow-2xl' onClick={event => event.stopPropagation()} role='dialog' aria-modal='true' aria-labelledby='delete-story-title'>
+                <div className='flex items-start gap-4'><div className='min-w-0 flex-1'><div className='text-[9px] uppercase tracking-[.2em] font-bold text-rose-500'>Delete theater</div><h2 id='delete-story-title' className='mt-1 text-lg font-semibold'>删除整个剧情？</h2></div><button disabled={deletingStory} onClick={() => setDeletingEntry(null)} className='w-9 h-9 shrink-0 rounded-full bg-white border border-slate-200 grid place-items-center text-slate-400 disabled:opacity-30' aria-label='关闭删除确认'><X size={16} /></button></div>
+                <p className='mt-4 text-[11px] leading-6 text-slate-600'>「{deletingEntry.title}」的楼层、事件盒、关系备注和本剧情独立向量会一起删除。</p>
+                {deletingEntry.writesToCharacterMemory && <p className='mt-2 text-[10px] leading-5 text-amber-700'>角色侧仍能定位到的剧情镜像也会删除；已经被记忆宫殿总结成长期记忆的内容不会反向改写。</p>}
+                <p className='mt-2 text-[10px] leading-5 text-slate-400'>其它剧情、普通聊天与角色原有向量记忆不会受影响。删除后无法恢复。</p>
+                <div className='mt-5 grid grid-cols-2 gap-3'><button disabled={deletingStory} onClick={() => setDeletingEntry(null)} className='h-12 rounded-2xl border border-slate-200 bg-white text-xs font-bold text-slate-600 disabled:opacity-30'>取消</button><button disabled={deletingStory} onClick={() => void confirmDeleteEntry()} className='h-12 rounded-2xl bg-rose-600 text-white text-xs font-bold disabled:opacity-40'>{deletingStory ? <SpinnerGap size={17} className='mx-auto animate-spin' /> : '删除整个剧情'}</button></div>
+            </div>
+        </div>}
     </div>;
 };
 

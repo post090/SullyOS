@@ -58,6 +58,11 @@ export interface DevDebugFlags {
      * 只影响导出那一层，不改变实际抓取 / 存储的数据。
      */
     exposeLogDetail: boolean;
+    /**
+     * amsg2 任务观察窗（components/Amsg2DebugPanel.tsx）开着没有。
+     * 纯观察不改行为，所以不计进浮球的「生效开关数」红点——它自己就有个可见的角标。
+     */
+    amsg2Panel: boolean;
 }
 
 export interface DevDebugLogEntry {
@@ -91,6 +96,7 @@ export const DEFAULT_DEV_DEBUG_FLAGS: DevDebugFlags = {
     captureEnabled: false,
     captureLogs: [],
     exposeLogDetail: false,
+    amsg2Panel: false,
 };
 
 const MAX_LOG_ENTRIES = 100;
@@ -144,6 +150,7 @@ function normalizeFlags(value: unknown): DevDebugFlags {
         captureEnabled: source.captureEnabled === true || legacyHasCapture,
         captureLogs,
         exposeLogDetail: source.exposeLogDetail === true,
+        amsg2Panel: source.amsg2Panel === true,
     };
 }
 

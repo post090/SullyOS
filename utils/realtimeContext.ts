@@ -8,28 +8,46 @@ import { resilientFetch } from './resilientFetch';
 import { DB } from './db';
 import { getProxyWorkerUrl } from './proxyWorker';
 import { nowInTimeZone } from './timezone';
+import {
+    performSearch as performSearchCore,
+    notionGetDiaryByDate,
+    notionReadDiaryContent,
+    notionSearchUserNotes,
+    feishuGetToken,
+    feishuGetDiaryByDate,
+    type SearchResult,
+    type DiaryPreview,
+    type FeishuDiaryPreview,
+} from './realtimeFetchCore';
+import {
+    generateWeatherAdvice as generateWeatherAdviceCore,
+    checkSpecialDates as checkSpecialDatesCore,
+    clearGeocodeCache,
+    getHotNewsSlot as getHotNewsSlotCore,
+    HOTNEWS_PLATFORM_LABELS,
+    DEFAULT_HOTNEWS_PLATFORMS,
+    type WeatherData,
+    type NewsItem,
+} from './realtimeWorldCore';
+// 注意：fetchWeatherWithFallback / fetchHotNews / resolveHotNewsPlatforms / sameHotNewsPlatforms /
+// pickRandomNews / renderRealtimeWorldBlock / REALTIME_NEWS_PICK_COUNT 这些上游版本 fork 不用——
+// fork 自带带超时+瞬断补枪+陈旧缓存兜底的 fetchWithTimeout，以及角色级 origin/RSS 过滤、
+// ratio 加权抽样、双城市天气模糊感知，buildFullContext 全程走 fork 自己的实现。amsg worker
+// 才直接用 realtimeWorldCore 那份（云端网络稳定，不需要超时包装）。
 import { getLocalDateKey } from './localDate';
 
-export interface WeatherData {
-    temp: number;
-    feelsLike: number;
-    humidity: number;
-    description: string;
-    icon: string;
-    city: string;
-}
-
-export interface NewsItem {
-    title: string;
-    source?: string;
-    origin?: string;  // 源标识：hot_news 平台 key（如 'weibo'）或 RSS URL，用于角色级订阅过滤 / 占比加权
-    url?: string;
-    desc?: string;
-    image?: string;   // 配图 URL（目前只有 RSS 源能给，orz.ai 热榜接口不返图）
-}
+// 两份环境无关叶子，amsg worker 共用同一份，这里的 Manager 方法委托过去；
+// 类型与常量原样 re-export，既有 import 路径不用改：
+//   realtimeFetchCore  搜索 / Notion / 飞书的读取类纯 fetch（服务端工具循环用）
+//   realtimeWorldCore  天气 / 热搜 / 节日的取数与成段渲染（到点组 prompt 用）
+export type { SearchResult, DiaryPreview, FeishuDiaryPreview } from './realtimeFetchCore';
+export type { WeatherData, NewsItem } from './realtimeWorldCore';
+// fetchOwmWeather / fetchOpenMeteoWeather / HOTNEWS_API_BASE_URL 不再从 realtimeWorldCore re-export：
+// fork 在本文件下方自带带超时+瞬断补枪的版本（buildFullContext 走这份），amsg worker 才用
+// realtimeWorldCore 里那份裸 fetch 版本（云端网络稳定，不需要超时包装）。
 
 /**
- * 角色级「地区与热点」覆盖参数（buildFullContext 用）。
+ * 角色级「地区与热点」覆盖参数（buildFullContext 用）。fork 特有，上游无。
  * 所有字段都可选——未设置即跟随全局 config；设置了则在全局池子里做过滤 / 加权。
  */
 export interface CharRegionOverride {
@@ -44,12 +62,6 @@ export interface CharRegionOverride {
         fuzzTemp?: boolean;      // 温度模糊（默认 true）
         fuzzHumidity?: boolean;  // 湿度模糊（默认 true）
     };
-}
-
-export interface SearchResult {
-    title: string;
-    description: string;
-    url: string;
 }
 
 export interface RealtimeConfig {
@@ -418,17 +430,11 @@ export const RealtimeContextManager = {
         return weather;
     },
 
-    // hot_news（news.orz.ai）平台 key → 中文展示名。用于 source 标注，让提示词读起来自然。
-    HOTNEWS_PLATFORM_LABELS: {
-        baidu: '百度', sspai: '少数派', weibo: '微博', zhihu: '知乎', tskr: '36氪',
-        ftpojie: '吾爱破解', bilibili: 'B站', douban: '豆瓣', hupu: '虎扑', tieba: '贴吧',
-        juejin: '掘金', douyin: '抖音', vtex: 'V2EX', jinritoutiao: '今日头条',
-        stackoverflow: 'Stack Overflow', github: 'GitHub', hackernews: 'Hacker News',
-        sina_finance: '新浪财经', eastmoney: '东方财富', xueqiu: '雪球', cls: '财联社',
-        tenxunwang: '腾讯网',
-    } as Record<string, string>,
+    // 平台名表、默认平台、真正的多平台拉取都住在 realtimeWorldCore（主动消息到点
+    // 也要用同一份），这里保留同名入口，「热点」App 与既有调用方不用改。
+    HOTNEWS_PLATFORM_LABELS,
 
-    DEFAULT_HOTNEWS_PLATFORMS: ['weibo', 'zhihu', 'baidu', 'bilibili', 'douyin'],
+    DEFAULT_HOTNEWS_PLATFORMS,
 
     /**
      * RSS 内置订阅源清单（一坨显示，不分分类）。
@@ -544,7 +550,6 @@ export const RealtimeContextManager = {
      * 使用 hot_news（news.orz.ai）获取中文多平台热榜。
      * 免鉴权、半小时刷新。浏览器端优先直连；若被 CORS 拦截则本调用返回 []，
      * 由 fetchNews 自然回落到 Brave / Hacker News。
-     * 多平台并发拉取，每平台取前几条后 round-robin 交错合并，避免单一平台霸屏。
      */
     fetchHotNews: async (platforms?: string[], perPlatform = 12, total = 240): Promise<NewsItem[]> => {
         const list = (platforms && platforms.length > 0)
@@ -606,13 +611,8 @@ export const RealtimeContextManager = {
         return final;
     },
 
-    // 一天分 6 段（每 4 小时）：0-4 凌晨 / 4-8 清晨 / 8-12 上午 / 12-16 午后 / 16-20 傍晚 / 20-24 夜间。slot = floor(hour/4)
-    getHotNewsSlot: (d: Date = new Date()): { id: string; date: string; slot: number; label: string } => {
-        const slot = Math.min(5, Math.floor(d.getHours() / 4));
-        const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-        const label = ['凌晨', '清晨', '上午', '午后', '傍晚', '夜间'][slot];
-        return { id: `${date}#${slot}`, date, slot, label };
-    },
+    // 一天分 6 段（每 4 小时）：0-4 凌晨 / 4-8 清晨 / 8-12 上午 / 12-16 午后 / 16-20 傍晚 / 20-24 夜间。
+    getHotNewsSlot: (d: Date = new Date()) => getHotNewsSlotCore({ now: d }),
 
     // 同一时段并发只真正发一次请求（群聊 / 多角色同时回复时复用同一 Promise）
     _hotNewsInFlight: new Map<string, Promise<NewsItem[]>>(),
@@ -897,65 +897,28 @@ export const RealtimeContextManager = {
      * tz 非空时按角色所在时区判「今天几号」——否则角色会跟着用户的日历过节：
      * 用户这边 2/14 早上，角色在纽约还是 13 号晚上，却被告知今天是情人节。
      */
-    checkSpecialDates: (tz?: string): string[] => {
-        const now = nowInTimeZone(tz);
-        const monthDay = `${(now.getMonth() + 1).toString().padStart(2, '0')}-${now.getDate().toString().padStart(2, '0')}`;
-
-        const special: string[] = [];
-
-        if (SPECIAL_DATES[monthDay]) {
-            special.push(SPECIAL_DATES[monthDay]);
-        }
-
-        // 检查农历节日（简化版，只检查大概日期）
-        // 这里可以后续接入农历API
-
-        return special;
-    },
+    checkSpecialDates: (tz?: string): string[] => checkSpecialDatesCore(tz),
 
     /**
      * 生成天气建议
      */
-    generateWeatherAdvice: (weather: WeatherData): string => {
-        const advices: string[] = [];
-
-        // 温度建议
-        if (weather.temp < 5) {
-            advices.push('天气很冷，记得多穿点');
-        } else if (weather.temp < 15) {
-            advices.push('有点凉，注意保暖');
-        } else if (weather.temp > 30) {
-            advices.push('天气炎热，注意防暑');
-        } else if (weather.temp > 25) {
-            advices.push('天气不错，适合出门');
-        }
-
-        // 天气状况建议
-        const desc = weather.description.toLowerCase();
-        if (desc.includes('雨')) {
-            advices.push('记得带伞');
-        } else if (desc.includes('雪')) {
-            advices.push('路上小心，注意防滑');
-        } else if (desc.includes('雾') || desc.includes('霾')) {
-            advices.push('空气不太好，建议戴口罩');
-        } else if (desc.includes('晴')) {
-            advices.push('阳光明媚');
-        }
-
-        // 湿度建议
-        if (weather.humidity > 80) {
-            advices.push('湿度较高，可能会闷热');
-        } else if (weather.humidity < 30) {
-            advices.push('空气干燥，记得多喝水');
-        }
-
-        return advices.join('，') || '天气正常';
-    },
+    generateWeatherAdvice: (weather: WeatherData): string => generateWeatherAdviceCore(weather),
 
     /**
-     * 构建完整的实时上下文（注入到系统提示词）
+     * 构建完整的实时上下文（注入到系统提示词）。
+     * 取数在这里（天气两源 + 热点分时段快照），拼成话交给 realtimeWorldCore 的
+     * renderRealtimeWorldBlock——主动消息到点生成时 worker 自己取数、调同一个渲染，
+     * 两边说的是同一套话。
      */
-    buildFullContext: async (config: RealtimeConfig, tz?: string, charRegion?: CharRegionOverride): Promise<string> => {
+    buildFullContext: async (
+        config: RealtimeConfig,
+        tz?: string,
+        charRegion?: CharRegionOverride,
+        // includeTime=false：角色关掉了「时间感知」。天气/新闻还要，但当前时间和今日节日
+        // 属于时间感知的范畴，这个开关关着就不该从这一段里漏出去。
+        opts?: { includeTime?: boolean },
+    ): Promise<string> => {
+        const includeTime = opts?.includeTime !== false;
         const parts: string[] = [];
 
         // 开头强调：这是真实世界的信息
@@ -963,15 +926,17 @@ export const RealtimeContextManager = {
         parts.push(`⚠️ 重要：以下信息来自真实世界，不是虚构的。你现在真的能"看到"外面的世界。`);
         parts.push('');
 
-        // 1. 时间信息（总是包含）。tz 非空时按角色所在时区折算。
+        // 1. 时间信息（includeTime=false 时跳过）。tz 非空时按角色所在时区折算。
         //    时差提示（tzAwarenessNote）统一由 ContextBuilder.buildCoreContext 注入，这里不再追加，避免双份。
-        const time = RealtimeContextManager.getTimeContext(tz);
-        parts.push(`📅 当前真实时间: ${time.dateStr} ${time.dayOfWeek} ${time.timeOfDay} ${time.timeStr}`);
+        if (includeTime) {
+            const time = RealtimeContextManager.getTimeContext(tz);
+            parts.push(`📅 当前真实时间: ${time.dateStr} ${time.dayOfWeek} ${time.timeOfDay} ${time.timeStr}`);
 
-        // 2. 特殊日期（跟上面的「当前真实时间」同一个时区，否则同一段里日期和节日会打架）
-        const specialDates = RealtimeContextManager.checkSpecialDates(tz);
-        if (specialDates.length > 0) {
-            parts.push(`🎉 今日特殊: ${specialDates.join('、')}`);
+            // 2. 特殊日期（跟上面的「当前真实时间」同一个时区，否则同一段里日期和节日会打架）
+            const specialDates = RealtimeContextManager.checkSpecialDates(tz);
+            if (specialDates.length > 0) {
+                parts.push(`🎉 今日特殊: ${specialDates.join('、')}`);
+            }
         }
 
         // 3. 天气信息（有没有 OWM key 都能取：无 key 走 Open-Meteo）
@@ -1092,7 +1057,7 @@ export const RealtimeContextManager = {
     clearCache: () => {
         weatherCacheMap.clear();
         newsCache = { data: [], timestamp: 0 };
-        geocodeCache.clear();
+        clearGeocodeCache();
     },
 
     /**
@@ -1100,61 +1065,7 @@ export const RealtimeContextManager = {
      * Active Search - Let AI characters actively search for anything
      */
     performSearch: async (query: string, apiKey: string): Promise<{ success: boolean; results: SearchResult[]; message: string }> => {
-        if (!query || !apiKey) {
-            return { success: false, results: [], message: '缺少搜索关键词或API Key' };
-        }
-
-        try {
-            // 使用自建的 Cloudflare Worker 代理
-            const workerUrl = `${getProxyWorkerUrl()}/search?q=${encodeURIComponent(query)}&count=5`;
-
-            const response = await fetch(workerUrl, {
-                method: 'GET',
-                headers: {
-                    'Accept': 'application/json',
-                    'X-Brave-API-Key': apiKey
-                }
-            });
-
-            // 先读取 text，避免非 JSON 响应直接 crash
-            const text = await response.text();
-
-            // 非 2xx 直接抛错
-            if (!response.ok) {
-                console.error('Search API error:', response.status, text);
-                // 尝试解析错误信息
-                try {
-                    const errJson = JSON.parse(text);
-                    return { success: false, results: [], message: `搜索失败: ${errJson.error || response.status}` };
-                } catch {
-                    return { success: false, results: [], message: `搜索失败: ${response.status}` };
-                }
-            }
-
-            // 解析 JSON
-            let data;
-            try {
-                data = JSON.parse(text);
-            } catch (e) {
-                console.error('Search response not JSON:', text.slice(0, 200));
-                return { success: false, results: [], message: '搜索返回格式错误' };
-            }
-
-            // Brave Search API 返回结构
-            if (data.web?.results && data.web.results.length > 0) {
-                const results: SearchResult[] = data.web.results.slice(0, 5).map((item: any) => ({
-                    title: item.title,
-                    description: item.description || '',
-                    url: item.url
-                }));
-                return { success: true, results, message: '搜索成功' };
-            }
-
-            return { success: false, results: [], message: '没有找到相关结果' };
-        } catch (e: any) {
-            console.error('Search failed:', e);
-            return { success: false, results: [], message: `搜索出错: ${e.message}` };
-        }
+        return performSearchCore(query, apiKey);
     }
 };
 
@@ -1169,13 +1080,6 @@ export interface NotionDiaryEntry {
     date?: string;
     tags?: string[];
     characterName?: string;  // 角色名，用于区分不同角色的日记
-}
-
-export interface DiaryPreview {
-    id: string;
-    title: string;
-    date: string;
-    url: string;
 }
 
 export const NotionManager = {
@@ -1363,61 +1267,7 @@ export const NotionManager = {
         characterName: string,
         date: string  // YYYY-MM-DD
     ): Promise<{ success: boolean; entries: DiaryPreview[]; message: string }> => {
-        try {
-            const response = await fetch(`${NotionManager.WORKER_URL}/notion/query`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Notion-API-Key': apiKey
-                },
-                body: JSON.stringify({
-                    database_id: databaseId,
-                    filter: {
-                        and: [
-                            {
-                                property: 'Name',
-                                title: { starts_with: `[${characterName}]` }
-                            },
-                            {
-                                property: 'Date',
-                                date: { equals: date }
-                            }
-                        ]
-                    },
-                    sorts: [{ property: 'Date', direction: 'descending' }],
-                    page_size: 10
-                })
-            });
-
-            const text = await response.text();
-
-            if (!response.ok) {
-                console.error('Query diary by date failed:', response.status, text);
-                return { success: false, entries: [], message: `查询失败: ${response.status}` };
-            }
-
-            const data = JSON.parse(text);
-
-            if (!data.results || data.results.length === 0) {
-                return { success: true, entries: [], message: `没有找到 ${date} 的日记` };
-            }
-
-            const entries: DiaryPreview[] = data.results.map((page: any) => {
-                const title = page.properties?.Name?.title?.[0]?.plain_text || '无标题';
-                const cleanTitle = title.replace(/^\[.*?\]\s*/, '');
-                return {
-                    id: page.id,
-                    title: cleanTitle,
-                    date: page.properties?.Date?.date?.start || '',
-                    url: page.url
-                };
-            });
-
-            return { success: true, entries, message: `找到 ${entries.length} 篇日记` };
-        } catch (e: any) {
-            console.error('Get diary by date failed:', e);
-            return { success: false, entries: [], message: `查询失败: ${e.message}` };
-        }
+        return notionGetDiaryByDate(apiKey, databaseId, characterName, date);
     },
 
     /**
@@ -1428,34 +1278,7 @@ export const NotionManager = {
         apiKey: string,
         pageId: string
     ): Promise<{ success: boolean; content: string; message: string }> => {
-        try {
-            const response = await fetch(`${NotionManager.WORKER_URL}/notion/blocks/${pageId}`, {
-                method: 'GET',
-                headers: {
-                    'X-Notion-API-Key': apiKey
-                }
-            });
-
-            const text = await response.text();
-
-            if (!response.ok) {
-                console.error('Read diary content failed:', response.status, text);
-                return { success: false, content: '', message: `读取失败: ${response.status}` };
-            }
-
-            const data = JSON.parse(text);
-
-            if (!data.results || data.results.length === 0) {
-                return { success: true, content: '（空白日记）', message: '日记内容为空' };
-            }
-
-            // 将 Notion blocks 转换为可读文本
-            const content = notionBlocksToText(data.results);
-            return { success: true, content, message: '读取成功' };
-        } catch (e: any) {
-            console.error('Read diary content failed:', e);
-            return { success: false, content: '', message: `读取失败: ${e.message}` };
-        }
+        return notionReadDiaryContent(apiKey, pageId);
     },
 
     /**
@@ -1540,58 +1363,7 @@ export const NotionManager = {
         keyword: string,
         limit: number = 5
     ): Promise<{ success: boolean; entries: DiaryPreview[]; message: string }> => {
-        try {
-            const response = await fetch(`${NotionManager.WORKER_URL}/notion/query`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Notion-API-Key': apiKey
-                },
-                body: JSON.stringify({
-                    database_id: notesDatabaseId,
-                    filter: {
-                        property: 'Name',
-                        title: { contains: keyword }
-                    },
-                    sorts: [{ timestamp: 'last_edited_time', direction: 'descending' }],
-                    page_size: limit
-                })
-            });
-
-            const text = await response.text();
-
-            if (!response.ok) {
-                return { success: false, entries: [], message: `搜索失败: ${response.status}` };
-            }
-
-            const data = JSON.parse(text);
-
-            if (!data.results || data.results.length === 0) {
-                return { success: true, entries: [], message: `没有找到关于"${keyword}"的笔记` };
-            }
-
-            const entries: DiaryPreview[] = data.results.map((page: any) => {
-                const title = page.properties?.Name?.title?.[0]?.plain_text
-                    || page.properties?.['名称']?.title?.[0]?.plain_text
-                    || page.properties?.Title?.title?.[0]?.plain_text
-                    || '无标题';
-                const date = page.properties?.Date?.date?.start
-                    || page.properties?.['日期']?.date?.start
-                    || page.last_edited_time?.split('T')[0]
-                    || '';
-                return {
-                    id: page.id,
-                    title,
-                    date,
-                    url: page.url || ''
-                };
-            });
-
-            return { success: true, entries, message: `找到 ${entries.length} 篇笔记` };
-        } catch (e: any) {
-            console.error('Search user notes failed:', e);
-            return { success: false, entries: [], message: `搜索失败: ${e.message}` };
-        }
+        return notionSearchUserNotes(apiKey, notesDatabaseId, keyword, limit);
     }
 };
 
@@ -2026,65 +1798,6 @@ function normalizeBlocksForNotion(blocks: any[]): any[] {
 // ============================================
 // Notion Blocks → 可读文本 转换器
 // ============================================
-function notionBlocksToText(blocks: any[]): string {
-    const lines: string[] = [];
-
-    for (const block of blocks) {
-        const type = block.type;
-
-        if (type === 'divider') {
-            lines.push('---');
-            continue;
-        }
-
-        // 提取 rich_text
-        const richText = block[type]?.rich_text;
-        if (!richText) continue;
-
-        const text = richText.map((rt: any) => rt.plain_text || rt.text?.content || '').join('');
-        if (!text.trim()) continue;
-
-        switch (type) {
-            case 'heading_1':
-                lines.push(`# ${text}`);
-                break;
-            case 'heading_2':
-                lines.push(`## ${text}`);
-                break;
-            case 'heading_3':
-                lines.push(`### ${text}`);
-                break;
-            case 'quote':
-                lines.push(`> ${text}`);
-                break;
-            case 'callout':
-                const emoji = block.callout?.icon?.emoji || '📌';
-                lines.push(`${emoji} ${text}`);
-                break;
-            case 'bulleted_list_item':
-                lines.push(`- ${text}`);
-                break;
-            case 'numbered_list_item':
-                lines.push(`· ${text}`);
-                break;
-            case 'to_do':
-                const checked = block.to_do?.checked ? '✅' : '⬜';
-                lines.push(`${checked} ${text}`);
-                break;
-            case 'toggle':
-                lines.push(`▶ ${text}`);
-                break;
-            case 'code':
-                lines.push(`\`\`\`\n${text}\n\`\`\``);
-                break;
-            default:
-                lines.push(text);
-        }
-    }
-
-    return lines.join('\n');
-}
-
 // ============================================
 // 飞书多维表格 集成模块 (中国区 Notion 替代)
 // ============================================
@@ -2096,16 +1809,6 @@ export interface FeishuDiaryEntry {
     date?: string;
     characterName?: string;
 }
-
-export interface FeishuDiaryPreview {
-    recordId: string;
-    title: string;
-    date: string;
-    content: string;
-}
-
-// 飞书 token 缓存
-let feishuTokenCache: { token: string; expiresAt: number } | null = null;
 
 /**
  * 飞书日记内容美化格式化器
@@ -2231,41 +1934,7 @@ export const FeishuManager = {
      * 获取飞书 tenant_access_token（通过 Worker 代理，带缓存）
      */
     getToken: async (appId: string, appSecret: string): Promise<{ success: boolean; token: string; message: string }> => {
-        // 检查缓存是否有效 (提前5分钟过期)
-        if (feishuTokenCache && feishuTokenCache.expiresAt > Date.now() + 5 * 60 * 1000) {
-            return { success: true, token: feishuTokenCache.token, message: '使用缓存token' };
-        }
-
-        try {
-            const response = await fetch(`${FeishuManager.WORKER_URL}/feishu/token`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ app_id: appId, app_secret: appSecret })
-            });
-
-            const text = await response.text();
-            if (!response.ok) {
-                try {
-                    const errJson = JSON.parse(text);
-                    return { success: false, token: '', message: `获取token失败: ${errJson.msg || errJson.error || response.status}` };
-                } catch {
-                    return { success: false, token: '', message: `获取token失败: ${response.status}` };
-                }
-            }
-
-            const data = JSON.parse(text);
-            if (data.code !== 0) {
-                return { success: false, token: '', message: `飞书错误: ${data.msg || '未知错误'}` };
-            }
-
-            const token = data.tenant_access_token;
-            const expire = (data.expire || 7200) * 1000; // 转为毫秒
-            feishuTokenCache = { token, expiresAt: Date.now() + expire };
-
-            return { success: true, token, message: 'Token获取成功' };
-        } catch (e: any) {
-            return { success: false, token: '', message: `网络错误: ${e.message}` };
-        }
+        return feishuGetToken(appId, appSecret);
     },
 
     /**
@@ -2482,67 +2151,7 @@ export const FeishuManager = {
         characterName: string,
         date: string  // YYYY-MM-DD
     ): Promise<{ success: boolean; entries: FeishuDiaryPreview[]; message: string }> => {
-        try {
-            const tokenResult = await FeishuManager.getToken(appId, appSecret);
-            if (!tokenResult.success) {
-                return { success: false, entries: [], message: tokenResult.message };
-            }
-
-            const dateTimestamp = new Date(date).getTime();
-            const nextDayTimestamp = dateTimestamp + 24 * 60 * 60 * 1000;
-
-            const response = await fetch(`${FeishuManager.WORKER_URL}/feishu/bitable/${baseId}/${tableId}/records/search`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Feishu-Token': tokenResult.token
-                },
-                body: JSON.stringify({
-                    filter: {
-                        conjunction: 'and',
-                        conditions: [
-                            { field_name: '角色', operator: 'is', value: [characterName] },
-                            { field_name: '日期', operator: 'isGreater', value: [dateTimestamp - 1] },
-                            { field_name: '日期', operator: 'isLess', value: [nextDayTimestamp] }
-                        ]
-                    },
-                    sort: [{ field_name: '日期', desc: true }],
-                    page_size: 10
-                })
-            });
-
-            const text = await response.text();
-            if (!response.ok) {
-                return { success: false, entries: [], message: `查询失败: ${response.status}` };
-            }
-
-            const data = JSON.parse(text);
-            if (data.code !== 0) {
-                return { success: false, entries: [], message: `飞书错误: ${data.msg || '查询失败'}` };
-            }
-
-            const items = data.data?.items || [];
-            if (items.length === 0) {
-                return { success: true, entries: [], message: `没有找到 ${date} 的日记` };
-            }
-
-            const entries: FeishuDiaryPreview[] = items.map((item: any) => {
-                const fields = item.fields || {};
-                const rawTitle = (Array.isArray(fields['标题']) ? fields['标题']?.[0]?.text : fields['标题']) || '无标题';
-                const cleanTitle = String(rawTitle).replace(/^\[.*?\]\s*/, '');
-
-                return {
-                    recordId: item.record_id,
-                    title: cleanTitle,
-                    date: date,
-                    content: (Array.isArray(fields['内容']) ? fields['内容']?.[0]?.text : fields['内容']) || ''
-                };
-            });
-
-            return { success: true, entries, message: `找到 ${entries.length} 篇日记` };
-        } catch (e: any) {
-            return { success: false, entries: [], message: `查询失败: ${e.message}` };
-        }
+        return feishuGetDiaryByDate(appId, appSecret, baseId, tableId, characterName, date);
     },
 
     /**

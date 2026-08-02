@@ -20,7 +20,8 @@ import { CharacterProfile, UserProfile, DailySchedule, ScheduleSlot, SlotTheater
 import { ContextBuilder } from './context';
 import { DB } from './db';
 import { safeResponseJson, extractContent } from './safeApi';
-import { isScheduleFeatureOn, getFlowNarrativeKey } from './scheduleGenerator';
+import { isScheduleFeatureOn } from './scheduleGenerator';
+import { getFlowNarrativeKey } from './scheduleInjection';
 import { DATE_STYLE_PRESETS } from './datePrompts';
 
 interface ApiConfig {

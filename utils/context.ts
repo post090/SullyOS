@@ -1,7 +1,9 @@
 
 import { CharacterProfile, UserProfile, DailySchedule } from '../types';
 import { normalizeUserImpression } from './impression';
-import { getFlowNarrativeKey, isScheduleFeatureOn } from './scheduleGenerator';
+import { getFlowNarrativeKey } from './scheduleGenerator';
+import { isScheduleFeatureOn } from './scheduleFeature';
+import { buildScheduleInjection as buildScheduleInjectionText } from './scheduleInjection';
 import { resolveCharTimeZone, nowInTimeZone, tzAwarenessNote, interactionGapNote, tzLabel } from './timezone';
 import {
     formatWorldbookSection,
@@ -494,72 +496,11 @@ export const ContextBuilder = {
     },
 
     /**
-     * 构建日程注入文本
-     *
-     * 两段式，独立叠加：
-     * 1) 当前时段硬事实——每轮都注入，不受 evolvedNarrative 影响
-     * 2) 意识流独白——evolvedNarrative > flowNarrative > 当前 slot innerThought
+     * 构建日程注入文本。实现住在 utils/scheduleInjection.ts —— 那是个零依赖的纯叶子，
+     * 主动消息到点生成时 worker 也要渲染同一段（见 utils/amsgFireScene.ts），
+     * 两边共用一份才不会出现「聊天里说在健身房、主动消息里说在睡觉」。
      */
-    buildScheduleInjection: (
-        schedule: DailySchedule | null,
-        evolvedNarrative?: string,
-        now: Date = new Date(),
-    ): string => {
-        if (!schedule || !schedule.slots || schedule.slots.length === 0) return '';
-        const currentMinutes = now.getHours() * 60 + now.getMinutes();
-
-        // 1. 计算当前 / 下一个时段
-        let currentSlot: typeof schedule.slots[0] | null = null;
-        let nextSlot: typeof schedule.slots[0] | null = null;
-        for (let i = schedule.slots.length - 1; i >= 0; i--) {
-            const [h, m] = schedule.slots[i].startTime.split(':').map(Number);
-            if (currentMinutes >= h * 60 + m) {
-                currentSlot = schedule.slots[i];
-                nextSlot = i < schedule.slots.length - 1 ? schedule.slots[i + 1] : null;
-                break;
-            }
-        }
-        if (!currentSlot) {
-            nextSlot = schedule.slots[0];
-        }
-
-        // 2. 当前时段硬事实（每轮独立注入）
-        let slotHeader = '';
-        if (currentSlot) {
-            slotHeader = `当前时段：${currentSlot.startTime} 你正在${currentSlot.activity}`;
-            if (currentSlot.location) slotHeader += `（${currentSlot.location}）`;
-            if (nextSlot) slotHeader += `\n之后安排：${nextSlot.startTime} ${nextSlot.activity}`;
-            slotHeader += '\n';
-        } else if (nextSlot) {
-            slotHeader = `今天还没开始活动，稍后先${nextSlot.activity}（${nextSlot.startTime}）\n`;
-        }
-
-        // 3. 意识流独白
-        let narrative = '';
-        if (evolvedNarrative) {
-            narrative = evolvedNarrative;
-        } else if (schedule.flowNarrative && Object.keys(schedule.flowNarrative).length > 0) {
-            const key = getFlowNarrativeKey(now.getHours());
-            narrative = schedule.flowNarrative[key]
-                || schedule.flowNarrative['evening']
-                || schedule.flowNarrative['afternoon']
-                || schedule.flowNarrative['morning']
-                || '';
-        } else if (currentSlot?.innerThought) {
-            narrative = currentSlot.innerThought;
-        }
-
-        // 4. 拼接：硬事实 → 意识流（可选）
-        const preamble = `此刻你的心中盘旋着这些想法……\n`;
-        const footnote = `\n（不是台词，不用说出口——让它影响你的语气和情绪就好。）`;
-
-        let out = slotHeader;
-        if (narrative) {
-            out += preamble + narrative + footnote;
-        }
-        out += '\n';
-        return out;
-    },
+    buildScheduleInjection: buildScheduleInjectionText,
 
     /**
      * 音乐氛围注入：

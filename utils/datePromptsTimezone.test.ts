@@ -18,7 +18,7 @@ afterEach(() => vi.useRealTimers());
 /** 北京 2026-07-26 21:00（周日）== 纽约同日 09:00（周日, EDT）。 */
 const INSTANT = new Date('2026-07-26T13:00:00Z');
 
-const userProfile = { name: '楪' } as UserProfile;
+const userProfile = { name: '小明' } as UserProfile;
 
 const makeChar = (overrides: Partial<CharacterProfile>): CharacterProfile => ({
     id: 'char-1',

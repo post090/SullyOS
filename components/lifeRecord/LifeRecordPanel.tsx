@@ -8,6 +8,7 @@ import {
     isMedPlanDueToday, lifeAddDays, medFreqLabel, weekStartOf,
 } from '../../utils/lifeRecords';
 import { useLocalDateKey } from '../../hooks/useLocalDateKey';
+import { markAmsgStateDirtyForAll } from '../../utils/amsgStateSync';
 
 /**
  * 档案 App「生活记录」面板 —— 复古优雅浅色系，但四个模块各有独立版式：
@@ -257,7 +258,7 @@ const ModuleTab: React.FC<{
 // ─── 主面板 ───
 
 const LifeRecordPanel: React.FC = () => {
-    const { addToast } = useOS();
+    const { addToast, characters, userProfile, groups, realtimeConfig } = useOS();
     const [tab, setTab] = useState<LifeRecordModule>('period');
     const [records, setRecords] = useState<LifeRecord[]>([]);
     const [plans, setPlans] = useState<MedPlan[]>([]);
@@ -282,7 +283,13 @@ const LifeRecordPanel: React.FC = () => {
         setRecordDate(current => current > today ? today : current);
     }, [today]);
 
-    const reload = async () => {
+    /**
+     * 重新读库刷新面板。面板里每个写库点写完都调它，所以顺带在这里给主动消息 2.0 打脏：
+     * 生活记录（生理期 / 药盒 / 记账 / 锻炼）会注入给所有开了开关的角色，改完不刷云端的话，
+     * 角色到点还照着改之前那份说话（比如药已经停了还催你吃）。
+     * 首次进面板只是读，不算改动，所以 mutated 传 false。
+     */
+    const reload = async (mutated = true) => {
         const [r, p, s, t] = await Promise.all([
             DB.getAllLifeRecords().catch(() => [] as LifeRecord[]),
             DB.getAllMedPlans().catch(() => [] as MedPlan[]),
@@ -294,8 +301,9 @@ const LifeRecordPanel: React.FC = () => {
         setSettings(s);
         setTxs(t.sort((a, b) => b.timestamp - a.timestamp));
         setLoaded(true);
+        if (mutated) markAmsgStateDirtyForAll({ characters, userProfile, groups, realtimeConfig });
     };
-    useEffect(() => { reload(); }, []);
+    useEffect(() => { reload(false); }, []);
 
     const saveSettings = async (patch: Partial<LifeRecordSettings>) => {
         await DB.saveLifeRecordSettings({ id: 'main', ...(settings || {}), ...patch });

@@ -7,6 +7,7 @@ import { XhsActivityRecord, CharacterProfile } from '../types';
 import { XhsFreeRoamEngine, FreeRoamCallbacks } from '../utils/xhsFreeRoam';
 import { XhsMcpClient } from '../utils/xhsMcpClient';
 import ConfirmDialog from '../components/os/ConfirmDialog';
+import { trackEvent } from '../utils/analytics';
 import { Book, PencilSimple, MagnifyingGlass, DeviceMobileCamera, ChatCircleDots, PushPin, Moon, House } from '@phosphor-icons/react';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
 
@@ -117,6 +118,7 @@ const XhsFreeRoamApp: React.FC = () => {
         setStatus('启动中...');
         setThinking('');
         setLiveActivities([]);
+        trackEvent('开始角色自由活动');
 
         const callbacks: FreeRoamCallbacks = {
             onStatus: (s) => setStatus(s),
@@ -444,7 +446,7 @@ const XhsFreeRoamApp: React.FC = () => {
                 activities.map(a => (
                     <button
                         key={a.id}
-                        onClick={() => setShowDetail(a)}
+                        onClick={() => { setShowDetail(a); trackEvent('打开自由活动记录详情'); }}
                         className="w-full bg-white rounded-2xl border border-slate-100 p-3 text-left active:scale-[0.98] transition-transform"
                     >
                         <div className="flex items-center justify-between">

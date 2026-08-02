@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 import { AppID, CharacterProfile, RoomItem, DailySchedule, ScheduleSlot } from '../../types';
 import { DB } from '../../utils/db';
 import { getLastInnerState } from '../../utils/emotionApply';
-import { getFlowNarrativeKey } from '../../utils/scheduleGenerator';
+import { getFlowNarrativeKey } from '../../utils/scheduleInjection';
 import { generateSlotTheater } from '../../utils/theaterGenerator';
 import { roomLaunch } from '../../utils/roomLaunch';
 import TheaterPlayer from '../schedule/TheaterPlayer';

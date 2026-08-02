@@ -632,6 +632,21 @@ export const DB = {
     });
   },
 
+  /**
+   * 某个角色的聊天条数。走 charId 索引的 count()，**一条消息都不会被读出来**，
+   * IndexedDB 只回一个数字。使用统计的规模档位用它，别拿 getMessagesByCharId
+   * 去 length ——那会把整段聊天记录读进内存。
+   */
+  countMessagesByCharId: async (charId: string): Promise<number> => {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(STORE_MESSAGES, 'readonly');
+      const request = transaction.objectStore(STORE_MESSAGES).index('charId').count(IDBKeyRange.only(charId));
+      request.onsuccess = () => resolve(request.result || 0);
+      request.onerror = () => reject(request.error);
+    });
+  },
+
   // Performance: Load only the most recent N messages for a character
   getRecentMessagesByCharId: async (charId: string, limit: number, includeProcessed: boolean = false): Promise<Message[]> => {
     const db = await openDB();
@@ -649,6 +664,30 @@ export const DB = {
           if (cursor && collected.length < limit) {
               const m = cursor.value as Message;
               if (!m.groupId && (includeProcessed || m.id > hwm)) collected.push(m);
+              cursor.continue();
+          } else {
+              resolve(collected.reverse());
+          }
+      };
+      cursorReq.onerror = () => reject(cursorReq.error);
+    });
+  },
+
+  // DateApp 等按来源展示的轻量历史读取：用 charId 索引倒序扫，只收集目标 source 的最近 N 条。
+  // 这样不会为了渲染见面阅读模式，把该角色全量聊天（含图片/base64消息）一次性 getAll 进内存。
+  getRecentMessagesByCharIdAndSource: async (charId: string, source: string, limit: number): Promise<Message[]> => {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(STORE_MESSAGES, 'readonly');
+      const store = transaction.objectStore(STORE_MESSAGES);
+      const index = store.index('charId');
+      const collected: Message[] = [];
+      const cursorReq = index.openCursor(IDBKeyRange.only(charId), 'prev');
+      cursorReq.onsuccess = () => {
+          const cursor = cursorReq.result;
+          if (cursor && collected.length < limit) {
+              const m = cursor.value as Message;
+              if (!m.groupId && m.metadata?.source === source) collected.push(m);
               cursor.continue();
           } else {
               resolve(collected.reverse());
@@ -2346,6 +2385,11 @@ export const DB = {
       const db = await openDB();
       const transaction = db.transaction(STORE_STORY_THEATERS, 'readwrite');
       transaction.objectStore(STORE_STORY_THEATERS).delete(id);
+      return new Promise((resolve, reject) => {
+          transaction.oncomplete = () => resolve();
+          transaction.onerror = () => reject(transaction.error);
+          transaction.onabort = () => reject(transaction.error || new Error('deleteStoryTheater aborted'));
+      });
   },
 
   getStoryTheaterPresets: async (): Promise<StoryTheaterPreset[]> => {

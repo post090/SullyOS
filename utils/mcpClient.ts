@@ -13,7 +13,44 @@ import { Capacitor, CapacitorHttp } from '@capacitor/core';
  * 3. 用户自己的 Cloudflare Worker —— worker/mcp-proxy/，部署到用户自己的账号
  * 代理约定统一为 <代理URL>?target=<url-encoded 服务器URL>，可选 X-Proxy-Key 头。
  * 刻意不走中心 sfworker：MCP 流量（含用户的 Bearer Token）不该过项目方的服务器。
+ *
+ * JSON-RPC 收发本体（握手、SSE、tools/call、参数还原）住在环境无关叶子
+ * mcpFireCore，浏览器和 amsg worker 共用；这里只补浏览器侧的配置、代理包装和会话表。
  */
+
+import {
+    createMcpSessionState,
+    normalizeMcpToolArguments,
+    MCP_REQUEST_TIMEOUT_MS,
+    type McpSessionState,
+    type McpToolResult,
+    type McpFireServer,
+} from './mcpFireCore';
+import { isWorkerReachableUrl } from './amsgToolPack';
+
+export { MCP_REQUEST_TIMEOUT_MS, normalizeMcpToolArguments };
+
+// JSON-RPC 收发类型（mcpFireCore 里有同名定义但未导出——这里是浏览器侧自带的收发实现，
+// 各自维护 requestIdCounter，与 luckinMcpClient / mcdMcpClient 同样的模式）。
+interface McpJsonRpcRequest {
+    jsonrpc: '2.0';
+    method: string;
+    params?: any;
+    id?: number;
+}
+
+interface McpJsonRpcResponse {
+    jsonrpc: '2.0';
+    id?: number;
+    result?: any;
+    error?: { code: number; message: string; data?: any };
+}
+
+let requestIdCounter = 0;
+
+/** initialize 握手声明的协议版本（与 mcpFireCore 保持一致）。 */
+const MCP_PROTOCOL_VERSION = '2024-11-05';
+export type { McpToolResult };
 
 export interface McpToolDef {
     name: string;
@@ -50,19 +87,8 @@ export interface McpServerConfig {
     updatedAt: number;
 }
 
-export interface McpToolResult {
-    success: boolean;
-    data?: any;
-    rawText?: string;
-    error?: string;
-}
-
 const MCP_SERVERS_KEY = 'aetheros.mcp.servers';
 const MCP_USE_NATIVE_TOOLS_KEY = 'aetheros.mcp.useNativeTools';
-const MCP_PROTOCOL_VERSION = '2024-11-05';
-// 远端 MCP / 用户自建代理都可能保持连接不结束。不能让一次 tools/call
-// 永久卡住整条聊天链路（外层 isTyping 只有等 Promise 结束后才会清掉）。
-export const MCP_REQUEST_TIMEOUT_MS = 60_000;
 
 // ========== 服务器配置 (持久化在 localStorage) ==========
 
@@ -110,6 +136,28 @@ export const getEnabledMcpServers = (charId?: string): McpServerConfig[] =>
 /** 有任何一个启用且已发现工具、对该角色可见的服务器 → 聊天进入 MCP 工具模式 */
 export const isMcpChatAvailable = (charId?: string): boolean => getEnabledMcpServers(charId).length > 0;
 
+// CF worker 够不够得着的判断搬去了 utils/amsgToolPack.ts —— 小红书配置那边要用同一份。
+
+/**
+ * 上云给 amsg worker 用的服务器子集。注意不走 getEnabledMcpServers：
+ * 那个函数缺 charId 时只回通用服务器，而这里要的是全部 enabled（含绑定角色的），
+ * charIds 原样带上、由 worker 在 fire 时按角色过滤。
+ *
+ * 带上 token/customHeaders：走的是 client_state 端到端加密通道、落在用户自己的
+ * amsg worker（不是项目方服务器，与文件头「不走中心 sfworker」的原则不冲突），
+ * 与 notion/飞书凭据同一信任模型。
+ */
+export const collectMcpFireServers = (): McpFireServer[] =>
+    loadMcpServers()
+        .filter((s) => s.enabled && s.url && (s.tools?.length || 0) > 0 && isWorkerReachableUrl(s.url))
+        .map((s) => ({
+            id: s.id, name: s.name, url: s.url,
+            ...(s.token ? { token: s.token } : {}),
+            ...(s.customHeaders?.length ? { customHeaders: s.customHeaders } : {}),
+            ...(s.charIds?.length ? { charIds: s.charIds } : {}),
+            tools: (s.tools || []).map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
+        }));
+
 // ── 备份用：随「设置 → 导出/导入备份」一起带走（存 localStorage） ──
 export function exportMcpLocal(): Record<string, string> | undefined {
     try {
@@ -131,33 +179,12 @@ export function importMcpLocal(data: Record<string, string> | null | undefined):
 
 // ========== JSON-RPC 会话状态 (内存, 每服务器一份) ==========
 
-interface McpJsonRpcRequest {
-    jsonrpc: '2.0';
-    method: string;
-    params?: any;
-    id?: number;
-}
+const sessions = new Map<string, McpSessionState>();
 
-interface McpJsonRpcResponse {
-    jsonrpc: '2.0';
-    id?: number;
-    result?: any;
-    error?: { code: number; message: string; data?: any };
-}
-
-interface McpSession {
-    sessionId: string | null;
-    initialized: boolean;
-    initPromise: Promise<void> | null;
-}
-
-const sessions = new Map<string, McpSession>();
-let requestIdCounter = 0;
-
-const getSession = (serverId: string): McpSession => {
+const getSession = (serverId: string): McpSessionState => {
     let s = sessions.get(serverId);
     if (!s) {
-        s = { sessionId: null, initialized: false, initPromise: null };
+        s = createMcpSessionState();
         sessions.set(serverId, s);
     }
     return s;
@@ -457,89 +484,9 @@ export const discoverMcpTools = async (server: McpServerConfig): Promise<McpTool
     }));
 };
 
-const isRecord = (value: unknown): value is Record<string, any> =>
-    value !== null && typeof value === 'object' && !Array.isArray(value);
-
-const resolveLocalSchemaRef = (schema: any, rootSchema: any): any => {
-    const ref = typeof schema?.$ref === 'string' ? schema.$ref : '';
-    if (!ref.startsWith('#/')) return schema;
-    const resolved = ref.slice(2).split('/').reduce((current: any, part: string) => {
-        const key = part.replace(/~1/g, '/').replace(/~0/g, '~');
-        return current?.[key];
-    }, rootSchema);
-    return resolved || schema;
-};
-
-const schemaAccepts = (schema: any, kind: 'object' | 'array'): boolean => {
-    const types = Array.isArray(schema?.type) ? schema.type : [schema?.type];
-    if (types.includes(kind)) return true;
-    if (kind === 'object' && schema?.properties) return true;
-    if (kind === 'array' && schema?.items) return true;
-    return [...(schema?.oneOf || []), ...(schema?.anyOf || [])].some((item: any) => schemaAccepts(item, kind));
-};
-
 /**
- * 部分 OpenAI 兼容中转会把 schema 中的 object / array 再编码成 JSON 字符串。
- * 只在 schema 明确要求结构类型时还原，避免把 URL、文本等合法 string 误解析。
+ * 调用一个工具（会自动补握手；session 失效自动重试一次）。
  */
-const normalizeMcpValueBySchema = (value: any, rawSchema: any, rootSchema: any, depth: number): any => {
-    if (!rawSchema || depth > 20) return value;
-    const schema = resolveLocalSchemaRef(rawSchema, rootSchema);
-    const acceptsObject = schemaAccepts(schema, 'object');
-    const acceptsArray = schemaAccepts(schema, 'array');
-    let normalized = value;
-
-    if (typeof normalized === 'string' && (acceptsObject || acceptsArray)) {
-        // 最多解三层，兼容整个 arguments 双重编码与嵌套字段额外编码。
-        for (let i = 0; i < 3 && typeof normalized === 'string'; i++) {
-            const text = normalized.trim();
-            if (!text) break;
-            try { normalized = JSON.parse(text); }
-            catch { break; }
-        }
-        const decodedMatchesSchema = (acceptsObject && isRecord(normalized)) || (acceptsArray && Array.isArray(normalized));
-        if (!decodedMatchesSchema) normalized = value;
-    }
-
-    const alternatives = [...(schema?.oneOf || []), ...(schema?.anyOf || [])];
-    if (alternatives.length) {
-        const matching = alternatives.find((item: any) =>
-            (isRecord(normalized) && schemaAccepts(item, 'object'))
-            || (Array.isArray(normalized) && schemaAccepts(item, 'array')),
-        );
-        if (matching) normalized = normalizeMcpValueBySchema(normalized, matching, rootSchema, depth + 1);
-    }
-
-    if (isRecord(normalized) && acceptsObject) {
-        const result = { ...normalized };
-        const properties = schema?.properties || {};
-        for (const [key, childSchema] of Object.entries(properties)) {
-            if (key in result) result[key] = normalizeMcpValueBySchema(result[key], childSchema, rootSchema, depth + 1);
-        }
-        if (schema?.additionalProperties && typeof schema.additionalProperties === 'object') {
-            for (const key of Object.keys(result)) {
-                if (!(key in properties)) {
-                    result[key] = normalizeMcpValueBySchema(result[key], schema.additionalProperties, rootSchema, depth + 1);
-                }
-            }
-        }
-        for (const item of schema?.allOf || []) {
-            const merged = normalizeMcpValueBySchema(result, item, rootSchema, depth + 1);
-            if (isRecord(merged)) Object.assign(result, merged);
-        }
-        return result;
-    }
-
-    if (Array.isArray(normalized) && acceptsArray && schema?.items) {
-        return normalized.map(item => normalizeMcpValueBySchema(item, schema.items, rootSchema, depth + 1));
-    }
-    return normalized;
-};
-
-export const normalizeMcpToolArguments = (args: any, inputSchema: any): any =>
-    normalizeMcpValueBySchema(args, inputSchema, inputSchema, 0);
-
-/** 调用一个工具（会自动补握手；session 失效自动重试一次） */
 export const callMcpTool = async (
     server: McpServerConfig,
     toolName: string,
@@ -553,7 +500,6 @@ export const callMcpTool = async (
             try { resultPreview = JSON.stringify(result.data).slice(0, 800); }
             catch { resultPreview = String(result.data).slice(0, 800); }
         }
-        // 不记录 URL / Token，只证明真实 tools/call 的目标、参数与服务端返回。
         console.info('🔌 [MCP] tools/call 完成', {
             server: server.name,
             tool: toolName,

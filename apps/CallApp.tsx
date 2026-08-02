@@ -26,6 +26,8 @@ import { CallSettings, loadCallSettings, saveCallSettings } from '../utils/callS
 import ApiConnectionPicker from '../components/os/ApiConnectionPicker';
 import { PRESET_THEMES } from '../components/chat/ChatConstants';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
+import { trackEvent } from '../utils/analytics';
+import { markAmsgStateDirty } from '../utils/amsgStateSync';
 type CallState = 'idle' | 'connecting' | 'listening' | 'thinking' | 'speaking' | 'ended' | 'error';
 type ViewMode = 'role-select' | 'in-call' | 'history' | 'record-detail';
 type CallBubble = { id: string; dbId?: number; role: 'user' | 'assistant'; text: string; time: string; audioUrl?: string; timestamp: number };
@@ -297,7 +299,7 @@ ${getVoicePromptOverride(getTtsProvider()) ?? (getTtsProvider() === 'fishaudio' 
   return [coreContext, timeContext, callPrompt, voiceLangPrompt].filter(Boolean).join('\n\n');
 };
 const CallApp: React.FC = () => {
-  const { closeApp, openApp, characters, activeCharacterId, addToast, logSystemError, apiConfig, userProfile, customThemes, suspendCall, suspendedCall, clearSuspendedCall, updateCharacter, characterGroups, callAutoStart, consumeCallAutoStart } = useOS();
+  const { closeApp, openApp, characters, activeCharacterId, addToast, logSystemError, apiConfig, userProfile, customThemes, suspendCall, suspendedCall, clearSuspendedCall, updateCharacter, characterGroups, groups, realtimeConfig, callAutoStart, consumeCallAutoStart } = useOS();
 
   const [viewMode, setViewMode] = useState<ViewMode>('role-select');
   // 进正式通话（in-call）：把正在放的音乐淡出暂停；离开通话（挂断/返回）时之前在放就淡入恢复。
@@ -392,6 +394,13 @@ const CallApp: React.FC = () => {
   const longPressTimerRef = useRef<number | null>(null);
   const callTouchStartPos = useRef({ x: 0, y: 0 });
   const selectedChar = useMemo(() => characters.find(c => c.id === selectedCharId) || null, [characters, selectedCharId]);
+  // 通话内容和普通聊天写进同一份历史，也就是主动消息 2.0 云端快照的素材。每轮落库后打一次脏，
+  // 不然打完电话直接关 App，角色到点就当这通电话没发生过（连"这段时间没联系"都会算错）。
+  // 去抖会把一通电话里的多次调用合并成一次上传；快照里的消息在上传时从 DB 重读。
+  const markCallTurnDirty = () => {
+    if (!selectedChar) return;
+    markAmsgStateDirty({ char: selectedChar, userProfile, groups, realtimeConfig });
+  };
   const recordDetail = useMemo(() => callRecords.find(r => r.id === recordDetailId) || null, [callRecords, recordDetailId]);
   // 面试白蓝专业皮肤：activeScene.skin==='proLight' 时整通话界面翻成浅底深字的商务风
   const isProLight = activeScene?.skin === 'proLight';
@@ -573,6 +582,7 @@ const CallApp: React.FC = () => {
     // If we are currently listening (sync ref), stop immediately
     if (isListeningRef.current) {
       isListeningRef.current = false;
+      trackEvent('切换语音输入', { action: 'stop' });
       setIsListening(false);
       try {
         const sess = sttSessionRef.current;
@@ -590,6 +600,7 @@ const CallApp: React.FC = () => {
     try {
       isListeningRef.current = true;
       setIsListening(true);
+      trackEvent('切换语音输入', { action: 'start' });
       setSttLevels([]);
       // 自动发送协调：仅面试/场景通话（activeScene）走——普通通话保留原来“转写落输入框手动发”行为。
       if (activeScene) {
@@ -718,6 +729,7 @@ const CallApp: React.FC = () => {
         document.body.appendChild(a); a.click(); a.remove();
       }
       addToast('语音已开始下载', 'success');
+      trackEvent('下载一条通话语音');
     } catch {
       addToast('语音下载失败', 'error');
     }
@@ -806,6 +818,7 @@ const CallApp: React.FC = () => {
         if (selectedChar?.id) {
           const dbId = await DB.saveMessage({ charId: selectedChar.id, role: 'assistant', type: 'text', content: greetingText, metadata: { source: 'call', callSessionId: currentSessionId } });
           setBubbles(prev => prev.map(b => b.id === greetingBubble.id ? { ...b, dbId: dbId } : b));
+          markCallTurnDirty();
         }
         // 尝试语音合成开场白
         const minimaxApiKey = resolveMiniMaxApiKey(apiConfig);
@@ -989,6 +1002,8 @@ const CallApp: React.FC = () => {
         sourceLabel: formatDuration(elapsedSeconds),
         eventSummary: `刚和用户通了 ${formatDuration(elapsedSeconds)} 电话（${Math.max(1, userTurns)} 轮对话）${keepsakeLine ? `，印象最深的一句：${keepsakeLine}` : ''}`,
       })).catch(() => { /* ignore */ });
+      // 挂断这一下最要紧：用户多半接着就把 App 关了，去抖窗口里的那些打脏还没冲刷。
+      markCallTurnDirty();
     }
     // 面试音频分析：≥2 轮 → 汇总「面试表达复盘」落笔记本（此时场景尚未清）
     if (activeScene && analysisResultsRef.current.length >= 2 && selectedChar?.id) {
@@ -1182,6 +1197,7 @@ const CallApp: React.FC = () => {
     if (selectedChar?.id) {
       userDbId = await DB.saveMessage({ charId: selectedChar.id, role: 'user', type: 'text', content: input, metadata: { source: 'call', callSessionId: currentSessionId } });
       setBubbles(prev => prev.map(b => (b.id === userBubble.id ? { ...b, dbId: userDbId } : b)));
+      markCallTurnDirty();
     }
     if (!callStartedAt) setCallStartedAt(Date.now());
     setCallState('connecting');
@@ -1209,6 +1225,7 @@ const CallApp: React.FC = () => {
         if (b.id === assistantBubbleId) return { ...b, dbId: assistantDbId };
         return b;
       }));
+      markCallTurnDirty();
     }
     const hasTimberWeights2 = (selectedChar?.voiceProfile?.timberWeights?.length || 0) > 1;
     if (!canSpeakVoice()) {
@@ -1415,6 +1432,7 @@ const CallApp: React.FC = () => {
     }
     await loadCallRecords(record.characterId);
     addToast('通话记录已删除', 'success');
+    trackEvent('删除一条通话记录');
   };
   const startEditBubble = (bubble: CallBubble) => {
     if (bubble.role !== 'user') return;
@@ -1430,6 +1448,7 @@ const CallApp: React.FC = () => {
     setEditingBubble(null);
     setEditingText('');
     addToast('已更新发言', 'success');
+    trackEvent('修改自己的通话发言');
   };
   const handleRerollAssistant = async (bubble: CallBubble) => {
     if (!selectedChar || bubble.role !== 'assistant') return;
@@ -1440,6 +1459,7 @@ const CallApp: React.FC = () => {
     try {
       setRerollingBubbleId(bubble.id);
       setCallState('thinking');
+      trackEvent('重掷角色的通话台词');
       const rawReroll = await requestAssistantReply(prevUser.text, bubble.dbId);
       const rerollLeadEmotion = extractLeadingEmotion(rawReroll);
       const rerolled = sanitizeAssistantOutput(rawReroll);
@@ -1628,7 +1648,7 @@ const CallApp: React.FC = () => {
 
           {/* actions */}
           <div className="shrink-0 pt-4 space-y-2.5">
-            <button onClick={() => { resetCurrentCall(); setViewMode('in-call'); }}
+            <button onClick={() => { resetCurrentCall(); setViewMode('in-call'); trackEvent('发起通话'); }}
               className="relative w-full py-3.5 rounded-2xl overflow-hidden transition active:scale-[0.98]"
               style={{ background: `linear-gradient(to right, ${accentColor}26, ${accentColor}4d, ${accentColor}26)`, border: `1px solid ${accentColor}80`, boxShadow: `0 0 22px ${accentColor}40` }}>
               <span className="absolute inset-[3px] rounded-xl border border-white/10 pointer-events-none" />
@@ -1638,7 +1658,7 @@ const CallApp: React.FC = () => {
                 {selectedChar ? <>拨给 <span className="font-serif italic text-xl align-baseline" style={{ textShadow: `0 0 12px ${accentColor}` }}>{selectedChar.name}</span></> : '开始通话'}
               </span>
             </button>
-            <button onClick={() => setViewMode('history')}
+            <button onClick={() => { setViewMode('history'); trackEvent('打开通话记录'); }}
               className="relative w-full py-3 rounded-2xl border border-white/15 bg-white/[0.04] backdrop-blur-md text-white/80 flex items-center justify-center gap-2 transition active:scale-[0.98] hover:bg-white/[0.08]">
               <Clock size={16} weight="bold" style={{ color: accentColor }} /> 通话记录
             </button>
@@ -1783,7 +1803,7 @@ const CallApp: React.FC = () => {
                 const cleanVoice = cleanVoiceMarkupForDisplay(voiceText);
                 return <>{renderAssistantLine(display, accentColor)}{cleanVoice && <div className="mt-1 text-[10px] text-white/40 italic">{cleanVoice}</div>}</>;
               })()}</div>
-              {!!item.audioUrl && <button onClick={() => playAudio(item.audioUrl)} className="mt-2 text-xs px-2.5 py-1 rounded-full bg-white/8 border border-white/15 text-white/60 transition hover:bg-white/15">重播语音</button>}
+              {!!item.audioUrl && <button onClick={() => { playAudio(item.audioUrl); trackEvent('重播通话记录里的语音'); }} className="mt-2 text-xs px-2.5 py-1 rounded-full bg-white/8 border border-white/15 text-white/60 transition hover:bg-white/15">重播语音</button>}
             </div>
           ))}
         </div>
@@ -1792,6 +1812,7 @@ const CallApp: React.FC = () => {
             setSelectedCharId(recordDetail.characterId || selectedCharId);
             resetCurrentCall();
             setViewMode('in-call');
+            trackEvent('再打一通电话');
           }}
           className="w-full py-3 rounded-2xl mt-4 font-medium text-white transition active:scale-[0.98]"
           style={{ backgroundColor: accentColor }}
@@ -1986,7 +2007,7 @@ const CallApp: React.FC = () => {
             </div>
             {bubble.role === 'assistant' && (bubble.audioUrl || isLatest) && (
               <div className="mt-2 flex gap-2 flex-wrap">
-                {bubble.audioUrl && <button onClick={() => playAudio(bubble.audioUrl)} className="text-xs px-2.5 py-1 rounded-full bg-white/8 border border-white/15 text-white/70 transition hover:bg-white/15">重播语音</button>}
+                {bubble.audioUrl && <button onClick={() => { playAudio(bubble.audioUrl); trackEvent('重播一条通话语音'); }} className="text-xs px-2.5 py-1 rounded-full bg-white/8 border border-white/15 text-white/70 transition hover:bg-white/15">重播语音</button>}
                 {bubble.audioUrl && <button onClick={() => handleDownloadCallAudio(bubble.audioUrl, bubble.timestamp)} className="text-xs px-2.5 py-1 rounded-full bg-white/8 border border-white/15 text-white/70 transition hover:bg-white/15">下载</button>}
                 {isLatest && <button onClick={() => handleRerollAssistant(bubble)} disabled={!!rerollingBubbleId} className="text-xs px-2.5 py-1 rounded-full bg-white/8 border border-white/15 text-white/70 transition hover:bg-white/15 disabled:opacity-40">{rerollingBubbleId === bubble.id ? '换一种说法…' : '换个说法'}</button>}
               </div>
@@ -2112,7 +2133,7 @@ const CallApp: React.FC = () => {
             <p className="text-xs text-white/40">选择后，角色会用中文回复，语音则用对应语种朗读</p>
             <div className="flex flex-wrap gap-2 pt-1">
               {VOICE_LANG_OPTIONS.map(opt => (
-                <button key={opt.value} onClick={() => { setVoiceLang(opt.value); if (selectedChar) updateCharacter(selectedChar.id, { callVoiceLang: opt.value }); setShowLangPicker(false); }}
+                <button key={opt.value} onClick={() => { setVoiceLang(opt.value); if (selectedChar) updateCharacter(selectedChar.id, { callVoiceLang: opt.value }); setShowLangPicker(false); trackEvent('设置通话语音语种', { lang: opt.value }); }}
                   className="text-xs px-3 py-2 rounded-full font-medium transition-colors text-white"
                   style={voiceLang === opt.value ? { backgroundColor: accentColor } : { background: 'rgba(255,255,255,0.1)' }}>
                   {opt.label}
@@ -2133,6 +2154,7 @@ const CallApp: React.FC = () => {
                 if (selectedChar) {
                   suspendCall({ charId: selectedChar.id, charName: selectedChar.name, charAvatar: selectedChar.avatar, startedAt: callStartedAt || Date.now(), bubbles, sessionId: currentSessionId, elapsedSeconds, voiceLang });
                   addToast('通话已挂起，点击顶部绿色条可随时回来', 'success');
+                  trackEvent('挂起通话到后台');
                 }
               }} className="w-full py-2.5 rounded-2xl bg-emerald-500/80 text-white font-semibold transition active:scale-[0.97] flex items-center justify-center gap-2">
                 <span>先忙别的</span><span className="text-xs opacity-70">（挂起通话）</span>

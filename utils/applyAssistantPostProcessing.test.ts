@@ -8,7 +8,7 @@ import { DB } from './db';
 // 修复前解析出的引用目标随这个空 chunk 一起被丢弃, 表现为"引用被后处理吞掉"。
 // 修复后引用目标顺延挂到下一条真正落库的文字气泡。
 
-const makeCtx = (charId: string, contextMsgs: any[]): PostProcessCtx => {
+const makeCtx = (charId: string, contextMsgs: any[], emojis: any[] = []): PostProcessCtx => {
     const xhsCaches: XhsCaches = {
         xsecTokenCache: new Map(),
         noteTitleCache: new Map(),
@@ -19,7 +19,7 @@ const makeCtx = (charId: string, contextMsgs: any[]): PostProcessCtx => {
     return {
         char: { id: charId, name: '测试角色' } as any,
         userProfile: { name: '我' } as any,
-        emojis: [],
+        emojis,
         contextMsgs,
         fullMessages: [],
         initialData: {},
@@ -51,7 +51,13 @@ describe('renderAndPersist 引用解析', () => {
         const charId = `c-quote-${Date.now()}`;
         const raw = '[[QUOTE: 引用我说的话]]\n[[SEND_EMOJI: 有点生气]]\n消失了整整三十六个小时';
 
-        await applyAssistantPostProcessing(raw, makeCtx(charId, [{ ...quotedUserMsg, charId }]));
+        // 表情要真存在，否则走的是「名字对不上落降级文本气泡」那条路，
+        // 第一条 text 会变成降级气泡，验不到这里要验的「引用顺延到正文」。
+        await applyAssistantPostProcessing(raw, makeCtx(
+            charId,
+            [{ ...quotedUserMsg, charId }],
+            [{ name: '有点生气', url: 'blob:emoji-angry' }],
+        ));
 
         const msgs = await DB.getRecentMessagesByCharId(charId, 50);
         const texts = msgs.filter(m => m.role === 'assistant' && m.type === 'text');
@@ -221,6 +227,46 @@ describe('renderAndPersist 双语分支表情包顺序', () => {
     }, 20000);
 });
 
+// 回归守卫：ctx.messageTimestamp 要一路透传到每条 DB.saveMessage。
+// 修复前 15 处落库都不传 timestamp、一律取写库当刻——主动消息离线补收时昨晚的消息
+// 显示成今天中午。修复后调用方（activeMsgRuntime）可以把 worker 发送时刻传进来，
+// 同一轮拆出的多条气泡（文字 / 表情）共用同一个时间戳。
+describe('messageTimestamp 落库时间戳透传', () => {
+    const testEmojis = [
+        { id: 1, name: '开心', url: 'https://example.com/happy.png' },
+    ] as any[];
+
+    it('传了 messageTimestamp → 文字与表情多条气泡全部落这个时间戳', async () => {
+        const charId = `c-msgts-${Date.now()}`;
+        const ctx = makeCtx(charId, []);
+        ctx.emojis = testEmojis as any;
+        ctx.instantRender = true;
+        const sentAt = Date.now() - 13 * 3_600_000; // 昨晚发的，今天才补收
+        ctx.messageTimestamp = sentAt;
+        const raw = '昨晚看到流星了\n[[SEND_EMOJI: 开心]]\n你猜我许了什么愿';
+
+        await applyAssistantPostProcessing(raw, ctx);
+
+        const msgs = (await DB.getRecentMessagesByCharId(charId, 50)).filter(m => m.role === 'assistant');
+        expect(msgs.map(m => m.type)).toEqual(['text', 'emoji', 'text']);
+        // 修复前这里挂：timestamp 是写库当刻（≈ 现在），不是传入的 sentAt
+        for (const m of msgs) expect(m.timestamp).toBe(sentAt);
+    }, 20000);
+
+    it('不传 messageTimestamp → 维持默认写库当刻（既有行为不回归）', async () => {
+        const charId = `c-msgts-default-${Date.now()}`;
+        const ctx = makeCtx(charId, []);
+        ctx.instantRender = true;
+        const before = Date.now();
+
+        await applyAssistantPostProcessing('刚想起来跟你说个事', ctx);
+
+        const msgs = (await DB.getRecentMessagesByCharId(charId, 50)).filter(m => m.role === 'assistant');
+        expect(msgs.length).toBeGreaterThan(0);
+        for (const m of msgs) expect(m.timestamp).toBeGreaterThanOrEqual(before);
+    }, 20000);
+});
+
 describe('renderAndPersist XHS mimicked-card fallback', () => {
     it('restores the five-line history format as xhs_card and preserves surrounding text', async () => {
         const charId = `c-xhs-mimic-${Date.now()}`;
@@ -271,5 +317,80 @@ describe('renderAndPersist XHS mimicked-card fallback', () => {
         expect(text).not.toContain('\u4f60\u5206\u4eab\u4e86\u5c0f\u7ea2\u4e66\u7b14\u8bb0');
         expect(text).not.toContain('\u6807\u9898:');
         expect(text).not.toContain('\u4e92\u52a8:');
+    }, 20000);
+});
+
+// push 路径上 LIFE / NEWS_CARD 的副作用改走 worker classifier 的 directive 通道
+// (life_record / news_card)。这里钉的是重放这一段: directive → 拼回原 tag →
+// ChatParser.parseAndExecuteActions 执行, 跟本地 fetch 路径同一份代码。
+describe('directive 重放: life_record / news_card', () => {
+    it('news_card directive → 落一张 news_card 消息, 正文不留标签', async () => {
+        const charId = `c-newscard-${Date.now()}`;
+        const ctx = makeCtx(charId, []);
+        ctx.skipSecondPassLLM = true;
+        ctx.directives = [{ type: 'news_card', body: '微博|某某官宣' }];
+
+        await applyAssistantPostProcessing('刷到条新闻，你看过没', ctx);
+
+        const msgs = (await DB.getRecentMessagesByCharId(charId, 50)).filter(m => m.role === 'assistant');
+        const cards = msgs.filter(m => m.type === 'news_card');
+        expect(cards).toHaveLength(1);
+        expect(cards[0].metadata?.title).toBe('某某官宣');
+        expect(cards[0].metadata?.source).toBe('微博');
+        const text = msgs.filter(m => m.type === 'text').map(m => m.content).join('\n');
+        expect(text).toContain('刷到条新闻，你看过没');
+        expect(text).not.toContain('NEWS_CARD');
+    }, 20000);
+
+    it('life_record directive → 落一张 life_card, 正文不留标签', async () => {
+        const charId = `c-liferecord-${Date.now()}`;
+        await DB.saveCharacter({
+            id: charId,
+            name: '测试角色',
+            lifeRecordEnabled: true,
+        } as any);
+
+        const ctx = makeCtx(charId, []);
+        ctx.skipSecondPassLLM = true;
+        ctx.directives = [{ type: 'life_record', body: 'MED|布洛芬' }];
+
+        await applyAssistantPostProcessing('记得吃药哦', ctx);
+
+        const msgs = (await DB.getRecentMessagesByCharId(charId, 50)).filter(m => m.role === 'assistant');
+        const cards = msgs.filter(m => m.type === 'life_card');
+        expect(cards).toHaveLength(1);
+        expect(cards[0].metadata?.module).toBe('med');
+        const text = msgs.filter(m => m.type === 'text').map(m => m.content).join('\n');
+        expect(text).toContain('记得吃药哦');
+        expect(text).not.toContain('LIFE');
+    }, 20000);
+});
+
+// 表情名对不上时不能静默丢：后台主动消息会把每个 [[SEND_EMOJI]] 切成独立一条 push，
+// 丢了就是整条 0 气泡 —— 而系统横幅（[表情：x]）和未读数照常，用户点进去是空的。
+describe('SEND_EMOJI 名字对不上', () => {
+    it('落一条降级文本气泡，文案与横幅一致', async () => {
+        const charId = `c-emoji-miss-${Date.now()}`;
+
+        await applyAssistantPostProcessing('[[SEND_EMOJI: 查无此表情]]', makeCtx(charId, []));
+
+        const bubbles = (await DB.getRecentMessagesByCharId(charId, 50)).filter(m => m.role === 'assistant');
+        expect(bubbles).toHaveLength(1);
+        expect(bubbles[0].type).toBe('text');
+        expect(bubbles[0].content).toBe('[表情：查无此表情]');
+    }, 20000);
+
+    it('名字对得上时照常落表情气泡', async () => {
+        const charId = `c-emoji-hit-${Date.now()}`;
+
+        await applyAssistantPostProcessing(
+            '[[SEND_EMOJI: 笑死]]',
+            makeCtx(charId, [], [{ name: '笑死', url: 'blob:emoji-lol' }]),
+        );
+
+        const bubbles = (await DB.getRecentMessagesByCharId(charId, 50)).filter(m => m.role === 'assistant');
+        expect(bubbles).toHaveLength(1);
+        expect(bubbles[0].type).toBe('emoji');
+        expect(bubbles[0].content).toBe('blob:emoji-lol');
     }, 20000);
 });

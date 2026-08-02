@@ -2,6 +2,14 @@ name = "sullyos-mcp-proxy"
 main = "worker.js"
 compatibility_date = "2025-01-01"
 
+# wrangler deploy 会用本地这份配置整体覆盖 Cloudflare 面板上的设置——
+# 不显式写这段，面板里手动开的 Workers Logs（实时日志）会被一起关掉。
+[observability]
+enabled = true
+
+[observability.logs]
+enabled = true
+
 # 可选：防白嫖密钥。部署后执行
 #   wrangler secret put PROXY_KEY
 # 然后在 SullyOS 设置的「代理密钥」里填同一个值。

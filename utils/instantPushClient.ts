@@ -12,6 +12,7 @@ import {
 import { ReiClient } from '@rei-standard/amsg-client';
 import { INSTANT_WORKER_VERSION } from './instantWorkerVersion';
 import { fetchWithTimeout } from './resilientFetch';
+import { appendInstantTraceEntry } from './instantTraceLog';
 
 const log = makeDebugLogger('instant-push', 'InstantPush');
 
@@ -481,18 +482,22 @@ export async function probeInstantWorkerCapabilities(
 }
 
 /**
- * 复制最新版 worker bundle 到剪贴板。Settings 部署区和「Worker 有更新」弹窗
- * 共用同一份逻辑, 避免两边 fetch 路径漂移。
+ * 复制站点随 build 发布的某个 worker bundle 到剪贴板（Dashboard 粘贴部署用）。
+ * instant push 的 Settings 部署区、「Worker 有更新」弹窗、以及主动消息 2.0 的
+ * 设置面板共用这一份, 避免几处 fetch 路径各写各的、悄悄漂移。
  *
  * 抛出原始错误让调用方决定怎么显示 (toast / inline status / 不显示)。
  */
-export async function copyInstantWorkerBundleToClipboard(): Promise<void> {
+export async function copyWorkerBundleToClipboard(bundleName: string): Promise<void> {
   const base = import.meta.env.BASE_URL || '/';
-  const res = await fetch(`${base}instant-worker.bundle.js`);
+  const res = await fetch(`${base}${bundleName}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const text = await res.text();
   await navigator.clipboard.writeText(text);
 }
+
+export const copyInstantWorkerBundleToClipboard = () =>
+  copyWorkerBundleToClipboard('instant-worker.bundle.js');
 
 /**
  * 生成 Deno Deploy Playground 用的 loader 片段（自动追新部署方式）。
@@ -783,13 +788,10 @@ const DEFAULT_INSTANT_TIMEOUT_MS = 300_000;
 // (旧 SSE_FLUSH_GRACE_MS 已删 — grace 现在由 client.deliver() 内部 _computeGrace 处理:
 // min(remainingBudget, max(5000, timeoutMs * 0.1))。300s 整体 timeout 下默认 30s grace,
 // 比之前硬 8s 给慢 worker / iOS 早杀 SSE 的场景留更多余量。)
-const INSTANT_TRACE_LOG_KEY = 'instant_push_trace_log_v1';
-const INSTANT_TRACE_LOG_LIMIT = 200;
-
 // 三写说明（故意不用 makeDebugLogger，因为 trace 跟普通 logger 的语义不一样）：
 //   1) console.info → F12 看实时通道事件
-//   2) localStorage ring buffer (instant_push_trace_log_v1, 200 条上限)
-//      → 无条件抓的"通道自带 debug ring"，开发者随时可 localStorage.getItem 查
+//   2) localStorage ring buffer（见 utils/instantTraceLog.ts，键名与容量在那里定义）
+//      → 无条件抓的"通道自带 debug ring"，开发者随时可查
 //   3) appendDevDebugLog → 用户勾了 IP 才录的"可控录制"，进复制 / 下载导出
 // ring 跟 devDebug 的区别就是「无条件 vs 用户可控」，两套并存是有意的。
 function instantTrace(
@@ -808,12 +810,7 @@ function instantTrace(
   try {
     console.info('[InstantTrace]', entry);
   } catch { /* ignore */ }
-  try {
-    const raw = localStorage.getItem(INSTANT_TRACE_LOG_KEY);
-    const list = raw ? JSON.parse(raw) : [];
-    const next = Array.isArray(list) ? [...list, entry].slice(-INSTANT_TRACE_LOG_LIMIT) : [entry];
-    localStorage.setItem(INSTANT_TRACE_LOG_KEY, JSON.stringify(next));
-  } catch { /* ignore */ }
+  appendInstantTraceEntry(entry);
   // gate 由 isCaptureEnabled('instant-push') 在 appendDevDebugLog 内部自动管，未勾时零成本。
   appendDevDebugLog('instant-push', { label: `trace:${event}`, data: entry });
 }

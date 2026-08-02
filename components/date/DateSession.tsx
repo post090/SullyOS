@@ -6,7 +6,6 @@ import { DB } from '../../utils/db';
 import DateSettings from './DateSettings';
 import ObserveHUD from './ObserveHUD';
 import { extractObservation, hasObservation } from '../../utils/datePrompts';
-import { pickDateFallbackSprite } from '../../utils/dateSprites';
 import { isBlobRef } from '../../utils/blobRef';
 import { clearDateResumeAttempt } from '../../utils/dateSessionRecovery';
 import { cleanTextForTts, VALID_EMOTIONS } from '../../utils/minimaxTts';
@@ -15,6 +14,7 @@ import { resolveTtsProvider } from '../../utils/ttsProvider';
 import { cleanTextForTtsFish } from '../../utils/fishAudioTts';
 import { cleanTextForTtsEleven } from '../../utils/elevenLabsTts';
 import { resilientFetch } from '../../utils/resilientFetch';
+import { planNovelLoadMore } from '../../utils/dateSessionHistory';
 
 // 语音情绪标记 [v:xxx]：跟立绘情绪 [emotion] 分开的独立通道。立绘的 happy 是
 // 夸张的表情、语音的 happy 是音色情绪，两者强度/语义差异大，不能一概而论。
@@ -112,9 +112,24 @@ interface DateSessionProps {
     onDeleteMessage: (msg: Message) => void;
     onDeleteMessages: (ids: number[]) => Promise<void>;
     onSettings: () => void;
+    /** 阅读模式「加载更早」铺满已加载部分后，回库里取下一批（limit 递增式重取）。 */
+    onLoadMoreHistory?: (nextLimit: number) => Promise<void>;
+    /** 当前查询用的 limit（配合 onLoadMoreHistory 递增）。 */
+    historyLoadLimit?: number;
+    /** 库里的见面记录是否已经取完。 */
+    historyReachedEnd?: boolean;
 }
 
+const NOVEL_MESSAGE_WINDOW_SIZE = 80;
+/** 铺满已加载部分后，每次回库多取多少条见面消息。 */
+const NOVEL_HISTORY_FETCH_STEP = 220;
+const NOVEL_MESSAGE_LOAD_STEP = 80;
+const REQUIRED_EMOTIONS_SET = ['normal', 'happy', 'angry', 'sad', 'shy'];
+
 const DateSession: React.FC<DateSessionProps> = ({ 
+    onLoadMoreHistory,
+    historyLoadLimit = 0,
+    historyReachedEnd = true,
     char, 
     userProfile,
     messages, 
@@ -134,6 +149,7 @@ const DateSession: React.FC<DateSessionProps> = ({
     const [isNovelMode, setIsNovelMode] = useState(false);
     const [bgImage, setBgImage] = useState<string>(char.dateBackground || '');
     const [currentSprite, setCurrentSprite] = useState<string>('');
+    const [currentSpriteKey, setCurrentSpriteKey] = useState<string>('');
     const [spriteConfig, setSpriteConfig] = useState(char.spriteConfig || { scale: 1, x: 0, y: 0 });
     
     // Dialogue Engine State
@@ -176,6 +192,7 @@ const DateSession: React.FC<DateSessionProps> = ({
     const voiceCacheRef = useRef<Record<string, string>>({});
     const [novelVoiceLoading, setNovelVoiceLoading] = useState<Set<string>>(new Set());
     const [novelPlayingId, setNovelPlayingId] = useState<string | null>(null);
+    const [novelVisibleCount, setNovelVisibleCount] = useState(NOVEL_MESSAGE_WINDOW_SIZE);
     const dateAudioRef = useRef<HTMLAudioElement | null>(null);
     const voiceEnabled = !!char.dateVoiceEnabled;
     const voiceLang = char.dateVoiceLang || '';
@@ -346,6 +363,50 @@ const DateSession: React.FC<DateSessionProps> = ({
         return unregister;
     }, [showSettings, showMenu, showExitModal, registerBackHandler]);
 
+    const dateEmotionKeys = [...REQUIRED_EMOTIONS_SET, ...(char.customDateSprites || [])];
+
+    const getSpritesForSkin = (skinId?: string): Record<string, string> => {
+        const explicitSkin = skinId && char.dateSkinSets?.find(s => s.id === skinId);
+        if (explicitSkin && Object.keys(explicitSkin.sprites || {}).length > 0) return explicitSkin.sprites;
+        if (char.activeSkinSetId && char.dateSkinSets) {
+            const activeSkin = char.dateSkinSets.find(s => s.id === char.activeSkinSetId);
+            if (activeSkin && Object.keys(activeSkin.sprites || {}).length > 0) return activeSkin.sprites;
+        }
+        return char.sprites || {};
+    };
+
+    const activeSprites = React.useMemo(() => getSpritesForSkin(), [char.activeSkinSetId, char.dateSkinSets, char.sprites]);
+
+    const pickFallbackSprite = (sprites: Record<string, string>) => {
+        const key = ['normal', 'default', ...dateEmotionKeys].find(k => sprites[k] && !isBlobRef(sprites[k]));
+        const stray = Object.entries(sprites).find(([k, v]) => k !== 'chibi' && v && !isBlobRef(v));
+        return { key: key || stray?.[0] || '', src: (key && sprites[key]) || stray?.[1] || char.avatar || '' };
+    };
+
+    const inferSpriteKey = (src?: string, skinId?: string): string => {
+        if (!src) return '';
+        const sprites = getSpritesForSkin(skinId);
+        return Object.entries(sprites).find(([, value]) => value === src)?.[0] || '';
+    };
+
+    const resolveSpriteByKey = (key?: string, skinId?: string) => {
+        const sprites = getSpritesForSkin(skinId);
+        if (key && sprites[key] && !isBlobRef(sprites[key])) return { key, src: sprites[key] };
+        return pickFallbackSprite(sprites);
+    };
+
+    const resolveSpriteFromState = (state: DateState) => {
+        const bySavedKey = resolveSpriteByKey(state.currentSpriteKey, state.activeSkinSetId);
+        if (state.currentSpriteKey && bySavedKey.src) return bySavedKey;
+        const legacyKey = inferSpriteKey(state.currentSprite, state.activeSkinSetId) || inferSpriteKey(state.currentSprite);
+        if (legacyKey) return resolveSpriteByKey(legacyKey, state.activeSkinSetId);
+        const fallback = resolveSpriteByKey(undefined, state.activeSkinSetId);
+        const legacySprite = state.currentSprite && !isBlobRef(state.currentSprite)
+            ? state.currentSprite
+            : fallback.src;
+        return { key: fallback.key, src: legacySprite };
+    };
+
     // Filter messages for Novel Mode: Show only current session
     // Logic: Find the LAST message with `isOpening: true`. Show all messages from there onwards.
     const sessionMessages = React.useMemo(() => {
@@ -357,15 +418,23 @@ const DateSession: React.FC<DateSessionProps> = ({
         return messages;
     }, [messages]);
 
+    const visibleSessionMessages = React.useMemo(() => {
+        return sessionMessages.slice(-novelVisibleCount);
+    }, [sessionMessages, novelVisibleCount]);
+    const hiddenNovelMessageCount = Math.max(0, sessionMessages.length - visibleSessionMessages.length);
+
+    useEffect(() => {
+        setNovelVisibleCount(NOVEL_MESSAGE_WINDOW_SIZE);
+    }, [char.id]);
+
     // Initialization
     useEffect(() => {
         if (initialState) {
-            // Resume — 防御性回填：老快照 / 落库竞态可能缺字段，缺数组兜底成 []，
-            // 否则后续 dialogueQueue.length 等取值会抛异常连累整个会话渲染。
-            setBgImage(initialState.bgImage || '');
-            // 老快照可能存了 blobref 令牌当立绘（chibi 误兜底期间落库的），不能直接喂 <img>，洗成头像
-            const resumedSprite = initialState.currentSprite || '';
-            setCurrentSprite(isBlobRef(resumedSprite) ? (char.avatar || '') : resumedSprite);
+            // Resume: 新快照只保存 sprite key，不再复制 base64；旧快照的 bg/currentSprite 仍兼容读取一次。
+            const restoredSprite = resolveSpriteFromState(initialState);
+            setBgImage(char.dateBackground || initialState.bgImage || '');
+            setCurrentSprite(isBlobRef(restoredSprite.src) ? (char.avatar || '') : restoredSprite.src);
+            setCurrentSpriteKey(restoredSprite.key);
             setCurrentText(initialState.currentText || '');
             setDisplayedText(initialState.currentText || '');
             setDialogueQueue(Array.isArray(initialState.dialogueQueue) ? initialState.dialogueQueue : []);
@@ -373,14 +442,9 @@ const DateSession: React.FC<DateSessionProps> = ({
             setIsNovelMode(!!initialState.isNovelMode);
         } else {
             // New Session - pick initial sprite from active skin set or default sprites
-            const s = (() => {
-                if (char.activeSkinSetId && char.dateSkinSets) {
-                    const skin = char.dateSkinSets.find(sk => sk.id === char.activeSkinSetId);
-                    if (skin && Object.keys(skin.sprites).length > 0) return skin.sprites;
-                }
-                return char.sprites;
-            })();
-            setCurrentSprite(pickDateFallbackSprite(s, dateEmotionKeys, char.avatar) || '');
+            const initialSprite = pickFallbackSprite(activeSprites);
+            setCurrentSprite(initialSprite.src);
+            setCurrentSpriteKey(initialSprite.key);
             
             // Parse Peek Status as opening — 先剥出观测块（开了 OBSERVE 才有）
             const startText = peekStatus || "Waiting for connection...";
@@ -405,15 +469,19 @@ const DateSession: React.FC<DateSessionProps> = ({
     // Sprite & Config Sync (If user goes to settings and comes back, this helps)
     useEffect(() => {
         if (char.spriteConfig) setSpriteConfig(char.spriteConfig);
-        if (char.dateBackground) setBgImage(char.dateBackground);
-    }, [char]);
+        if (char.dateBackground || !initialState?.bgImage) setBgImage(char.dateBackground || '');
+        if (currentSpriteKey) {
+            const resolved = resolveSpriteByKey(currentSpriteKey);
+            if (resolved.src) setCurrentSprite(resolved.src);
+        }
+    }, [char, currentSpriteKey]);
 
     // Novel Mode Scroll
     useEffect(() => {
         if (isNovelMode && novelScrollRef.current) {
             novelScrollRef.current.scrollTop = novelScrollRef.current.scrollHeight;
         }
-    }, [sessionMessages.length, isNovelMode, showInputBox]);
+    }, [visibleSessionMessages.length, isNovelMode, showInputBox]);
 
     // Typewriter effect
     useEffect(() => {
@@ -437,19 +505,6 @@ const DateSession: React.FC<DateSessionProps> = ({
 
     // --- Logic ---
 
-    // Only allow date-relevant emotions (required + custom), never chibi or other non-date sprites
-    const REQUIRED_EMOTIONS_SET = ['normal', 'happy', 'angry', 'sad', 'shy'];
-    const dateEmotionKeys = [...REQUIRED_EMOTIONS_SET, ...(char.customDateSprites || [])];
-
-    // Resolve active sprites: if a skin set is active, use its sprites; otherwise fall back to char.sprites
-    const activeSprites = React.useMemo(() => {
-        if (char.activeSkinSetId && char.dateSkinSets) {
-            const skin = char.dateSkinSets.find(s => s.id === char.activeSkinSetId);
-            if (skin) return skin.sprites;
-        }
-        return char.sprites || {};
-    }, [char.activeSkinSetId, char.dateSkinSets, char.sprites]);
-
     const processNextDialogue = (item: DialogueItem, remaining: DialogueItem[]) => {
         setCurrentText(item.text);
         currentLineEmotionRef.current = item.voiceEmotion;
@@ -457,11 +512,15 @@ const DateSession: React.FC<DateSessionProps> = ({
             const emotionKey = item.emotion.toLowerCase();
             if (dateEmotionKeys.includes(emotionKey)) {
                 const nextSprite = activeSprites[emotionKey];
-                if (nextSprite) setCurrentSprite(nextSprite);
+                if (nextSprite) {
+                    setCurrentSprite(nextSprite);
+                    setCurrentSpriteKey(emotionKey);
+                }
             } else {
                 const found = dateEmotionKeys.find(k => emotionKey.includes(k));
                 if (found && activeSprites[found]) {
                     setCurrentSprite(activeSprites[found]);
+                    setCurrentSpriteKey(found);
                 }
             }
         }
@@ -583,8 +642,11 @@ const DateSession: React.FC<DateSessionProps> = ({
         dialogueQueue,
         dialogueBatch,
         currentText,
-        bgImage,
-        currentSprite,
+        // Keep recovery snapshots light: don't duplicate base64 background/sprite data here.
+        // TODO(date-assets): migrate CharacterProfile dateBackground/sprites/dateSkinSets themselves
+        // into the IndexedDB assets store and keep stable asset refs on the character.
+        currentSpriteKey: currentSpriteKey || inferSpriteKey(currentSprite) || undefined,
+        activeSkinSetId: char.activeSkinSetId,
         isNovelMode,
         timestamp: Date.now(),
         peekStatus,
@@ -860,7 +922,35 @@ const DateSession: React.FC<DateSessionProps> = ({
                                     </>
                                 );
                             })()}
-                            {sessionMessages.map((msg) => (
+                            {(hiddenNovelMessageCount > 0 || !historyReachedEnd) && (
+                                <div className="flex justify-center">
+                                    <button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            // 本地还有没显示的就只开窗；已经铺满则回库里取更早的一批，
+                                            // 否则初始窗口以外的见面记录在阅读模式里永远够不着。
+                                            const plan = planNovelLoadMore({
+                                                loadedCount: sessionMessages.length,
+                                                visibleCount: novelVisibleCount,
+                                                windowStep: NOVEL_MESSAGE_LOAD_STEP,
+                                                loadLimit: historyLoadLimit,
+                                                loadStep: NOVEL_HISTORY_FETCH_STEP,
+                                                reachedDbEnd: historyReachedEnd,
+                                            });
+                                            setNovelVisibleCount(plan.nextVisibleCount);
+                                            if (plan.nextLoadLimit !== null) void onLoadMoreHistory?.(plan.nextLoadLimit);
+                                        }}
+                                        className={`px-4 py-2 rounded-full text-xs font-bold border active:scale-95 transition-transform ${
+                                            char.dateLightReading
+                                                ? 'bg-stone-100 text-stone-500 border-stone-200'
+                                                : 'bg-white/10 text-white/60 border-white/10'
+                                        }`}
+                                    >
+                                        加载更早见面记录{hiddenNovelMessageCount > 0 ? ` (${hiddenNovelMessageCount})` : ''}
+                                    </button>
+                                </div>
+                            )}
+                            {visibleSessionMessages.map((msg) => (
                                 <div
                                     key={msg.id}
                                     className={`group relative rounded-xl transition-colors -mx-4 px-4 py-2 ${char.dateLightReading ? 'active:bg-stone-100' : 'active:bg-white/5'}`}

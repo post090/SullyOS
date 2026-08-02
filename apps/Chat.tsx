@@ -47,6 +47,7 @@ import MemoryRepairPortal from '../components/chat/MemoryRepairPortal';
 import ChatModals from '../components/chat/ChatModals';
 import Modal from '../components/os/Modal';
 import ProactiveSettingsModal from '../components/chat/ProactiveSettingsModal';
+import ActiveMsg2SettingsModal from '../components/chat/ActiveMsg2SettingsModal';
 import ThinkingChainSettingsModal from '../components/chat/ThinkingChainSettingsModal';
 import CharApiHubModal from '../components/chat/CharApiHubModal';
 import JobHuntPanelModal from '../components/chat/JobHuntPanelModal';
@@ -55,6 +56,7 @@ import { useChatAI } from '../hooks/useChatAI';
 import { cleanTextForTts, parseVoiceOutput } from '../utils/minimaxTts';
 import { collectVoiceBatchSubtitle, isPoisonedVoiceSubtitle } from '../utils/voiceSubtitle';
 import { synthesizeSpeechDetailed, characterHasVoice } from '../utils/ttsRouter';
+import { shouldAutoPlayGeneratedVoice } from '../utils/voicePlayback';
 import { resolveMiniMaxApiKey } from '../utils/minimaxApiKey';
 import { resolveFishAudioApiKey, stripFishMarkupForDisplay, cleanTextForTtsFish } from '../utils/fishAudioTts';
 import { resolveElevenLabsApiKey, stripElevenMarkupForDisplay, cleanTextForTtsEleven } from '../utils/elevenLabsTts';
@@ -62,9 +64,11 @@ import { resolveTtsProvider } from '../utils/ttsProvider';
 import { isInstantConfigReady, loadInstantConfig } from '../utils/instantPushClient';
 import { resolveActiveSound, playWhiteboxSound, unlockWhiteboxAudio, parseWhiteboxSound, upsertWhiteboxSound, stripWhiteboxSoundDirective, WhiteboxSound } from '../utils/whiteboxSound';
 import WhiteboxSoundEditor from '../components/chat/WhiteboxSoundEditor';
-import { normalizeTranslationLangLabel } from '../utils/translationLang';
+import { normalizeTranslationLangLabel, isTranslationLangPreset } from '../utils/translationLang';
 import { resetNoResponseCount } from '../utils/proactiveChat';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
+import { trackEvent, noteMessageSent, presetOrCustom } from '../utils/analytics';
+import { markAmsgStateDirty, markAmsgStateDirtyForAll } from '../utils/amsgStateSync';
 import {
     CONTEXT_RANGE_POLICY_VERSION,
     computeContextRangeSnapshot,
@@ -175,6 +179,7 @@ const Chat: React.FC = () => {
     const [isSummarizing, setIsSummarizing] = useState(false);
     const [archiveProgress, setArchiveProgress] = useState('');
     const [showProactiveModal, setShowProactiveModal] = useState(false);
+    const [showActiveMsg2Modal, setShowActiveMsg2Modal] = useState(false);
     const [showThinkingChainModal, setShowThinkingChainModal] = useState(false);
     // 加号菜单第二页：角色级 API 配置聚合 / 聊天记录搜索
     const [showApiHubModal, setShowApiHubModal] = useState(false);
@@ -652,25 +657,28 @@ const Chat: React.FC = () => {
             setVoiceDataMap(prev => ({ ...prev, [msg.id]: { url: blobUrl, originalText, spokenText: storedSpokenText, lang: storedLang } }));
             // Persist so the voice bar survives leaving and re-entering the chat.
             persistVoice(msg.id, blobUrl, blob, originalText, storedSpokenText, storedLang);
-            // Auto-play
-            if (!chatAudioRef.current) chatAudioRef.current = new Audio();
-            chatAudioRef.current.src = blobUrl;
-            chatAudioRef.current.onended = () => { setPlayingMsgId(null); loadMusicControl()?.unduck(); };
-            // ⚠️ 修复：之前是 .catch(() => {}) 静默吞播放失败——如果 blob 是 JSON 错误体
-            // （上游 200 + JSON 被当音频缓存的"中毒"场景），用户看到语音条但无声，毫无报错。
-            // 现在 catch 里：(1) addToast 提示用户；(2) 释放这个 blob 的 URL + 从持久化库删掉，
-            // 避免下次进入会话又读到坏 blob。
-            chatAudioRef.current.play().catch((playErr) => {
-                console.error('[voice] audio.play() failed:', playErr, 'blob.type=', blob?.type || 'none', 'size=', blob?.size ?? 0);
-                addToast('语音播放失败，可能是合成返回了无效内容，请重试或换条文本', 'error');
-                loadMusicControl()?.unduck();
-                try {
-                    URL.revokeObjectURL(blobUrl);
-                    voiceBlobUrlsRef.current.delete(blobUrl);
-                } catch { /* ignore */ }
-            });
-            loadMusicControl()?.duck();
-            setPlayingMsgId(msg.id);
+            // 合成完是否立刻播（规则和来由见 shouldAutoPlayGeneratedVoice）：
+            // AI 自动发来的默认不响、等用户点；用户自己点着要的一定响。
+            if (shouldAutoPlayGeneratedVoice({ autoTriggered, autoPlayEnabled: char.chatVoiceAutoPlay })) {
+                if (!chatAudioRef.current) chatAudioRef.current = new Audio();
+                chatAudioRef.current.src = blobUrl;
+                chatAudioRef.current.onended = () => { setPlayingMsgId(null); loadMusicControl()?.unduck(); };
+                // ⚠️ 修复：之前是 .catch(() => {}) 静默吞播放失败——如果 blob 是 JSON 错误体
+                // （上游 200 + JSON 被当音频缓存的"中毒"场景），用户看到语音条但无声，毫无报错。
+                // 现在 catch 里：(1) addToast 提示用户；(2) 释放这个 blob 的 URL + 从持久化库删掉，
+                // 避免下次进入会话又读到坏 blob。
+                chatAudioRef.current.play().catch((playErr) => {
+                    console.error('[voice] audio.play() failed:', playErr, 'blob.type=', blob?.type || 'none', 'size=', blob?.size ?? 0);
+                    addToast('语音播放失败，可能是合成返回了无效内容，请重试或换条文本', 'error');
+                    loadMusicControl()?.unduck();
+                    try {
+                        URL.revokeObjectURL(blobUrl);
+                        voiceBlobUrlsRef.current.delete(blobUrl);
+                    } catch { /* ignore */ }
+                });
+                loadMusicControl()?.duck();
+                setPlayingMsgId(msg.id);
+            }
         } catch (err: any) {
             addToast(`语音生成失败: ${err?.message || '未知错误'}`, 'error');
         } finally {
@@ -704,6 +712,7 @@ const Chat: React.FC = () => {
                 return;
             }
             addToast('语音已开始下载', 'success');
+            trackEvent('下载语音条');
         } catch {
             addToast('语音下载失败', 'error');
         }
@@ -1145,6 +1154,8 @@ const Chat: React.FC = () => {
 
     const handleSendText = async (customContent?: string, customType?: MessageType, metadata?: any) => {
         if (!char || (!input.trim() && !customContent)) return;
+        // 只累加内存里的计数，这里不发任何请求；页面切走时才按区间报一次。见 utils/analytics.ts
+        noteMessageSent();
         // 借用户"发送"这个手势解锁音频上下文，好让稍后 AI 回复时的白框提示音能顺利播放（移动端自动播放策略）。
         unlockWhiteboxAudio();
         const text = customContent || input.trim();
@@ -1165,6 +1176,7 @@ const Chat: React.FC = () => {
                 return;
             }
             setMcdAppOpen(true);
+            trackEvent('打开麦当劳点单小程序');
             setShowPanel('none');
             return;
         }
@@ -1398,12 +1410,15 @@ const Chat: React.FC = () => {
         if (msg.metadata?.reviewStatus && msg.metadata.reviewStatus !== 'active') return;
         try {
             await resolveLifeRecordCard(msg, action);
+            // 否决会把这条记录踢出注入摘要、回滚银行流水，生活记录是注入给所有开了开关的
+            // 角色的共享素材，所以逐个打脏（同表情库）。
+            markAmsgStateDirtyForAll({ characters, userProfile, groups, realtimeConfig });
             addToast(action === 'confirmed' ? '已确认记录' : '已否决，记录撤销', action === 'confirmed' ? 'success' : 'info');
         } catch (e) {
             console.error('[LifeRecord] resolve failed:', e);
         }
         await reloadMessages(visibleCountRef.current);
-    }, [char, reloadMessages, addToast]);
+    }, [char, reloadMessages, addToast, characters, userProfile, groups, realtimeConfig]);
 
     // 用户在「时光契约提议」卡片上确认建立契约：
     // 1) 用编辑后的 meta 构造 TaskV2 落库（createTask 内部会塞一条 system 消息告诉监督人）
@@ -1486,9 +1501,13 @@ const Chat: React.FC = () => {
 
         await DB.deleteMessages(toDeleteIds);
         discardVoiceForMessages(toDeleteIds);
+        // 重 roll 也删了消息：正常路径下这轮生成结束会再打脏一次，这里先打是兜住
+        // 「触发失败没走到生成收尾」的路径，云端 fire_pack 不能停在删除前。
+        markAmsgStateDirty({ char, userProfile, groups, realtimeConfig });
         const newHistory = messages.slice(0, index + 1);
         setMessages(newHistory);
         addToast('回溯对话中...', 'info');
+        trackEvent('重新生成回复');
 
         // 重 roll：不注入上一轮残留的情绪 buff 与意识流（innerState），两边独立重新生成。
         triggerAI(newHistory, undefined, undefined, { skipEmotionInjection: true });
@@ -1505,6 +1524,18 @@ const Chat: React.FC = () => {
     };
 
     const handlePanelAction = (type: string, payload?: any) => {
+        // 只统计「打开某个面板 / 开关某个能力」这几个固定入口，名单写死在这里；
+        // 选表情、选分类之类的动作不上报。
+        if ([
+            'transfer', 'archive', 'settings', 'chrome-css', 'chrome-sound', 'fine-tune',
+            'meetup', 'proactive', 'active-msg-2', 'schedule', 'mcd-request', 'luckin-request',
+            'html-mode-toggle', 'html-mode-settings', 'thinking-settings',
+            // 独立小功能：点一下就是用了一次，跟「打开某个面板」同一性质。
+            // send-emoji / select-category 这些是「挑哪一个」，不进名单。
+            'poke', 'emoji-import', 'add-category', 'mcd-end', 'luckin-end',
+        ].includes(type)) {
+            trackEvent('打开聊天功能面板项', { action: type });
+        }
         switch (type) {
             case 'memory-link': setShowPanel('none'); setMemoryRepairOpen(true); break;
             case 'transfer': setModalType('transfer'); break;
@@ -1524,6 +1555,7 @@ const Chat: React.FC = () => {
             case 'delete-category-req': setSelectedCategory(payload); setModalType('delete-category'); break;
             case 'meetup': if (char) { setShowPanel('none'); openDateWithChar(char.id); } break;
             case 'proactive': setShowProactiveModal(true); break;
+            case 'active-msg-2': setShowActiveMsg2Modal(true); break;
             case 'emotion': setModalType('schedule'); break; // 情绪已并入日程，打开同一 modal
             case 'schedule': setModalType('schedule'); break;
             case 'mcd-not-configured':
@@ -1531,6 +1563,7 @@ const Chat: React.FC = () => {
                 break;
             case 'mcd-request':
                 setMcdAppOpen(true);
+                trackEvent('打开麦当劳点单小程序');
                 break;
             case 'mcd-end':
                 handleSendText(MCD_DEACTIVATE_TRIGGER, 'text', { mcdDeactivate: true });
@@ -1610,6 +1643,7 @@ const Chat: React.FC = () => {
         luckinChatRef.current = { active: true, longitude: lng, latitude: lat, cityName };
         setLuckinMode(true);
         setShowLuckinLoc(false);
+        trackEvent('开启瑞一杯聊天点单');
         addToast(`瑞一杯已开启 ☕ 定位: ${cityName || '已设置'}`, 'info');
         // 首次启动: 自动弹一次使用说明 (之后收在 banner 的 ? 里)
         try {
@@ -1821,6 +1855,8 @@ const Chat: React.FC = () => {
         if (modalType === 'schedule') loadSchedule();
     }, [modalType]);
 
+    // 日程表随 fire_pack 一起上云（角色到点按它说自己在干嘛），改完要让云端那份跟上：
+    // 用户把「健身」改成「在家养病」，角色晚上还说「刚从健身房回来」就穿帮了。
     const handleScheduleEdit = async (index: number, slot: ScheduleSlot) => {
         if (!scheduleData) return;
         const newSlots = [...scheduleData.slots];
@@ -1828,6 +1864,7 @@ const Chat: React.FC = () => {
         const updated = { ...scheduleData, slots: newSlots };
         setScheduleData(updated);
         await DB.saveDailySchedule(updated);
+        markAmsgStateDirty({ char, userProfile, groups, realtimeConfig });
     };
 
     const handleScheduleDelete = async (index: number) => {
@@ -1836,6 +1873,7 @@ const Chat: React.FC = () => {
         const updated = { ...scheduleData, slots: newSlots };
         setScheduleData(updated);
         await DB.saveDailySchedule(updated);
+        markAmsgStateDirty({ char, userProfile, groups, realtimeConfig });
     };
 
     const handleScheduleCoverChange = async (dataUrl: string) => {
@@ -1850,6 +1888,7 @@ const Chat: React.FC = () => {
         if (!char || !scheduleData) return;
         const slot = scheduleData.slots[index];
         if (!slot) return;
+        trackEvent('打开日程小剧场', { mode: forceRegenerate ? 'replay' : 'play' });
         // 命中缓存且非重演：直接打开，不烧 token
         if (!forceRegenerate && slot.theater && slot.theater.lines.length > 0) {
             setTheaterSlotIdx(index);
@@ -1911,7 +1950,11 @@ const Chat: React.FC = () => {
         setIsScheduleGenerating(true);
         try {
             const result = await generateDailyScheduleForChar(targetChar, userProfile, apiConfig, forceRegenerate);
-            if (result) setScheduleData(result);
+            if (result) {
+                setScheduleData(result);
+                // 跨天后台重新生成也要刷云端：不刷的话角色到点照着昨天的作息表说话
+                markAmsgStateDirty({ char: targetChar, userProfile, groups, realtimeConfig });
+            }
         } catch (e) {
             console.error('[Schedule] Generation error:', e);
         } finally {
@@ -1978,6 +2021,13 @@ const Chat: React.FC = () => {
 
     // --- Modal Handlers ---
 
+    /**
+     * 表情库是全局的：增删改名、删分类、改分类可见范围，都会让每个角色云端 fire_pack 里
+     * 那份表情清单过期。角色到点照旧清单发 [[SEND_EMOJI]]，客户端反查不到就只能落降级
+     * 文本气泡——所以这几个入口都要重新打包。
+     */
+    const markEmojiLibraryChanged = () => markAmsgStateDirtyForAll({ characters, userProfile, groups, realtimeConfig });
+
     const handleAddCategory = async () => {
         if (!newCategoryName.trim()) {
              addToast('请输入分类名称', 'error');
@@ -2008,6 +2058,7 @@ const Chat: React.FC = () => {
             }
         }
         await loadEmojiData();
+        markEmojiLibraryChanged();
         setModalType('none');
         setEmojiImportText('');
         addToast('表情包导入成功', 'success');
@@ -2017,6 +2068,7 @@ const Chat: React.FC = () => {
         if (!selectedCategory) return;
         await DB.deleteEmojiCategory(selectedCategory.id);
         await loadEmojiData();
+        markEmojiLibraryChanged();
         setActiveCategory('default');
         setModalType('none');
         setSelectedCategory(null);
@@ -2028,6 +2080,7 @@ const Chat: React.FC = () => {
         if (!cat) return;
         await DB.saveEmojiCategory({ ...cat, allowedCharacterIds });
         await loadEmojiData();
+        markEmojiLibraryChanged();
         setSelectedCategory(null);
         addToast(allowedCharacterIds ? `已设置 ${allowedCharacterIds.length} 个角色可见` : '已设为所有角色可见', 'success');
     };
@@ -2170,12 +2223,15 @@ const Chat: React.FC = () => {
                 const processedIds = processedMsgs.map(m => m.id);
                 await DB.deleteMessages(processedIds);
                 discardVoiceForMessages(processedIds);
+                // 清历史同样动了云端 fire_pack 的对话快照来源，落库后打脏（下同）。
+                markAmsgStateDirty({ char, userProfile, groups, realtimeConfig });
                 const remaining = allMessages.filter(m => m.id > hwm);
                 setMessages(remaining.slice(-200));
                 setTotalMsgCount(remaining.length);
                 setVisibleCount(LOAD_BATCH_SIZE);
                 visibleCountRef.current = LOAD_BATCH_SIZE;
                 addToast(`已安全清理 ${processedMsgs.length} 条已处理记录，保留 ${remaining.length} 条未处理记录`, 'success');
+                trackEvent('清空聊天记录');
                 setModalType('none');
                 return;
             }
@@ -2209,6 +2265,8 @@ const Chat: React.FC = () => {
             visibleCountRef.current = LOAD_BATCH_SIZE;
             addToast('已清空', 'success');
         }
+        markAmsgStateDirty({ char, userProfile, groups, realtimeConfig });
+        trackEvent('清空聊天记录');
         setModalType('none');
     };
 
@@ -2351,8 +2409,10 @@ const Chat: React.FC = () => {
 
         const range = historyContextRange;
         const maxStart = range?.maxRangeStartMessageId;
-        const latestId = range?.messages.at(-1)?.id
-            || allHistoryMessages.at(-1)?.id;
+        // 不用 Array.prototype.at：tsconfig 的 lib 没开 es2022，tsc 会报错
+        const rangeMessages = range?.messages ?? [];
+        const latestId = rangeMessages[rangeMessages.length - 1]?.id
+            || allHistoryMessages[allHistoryMessages.length - 1]?.id;
         if (maxStart === undefined || latestId === undefined || messageId < maxStart || messageId > latestId) {
             const required = countMessagesFrom(allHistoryMessages, messageId);
             const hint = settingsContextRangeMode === 'adaptive'
@@ -2430,6 +2490,7 @@ const Chat: React.FC = () => {
         setShowPanel('none');
         setArchiveProgress(`准备归档 ${datesToProcess.length} 天...`);
         addToast(`开始归档 ${datesToProcess.length} 天聊天记录`, 'info');
+        trackEvent('归档聊天记录');
 
         try {
             let processedCount = 0;
@@ -2539,11 +2600,15 @@ const Chat: React.FC = () => {
         const deletedId = selectedMessage.id;
         await DB.deleteMessage(deletedId);
         discardVoiceForMessages([deletedId]);
+        // 满血主动消息：云端 fire_pack 里带最近对话原文，删了消息不打脏的话，角色到点
+        // 还会提起这条已经不存在的消息（快照的消息在 flush 时从 DB 重读，这里只管打脏）。
+        markAmsgStateDirty({ char, userProfile, groups, realtimeConfig });
         setMessages(prev => prev.filter(m => m.id !== deletedId));
         setTotalMsgCount(prev => Math.max(0, prev - 1));
         setModalType('none');
         setSelectedMessage(null);
         addToast('消息已删除', 'success');
+        trackEvent('删除一条消息');
     };
 
     const confirmEditMessage = async () => {
@@ -2552,10 +2617,13 @@ const Chat: React.FC = () => {
         await DB.updateMessage(selectedMessage.id, editContent);
         // 内容变了旧语音就作废，否则语音条仍会播放编辑前的音频。
         if (contentChanged) discardVoiceForMessages([selectedMessage.id]);
+        // 同 handleDeleteMessage：正文改了要让云端 fire_pack 跟上。
+        if (contentChanged) markAmsgStateDirty({ char, userProfile, groups, realtimeConfig });
         setMessages(prev => prev.map(m => m.id === selectedMessage.id ? { ...m, content: editContent } : m));
         setModalType('none');
         setSelectedMessage(null);
         addToast('消息已修改', 'success');
+        trackEvent('编辑一条消息');
     };
 
     const handleQuickReply = useCallback((message: Message) => {
@@ -2563,6 +2631,7 @@ const Chat: React.FC = () => {
             ...message,
             metadata: { ...message.metadata, senderName: message.role === 'user' ? '我' : char.name }
         });
+        trackEvent('引用回复一条消息');
     }, [char.name]);
 
     const handleReplyMessage = () => {
@@ -2577,6 +2646,7 @@ const Chat: React.FC = () => {
         setModalType('none');
         setSelectedMessage(null);
         addToast('已复制到剪贴板', 'success');
+        trackEvent('复制一条消息');
     };
 
     const handleDeleteEmoji = async () => {
@@ -2590,6 +2660,8 @@ const Chat: React.FC = () => {
             addToast('删除表情包失败', 'error');
         } finally {
             await loadEmojiData();
+            // 放 finally：Promise.all 部分失败时也已经删掉了几个，云端那份照样过期了。
+            markEmojiLibraryChanged();
             setModalType('none');
             setSelectedEmoji(null);
         }
@@ -2604,6 +2676,7 @@ const Chat: React.FC = () => {
             await DB.renameEmoji(selectedEmoji.name, newName);
             addToast('表情包名称已修改', 'success');
             await loadEmojiData();
+            markEmojiLibraryChanged();
             setModalType('none');
             setSelectedEmoji(null);
             setNewEmojiName('');
@@ -3177,7 +3250,7 @@ const Chat: React.FC = () => {
                 onConfirmEditMessage={confirmEditMessage} onDeleteMessage={handleDeleteMessage} onCopyMessage={handleCopyMessage} onDeleteEmoji={handleDeleteEmoji} onDeleteCategory={handleDeleteCategory}
                 allCharacters={characters} onSaveCategoryVisibility={handleSaveCategoryVisibility}
                 translationEnabled={translationEnabled}
-                onToggleTranslation={() => { const next = !translationEnabled; setTranslationEnabled(next); localStorage.setItem(`chat_translate_enabled_${activeCharacterId}`, JSON.stringify(next)); if (!next) { setShowingTargetIds(new Set()); } }}
+                onToggleTranslation={() => { const next = !translationEnabled; setTranslationEnabled(next); localStorage.setItem(`chat_translate_enabled_${activeCharacterId}`, JSON.stringify(next)); if (next) { trackEvent('开启聊天翻译', { targetLang: isTranslationLangPreset(translateTargetLang) ? translateTargetLang : 'custom' }); } if (!next) { setShowingTargetIds(new Set()); } }}
                 translateSourceLang={translateSourceLang}
                 translateTargetLang={translateTargetLang}
                 onSetTranslateSourceLang={(lang: string) => { const next = normalizeTranslationLangLabel(lang); if (!next) return; setTranslateSourceLang(next); localStorage.setItem(`chat_translate_source_lang_${activeCharacterId}`, next); setShowingTargetIds(new Set()); }}
@@ -3192,6 +3265,8 @@ const Chat: React.FC = () => {
                 onToggleChatVoice={() => updateCharacter(char.id, { chatVoiceEnabled: !char.chatVoiceEnabled })}
                 memoEnabled={!!char.memoEnabled}
                 onToggleMemo={() => updateCharacter(char.id, { memoEnabled: !char.memoEnabled })}
+                chatVoiceAutoPlay={!!char.chatVoiceAutoPlay}
+                onToggleChatVoiceAutoPlay={() => updateCharacter(char.id, { chatVoiceAutoPlay: !char.chatVoiceAutoPlay })}
                 chatVoiceLang={char.chatVoiceLang || ''}
                 onSetChatVoiceLang={(lang: string) => updateCharacter(char.id, { chatVoiceLang: lang })}
                 voiceAvailable={characterHasVoice(char, apiConfig)}
@@ -3718,6 +3793,15 @@ const Chat: React.FC = () => {
                         updateCharacter(char.id, { proactiveConfig: config });
                         if (config.enabled) {
                             startProactiveChat(config.intervalMinutes);
+                            // 界面只给 7 个档，但这个值是从持久化状态读回来的——导入的备份、
+                            // 老版本写进去的都可能是任意整数。收敛到写死的档位，其余归 custom。
+                            trackEvent('启动主动消息', {
+                                intervalMinutes: presetOrCustom(
+                                    String(config.intervalMinutes),
+                                    ['30', '60', '120', '240', '480', '720', '1440'],
+                                    '没设',
+                                ),
+                            });
                             addToast(`已启动主动消息，每 ${config.intervalMinutes >= 60 ? (config.intervalMinutes / 60) + ' 小时' : config.intervalMinutes + ' 分钟'}发送一次`, 'success');
                         } else {
                             stopProactiveChat();
@@ -3775,6 +3859,26 @@ const Chat: React.FC = () => {
                         setShowChatSearch(false);
                         void handleJumpToMessageInChat(id);
                     }}
+                />
+            )}
+
+            {/* 主动消息 2.0（云端 worker 定时任务）Settings Modal */}
+            {char && (
+                <ActiveMsg2SettingsModal
+                    isOpen={showActiveMsg2Modal}
+                    onClose={() => setShowActiveMsg2Modal(false)}
+                    char={char}
+                    apiConfig={apiConfig}
+                    userProfile={userProfile}
+                    groups={groups}
+                    realtimeConfig={realtimeConfig}
+                    // updater 形态：merge 在 setCharacters 的函数式 updater 里发生，
+                    // 拿到的 prev 是最新排队后的状态，不会被面板的渲染时快照盖掉
+                    // （角色在聊天里用工具排的任务就是这么丢的）。
+                    onSave={(updater) => updateCharacter(char.id, (prev) => ({
+                        activeMsg2Config: updater(prev.activeMsg2Config),
+                    }))}
+                    addToast={addToast}
                 />
             )}
 

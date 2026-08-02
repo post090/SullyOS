@@ -8,6 +8,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useOS } from '../../context/OSContext';
 import { useMusic, musicApi } from '../../context/MusicContext';
 import { C, Sparkle, MizuHeader, BokehBg } from './MusicUI';
+import { trackEvent } from '../../utils/analytics';
 
 type Mode = 'qr' | 'phone' | 'manual';
 
@@ -126,6 +127,7 @@ const NeteaseLoginPanel: React.FC<Props> = ({ onBack, onLoggedIn }) => {
         addToast('登录信息没拿全，请重试。', 'error');
         return;
       }
+      trackEvent('用手机号验证码登录网易云');
       onLoggedIn(`MUSIC_U=${musicU}`);
     } catch (e: any) {
       addToast(`登录失败：${e.message}`, 'error');
@@ -271,6 +273,7 @@ const NeteaseLoginPanel: React.FC<Props> = ({ onBack, onLoggedIn }) => {
               onClick={() => {
                 const v = manualCookie.trim(); if (!v) return;
                 const final = v.toUpperCase().startsWith('MUSIC_U=') ? v : `MUSIC_U=${v}`;
+                trackEvent('手动粘贴 Cookie 登录网易云');
                 onLoggedIn(final);
               }}
               className="w-full py-3 rounded-2xl text-sm text-white"

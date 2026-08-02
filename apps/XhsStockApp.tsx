@@ -4,6 +4,7 @@ import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
 import { XhsStockImage } from '../types';
 import ConfirmDialog from '../components/os/ConfirmDialog';
+import { trackEvent } from '../utils/analytics';
 
 const XhsStockApp: React.FC = () => {
     const { closeApp, addToast } = useOS();
@@ -151,7 +152,11 @@ const XhsStockApp: React.FC = () => {
                         return (
                             <button
                                 key={tag}
-                                onClick={() => setFilterTag(filterTag === tag ? null : tag)}
+                                onClick={() => {
+                                    const nextTag = filterTag === tag ? null : tag;
+                                    setFilterTag(nextTag);
+                                    if (nextTag) trackEvent('按标签筛选图库');
+                                }}
                                 className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${filterTag === tag ? 'bg-red-500 text-white' : 'bg-slate-100 text-slate-500'}`}
                             >
                                 #{tag} ({count})
@@ -241,7 +246,7 @@ const XhsStockApp: React.FC = () => {
                     <div className="flex-1" />
                     {view === 'list' && (
                         <button
-                            onClick={() => setView('add')}
+                            onClick={() => { setView('add'); trackEvent('打开囤图添加表单'); }}
                             className="w-9 h-9 rounded-full bg-red-500 text-white flex items-center justify-center shadow-md active:scale-90 transition-transform"
                         >
                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-5 h-5">

@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { luckinItemEmoji } from '../../utils/luckinEmoji';
 import PayQr from '../luckin/PayQr';
+import { trackEvent } from '../../utils/analytics';
 
 /**
  * 瑞幸 MCP 工具结果卡片 (与 McdCard 同构, 瑞幸蓝主题)
@@ -305,6 +306,7 @@ const MenuList: React.FC<{ items: any[]; pageSize?: number; onSendCart?: (items:
         if (!cart.length || !onSendCart) return;
         onSendCart(cart);
         setSelected({});
+        trackEvent('把瑞幸购物车发给角色');
     };
 
     return (
@@ -352,7 +354,7 @@ const MenuList: React.FC<{ items: any[]; pageSize?: number; onSendCart?: (items:
                     </div>
                     <button
                         type="button"
-                        onClick={() => setSelected({})}
+                        onClick={() => { setSelected({}); trackEvent('清空瑞幸购物车'); }}
                         className="text-[10px] text-[#16386F] px-2 py-1.5 active:scale-95"
                     >清空</button>
                     <button

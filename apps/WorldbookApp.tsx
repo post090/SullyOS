@@ -14,6 +14,7 @@ import {
 } from '../utils/worldbook';
 import { confirmExportSafety } from '../utils/exportGuard';
 import { shareOrDownloadFile } from '../utils/shareExport';
+import { trackEvent } from '../utils/analytics';
 
 const WorldbookApp: React.FC = () => {
     const { closeApp, worldbooks, addWorldbook, updateWorldbook, deleteWorldbook, addToast } = useOS();
@@ -114,6 +115,7 @@ const WorldbookApp: React.FC = () => {
         setTempWholeWords(false);
         setShowCategoryPicker(false);
         setIsEditing(true);
+        trackEvent('打开世界书编辑页', { mode: 'create' });
     };
 
     const handleEdit = (book: Worldbook) => {
@@ -137,6 +139,7 @@ const WorldbookApp: React.FC = () => {
         setTempWholeWords(book.matchWholeWords === true);
         setShowCategoryPicker(false);
         setIsEditing(true);
+        trackEvent('打开世界书编辑页', { mode: 'edit' });
     };
 
     const handleSave = async () => {
@@ -231,6 +234,7 @@ const WorldbookApp: React.FC = () => {
         });
         const verb = result === 'shared' ? '已调起分享' : '已导出';
         addToast(`${verb}「${category}」共 ${books.length} 条`, 'success');
+        trackEvent('导出分组为标准世界书');
     };
 
     const requestDelete = (e: React.MouseEvent, book: Worldbook) => {
@@ -469,7 +473,11 @@ const WorldbookApp: React.FC = () => {
                                 <label className="text-xs font-bold text-slate-500 mb-2 block">注入位置</label>
                                 <select
                                     value={tempPosition}
-                                    onChange={e => setTempPosition(Number(e.target.value) as WorldbookPosition)}
+                                    onChange={e => {
+                                        const nextPosition = Number(e.target.value) as WorldbookPosition;
+                                        setTempPosition(nextPosition);
+                                        trackEvent('切换世界书注入位置', { position: nextPosition });
+                                    }}
                                     className="w-full text-sm text-slate-700 bg-slate-50/80 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:bg-white focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 transition-all"
                                 >
                                     {(Object.entries(WORLDBOOK_POSITION_LABELS) as [string, string][]).map(([value, label]) => (
@@ -580,7 +588,11 @@ const WorldbookApp: React.FC = () => {
                         <div className="flex items-center gap-2">
                             {worldbooks.length > 0 && (
                                 <button
-                                    onClick={() => isSelecting ? leaveSelectionMode() : setIsSelecting(true)}
+                                    onClick={() => {
+                                        if (isSelecting) { leaveSelectionMode(); return; }
+                                        setIsSelecting(true);
+                                        trackEvent('进入批量管理模式');
+                                    }}
                                     className={`h-9 px-3 rounded-full border text-xs font-bold shadow-sm flex items-center gap-1.5 active:scale-90 transition-all ${isSelecting ? 'bg-slate-100 text-slate-600 border-slate-200' : 'bg-white/80 text-indigo-500 border-white'}`}
                                     title={isSelecting ? '退出批量管理' : '批量管理世界书'}
                                 >
@@ -590,7 +602,7 @@ const WorldbookApp: React.FC = () => {
                             )}
                             <input ref={importRef} type="file" className="hidden" onChange={handleImport} />
                             <button
-                                onClick={() => setShowImportConfirm(true)}
+                                onClick={() => { setShowImportConfirm(true); trackEvent('打开导入世界书弹窗'); }}
                                 className="w-9 h-9 bg-white/80 text-indigo-500 border border-white rounded-full shadow-sm flex items-center justify-center active:scale-90 transition-transform"
                                 title="导入标准世界书"
                             >

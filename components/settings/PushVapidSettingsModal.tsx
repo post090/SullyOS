@@ -3,6 +3,7 @@ import Modal from '../os/Modal';
 import { useOS } from '../../context/OSContext';
 import { generateVapidKeyPair } from '../../utils/vapidGen';
 import { loadPushVapid, savePushVapid, clearPushVapid } from '../../utils/pushVapid';
+import { trackEvent } from '../../utils/analytics';
 
 interface PushVapidSettingsModalProps {
   open: boolean;
@@ -47,16 +48,24 @@ export const PushVapidSettingsModal: React.FC<PushVapidSettingsModalProps> = ({ 
       persist(kp.publicKey, kp.privateKey);
       setShowPrivateKey(true);
       addToast('已生成新的 VAPID 密钥对', 'success');
+      // 只报「这次生成成没成」。不带「之前配没配过」——那等于上报凭据配置状态。
+      trackEvent('生成 VAPID 密钥对', { result: 'success' });
     } catch (e) {
       const err = e as { message?: string } | null;
       addToast(err?.message ?? '生成失败', 'error');
+      // 只报「失败了」这一件事：报错原文可能带路径，留在 toast / console 里就够。
+      trackEvent('生成 VAPID 密钥对', { result: 'error' });
     } finally {
       setGenerating(false);
     }
   };
 
   const handleClear = () => {
-    if (!confirm('确定清空 VAPID 密钥对？Proactive / Instant Push 都会立即失效，下次订阅需要重建。')) return;
+    if (!confirm('确定清空 VAPID 密钥对？Proactive / Instant Push 都会立即失效，下次订阅需要重建。')) {
+      trackEvent('清空 VAPID 密钥对', { confirmed: false });
+      return;
+    }
+    trackEvent('清空 VAPID 密钥对', { confirmed: true });
     clearPushVapid();
     setPublicKey('');
     setPrivateKey('');
@@ -67,6 +76,7 @@ export const PushVapidSettingsModal: React.FC<PushVapidSettingsModalProps> = ({ 
     if (!publicKey) return;
     await navigator.clipboard.writeText(publicKey);
     addToast('公钥已复制', 'success');
+    trackEvent('复制 VAPID 公钥');
   };
 
   const handleCopyPrivateKey = async () => {
@@ -76,6 +86,7 @@ export const PushVapidSettingsModal: React.FC<PushVapidSettingsModalProps> = ({ 
     }
     await navigator.clipboard.writeText(privateKey);
     addToast('私钥已复制', 'success');
+    trackEvent('复制 VAPID 私钥');
   };
 
   const handleCopyEnv = async () => {
@@ -96,6 +107,7 @@ export const PushVapidSettingsModal: React.FC<PushVapidSettingsModalProps> = ({ 
     ];
     await navigator.clipboard.writeText(lines.join('\n'));
     addToast('env 已复制（含真实密钥）', 'success');
+    trackEvent('复制 Worker env 清单');
   };
 
   const handleSave = () => {

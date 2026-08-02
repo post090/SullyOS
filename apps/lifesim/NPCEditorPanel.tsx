@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { SimGender, SimNPC } from '../../types';
 import { CheckCircle, X } from '@phosphor-icons/react';
 import { NPCAvatar } from '../../utils/styledIcons';
+import { trackEvent } from '../../utils/analytics';
 
 const PERSONALITY_OPTIONS = [
     '社牛', '社恐', '卷王', '摸鱼', '文青', '话题女王', '职场精英', '暖男/暖女',
@@ -38,6 +39,7 @@ const NPCEditorPanel: React.FC<{
             bio: bio.trim(),
             backstory: backstory.trim(),
         });
+        trackEvent('保存小人设定编辑');
     };
 
     return (

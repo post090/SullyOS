@@ -17,6 +17,8 @@
  * 注意: 只在浏览器环境装一次, 幂等。必须在 React 挂载前执行 (见 index.tsx 首行 import)。
  */
 
+import { trackEvent } from './analytics';
+
 let installed = false;
 
 export const installTranslateCrashGuard = (): void => {
@@ -30,9 +32,11 @@ export const installTranslateCrashGuard = (): void => {
         if (referenceNode && referenceNode.parentNode !== this) {
             // 尽量在参照节点真正的 parent 上完成插入, 让视觉结果尽量正确;
             if (referenceNode.parentNode) {
+                trackEvent('触发翻译白屏护栏', { 降级路径: '插入改挂真父节点' });
                 return originalInsertBefore.call(referenceNode.parentNode, newNode, referenceNode) as T;
             }
             // 参照节点已彻底脱离文档树, 退化成 append 到 this, 总比崩溃强。
+            trackEvent('触发翻译白屏护栏', { 降级路径: '插入降级为追加' });
             return this.appendChild(newNode) as T;
         }
         return originalInsertBefore.call(this, newNode, referenceNode) as T;
@@ -44,8 +48,10 @@ export const installTranslateCrashGuard = (): void => {
         if (child.parentNode !== this) {
             // 节点若还挂在别处, 就从它真正的 parent 上删掉; 否则视为已脱离, 直接返回。
             if (child.parentNode) {
+                trackEvent('触发翻译白屏护栏', { 降级路径: '删除改挂真父节点' });
                 return originalRemoveChild.call(child.parentNode, child) as T;
             }
+            trackEvent('触发翻译白屏护栏', { 降级路径: '删除视为已脱离' });
             return child;
         }
         return originalRemoveChild.call(this, child) as T;

@@ -9,6 +9,7 @@ import {
 } from '@phosphor-icons/react';
 import StoryAttachments from './StoryAttachments';
 import { formatLifeSimActionDescription } from '../../utils/lifeSimTone';
+import { trackEvent } from '../../utils/analytics';
 
 const EVENT_ACCENTS: Record<string, string> = {
     fight: '#b85050',
@@ -359,7 +360,7 @@ const DramaFeed: React.FC<{ gameState: LifeSimState }> = ({ gameState }) => {
                         return (
                             <button
                                 key={item.value}
-                                onClick={() => setFilter(item.value)}
+                                onClick={() => { setFilter(item.value); trackEvent('筛选动态流', { filter: item.value }); }}
                                 className="retro-btn"
                                 style={{
                                     padding: '3px 10px',

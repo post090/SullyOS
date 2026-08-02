@@ -22,6 +22,7 @@ import type { DiveResult } from './memoryDiveTypes';
 import type { PixelCharConfig } from './pixelCharGenerator';
 import { ensurePixelChar } from './pixelCharGenerator';
 import { DB } from '../../utils/db';
+import { trackEvent } from '../../utils/analytics';
 
 // 内置角色的默认像素形象（用户未自定义时使用）
 const PIXEL_CHAR_BASE = ((import.meta as any).env?.BASE_URL ?? '/') + 'pixel-char/';
@@ -148,6 +149,7 @@ const PixelHomeView: React.FC<Props> = ({ charId, charName, charAvatar, userName
       return;
     }
     setViewMode('dive');
+    trackEvent('进入记忆潜行模式');
   }, [pixelUserConfig, pixelCharConfig, charName, addToast]);
 
   // 记忆潜行结束回调
@@ -164,6 +166,7 @@ const PixelHomeView: React.FC<Props> = ({ charId, charName, charAvatar, userName
 
   const handleEnterRoom = useCallback((roomId: MemoryRoom) => {
     setSelectedRoom(roomId); setViewMode('room');
+    trackEvent('进入像素家园房间', { room: roomId });
   }, []);
 
   const handleRoomUpdate = useCallback(async () => {
@@ -176,6 +179,7 @@ const PixelHomeView: React.FC<Props> = ({ charId, charName, charAvatar, userName
     const name = charName + '的家';
     await downloadPreset(homeState, assets, name, userName);
     addToast?.('预设已导出', 'success');
+    trackEvent('导出像素家园预设');
   }, [homeState, assets, charName, userName, addToast]);
 
   // 导入预设
@@ -188,6 +192,7 @@ const PixelHomeView: React.FC<Props> = ({ charId, charName, charAvatar, userName
         const allAssets = await PixelAssetDB.getAll();
         setAssets(allAssets);
         addToast?.(`导入成功！${result.roomsImported}个房间，${result.assetsImported}个新资产`, 'success');
+        trackEvent('导入像素家园预设');
       } else {
         addToast?.(result.error || '导入失败', 'error');
       }
@@ -229,6 +234,7 @@ const PixelHomeView: React.FC<Props> = ({ charId, charName, charAvatar, userName
       await PixelLayoutDB.save(updated);
       await handleRoomUpdate();
       addToast?.('家具已放置', 'success');
+      trackEvent('摆放一件像素家具', { action: 'add' });
     } else if (slotId) {
       // 替换已有家具的素材
       const updatedFurniture = roomLayout.furniture.map(f =>
@@ -240,6 +246,7 @@ const PixelHomeView: React.FC<Props> = ({ charId, charName, charAvatar, userName
       });
       await handleRoomUpdate();
       addToast?.('家具已替换', 'success');
+      trackEvent('摆放一件像素家具', { action: 'replace' });
     }
 
     pendingSlotRef.current = null;
@@ -350,10 +357,10 @@ const PixelHomeView: React.FC<Props> = ({ charId, charName, charAvatar, userName
           <div className="flex items-center justify-around px-4 py-2">
             <BottomTab label="家园" active onClick={() => setViewMode('map')} />
             <BottomTab label="🌀潜行" onClick={handleEnterDive} />
-            <BottomTab label="仓库/工坊" onClick={() => { pendingSlotRef.current = null; setViewMode('library'); }} />
+            <BottomTab label="仓库/工坊" onClick={() => { pendingSlotRef.current = null; setViewMode('library'); trackEvent('打开像素资产仓库'); }} />
             <BottomTab label="导出" onClick={handleExport} />
-            <BottomTab label="捏TA" onClick={() => { setEditorTarget('char'); setViewMode('charEditor'); }} />
-            <BottomTab label="捏我" onClick={() => { setEditorTarget('user'); setViewMode('charEditor'); }} />
+            <BottomTab label="捏TA" onClick={() => { setEditorTarget('char'); setViewMode('charEditor'); trackEvent('打开像素捏人器', { target: 'char' }); }} />
+            <BottomTab label="捏我" onClick={() => { setEditorTarget('user'); setViewMode('charEditor'); trackEvent('打开像素捏人器', { target: 'user' }); }} />
             <BottomTab label="导入" onClick={() => importInputRef.current?.click()} />
           </div>
           <input ref={importInputRef} type="file" accept=".json" className="hidden"

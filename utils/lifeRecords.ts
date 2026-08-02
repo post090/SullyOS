@@ -189,13 +189,27 @@ export const LIFE_MODULE_LABELS: Record<LifeRecordModule, string> = {
 // 1. 注入（读路径）
 // ═══════════════════════════════════════════════════════════
 
-const buildPeriodSummary = (records: LifeRecord[], settings: LifeRecordSettings | null, today: string): string => {
+/**
+ * absolute = 只写「哪天发生了什么」，不写「今天 / 第 N 天 / 还有几天」。
+ *
+ * 主动消息的提示词是提前打包好上云的，到点才渲染——中间隔了几小时甚至几天。相对说法
+ * 在打包那一刻算出来就冻住了，角色到点会照着念（用户五天没聊天，五天的主动消息都在说
+ * 「你现在生理期第二天」）。绝对日期永不过期，离现在多久由角色对着当前时间自己判断。
+ */
+const buildPeriodSummary = (
+    records: LifeRecord[], settings: LifeRecordSettings | null, today: string, absolute = false,
+): string => {
     const st = computePeriodStatus(records, settings, today);
     if (!st.lastStart) return '- 生理期：暂无记录。';
-    if (st.inPeriod) return `- 生理期：**第 ${st.dayN} 天**（${fmtCN(st.lastStart)}开始）。`;
+    if (st.inPeriod) {
+        return absolute
+            ? `- 生理期：本轮于 ${fmtCN(st.lastStart)} 开始，尚未记录结束。`
+            : `- 生理期：**第 ${st.dayN} 天**（${fmtCN(st.lastStart)}开始）。`;
+    }
     let s = `- 生理期：当前不在经期（上次 ${fmtCN(st.lastStart)}${st.lastEnd ? ` ~ ${fmtCN(st.lastEnd)}` : ''}）`;
     if (st.nextPredicted && st.daysUntilNext !== undefined) {
-        s += st.daysUntilNext >= 0
+        if (absolute) s += `；按周期预测下次约在 ${fmtCN(st.nextPredicted)}`;
+        else s += st.daysUntilNext >= 0
             ? `；预测下次约在 ${fmtCN(st.nextPredicted)}（还有约 ${st.daysUntilNext} 天）`
             : `；按周期预测已推迟约 ${-st.daysUntilNext} 天`;
         // 排卵期只在预测窗口还有意义时给（日历法估算，注明仅供参考）
@@ -207,7 +221,45 @@ const buildPeriodSummary = (records: LifeRecord[], settings: LifeRecordSettings 
     return s;
 };
 
-const buildMedSummary = (plans: MedPlan[], records: LifeRecord[], today: string): string => {
+/** 按日期倒序分组取最近几天，用于 absolute 模式下的「最近 X」列表。 */
+const groupRecentByDate = <T>(
+    items: T[], dateOf: (item: T) => string, today: string, days: number,
+): Array<{ date: string; items: T[] }> => {
+    const byDate = new Map<string, T[]>();
+    for (const item of items) {
+        const d = dateOf(item);
+        if (!d || d > today) continue;   // 未来日期不算「最近发生过」
+        const arr = byDate.get(d) ?? [];
+        arr.push(item);
+        byDate.set(d, arr);
+    }
+    return [...byDate.keys()].sort().reverse().slice(0, days)
+        .map(date => ({ date, items: byDate.get(date)! }));
+};
+
+/** absolute 见 buildPeriodSummary 的说明：不判「今天该不该服」，只给计划表和已发生的记录。 */
+const buildMedSummary = (
+    plans: MedPlan[], records: LifeRecord[], today: string, absolute = false,
+): string => {
+    if (absolute) {
+        const enabled = plans.filter(p => p.enabled).sort((a, b) => a.time.localeCompare(b.time));
+        const taken = groupRecentByDate(
+            effective(records).filter(r => r.module === 'med'), r => r.date, today, 3,
+        );
+        if (enabled.length === 0 && taken.length === 0) return '- 用药：暂无长期用药计划与记录。';
+        const lines: string[] = [];
+        if (enabled.length > 0) {
+            const items = enabled.map(p => {
+                const course = p.planKind === 'course' && p.endDate ? `，疗程至${fmtCN(p.endDate)}` : '';
+                return `${p.time} ${p.name}${p.dosage ? `(${p.dosage})` : ''}（${medFreqLabel(p)}${course}）`;
+            });
+            lines.push(`- 用药计划：${items.join('；')}。对着当前时间看：某个点早就过了、当天却没有对应的服用记录，可以视语境顺口提醒一句，别反复催。`);
+        }
+        lines.push(taken.length > 0
+            ? `- 最近服药记录：${taken.map(g => `${fmtCN(g.date)} ${g.items.map(r => r.payload.name).join('、')}`).join('；')}。`
+            : '- 最近服药记录：暂无。');
+        return lines.join('\n');
+    }
     const duePlans = plans.filter(p => isMedPlanDueToday(p, today)).sort((a, b) => a.time.localeCompare(b.time));
     const todayMeds = effective(records).filter(r => r.module === 'med' && r.date === today);
     if (plans.filter(p => p.enabled).length === 0 && todayMeds.length === 0) return '- 用药：暂无长期用药计划与记录。';
@@ -229,7 +281,19 @@ const buildMedSummary = (plans: MedPlan[], records: LifeRecord[], today: string)
     return lines.join('\n');
 };
 
-const buildExpenseSummary = (txs: BankTransaction[], today: string): string => {
+/** absolute 见 buildPeriodSummary 的说明：写「哪天花了多少」而不是「今日支出」。 */
+const buildExpenseSummary = (txs: BankTransaction[], today: string, absolute = false): string => {
+    if (absolute) {
+        const recent = groupRecentByDate(txs, t => t.dateStr, today, 3);
+        if (recent.length === 0) return '- 记账：近期暂无支出记录。';
+        const parts = recent.map(({ date, items }) => {
+            const total = items.reduce((s, t) => s + t.amount, 0);
+            const detail = items.slice(0, 5).map(t => `${t.note || '未备注'} ${t.amount}`).join('、');
+            const more = items.length > 5 ? ` 等 ${items.length} 笔` : '';
+            return `${fmtCN(date)} 共 ${items.length} 笔、合计 ${total}（${detail}${more}）`;
+        });
+        return `- 最近支出：${parts.join('；')}。`;
+    }
     const todayTx = txs.filter(t => t.dateStr === today);
     if (todayTx.length === 0) return '- 记账：今日暂无支出记录。';
     const total = todayTx.reduce((s, t) => s + t.amount, 0);
@@ -245,8 +309,27 @@ export const weekStartOf = (today: string): string => {
     return addDays(today, -((dow + 6) % 7));
 };
 
-const buildExerciseSummary = (records: LifeRecord[], settings: LifeRecordSettings | null, today: string): string => {
+/** absolute 见 buildPeriodSummary 的说明：列最近几次锻炼的日期，不写「今日 / 本周」。 */
+const buildExerciseSummary = (
+    records: LifeRecord[], settings: LifeRecordSettings | null, today: string, absolute = false,
+): string => {
     const ex = effective(records).filter(r => r.module === 'exercise');
+    const goalNum = settings?.exerciseWeeklyGoal;
+    const planNote = (settings?.exercisePlanNote || '').trim();
+    if (absolute) {
+        const recent = groupRecentByDate(ex, r => r.date, today, 5);
+        const detail = recent
+            .map(g => `${fmtCN(g.date)} ${g.items.map(r => `${r.payload.activity}${r.payload.duration ? ` ${r.payload.duration}` : ''}`).join('、')}`)
+            .join('；');
+        let s = recent.length > 0 ? `- 最近锻炼：${detail}` : '- 最近锻炼：近期没有记录';
+        if (goalNum) s += `（周目标 ${goalNum} 次）`;
+        s += '。';
+        if (planNote) s += `TA 的每周锻炼规划：「${planNote}」。`;
+        if (goalNum || planNote) {
+            s += `这份计划 TA 希望你帮忙盯着执行：对着上面的日期和当前时间估一下进度，落后时按你的方式自然地督促、约练或鼓励（有温度地推一把，不是教练查岗）；跟上了就替 TA 高兴。`;
+        }
+        return s;
+    }
     const todayEx = ex.filter(r => r.date === today);
     const ws = weekStartOf(today);
     const weekSessions = ex.filter(r => r.date >= ws && r.date <= today).length;
@@ -281,7 +364,17 @@ const MEDICAL_TONE_GUIDE = `**关于健康话题的分寸**：
  * 总开关关闭返回 ''（连指令说明都不给角色看）。
  * 会顺带取走该角色名下的否决反馈（注入一次后清除 pendingFeedback）。
  */
-export const buildLifeRecordInjection = async (char: CharacterProfile, userName: string): Promise<string> => {
+export const buildLifeRecordInjection = async (
+    char: CharacterProfile,
+    userName: string,
+    // forFirePack = 这份注入是给主动消息打包的（模板提前打好、到点才渲染）。摘要数据照给，
+    // 但两块跟「用户此刻在说话」绑定的内容要拿掉：
+    //  - 代记工具说明：后台没有用户新说的话，那时候输出的指令只会把旧事再记一遍；
+    //  - 否决反馈：这段是注入即消费的（读完就把 pendingFeedback 清掉）。打包时读一次，
+    //    用户下次真正聊天时就看不到了——那句「我理解错了」永远没人说出口。
+    opts: { forFirePack: boolean },
+): Promise<string> => {
+    const forFirePack = opts.forFirePack;
     if (!isLifeRecordOn(char)) return '';
     const today = lifeToday();
 
@@ -300,12 +393,18 @@ export const buildLifeRecordInjection = async (char: CharacterProfile, userName:
     let s = `\n### ${userName} 的生活记录（潜意识背景）\n`;
     s += `以下是 ${userName} 的近期生活状态。这些信息沉淀在你的潜意识里，是你理解 TA 的身体、情绪与状态的背景依据——**不要主动点破、不要逐条复述、不要表现得像在看报表**。只在自然的时机让关心自然流露（例如 TA 说累了，而你"隐约记得"TA 正处在生理期第 2 天）。\n\n`;
 
+    // fire_pack 里一律写绝对日期：这份摘要是打包那一刻存下来的，到点渲染时可能已经隔了
+    // 几小时甚至几天，「今日待服」「第 N 天」那种说法会被角色照着念成过时的事实。
     const dataLines: string[] = [];
-    if (moduleActive('period')) dataLines.push(buildPeriodSummary(records, settings, today));
-    if (moduleActive('med')) dataLines.push(buildMedSummary(plans, records, today));
-    if (moduleActive('expense')) dataLines.push(buildExpenseSummary(txs, today));
-    if (moduleActive('exercise')) dataLines.push(buildExerciseSummary(records, settings, today));
-    s += `${dataLines.join('\n')}\n\n`;
+    if (moduleActive('period')) dataLines.push(buildPeriodSummary(records, settings, today, forFirePack));
+    if (moduleActive('med')) dataLines.push(buildMedSummary(plans, records, today, forFirePack));
+    if (moduleActive('expense')) dataLines.push(buildExpenseSummary(txs, today, forFirePack));
+    if (moduleActive('exercise')) dataLines.push(buildExerciseSummary(records, settings, today, forFirePack));
+    s += `${dataLines.join('\n')}\n`;
+    if (forFirePack) {
+        s += `\n（以上记录截至 ${fmtCN(today)}。请对照当前时间自行判断这些事离现在有多久，不要默认它们就发生在今天。）\n`;
+    }
+    s += '\n';
 
     if (moduleActive('period') || moduleActive('med')) {
         s += `${MEDICAL_TONE_GUIDE}\n\n`;
@@ -319,14 +418,16 @@ export const buildLifeRecordInjection = async (char: CharacterProfile, userName:
     if (moduleActive('med')) tools.push(`- TA 明确说吃了什么药 → \`[[LIFE:MED|药名]]\``);
     if (moduleActive('expense')) tools.push(`- TA 明确说花了多少钱买什么 → \`[[LIFE:EXPENSE|金额|用途]]\`（金额是纯数字）`);
     if (moduleActive('exercise')) tools.push(`- TA 明确说做了什么运动 → \`[[LIFE:EXERCISE|运动|时长]]\`（时长可省略）`);
-    if (tools.length > 0) {
+    if (tools.length > 0 && !forFirePack) {
         s += `**代记工具**：只有当 ${userName} 在对话中**明确说出**以下事实时，才单独起一行输出对应指令、帮 TA 顺手记一笔（一次一条）：\n${tools.join('\n')}\n`;
         s += `TA 只是暗示、开玩笑、或在说过去 / 别人的事时，一律不要记录。记录成功后系统会插入一张卡片，TA 可以确认或否决；被否决说明你理解错了。平时不要把这些指令挂在嘴边，也不要替 TA 补记你只是猜测的事。\n`;
         s += `**一件事只记一次**：上面摘要里已经出现的状态（如「生理期第 N 天」「今日已练」「✓已服」、已列出的支出）都说明这件事**已经记过了**——不要再输出指令重复记，也不要因为翻到 TA 之前提过这件事就补记。聊天记录里出现过的 [生活记录：…] 卡片就是你之前记的。只有 TA 明确说**又**发生了新的一次（比如「晚上又跑了一次」），才再记一条。\n`;
     }
 
     // 否决反馈（一次性）：上次代记被用户否决 → 告诉角色它弄错了，注入后即清除
-    const pendingFb = records.filter(r => r.recordedBy === char.id && r.reviewStatus === 'rejected' && r.pendingFeedback);
+    const pendingFb = forFirePack
+        ? []
+        : records.filter(r => r.recordedBy === char.id && r.reviewStatus === 'rejected' && r.pendingFeedback);
     if (pendingFb.length > 0) {
         s += `\n**【记录反馈】**你之前帮 ${userName} 记的这些被 TA **否决**了——你理解错了，这些事并没有发生（记录已撤销）：\n`;
         pendingFb.forEach(r => { s += `- ${summarizeLifeRecord(r.module, r.kind, r.payload)}（${fmtCN(r.date)}）\n`; });
@@ -435,7 +536,8 @@ const findDuplicate = async (
 
 /**
  * 解析并执行角色输出里的 [[LIFE:...]] 指令（chatParser 调用）。
- * - 模块开关关闭 / 指令格式非法 → 只剥 tag，静默丢弃。
+ * - 指令格式非法 → 只剥 tag，静默丢弃（模型手滑，没什么可交代的）。
+ * - 生活记录已关 / 模块被隐藏 → 不写库，落一条系统提示说明这笔没记成（角色的话已经说出去了）。
  * - 重复 → 不写库，落一张"已有记录，无需重复"的成功态卡片（角色不算记错）。
  * - 成功 → 写库（expense 同时写银行流水）+ 落可交互 life_card。
  * 返回剥掉所有 LIFE tag 的文本。
@@ -444,26 +546,64 @@ export const executeLifeDirectives = async (
     aiContent: string,
     char: CharacterProfile,
     addToast: (msg: string, type: 'info' | 'success' | 'error') => void,
+    /** 这一轮消息该落的时间戳（离线补收时是原始发送时刻）；不传按写库当刻。 */
+    messageTimestamp?: number,
+    /** 这一轮消息统一继承的 metadata（主动消息 2.0 的标记，见 chatParser 的同名参数）。 */
+    inheritMeta?: Record<string, any>,
 ): Promise<string> => {
+    /** 生活卡跟同一条消息的正文气泡共用一个时间戳，别一条消息两个时间。 */
+    const stamp = messageTimestamp != null ? { timestamp: messageTimestamp } : {};
+    /** 卡片自己的字段优先，inheritMeta 只补它没有的键。 */
+    const withInherited = (meta: Record<string, any>) => (inheritMeta ? { ...inheritMeta, ...meta } : meta);
     let content = aiContent;
     if (!content.includes('[[LIFE:')) return content;
 
     const today = lifeToday();
     let executed = 0;
     const MAX_PER_MESSAGE = 4; // 防 LLM 发疯连打十几条
-    // 全局隐藏的模块：即使角色开关全开也静默丢弃（用户长按隐藏 = 不想看到这类内容）
+    // 全局隐藏的模块：即使角色开关全开也不记（用户长按隐藏 = 不想看到这类内容），但会留条提示
     const hidden = getHiddenLifeModules(await DB.getLifeRecordSettings().catch(() => null));
+
+    /**
+     * 想记但没记成（开关关了 / 模块被隐藏）时留一条系统提示。
+     *
+     * 主动消息是提前几小时打包的，打包时开着、送达前用户关掉是常态；角色那句「我帮你记下了」
+     * 已经说满了，动作却静默蒸发，用户只会觉得这功能坏了。写不进去也不拦着后面的指令。
+     */
+    const noteSkipped = async (summary: string, reason: string) => {
+        try {
+            await DB.saveMessage({
+                ...stamp,
+                charId: char.id, role: 'system', type: 'text',
+                content: `[系统: ${char.name}想帮你记「${summary}」，但${reason}，这次没记成]`,
+                metadata: withInherited({ lifeRecordSkipped: true }),
+            });
+        } catch (e) {
+            console.warn('[LifeRecord] 记不成的提示也没落进去:', e);
+        }
+    };
 
     let m: RegExpMatchArray | null;
     while ((m = content.match(LIFE_TAG_RE)) !== null) {
         const [tag, verb, argStr] = m;
         content = content.replace(tag, '').trim();
-        if (!isLifeRecordOn(char) || executed >= MAX_PER_MESSAGE) continue;
+        if (executed >= MAX_PER_MESSAGE) continue;
 
         const args = argStr ? argStr.split('|').slice(1).map(s => s.trim()) : [];
         const d = parseLifeDirective(verb, args);
-        if (!d || !isLifeModuleOn(char, d.module) || hidden.has(d.module)) continue;
+        if (!d) continue;
+        // 记不成的也计数：连打十几条时提示同样会刷屏
         executed++;
+
+        const skipSummary = summarizeLifeRecord(d.module, d.kind, d.payload);
+        if (!isLifeRecordOn(char)) {
+            await noteSkipped(skipSummary, '生活记录功能已关闭');
+            continue;
+        }
+        if (!isLifeModuleOn(char, d.module) || hidden.has(d.module)) {
+            await noteSkipped(skipSummary, `「${LIFE_MODULE_LABELS[d.module]}」已关闭`);
+            continue;
+        }
 
         try {
             const records = await DB.getAllLifeRecords();
@@ -472,12 +612,13 @@ export const executeLifeDirectives = async (
 
             if (dup) {
                 await DB.saveMessage({
+                    ...stamp,
                     charId: char.id, role: 'assistant', type: 'life_card',
                     content: `[生活记录：${summary}（已有记录，未重复添加）]`,
-                    metadata: {
+                    metadata: withInherited({
                         module: d.module, kind: d.kind, summary, dateStr: today,
                         recordedByName: char.name, duplicate: true, duplicateBy: dup.byName,
-                    },
+                    }),
                 });
                 addToast(`${char.name} 想记「${summary}」，已有记录`, 'info');
                 continue;
@@ -509,12 +650,13 @@ export const executeLifeDirectives = async (
             await DB.saveLifeRecord(record);
 
             await DB.saveMessage({
+                ...stamp,
                 charId: char.id, role: 'assistant', type: 'life_card',
                 content: `[生活记录：${summary}]`,
-                metadata: {
+                metadata: withInherited({
                     recordId: record.id, module: d.module, kind: d.kind, summary,
                     dateStr: today, recordedByName: char.name, reviewStatus: 'active',
-                },
+                }),
             });
             addToast(`${char.name} 帮你记录了「${summary}」`, 'success');
         } catch (e) {

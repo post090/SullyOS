@@ -16,6 +16,7 @@ import PersonaSim, { LifeLog, generatePersonaScript } from './PersonaSim';
 import { usePersonaSim, personaSimStore } from '../utils/personaSimStore';
 import { getLastInnerState } from '../utils/emotionApply';
 import { buildTaskSupervisionContext } from '../utils/taskContextInjector';
+import { trackEvent } from '../utils/analytics';
 import { normalizePhoneEvidence, phoneFieldToText } from '../utils/phoneEvidence';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
 import {
@@ -541,6 +542,7 @@ const CheckPhone: React.FC = () => {
         setSelectedChatRecord(null);
         setActiveAppId('chat');
         addToast('已清空全部聊天记录', 'success');
+        trackEvent('清空全部聊天归档');
     };
 
     // 把 Messages 归档里的一条聊天记录「转移/绑定」到人际关系系统。
@@ -585,6 +587,7 @@ const CheckPhone: React.FC = () => {
         } else {
             addToast('已绑定到联系人（虚构联系人）', 'success');
         }
+        trackEvent('把归档记录绑定到人际关系');
     };
 
     const handleDeleteApp = (appId: string) => {
@@ -619,6 +622,7 @@ const CheckPhone: React.FC = () => {
         setNewAppLayout('generic');
         setPage(1);
         addToast(`已安装 ${newAppName}`, 'success');
+        trackEvent('安装自定义 App', { layout: newAppLayout });
     };
 
     // --- Core Generation Logic ---
@@ -628,6 +632,10 @@ const CheckPhone: React.FC = () => {
             return;
         }
         setIsLoading(true);
+        // 只上报内置 App 的固定类型；自定义 App 的 id 是用户造的，一律归成 custom
+        trackEvent('刷新生成手机 App 数据', {
+            appType: ['call', 'order', 'delivery', 'social', 'contacts'].includes(type) ? type : 'custom',
+        });
 
         try {
             await injectMemoryPalace(targetChar);
@@ -924,6 +932,7 @@ ${realCharRule}
     const handleGenerateAiAgent = async (service: AiServiceKind) => {
         if (!targetChar || !apiConfig.apiKey) { addToast('配置错误', 'error'); return; }
         setIsLoading(true);
+        trackEvent('偷看 AI 助手使用记录', { service });
         try {
             const { context, recentMsgs } = await buildAiContext(targetChar);
             const userName = userProfile?.name || '用户';
@@ -1327,6 +1336,7 @@ ${olderText}
     const handlePlayCard = async (card: TavernCard) => {
         if (!targetChar || !apiConfig.apiKey) { addToast('配置错误', 'error'); return; }
         setIsLoading(true);
+        trackEvent('用角色卡开一局');
         try {
             const { context, recentMsgs } = await buildAiContext(targetChar);
             const task = `你（${charName}）在玩"酒馆"AI 角色扮演（沉浸式长剧情、像和 AI 合写小说）。这次的对手是你的角色卡「${card.name}」${card.kind === 'world' ? '（大型世界卡）' : ''}：
@@ -1382,6 +1392,7 @@ ${olderText}
             phoneState: { ...cur.phoneState, records: cur.phoneState?.records || [], allowFictionalContacts: next },
         }));
         addToast(next ? '已允许 TA 结交虚构 NPC' : '已限定 · TA 只与神经链接里的角色来往', 'info');
+        trackEvent('切换允许虚构 NPC 开关', { enabled: next ? 'on' : 'off' });
     };
 
     const handleSetContactStatus = (contact: PhoneContact, status: PhoneContact['status']) => {
@@ -1593,6 +1604,7 @@ ${olderText}
         setShowContactModal(false);
         setNcName(''); setNcKind('npc'); setNcLinkedId('');
         addToast('已添加联系人', 'success');
+        trackEvent('手动添加一位联系人', { contactKind: ncKind });
     };
 
     // 给某个机主侧落一段真实对话：更新好感/状态 + 写 chat 记录 + （机主开了同步才）镜像进私聊 + 自动加删友播报
@@ -1695,6 +1707,7 @@ ${olderText}
         const b = characters.find(c => c.id === contact.linkedCharId);
         if (!b) { addToast('该联系人未绑定真实角色', 'error'); return; }
         setIsLoading(true);
+        trackEvent('生成一段与联系人的对话', { contactKind: 'real' });
         try {
             const existing = (targetChar.phoneState?.records || []).find(r => r.type === 'chat' && (r.contactId === contact.id || normName(r.title) === normName(contact.name)));
             const bToA = (b.phoneState?.contacts || []).find(c => c.linkedCharId === targetChar.id || normName(c.name) === normName(targetChar.name));
@@ -1735,6 +1748,7 @@ ${olderText}
     const handleNpcConversation = async (contact: PhoneContact) => {
         if (!targetChar || !apiConfig.apiKey) { addToast('请先配置 API', 'error'); return; }
         setIsLoading(true);
+        trackEvent('生成一段与联系人的对话', { contactKind: 'npc' });
         try {
             const existing = (targetChar.phoneState?.records || []).find(r => r.type === 'chat' && (r.contactId === contact.id || normName(r.title) === normName(contact.name)));
             const { detail, learnedNew } = await runNpcConversation({
@@ -1891,6 +1905,8 @@ ${olderText}
         if (!apiConfig.apiKey) { addToast('请先配置 API', 'error'); return; }
         const cid = targetChar.id, cname = targetChar.name;
         personaSimStore.set({ status: 'loading', mode: m, theme: t, charId: cid, charName: cname });
+        // 只报模式（日常/事件）这个固定枚举；主题 t 是用户自己写的文本，不上报
+        trackEvent('生成人格模拟演出', { mode: m });
         try {
             const generated = await generatePersonaScript({
                 char: targetChar, userProfile, apiConfig: apiConfig as any, mode: m, theme: t, userPresence: presence, tone,
@@ -2469,6 +2485,7 @@ ${olderText}
                                     if (lpFired.current) { lpFired.current = false; return; }
                                     if (contactSelectMode) { toggleContactSelect(c.id); return; }
                                     setSelectedContact(c); setIdentityDraft(c.identity || ''); setEditingIdentity(false); setNoteDraft(c.note || ''); setEditingNote(false); setConvExpanded(false); setAffinityDraft(null); setShowProfile(false); exitMsgSelect(); setActiveAppId('contact_detail');
+                                    trackEvent('打开联系人对话详情', { contactKind: c.kind });
                                 }}
                                 className={`group relative flex items-center gap-3 rounded-2xl p-3.5 border active:scale-[0.99] transition cursor-pointer animate-fade-in select-none ${selected ? 'bg-pink-500/10 border-pink-400/40' : 'bg-white/[0.035] border-white/[0.06]'} ${dimmed && !selected ? 'opacity-45' : ''}`}>
                                 {contactSelectMode && (
@@ -2540,7 +2557,7 @@ ${olderText}
                         const active = s.id === aiService;
                         const Icon = s.id === 'assistant' ? Robot : s.id === 'claude' ? Brain : MaskHappy;
                         return (
-                            <button key={s.id} onClick={() => setAiService(s.id)}
+                            <button key={s.id} onClick={() => { setAiService(s.id); trackEvent('切换智能体服务分类', { service: s.id }); }}
                                 className={`flex-1 rounded-2xl px-2 py-2.5 border transition active:scale-[0.97] ${active ? 'text-white' : 'border-white/[0.07] bg-white/[0.03] text-white/55'}`}
                                 style={active ? { background: `linear-gradient(135deg, ${s.accent}33, ${s.accent}0d)`, borderColor: `${s.accent}66` } : undefined}>
                                 <Icon size={18} weight={active ? 'fill' : 'light'} style={{ color: active ? s.accent : undefined }} className="mx-auto" />
@@ -2697,7 +2714,7 @@ ${olderText}
                             <div className="px-4 py-2.5 text-[12px] text-white/50 border-b border-white/10">阅读皮肤</div>
                             <div className="grid grid-cols-2 gap-2 p-3">
                                 {TAVERN_STYLES.map(st => (
-                                    <button key={st.key} onClick={() => { setTavernStyle(st.key); setShowTavernStyle(false); }}
+                                    <button key={st.key} onClick={() => { setTavernStyle(st.key); setShowTavernStyle(false); trackEvent('切换酒馆阅读皮肤', { style: st.key }); }}
                                         className={`rounded-xl p-3 text-left border transition ${tavernStyle === st.key ? 'border-white/40' : 'border-white/10'}`}
                                         style={{ background: st.bg }}>
                                         <div className="text-[13px] font-semibold" style={{ color: st.text, fontFamily: st.font }}>{st.label}</div>
@@ -3262,7 +3279,7 @@ ${olderText}
             )}
 
             {/* Persona simulation hero */}
-            <button onClick={() => setActiveAppId('persona')}
+            <button onClick={() => { setActiveAppId('persona'); trackEvent('打开查手机子应用', { subApp: 'persona' }); }}
                 className="relative w-full rounded-[24px] p-5 mb-3.5 text-left overflow-hidden border border-white/[0.09] active:scale-[0.98] transition-transform"
                 style={{ background: 'linear-gradient(115deg, rgba(184,155,255,0.22), rgba(120,90,214,0.08) 55%, rgba(20,18,30,0.4))' }}>
                 <div className="absolute -top-10 -right-6 w-40 h-40 rounded-full blur-3xl pointer-events-none" style={{ background: 'radial-gradient(circle, rgba(184,155,255,0.55), transparent 70%)' }} />
@@ -3282,17 +3299,17 @@ ${olderText}
             {/* App cards —— 「联系人」占据原 Message 的主位（Message 已废弃，收进联系人里做不起眼入口） */}
             <div className="grid grid-cols-2 gap-3.5 mb-3.5">
                 <HomeCard icon={<UsersThree size={24} weight="light" />} label="联系人" sub={contactsSub} accent="#f472b6"
-                    onClick={() => setActiveAppId('contacts')} />
+                    onClick={() => { setActiveAppId('contacts'); trackEvent('打开查手机子应用', { subApp: 'contacts' }); }} />
                 <HomeCard icon={<ImagesSquare size={24} weight="light" />} label="Moments" sub={momentsSub} accent="#c084fc"
-                    onClick={() => setActiveAppId('social')} />
+                    onClick={() => { setActiveAppId('social'); trackEvent('打开查手机子应用', { subApp: 'social' }); }} />
                 <HomeCard icon={<Hamburger size={24} weight="light" />} label="Food" sub={foodSub} accent="#fbbf24"
-                    onClick={() => setActiveAppId('waimai')} />
+                    onClick={() => { setActiveAppId('waimai'); trackEvent('打开查手机子应用', { subApp: 'waimai' }); }} />
                 <HomeCard icon={<ShoppingBag size={24} weight="light" />} label="Taobao" sub={taobaoSub} accent="#ff7a45"
-                    onClick={() => setActiveAppId('taobao')} />
+                    onClick={() => { setActiveAppId('taobao'); trackEvent('打开查手机子应用', { subApp: 'taobao' }); }} />
             </div>
 
             {/* 智能体：偷看「TA 的小手机」 —— 给个抢眼的横条入口 */}
-            <button onClick={() => setActiveAppId('aiagent')}
+            <button onClick={() => { setActiveAppId('aiagent'); trackEvent('打开查手机子应用', { subApp: 'aiagent' }); }}
                 className="relative w-full rounded-[24px] p-4 mb-3.5 text-left overflow-hidden border border-white/[0.09] active:scale-[0.98] transition-transform flex items-center gap-3.5"
                 style={{ background: 'linear-gradient(115deg, rgba(52,211,153,0.20), rgba(16,185,129,0.06) 55%, rgba(12,20,18,0.4))' }}>
                 <div className="absolute -top-10 -right-6 w-36 h-36 rounded-full blur-3xl pointer-events-none" style={{ background: 'radial-gradient(circle, rgba(52,211,153,0.45), transparent 70%)' }} />

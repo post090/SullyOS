@@ -59,7 +59,7 @@ const sampleBackup = () => ({
     timestamp: 123,
     version: 3,
     theme: { name: 'dark', wallpaper: 'assets/asset_1.png' },
-    userProfile: { name: '楪', avatar: 'assets/asset_2.png' },
+    userProfile: { name: '小明', avatar: 'assets/asset_2.png' },
     lifeSimState: null,                 // 单例空 → null，仍要原样带回（v1 语义：清目标）
     apiConfig: undefined,               // undefined 字段 → JSON 丢弃，导入端拿不到（与 v1 一致）
     // 数组字段 → 分片

@@ -12,6 +12,7 @@ import { PixelAssetDB } from './pixelHomeDb';
 import { pixelizeImage, removeBackground } from '../../utils/pixelizer';
 import { extractPalette } from '../../utils/paletteExtractor';
 import { processImage } from '../../utils/file';
+import { trackEvent } from '../../utils/analytics';
 
 interface Props {
   onGenerated: () => void;
@@ -170,6 +171,7 @@ const PixelAssetGenerator: React.FC<Props> = ({ onGenerated }) => {
     onGenerated();
     setImportItems([]);
     setSaving(false);
+    trackEvent('直接导入现成像素素材');
   }, [importItems, onGenerated]);
 
   // ─── 生成模式（原有逻辑）─────────────────────────────
@@ -289,6 +291,7 @@ const PixelAssetGenerator: React.FC<Props> = ({ onGenerated }) => {
     onGenerated();
     setPending([]);
     setSaving(false);
+    trackEvent('生成一批像素素材');
   }, [pending, pixelSize, defaultCategory, defaultRoom, onGenerated]);
 
   const readyCount = pending.filter(p => p.previewUri).length;

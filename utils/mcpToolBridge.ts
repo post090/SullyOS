@@ -3,12 +3,23 @@
  *
  * 职责：
  * 1. 把所有启用 MCP 服务器的已发现工具聚合成 OpenAI function-calling 格式
- * 2. 处理跨服务器工具重名 / OpenAI 工具名字符限制（暴露名 ↔ 真实工具映射）
- * 3. 生成注入 systemPrompt 的说明块
+ * 2. 生成注入 systemPrompt 的说明块与尾部提醒
+ * 3. 中转不认 function calling 时的兼容兜底（降级请求体、前置气泡粗洗）
+ * 重名映射和正文假调用解析住在 mcpFireCore（浏览器与 amsg worker 共用）。
  * 工具循环本体在 hooks/useChatAI.ts（对标 luckinChat 循环）。
  */
 
 import { getEnabledMcpServers, type McpServerConfig, type McpToolDef } from './mcpClient';
+import { buildMcpNameMap, type FakedMcpCall as FakedMcpCallCore, type McpResolvedToolCore } from './mcpFireCore';
+
+// 结果格式化和正文假调用解析都是纯逻辑，住在 mcpFireCore 里给浏览器和 amsg
+// worker 共用；这里按原名转出来，调用方的引用路径不用动。
+export {
+    MCP_RESULT_MAX_CHARS,
+    formatMcpToolResult,
+    stripTextFakedMcpCalls,
+    extractTextFakedMcpCalls,
+} from './mcpFireCore';
 
 export interface OpenAIMcpTool {
     type: 'function';
@@ -19,45 +30,31 @@ export interface OpenAIMcpTool {
     };
 }
 
-export interface ResolvedMcpTool {
-    server: McpServerConfig;
-    toolName: string;
-}
+/** 名映射条目，server 收窄成前台的完整配置类型（含 proxyUrl 等浏览器侧字段） */
+export type ResolvedMcpTool = McpResolvedToolCore<McpServerConfig>;
 
-// OpenAI 工具名只允许 [A-Za-z0-9_-]，最长 64；MCP 工具名可能带点号等
-const sanitizeToolName = (name: string): string =>
-    (name || 'tool').replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64) || 'tool';
-
-const serverSlug = (server: McpServerConfig): string =>
-    sanitizeToolName(server.name).slice(0, 20) || 'srv';
+/** 正文假调用条目，server 收窄成前台完整配置（callMcpTool 要 proxyUrl/proxyKey） */
+export type FakedMcpCall = FakedMcpCallCore<McpServerConfig>;
 
 /**
  * 聚合启用服务器的工具，返回 OpenAI 工具数组 + 暴露名→真实工具 的映射。
- * 暴露名默认用工具原名（sanitize 后）；跨服务器重名时后者加 <服务器名>_ 前缀。
+ * 暴露名（含重名前缀、非法字符替换）统一由 mcpFireCore.buildMcpNameMap 算，
+ * 保证前台聊天和 amsg worker 后台 fire 看到的是同一套工具名。
  * charId：只聚合对该角色可见的服务器（通用 + 绑定了该角色的）。
  */
 export const buildMcpOpenAITools = (charId?: string): { tools: OpenAIMcpTool[]; resolve: Map<string, ResolvedMcpTool> } => {
-    const tools: OpenAIMcpTool[] = [];
-    const resolve = new Map<string, ResolvedMcpTool>();
     const servers = getEnabledMcpServers(charId);
-    for (const server of servers) {
-        for (const t of server.tools || []) {
-            let exposed = sanitizeToolName(t.name);
-            if (resolve.has(exposed)) {
-                exposed = sanitizeToolName(`${serverSlug(server)}_${t.name}`);
-                let i = 2;
-                while (resolve.has(exposed)) exposed = sanitizeToolName(`${serverSlug(server)}_${t.name}_${i++}`);
-            }
-            resolve.set(exposed, { server, toolName: t.name });
-            tools.push({
-                type: 'function',
-                function: {
-                    name: exposed,
-                    description: buildToolDescription(server, t, servers.length > 1),
-                    parameters: t.inputSchema || { type: 'object', properties: {} },
-                },
-            });
-        }
+    const resolve: Map<string, ResolvedMcpTool> = buildMcpNameMap(servers);
+    const tools: OpenAIMcpTool[] = [];
+    for (const [exposed, { server, tool }] of resolve) {
+        tools.push({
+            type: 'function',
+            function: {
+                name: exposed,
+                description: buildToolDescription(server, tool, servers.length > 1),
+                parameters: tool.inputSchema || { type: 'object', properties: {} },
+            },
+        });
     }
     return { tools, resolve };
 };
@@ -66,23 +63,6 @@ const buildToolDescription = (server: McpServerConfig, t: McpToolDef, multi: boo
     const desc = (t.description || '').trim();
     // 多服务器时在描述里带上来源，帮模型区分同类工具
     return multi ? `[${server.name}] ${desc}` : desc;
-};
-
-// ========== 工具结果回填 ==========
-
-/**
- * MCP 结果（记忆检索、网页抓取等）体量远超瑞幸商品列表，1500 字符会把一条
- * 完整结果拦腰截断。上限放到 20000 只防病态超长结果炸上下文——工具循环每轮
- * 会全量重发消息，真有兆级 JSON 混进来会直接 4xx 或 token 起飞。
- */
-export const MCP_RESULT_MAX_CHARS = 20000;
-
-export const formatMcpToolResult = (data: any): string => {
-    let s: string;
-    try { s = typeof data === 'string' ? data : JSON.stringify(data); } catch { s = String(data); }
-    return s.length > MCP_RESULT_MAX_CHARS
-        ? `${s.slice(0, MCP_RESULT_MAX_CHARS)}…[结果过长已截断, 全文共 ${s.length} 字符]`
-        : s;
 };
 
 // ========== 提示词 ==========
@@ -122,30 +102,7 @@ ${lines.join('\n')}
 /** 尾部小提醒（注入 messages 末尾，防长对话把纪律冲掉） */
 export const MCP_TAIL_REMINDER = `[MCP 工具 ON · 永远用角色语气回复别空回; 工具只能走 function calling 接口、严禁写成正文文字; 工具结果别复读 JSON; 有副作用的操作先确认再执行]`;
 
-// ========== 掉格式容错: 正文里的"假工具调用" ==========
-//
-// 不支持 function calling 的模型（或被中转剥了 tools 参数的）看到系统块里的
-// 工具清单后, 会把调用直接"演"在正文里, 常见形态:
-//   ask_question("SullyOS")           ← 括号传参
-//   ask_question: SullyOS             ← 冒号传参（整行）
-//   get_weather({"city": "上海"})     ← 括号传 JSON
-// 与见面观测协议同款思路的两层容错: FC 通道是第一层, 这里兜第二层。
-// 只认已启用服务器的真实工具名（暴露名/原名都认）, 避免误伤普通文字。
-
-export interface FakedMcpCall {
-    exposedName: string;
-    server: McpServerConfig;
-    toolName: string;
-    args: Record<string, any>;
-    matched: string;
-}
-
-/** 从正文兼容调用中剥掉调用语法，只留下可以先展示给用户的角色文字。 */
-export const stripTextFakedMcpCalls = (content: string, calls: FakedMcpCall[]): string => {
-    let cleaned = content;
-    for (const call of calls) cleaned = cleaned.split(call.matched).join('');
-    return cleaned.replace(/\n{3,}/g, '\n\n').trim();
-};
+// ========== 掉格式容错: 正文里的"假工具调用"（解析本体见 mcpFireCore） ==========
 
 /**
  * MCP 工具前置气泡专用粗洗。该气泡在统一后处理之前落库，必须自行清掉模型
@@ -199,153 +156,4 @@ export const buildMcpRejectedToolsFallbackBody = (baseReqBody: any): any => {
 export const shouldRetryMcpWithoutTools = (error: unknown): boolean => {
     const message = error instanceof Error ? error.message : String(error || '');
     return /(?:^|\D)(?:400|401|403|422)(?:\D|$)/.test(message);
-};
-
-const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
-
-const stripQuotes = (s: string): string => {
-    const t = s.trim();
-    const m = t.match(/^(['"`「『])([\s\S]*)(['"`」』])$/);
-    return m ? m[2] : t;
-};
-
-/** schema 的参数名顺序: required 优先, 其余按声明序 —— 用于位置参数落位 */
-const positionalKeys = (schema: any): string[] => {
-    const props = schema?.properties ? Object.keys(schema.properties) : [];
-    const req = Array.isArray(schema?.required) ? schema.required.filter((k: string) => props.includes(k)) : [];
-    return [...req, ...props.filter(k => !req.includes(k))];
-};
-
-const coerceBySchema = (value: string, schema: any, key: string): any => {
-    const type = schema?.properties?.[key]?.type;
-    const v = stripQuotes(value);
-    if (type === 'number' || type === 'integer') {
-        const n = Number(v);
-        if (Number.isFinite(n)) return type === 'integer' ? Math.trunc(n) : n;
-    }
-    if (type === 'boolean') {
-        if (/^(true|是|开)$/i.test(v)) return true;
-        if (/^(false|否|关)$/i.test(v)) return false;
-    }
-    return v;
-};
-
-/** 顶层逗号切分（尊重引号与花括号嵌套） */
-const splitTopLevel = (s: string): string[] => {
-    const out: string[] = [];
-    let depth = 0, cur = '', quote = '';
-    for (const ch of s) {
-        if (quote) {
-            cur += ch;
-            if (ch === quote) quote = '';
-            continue;
-        }
-        if (ch === '"' || ch === "'") { quote = ch; cur += ch; continue; }
-        if (ch === '{' || ch === '[') depth++;
-        if (ch === '}' || ch === ']') depth--;
-        if (ch === ',' && depth === 0) { out.push(cur); cur = ''; continue; }
-        cur += ch;
-    }
-    if (cur.trim()) out.push(cur);
-    return out;
-};
-
-/** 把括号里的原始文本解析成 args 对象（JSON / kwargs / 位置参数三种形态） */
-const parseFakedArgs = (inner: string, schema: any): Record<string, any> => {
-    const t = inner.trim();
-    if (!t) return {};
-    // JSON 形态
-    if (t.startsWith('{')) {
-        try { return JSON.parse(t); } catch { /* 尝试宽松修复 */ }
-        try {
-            return JSON.parse(t
-                .replace(/,\s*([}\]])/g, '$1')
-                .replace(/'/g, '"')
-                .replace(/([{,]\s*)([a-zA-Z_]\w*)\s*:/g, '$1"$2":'));
-        } catch { /* 落回单参数 */ }
-    }
-    const parts = splitTopLevel(t);
-    // kwargs 形态: key=value / key: value
-    if (parts.every(p => /^\s*[A-Za-z_]\w*\s*[=:]/.test(p))) {
-        const args: Record<string, any> = {};
-        for (const p of parts) {
-            const m = p.match(/^\s*([A-Za-z_]\w*)\s*[=:]\s*([\s\S]*)$/);
-            if (m) args[m[1]] = coerceBySchema(m[2], schema, m[1]);
-        }
-        return args;
-    }
-    // 位置参数形态: 按 schema 声明顺序落位
-    const keys = positionalKeys(schema);
-    const args: Record<string, any> = {};
-    parts.forEach((p, i) => {
-        const key = keys[i];
-        if (key) args[key] = coerceBySchema(p, schema, key);
-    });
-    return args;
-};
-
-/**
- * 从 AI 正文里提取"假工具调用"。只匹配 resolve 里已知的工具名（暴露名/真实名）。
- * 返回按出现位置排序、按 matched 文本去重的调用列表。
- */
-export const extractTextFakedMcpCalls = (
-    content: string,
-    resolve: Map<string, ResolvedMcpTool>,
-): FakedMcpCall[] => {
-    if (!content || !resolve.size) return [];
-
-    // 名字查找表: 暴露名和真实工具名都认（模型两种都可能写）
-    const lookup = new Map<string, { exposed: string; hit: ResolvedMcpTool }>();
-    for (const [exposed, hit] of resolve) {
-        lookup.set(exposed, { exposed, hit });
-        lookup.set(hit.toolName, { exposed, hit });
-    }
-
-    const found: Array<FakedMcpCall & { index: number }> = [];
-    const seen = new Set<string>();
-
-    for (const [name, { exposed, hit }] of lookup) {
-        const schema = (hit.server.tools || []).find(t => t.name === hit.toolName)?.inputSchema;
-        const esc = escapeRegExp(name);
-
-        // 形态1: name(args) —— 前面不能是单词字符/点/斜杠（防止匹配到更长标识符的一部分）
-        const parenRe = new RegExp(`(^|[^\\w./])${esc}\\s*\\(([^)]*)\\)`, 'g');
-        for (const m of content.matchAll(parenRe)) {
-            const matched = m[0].slice(m[1].length);
-            const key = `${exposed}|${matched}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            found.push({
-                exposedName: exposed,
-                server: hit.server,
-                toolName: hit.toolName,
-                args: parseFakedArgs(m[2], schema),
-                matched,
-                index: (m.index ?? 0) + m[1].length,
-            });
-        }
-
-        // 形态2: 行首 name: 值 —— 限定行首, 避免误伤句中"提到"工具名的普通文字
-        const colonRe = new RegExp(`(^|\\n)\\s*[>*-]*\\s*\`?${esc}\`?\\s*[:：]\\s*([^\\n]+)`, 'g');
-        for (const m of content.matchAll(colonRe)) {
-            const matched = m[0].slice(m[1].length);
-            const key = `${exposed}|${matched.trim()}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            const keys = positionalKeys(schema);
-            const value = stripQuotes(m[2].replace(/[。！？!?…\s]+$/, ''));
-            found.push({
-                exposedName: exposed,
-                server: hit.server,
-                toolName: hit.toolName,
-                args: keys.length ? { [keys[0]]: coerceBySchema(value, schema, keys[0]) } : {},
-                matched,
-                index: (m.index ?? 0) + m[1].length,
-            });
-        }
-    }
-
-    return found
-        .sort((a, b) => a.index - b.index)
-        .map(({ index: _index, ...call }) => call);
 };

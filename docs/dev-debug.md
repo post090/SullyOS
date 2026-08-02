@@ -47,11 +47,11 @@ isDevDebugAvailable()  // utils/devDebug.ts
 |------|------|
 | `utils/devDebug.ts` | 核心：类型、存储读写、事件、分类捕获、便捷 getter。**所有逻辑都在这** |
 | `components/DevDebugPanel.tsx` | 悬浮按钮 + 面板 UI（拖拽、开关行、复制 / 下载日志、重置） |
-| `components/settings/VersionInfo.tsx` | 设置页底部版本脚注（APP_VERSION + build hash + sw 版本）；连点 5 下手动解锁面板 |
+| `components/settings/VersionInfo.tsx` | 设置页底部版本脚注（APP_VERSION + build hash + UTC+8 构建时间 + sw 版本）；连点 5 下手动解锁面板 |
 | `utils/swVersion.ts` | `querySwVersion()`：向 SW 查版本号（BuildBadge / VersionInfo 共用） |
 | `App.tsx` | 挂载 `<DevDebugPanel />`（无脑挂，组件内部自己判断要不要渲染） |
-| `vite.config.ts` | 注入 `__BUILD_BRANCH__` / `__BUILD_COMMIT__` / `__BUILD_BADGE_VISIBLE__` |
-| `vite-env.d.ts` | 上面三个常量的 TS 声明 |
+| `vite.config.ts` | 注入 `__BUILD_BRANCH__` / `__BUILD_COMMIT__` / `__BUILD_TIME__` / `__BUILD_BADGE_VISIBLE__` |
+| `vite-env.d.ts` | 上面四个常量的 TS 声明 |
 
 消费现有开关的地方（改开关行为时要一起看）：
 

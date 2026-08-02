@@ -16,6 +16,7 @@ import { PixelLayoutDB } from './pixelHomeDb';
 import { MemoryNodeDB } from '../../utils/memoryPalace/db';
 import { processImage } from '../../utils/file';
 import { pixelizeImage, removeBackground } from '../../utils/pixelizer';
+import { trackEvent } from '../../utils/analytics';
 
 interface Props {
   charId: string;
@@ -481,6 +482,7 @@ const PixelRoomEditor: React.FC<Props> = ({ charId, charName, charSprite, userNa
   const deleteFurniture = useCallback((slotId: string) => {
     setFurniture(prev => { const next = prev.filter(f => f.slotId !== slotId); saveLayout(next); return next; });
     setSelectedSlot(null);
+    trackEvent('删除一件像素家具');
   }, [saveLayout]);
 
   /** 一键清空：移除所有用户自由放置家具 + 把默认槽位的素材都清空 */
@@ -499,6 +501,7 @@ const PixelRoomEditor: React.FC<Props> = ({ charId, charName, charSprite, userNa
       return next;
     });
     setSelectedSlot(null);
+    trackEvent('清空像素房间的家具');
   }, [furniture, saveLayout]);
 
   const getFurnitureImage = useCallback((f: PlacedFurniture): string | null => {
@@ -577,6 +580,7 @@ const PixelRoomEditor: React.FC<Props> = ({ charId, charName, charSprite, userNa
       });
     }
     setTexturePreview(null);
+    trackEvent('换上自定义墙纸或地砖', { target: texturePreview.target, fillMode: texturePreview.fillMode });
   }, [texturePreview, textureUseOriginal, furniture, saveLayout]);
 
   // 还原默认纹理
@@ -842,8 +846,8 @@ const PixelRoomEditor: React.FC<Props> = ({ charId, charName, charSprite, userNa
       >
         <div className="flex items-center justify-between mb-2">
           <div className="flex gap-1">
-            <ModeBtn label="浏览" active={mode === 'view'} onClick={() => { setMode('view'); setSelectedSlot(null); }} />
-            <ModeBtn label="编辑" active={mode === 'edit'} onClick={() => setMode('edit')} />
+            <ModeBtn label="浏览" active={mode === 'view'} onClick={() => { setMode('view'); setSelectedSlot(null); trackEvent('切换像素房间装修模式', { mode: 'view' }); }} />
+            <ModeBtn label="编辑" active={mode === 'edit'} onClick={() => { setMode('edit'); trackEvent('切换像素房间装修模式', { mode: 'edit' }); }} />
             <ModeBtn label="记忆" active={showMemory} onClick={() => setShowMemory(!showMemory)} />
           </div>
           <div className="flex gap-1 flex-wrap justify-end items-center">

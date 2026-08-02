@@ -43,6 +43,7 @@ import {
 } from '@phosphor-icons/react';
 import { getCalendarDayDifference, getLocalDateKey } from '../utils/localDate';
 import { useLocalDateKey } from '../hooks/useLocalDateKey';
+import { trackEvent } from '../utils/analytics';
 
 const TWEMOJI_BASE = 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72';
 const twemojiUrl = (codepoint: string) => `${TWEMOJI_BASE}/${codepoint}.png`;
@@ -275,6 +276,7 @@ const ScheduleApp: React.FC = () => {
         const nextMode = modes[nextIndex];
         setCurrentThemeMode(nextMode);
         localStorage.setItem('schedule_app_theme', nextMode);
+        trackEvent('切换日程界面主题', { theme: nextMode });
     };
 
     // --- 纪念日 LLM 想法（保留原逻辑，按场景描述 prompt）---

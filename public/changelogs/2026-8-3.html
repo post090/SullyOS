@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>2026 年 8 月 3 日更新说明 · 主动消息 2.0</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,400&family=Noto+Serif+SC:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #161427;
+    --ink-soft: #322e4a;
+    --ink-mute: #635d80;
+    --ink-faint: #9892b3;
+    --paper: #f1f0fa;
+    --paper-warm: #e4e1f3;
+    --rule: #d4cfe6;
+    --accent: #4f46a8;
+    --accent-soft: #7b72c9;
+    --highlight: #ddd6f5;
+    --note-bg: #e4e1f3;
+    --tip-bg: #dfe9ec;
+    --warn-bg: #f3e2ea;
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+    --serif: 'Fraunces', 'Noto Serif SC', Georgia, serif;
+    --cn: 'Noto Serif SC', 'Fraunces', serif;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    padding: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--cn);
+    font-size: 17px;
+    line-height: 1.85;
+    font-feature-settings: "palt" 1, "kern" 1;
+    -webkit-font-smoothing: antialiased;
+    background-image:
+      radial-gradient(circle at 18% 8%, rgba(123, 114, 201, 0.08) 0%, transparent 42%),
+      radial-gradient(circle at 88% 92%, rgba(79, 70, 168, 0.06) 0%, transparent 42%);
+  }
+
+  .wrap {
+    position: relative;
+    z-index: 1;
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 80px 32px 120px;
+  }
+
+  header.page {
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 48px;
+    margin-bottom: 56px;
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .eyebrow::after { content: ''; flex: 1; height: 1px; background: var(--rule); }
+
+  h1 {
+    font-family: var(--cn);
+    font-weight: 600;
+    font-size: 44px;
+    line-height: 1.25;
+    margin: 0 0 20px;
+    letter-spacing: -0.01em;
+  }
+
+  h1 .en {
+    display: block;
+    font-family: var(--serif);
+    font-style: italic;
+    font-weight: 400;
+    font-size: 22px;
+    color: var(--ink-mute);
+    margin-top: 12px;
+    letter-spacing: 0;
+  }
+
+  .lede { font-size: 18px; color: var(--ink-soft); max-width: 600px; margin-top: 28px; line-height: 1.75; }
+
+  .meta { display: flex; gap: 32px; margin-top: 36px; font-family: var(--mono); font-size: 12px; color: var(--ink-faint); letter-spacing: 0.05em; flex-wrap: wrap; }
+  .meta span strong { color: var(--ink-soft); font-weight: 500; margin-right: 8px; }
+
+  .overview { background: white; border: 1px solid var(--rule); border-radius: 4px; padding: 24px 28px; margin-bottom: 64px; }
+  .overview h4 { font-family: var(--mono); font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--ink-mute); margin: 0 0 14px; font-weight: 500; }
+  .overview ol { margin: 0; padding-left: 0; list-style: none; counter-reset: ov; }
+  .overview li { counter-increment: ov; padding: 6px 0 6px 36px; position: relative; color: var(--ink-soft); font-size: 15px; }
+  .overview li::before { content: counter(ov, decimal-leading-zero); position: absolute; left: 0; top: 6px; font-family: var(--serif); font-style: italic; color: var(--accent); font-weight: 600; }
+
+  .item { margin-bottom: 56px; scroll-margin-top: 40px; }
+  .item-head { display: flex; align-items: baseline; gap: 20px; margin-bottom: 14px; padding-bottom: 18px; border-bottom: 1px dashed var(--rule); }
+  .item-num { font-family: var(--serif); font-style: italic; font-weight: 600; font-size: 52px; line-height: 1; color: var(--accent); flex-shrink: 0; }
+  .item-title h2 { font-family: var(--cn); font-weight: 600; font-size: 26px; line-height: 1.3; margin: 0 0 6px; color: var(--ink); }
+  .item-title .sub { font-family: var(--serif); font-style: italic; color: var(--ink-mute); font-size: 15px; }
+
+  .tag-pill { display: inline-block; font-family: var(--mono); font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--accent); background: var(--paper-warm); border: 1px solid var(--rule); padding: 2px 10px; border-radius: 999px; margin-left: 4px; vertical-align: middle; }
+
+  p { margin: 0 0 18px; color: var(--ink-soft); }
+  strong { color: var(--ink); font-weight: 600; }
+  em { font-family: var(--serif); font-style: italic; color: var(--accent); font-weight: 500; }
+
+  code, .kbd { font-family: var(--mono); font-size: 0.88em; background: var(--paper-warm); padding: 2px 7px; border-radius: 3px; color: var(--accent); border: 1px solid var(--rule); }
+  mark { background: linear-gradient(180deg, transparent 55%, var(--highlight) 55%); color: var(--ink); padding: 0 2px; }
+
+  a { color: var(--accent); text-decoration: none; border-bottom: 1px solid var(--accent-soft); padding-bottom: 1px; font-weight: 500; }
+  a:hover { border-bottom-color: var(--accent); }
+
+  .path { font-family: var(--mono); font-size: 13px; background: var(--paper-warm); padding: 3px 10px; border-radius: 3px; color: var(--ink); border: 1px solid var(--rule); white-space: nowrap; display: inline-block; }
+
+  ul.clean { list-style: none; padding: 0; margin: 14px 0; }
+  ul.clean li { padding: 5px 0 5px 22px; position: relative; color: var(--ink-soft); font-size: 15.5px; }
+  ul.clean li::before { content: '—'; position: absolute; left: 0; color: var(--accent); font-weight: 600; }
+
+  .note { background: var(--note-bg); border-left: 3px solid var(--ink-mute); padding: 18px 22px; border-radius: 3px; margin: 22px 0; }
+  .note .label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.25em; text-transform: uppercase; color: var(--ink-mute); margin-bottom: 6px; font-weight: 500; }
+  .note p:last-child { margin-bottom: 0; }
+
+  .tip { background: var(--tip-bg); border-radius: 3px; padding: 18px 22px; margin: 22px 0; border: 1px dashed #7d9aa3; }
+  .tip .label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.25em; text-transform: uppercase; color: #3f6470; margin-bottom: 6px; font-weight: 600; }
+  .tip p:last-child { margin-bottom: 0; }
+
+  ol.steps { list-style: none; padding-left: 0; margin: 18px 0; counter-reset: stp; }
+  ol.steps > li { counter-increment: stp; padding: 10px 0 10px 44px; position: relative; color: var(--ink-soft); font-size: 15.5px; line-height: 1.75; }
+  ol.steps > li::before { content: counter(stp); position: absolute; left: 0; top: 8px; width: 28px; height: 28px; line-height: 26px; text-align: center; border-radius: 50%; border: 1px solid var(--accent); color: var(--accent); font-family: var(--serif); font-weight: 600; font-size: 14px; background: white; }
+
+  .finale { margin-top: 48px; background: white; border: 1px solid var(--rule); border-radius: 4px; padding: 30px 34px; text-align: center; }
+  .finale .big { font-family: var(--cn); font-size: 22px; font-weight: 600; color: var(--ink); margin-bottom: 8px; }
+  .finale .small { color: var(--ink-mute); font-size: 15px; margin-bottom: 0; }
+
+  footer.page { margin-top: 72px; padding-top: 32px; border-top: 1px solid var(--rule); text-align: center; font-family: var(--serif); font-style: italic; color: var(--ink-faint); font-size: 15px; }
+  footer.page .ornament { font-size: 20px; color: var(--accent); margin-bottom: 12px; letter-spacing: 8px; }
+
+  @media (max-width: 640px) {
+    .wrap { padding: 48px 20px 80px; }
+    h1 { font-size: 32px; }
+    h1 .en { font-size: 17px; }
+    .item-head { flex-direction: column; gap: 4px; align-items: flex-start; }
+    .item-num { font-size: 42px; }
+    .item-title h2 { font-size: 22px; }
+    .meta { flex-direction: column; gap: 6px; }
+    .finale { padding: 22px 20px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header class="page">
+    <div class="eyebrow">August 3, 2026 · Feature Update</div>
+    <h1>
+      主动消息 2.0
+      <span class="en">They pick the moment now — and keep the thread going.</span>
+    </h1>
+    <p class="lede">
+      角色到点自己给你发消息，<em>App 关着、手机锁着也收得到</em>。以前那套定时消息得让页面一直开着才走得动，这回把「到点生成」整个挪去了一个只属于你的小后端。更要紧的是，它不只是个闹钟——角色能自己决定什么时候再来找你，话说一半可以留到晚点接着讲，答应去做的事办完了会回来跟你报一声。
+    </p>
+    <div class="meta">
+      <span><strong>主题</strong>主动消息 · 定时任务 · 后台推送</span>
+      <span><strong>类型</strong>新功能</span>
+      <span><strong>阅读</strong>约 4 分钟</span>
+    </div>
+  </header>
+
+  <div class="overview">
+    <h4>本次更新概览</h4>
+    <ol>
+      <li><strong>到点主动推</strong>：消息在后端生成并推到手机，App 不用开着。</li>
+      <li><strong>三种排任务的方式</strong>：你在面板里排、聊天里说一句让角色排、角色在后台给自己排。</li>
+      <li><strong>到点现取世界</strong>：时间、天气、节日、热搜、当天作息、在听的歌，触发那一刻才取。</li>
+      <li><strong>角色记得自己发过什么</strong>：连发不重样，也知道该收着点。</li>
+      <li><strong>后台照样能用工具</strong>：MCP、搜索、翻记忆、读笔记、刷小红书。</li>
+      <li><strong>防穿帮</strong>：想找话说的那类会让路，闹钟和承诺照发。</li>
+      <li><strong>要自己部署一个后端</strong>：Cloudflare Worker + D1，网页上点，约 15 分钟。</li>
+    </ol>
+  </div>
+
+  <!-- 1 -->
+  <section class="item" id="i-what">
+    <div class="item-head">
+      <div class="item-num">01</div>
+      <div class="item-title">
+        <h2>它到底变了什么 <span class="tag-pill">NEW</span></h2>
+        <div class="sub">从「你开着才有」到「你不在也在」。</div>
+      </div>
+    </div>
+    <p>
+      老的定时消息靠页面里的计时器派发，手机一锁、标签页一关，那个计时器就不存在了，说好的消息自然也不会响。<mark>主动消息 2.0</mark> 把到点生成搬去了后端：任务存在你自己的数据库里，后端每分钟看一眼有没有到点的，到了就生成消息、推到你手机上。
+    </p>
+    <p>
+      消息以<strong>系统通知</strong>的形式弹出来，同时落进聊天记录。你要是那会儿正好离线，等下次打开 App，这些消息会<strong>按当时发出的时刻</strong>补进记录里，不会全挤在你打开的这一刻。
+    </p>
+  </section>
+
+  <!-- 2 -->
+  <section class="item" id="i-tasks">
+    <div class="item-head">
+      <div class="item-num">02</div>
+      <div class="item-title">
+        <h2>任务从哪来</h2>
+        <div class="sub">你排、它排、还有它给自己排。</div>
+      </div>
+    </div>
+    <p>
+      <strong>你自己在面板里排。</strong>位置：<span class="path">聊天 App → 顶部加号 → 主动消息 2.0</span>。新建一条要选三样：
+    </p>
+    <ul class="clean">
+      <li><strong>消息怎么来</strong>：固定（到点直接发你写好的那段话，不经过 AI）／自动（让角色按人设和最近的聊天自己想一句）／提示词（你给个方向，比如「提醒我喝水」，角色围着它发挥）。</li>
+      <li><strong>什么时候发</strong>：一次、每天、或每周。</li>
+      <li><strong>到点你正在聊天怎么办</strong>：自动作废，还是照常发送。</li>
+    </ul>
+    <p>
+      <strong>在聊天里说一句就行。</strong>「明早八点叫我起床」「下午三点提醒我喝水」这种话说出来，角色会自己把任务排上；也能回头查自己手上挂着哪几条、取消某一条、或者把时间往后挪。你不用记编号，说清是哪件事就够了。
+    </p>
+    <p>
+      <strong>角色自己给自己排。</strong>这是这次最主要的变化。角色在后台发消息的那一刻，可以顺手再给自己排下一条：<em>这条话说了一半，剩下的过两小时接着说</em>；<em>汤炖上了，好了叫你</em>；<em>说好要去做的事，办完的时间点回来讲一声</em>。排下的那条到点时知道前一条说过什么，接得上——中间不需要你在线当中转站。
+    </p>
+    <div class="tip">
+      <div class="label">这意味着</div>
+      <p>你可以睡前跟 ta 说一句「明天有事帮我盯着点」，然后什么都不用管。第二天该提醒的时候提醒，中途它想到什么要补充，会自己安排在合适的时间发出来。</p>
+    </div>
+  </section>
+
+  <!-- 3 -->
+  <section class="item" id="i-now">
+    <div class="item-head">
+      <div class="item-num">03</div>
+      <div class="item-title">
+        <h2>到点那一刻</h2>
+        <div class="sub">不是照着几小时前的稿子念。</div>
+      </div>
+    </div>
+    <p>
+      消息不是排任务的时候就写好存着的。触发那一刻会现取一遍：<mark>现在几点</mark>、<mark>那边什么天气</mark>、<mark>今天有没有节日</mark>、<mark>热搜上在聊什么</mark>、角色当天的作息走到哪一段、此刻在听的是哪首歌。
+    </p>
+    <p>
+      所有时间都按<strong>角色自己的时区</strong>算。跨时区的角色不会在你这边的凌晨三点，按它那边的白天跟你说「刚睡醒」。
+    </p>
+  </section>
+
+  <!-- 4 -->
+  <section class="item" id="i-self">
+    <div class="item-head">
+      <div class="item-num">04</div>
+      <div class="item-title">
+        <h2>它记得自己发过什么</h2>
+        <div class="sub">连着发，但不会翻来覆去说同一句。</div>
+      </div>
+    </div>
+    <p>
+      你一直没回的那几条，会摆在角色面前：几点发的、说了什么。所以它往下接着说，而不是把同一句话换个说法再讲一遍，也不会假装前面那几条不存在。
+    </p>
+    <p>
+      连着发到第二条以后，还会提醒它<strong>注意分寸</strong>——你没回可能是在忙，也可能是不想聊，这种时候该收着点。
+    </p>
+    <p>
+      还有一种情况：这一轮它只是想排个后续、并没有什么非说不可的话。<strong>那就不发</strong>，不会硬凑一条空消息推给你。
+    </p>
+  </section>
+
+  <!-- 5 -->
+  <section class="item" id="i-tools">
+    <div class="item-head">
+      <div class="item-num">05</div>
+      <div class="item-title">
+        <h2>后台也能用工具</h2>
+        <div class="sub">该有的手段一样没少。</div>
+      </div>
+    </div>
+    <p>
+      在后台生成消息时，角色能用的工具和平时聊天差不多：你自己配的 <mark>MCP 服务器</mark>、<strong>联网搜索</strong>、翻以前的<strong>记忆</strong>、读<strong>笔记</strong>、刷<strong>小红书</strong>。
+    </p>
+    <p>
+      所以那条消息可以是查过东西之后才说出口的，而不是凭着几个小时前的印象随口一句。
+    </p>
+  </section>
+
+  <!-- 6 -->
+  <section class="item" id="i-guard">
+    <div class="item-head">
+      <div class="item-num">06</div>
+      <div class="item-title">
+        <h2>不穿帮</h2>
+        <div class="sub">该让路的让路，该响的照响。</div>
+      </div>
+    </div>
+    <p>
+      每条任务都带一个态度，分界线不在于是谁排的，而在于<strong>到点要说的是一件具体的事，还是只是想找话说</strong>：
+    </p>
+    <ul class="clean">
+      <li><strong>到点作废</strong>：挑话题、想找人聊天这类。你人回来聊过了，几小时前那句开场白就自动撤掉——不然它照着老想法开口，会很假。</li>
+      <li><strong>照常发送</strong>：闹钟和承诺这类。你要求的（「八点叫我起床」）和它自己许下的（「汤炖上了，两小时后叫你」）都算，中途你回来聊过天也不影响它该响。</li>
+    </ul>
+    <p>
+      被作废掉的那条，角色是知道的。下次聊天它可以自然带出来、重新排一次，或者干脆算了。任务要是失败或者被跳过，面板里也会写明是哪种情况——不会让一条说好的消息凭空消失。
+    </p>
+  </section>
+
+  <!-- 7 -->
+  <section class="item" id="i-setup">
+    <div class="item-head">
+      <div class="item-num">07</div>
+      <div class="item-title">
+        <h2>怎么开</h2>
+        <div class="sub">要自己搭一个小后端。</div>
+      </div>
+    </div>
+    <p>
+      这个功能需要一个<strong>只属于你的后端</strong>：一个 Cloudflare Worker 加一个 D1 数据库。全程在网页上点，不用装东西、不用敲命令，大约 15 分钟，免费额度日常够用。
+    </p>
+    <div class="tip">
+      <div class="label">教程</div>
+      <p>逐步图文手册发在 Discord 的<a href="https://discord.com/channels/1487742660314923100/1533520151784460449" target="_blank" rel="noopener">主动消息 2.0 部署帖</a>里，照着做就行。装好之后回到 <span class="path">设置 → 主动消息 2.0</span> 填地址、连接，再给需要的角色单独打开开关。</p>
+    </div>
+    <div class="note">
+      <div class="label">用之前要知道</div>
+      <p>消息内容、提示词和相关配置都会进你自己的这个库。是你的 Worker、你的数据库，项目这边不额外接中心服务器；但只要数据进了库，能碰到它的人就能看到。<strong>不接受这一点就别开。</strong></p>
+    </div>
+  </section>
+
+  <!-- 8 -->
+  <section class="item" id="i-limits">
+    <div class="item-head">
+      <div class="item-num">08</div>
+      <div class="item-title">
+        <h2>几条边界</h2>
+        <div class="sub">先说清楚，省得以为是坏了。</div>
+      </div>
+    </div>
+    <ul class="clean">
+      <li>每个角色<strong>同时最多挂 5 条</strong>待触发的任务；角色在后台<strong>一次最多给自己排 2 条</strong>。</li>
+      <li>任务时间是<strong>开始生成</strong>的时刻，不是送达时刻。中间要过一遍模型，通常慢十几到几十秒，想卡整点的话提前一分钟排。</li>
+      <li>如果 <strong>Instant Push 也开着</strong>，聊天会走 Instant，那时「角色在对话里排任务 / 查任务」和「防打断」这三样不生效。到点推送本身不受影响——两边各管一件事，按你更需要哪个来留。</li>
+    </ul>
+  </section>
+
+  <div class="finale">
+    <div class="big">接下来，等 ta 来找你。</div>
+    <div class="small">有 Bug 或想法，欢迎反馈 —— 这次数据库咕咕叫得比较收敛，说好几点响就几点响。</div>
+  </div>
+
+  <footer class="page">
+    <div class="ornament">· · ·</div>
+    SullyOS Changelog · 2026.08.03
+  </footer>
+
+</div>
+
+</body>
+</html>

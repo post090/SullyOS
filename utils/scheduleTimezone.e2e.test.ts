@@ -5,7 +5,7 @@
 // 这正是用户反馈的现象：角色那边明明是早上 9 点，卡片却把晚上 21 点标成进行中。
 import { afterAll, describe, expect, it } from 'vitest';
 import { ContextBuilder } from '../utils/context';
-import { getFlowNarrativeKey } from '../utils/scheduleGenerator';
+import { getFlowNarrativeKey } from '../utils/scheduleInjection';
 import { getCurrentScheduleSlotIndex, getScheduleDateKey, getScheduleWallClock } from '../utils/scheduleTime';
 import type { CharacterProfile, DailySchedule, ScheduleSlot } from '../types';
 

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runXhsDetail, type XhsCaches } from './agenticTools';
 import { XhsMcpClient } from './xhsMcpClient';
+import { buildToolResultMessage } from './agenticToolFeedback';
 
 describe('runXhsDetail', () => {
     afterEach(() => vi.restoreAllMocks());
@@ -70,7 +71,7 @@ describe('runXhsDetail', () => {
         );
 
         expect(getDetail).toHaveBeenCalledTimes(1);
-        expect(result).toMatchObject({ ok: true, failed: false });
+        expect(result).toMatchObject({ ok: true });
         expect(result.ok && result.detailText).toContain('12000赞 345收藏 2评论 8分享');
         expect(result.ok && result.detailText).toContain('甲: 一级评论');
         expect(result.ok && result.detailText).toContain('乙: 回复内容');
@@ -88,5 +89,63 @@ describe('runXhsDetail', () => {
                 { author: '乙', content: '回复内容' },
             ],
         });
+    });
+
+    // 回归守卫：详情一个字都没拿回来时，以前回的是 ok:true 外加一段「[加载失败: …]」的正文。
+    // 护栏（NEVER_RAN_REASONS）只认 ok:false，这条失败于是被当成正常结果喂给模型——轻则
+    // 把报错原文抄进消息里，重则直接说「我点开看了这条笔记」。
+    it('详情拿不回来时算这次没跑成，不再包成"成功但正文是一句报错"', async () => {
+        vi.spyOn(XhsMcpClient, 'getNoteDetail').mockResolvedValue({
+            success: false,
+            error: 'connect ECONNREFUSED 127.0.0.1:18060',
+        } as any);
+
+        const result = await runXhsDetail(
+            { noteId: 'note-404' },
+            {
+                char: { xhsEnabled: true } as any,
+                userProfile: {} as any,
+                realtimeConfig: {
+                    xhsMcpConfig: { enabled: true, serverUrl: 'https://example.test/xhs' },
+                } as any,
+            },
+        );
+
+        expect(result).toMatchObject({ ok: false, reason: 'unreachable' });
+        const feedback = buildToolResultMessage({
+            name: 'xhs_detail',
+            result,
+            history: [{ name: 'xhs_detail', fingerprint: 'a' }],
+        });
+        expect(feedback).toContain('这件事**没有发生**');
+    });
+
+    // 同上：服务器回了 200、正文却是一句报错，也是"这次没读到笔记"。
+    // 以前这条包成 ok:true 外加一个 failed 标志，护栏只认 ok:false，照样漏过去。
+    it('回了 200 但正文是一句报错 → 同样算没跑成', async () => {
+        vi.spyOn(XhsMcpClient, 'getNoteDetail').mockResolvedValue({
+            success: true,
+            data: '获取笔记详情失败: 需要先搜索',
+        } as any);
+
+        const result = await runXhsDetail(
+            { noteId: 'note-500' },
+            {
+                char: { xhsEnabled: true } as any,
+                userProfile: {} as any,
+                realtimeConfig: {
+                    xhsMcpConfig: { enabled: true, serverUrl: 'https://example.test/xhs' },
+                } as any,
+            },
+        );
+
+        expect(result).toMatchObject({ ok: false, reason: 'unreachable' });
+        expect(!result.ok && result.message).toContain('获取笔记详情失败');
+        const feedback = buildToolResultMessage({
+            name: 'xhs_detail',
+            result,
+            history: [{ name: 'xhs_detail', fingerprint: 'a' }],
+        });
+        expect(feedback).toContain('这件事**没有发生**');
     });
 });

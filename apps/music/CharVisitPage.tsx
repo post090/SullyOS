@@ -22,6 +22,7 @@ import { getDailyScheduleForChar } from '../../utils/dailySchedule';
 import { useLocalDateKey } from '../../hooks/useLocalDateKey';
 import { resolveCharTimeZone } from '../../utils/timezone';
 import { RemoteImg } from '../../utils/remoteImgCache';
+import { trackEvent } from '../../utils/analytics';
 
 interface Props {
   charId: string;
@@ -93,6 +94,7 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer, onOpenPl
       const newProfile = await CharMusicPersona.initialize(char, userProfile, apiConfig);
       updateCharacter(char.id, { musicProfile: newProfile });
       addToast(`${char.name} 的音乐角落已开启`, 'success');
+      trackEvent('生成角色的音乐人格');
     } catch (e: any) {
       addToast(`初始化失败：${e.message || '未知错误'}`, 'error');
     } finally {
@@ -112,6 +114,7 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer, onOpenPl
       const newProfile = await CharMusicPersona.initialize(char, userProfile, apiConfig);
       updateCharacter(char.id, { musicProfile: newProfile });
       addToast(`${char.name} 的音乐人格已重新生成`, 'success');
+      trackEvent('重新生成角色的音乐人格');
     } catch (e: any) {
       addToast(`重新生成失败：${e.message || '未知错误'}`, 'error');
     } finally {

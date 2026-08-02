@@ -9,6 +9,14 @@ main = "src/index.ts"
 compatibility_date = "2024-11-01"
 compatibility_flags = ["nodejs_compat"]
 
+## wrangler deploy 会用本地这份配置整体覆盖 Cloudflare 面板上的设置——
+## 不显式写这段，面板里手动开的 Workers Logs（实时日志）会被一起关掉。
+[observability]
+enabled = true
+
+[observability.logs]
+enabled = true
+
 ## 部署前需要把下面 database_id 换成你 `wrangler d1 create proactive-db`
 ## 输出的真实 id。
 [[d1_databases]]

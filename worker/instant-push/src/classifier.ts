@@ -5,7 +5,8 @@
  *   - DATA tags (RECALL / SEARCH / READ_DIARY / FS_READ_DIARY / READ_NOTE / XHS_*) →
  *     tool-request: worker截断, 推送 toolCalls, 客户端跑工具后 POST /continue.
  *   - SIDE-EFFECT tags (ACTION:POKE / TRANSFER / ADD_EVENT / MUSIC_ACTION / XHS_LIKE /
- *     XHS_FAV / XHS_COMMENT / XHS_REPLY / XHS_POST / XHS_SHARE / schedule_message) →
+ *     XHS_FAV / XHS_COMMENT / XHS_REPLY / XHS_POST / XHS_SHARE / schedule_message /
+ *     DIARY / FS_DIARY / LIFE / NEWS_CARD) →
  *     finish + directive metadata. worker 识别但不执行, 客户端 applyAssistantPostProcessing
  *     看到 directives 非空时只重放、不再扫原文.
  *   - 其他 (结构型 + 纯文本) → finish, 原文给客户端 13 步管线消化.
@@ -28,6 +29,21 @@ export type ToolCall = {
   function: { name: string; arguments: string };
 };
 
+/**
+ * MUSIC_ACTION 说的是哪一首歌 —— 标签语法里只有歌单名，带不动歌名。
+ *
+ * classifier 自己永远不产这个字段（它只看得到正文，看不到角色此刻在听什么）。填它的是
+ * 主动消息 2.0 的 worker：到点渲染「你此刻在听：《X》」的时候顺手把 X 冻进来，客户端
+ * 重放时才知道角色说的是哪首（见 worker/amsg/src/agentic.ts 的 attachSceneSong）。
+ * instant push 路径不填，客户端照旧取「用户此刻在听的那首」。
+ */
+export interface MusicActionSong {
+  /** 歌曲 id；从角色歌单抽出来的都有，缺了就只能按名字对。 */
+  id?: number;
+  name: string;
+  artists: string;
+}
+
 export type Directive =
   | { type: 'poke' }
   | { type: 'transfer'; amount: number }
@@ -37,13 +53,20 @@ export type Directive =
   | { type: 'transfer_return' }
   | { type: 'add_event'; title: string; date: string }
   | { type: 'schedule_message'; time: string; text: string }
-  | { type: 'music_action'; verb: string; args: string[] }
+  // song 是可选的后补字段（见 MusicActionSong），只有主动消息 2.0 的定时路径会填。
+  | { type: 'music_action'; verb: string; args: string[]; song?: MusicActionSong }
   | { type: 'xhs_like'; noteId: string }
   | { type: 'xhs_fav'; noteId: string }
   | { type: 'xhs_comment'; noteId: string; text: string }
   | { type: 'xhs_reply'; noteId: string; commentId: string; text: string }
   | { type: 'xhs_post'; title: string; content: string; tags: string }
   | { type: 'xhs_share'; idx: number }
+  // 生活记录代记 [[LIFE:MED|布洛芬]] / [[LIFE:PERIOD_START]] / [[LIFE:EXPENSE|38|打车]] ...
+  // body = 冒号后的整段原文, 客户端拼回原 tag 交给 lifeRecords.executeLifeDirectives 解析,
+  // 开关校验 / 去重 / 写库都在那边, 这里不拆字段。
+  | { type: 'life_record'; body: string }
+  // 分享热点卡片 [[NEWS_CARD: 来源|标题]] (来源可省略). body 原样带走, 客户端按 `|` 切。
+  | { type: 'news_card'; body: string }
   // 写日记: 短形态 [[DIARY: title|content]] 或长形态 [[DIARY_START: title|mood]]\n content \n[[DIARY_END]],
   // 飞书同形态 (FS_ 前缀). title 可空 → 客户端兜底用 `${char.name}的日记 - M/D`. mood 可空.
   | { type: 'notion_write_diary'; title: string; content: string; mood?: string }
@@ -215,6 +238,17 @@ const SIDE_EFFECT_TAGS: SideEffectSpec[] = [
     re: /\[\[XHS_SHARE:\s*(\d+)\]\]/g,
     toDirective: (m) => ({ type: 'xhs_share', idx: Number(m[1]) }),
   },
+  // [[LIFE:MED|布洛芬]] 生活记录代记 — 跟 chatParser.ts 的 `\[\[LIFE:[^\]]*\]\]` 同口径,
+  // 冒号后整段原样带走, 不在这里拆 verb/args (那份解析在 lifeRecords.parseLifeDirective)。
+  {
+    re: /\[\[LIFE:([^\]]*)\]\]/g,
+    toDirective: (m) => ({ type: 'life_record', body: m[1] }),
+  },
+  // [[NEWS_CARD: 来源|标题]] 分享热点卡片 — 跟 chatParser.ts:NEWS_CARD_RE 同口径。
+  {
+    re: /\[\[NEWS_CARD:\s*([^\]]*?)\s*\]\]/g,
+    toDirective: (m) => ({ type: 'news_card', body: m[1] }),
+  },
   // 写日记 — 长形态: [[DIARY_START: title|mood]]\n content \n[[DIARY_END]]
   // 短形态: [[DIARY: title|content]] 或 [[DIARY: content]] (无 title)
   // 行为跟 applyAssistantPostProcessing.ts:465-495 字节对齐:
@@ -346,6 +380,22 @@ export function classifyLLMOutput(text: string): ClassificationResult {
     }
   }
 
+  // 2.5 同一件事只出一个 directive.
+  // 复述型模型经常把整条消息重写一遍 (先说一遍、再"总结"一遍), 同一个 [[ACTION:TRANSFER:520]]
+  // 就会出现两次; 客户端重放没有去重, 放过去就是同一笔钱转两次账、同一篇日记写两遍。
+  // 判据是 type + 参数**完全一致**: 金额不同 / 笔记 id 不同的两条仍是两件事, 照常都留。
+  const dedupedDirectives: Directive[] = [];
+  const seenDirectives = new Set<string>();
+  for (const d of directives) {
+    const key = JSON.stringify(d);
+    if (seenDirectives.has(key)) {
+      console.warn('[classifier] 同一条消息里重复的副作用, 只保留第一个:', key);
+      continue;
+    }
+    seenDirectives.add(key);
+    dedupedDirectives.push(d);
+  }
+
   // 3. 不管 directives 有没有, 都剥光所有标签 (数据 + 副作用) 出干净文本.
   let cleanedText = textAfterTransfers;
   for (const spec of DATA_TAGS) cleanedText = cleanedText.replace(spec.re, '');
@@ -353,5 +403,5 @@ export function classifyLLMOutput(text: string): ClassificationResult {
   cleanedText = cleanedText.trim();
   const sanitizedBody = sanitizeForNotification(cleanedText);
 
-  return { kind: 'finish', cleanedText, sanitizedBody, directives };
+  return { kind: 'finish', cleanedText, sanitizedBody, directives: dedupedDirectives };
 }

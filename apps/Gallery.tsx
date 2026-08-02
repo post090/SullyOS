@@ -6,6 +6,7 @@ import { DB } from '../utils/db';
 import { GalleryImage, CharacterProfile } from '../types';
 import { safeResponseJson } from '../utils/safeApi';
 import ConfirmDialog from '../components/os/ConfirmDialog';
+import { trackEvent } from '../utils/analytics';
 
 const Gallery: React.FC = () => {
     const { closeApp, characters, apiConfig, addToast } = useOS();
@@ -47,6 +48,7 @@ const Gallery: React.FC = () => {
     const handleCharClick = (id: string) => {
         setActiveCharId(id);
         setView('grid');
+        trackEvent('打开角色相册');
     };
 
     const handleImageClick = (img: GalleryImage) => {
@@ -82,6 +84,7 @@ const Gallery: React.FC = () => {
                     }
                     setAlbumCounts(prev => ({ ...prev, [charId]: 0 }));
                     addToast('相册已清空', 'success');
+                    trackEvent('清空一个角色的相册');
                     setConfirmDialog(null);
                 }
             });
@@ -109,6 +112,7 @@ const Gallery: React.FC = () => {
                 setView('grid');
                 setSelectedImage(null);
                 addToast('照片已删除', 'success');
+                trackEvent('删除一张照片');
                 setConfirmDialog(null);
             }
         });
@@ -124,6 +128,7 @@ const Gallery: React.FC = () => {
         if (!char) return;
 
         setIsReviewing(true);
+        trackEvent('让角色点评这张照片');
         try {
             // Build context-aware prompt
             const chatContextStr = selectedImage.chatContext?.length

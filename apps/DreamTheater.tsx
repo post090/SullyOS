@@ -12,6 +12,7 @@ import { isDevDebugAvailable } from '../utils/devDebug';
 import { useDreamSim, dreamSimStore } from '../utils/dreamSimStore';
 import { safeResponseJson } from '../utils/safeApi';
 import CdnImg from '../components/os/CdnImg';
+import { trackEvent } from '../utils/analytics';
 import {
     CaretLeft, MoonStars, ArrowClockwise, X, Eye, Sparkle, Lock, Question, Trash,
 } from '@phosphor-icons/react';
@@ -631,6 +632,7 @@ const DreamTheater: React.FC<{ char: CharacterProfile; onExit: () => void }> = (
         const cid = char.id, cname = char.name;
         savedRef.current = false; setRevealed(1); setBoxReveal(null);
         setPhase('loading');
+        trackEvent('生成一场梦境');
         dreamSimStore.set({ status: 'loading', charId: cid, charName: cname });
         // 原型由应用端抽（dev 强制时优先 dev）：保证多样、不老 roll 同一种、隐藏款按掉率出
         const chosenArchetype = forcedArchetype || rollArchetype(char.dreamLogs);
@@ -738,7 +740,7 @@ const DreamTheater: React.FC<{ char: CharacterProfile; onExit: () => void }> = (
         else finishDream();
     };
 
-    const restart = () => { savedRef.current = true; setRevealed(1); setPhase('play'); };
+    const restart = () => { savedRef.current = true; setRevealed(1); setPhase('play'); trackEvent('重看一遍刚做完的梦'); };
 
     // ----- replay a saved dream -----
     const replay = (s: DreamScript) => {
@@ -752,6 +754,7 @@ const DreamTheater: React.FC<{ char: CharacterProfile; onExit: () => void }> = (
         updateCharacter(char.id, (cur) => ({ dreamLogs: (cur.dreamLogs || []).filter(l => l.id !== log.id) }));
         setConfirmDelete(null);
         addToast('已撕掉这页梦', 'success');
+        trackEvent('撕掉一页梦的残页');
     };
 
     const dreamLogs = char.dreamLogs || [];
@@ -763,7 +766,7 @@ const DreamTheater: React.FC<{ char: CharacterProfile; onExit: () => void }> = (
             <DreamPopup title={`今天已经看过 ${char.name} 的梦了哦`} onClose={() => setDayPrompt(null)}
                 actions={<>
                     <button onClick={() => setDayPrompt(null)} className="flex-1 py-2.5 rounded-xl text-[12px] font-semibold text-white/70 bg-white/[0.06] border border-white/[0.1]">好的</button>
-                    <button onClick={() => { setDayPrompt(null); start({ override: true }); }} className="flex-1 py-2.5 rounded-xl text-[12px] font-semibold text-[#15121c]" style={{ background: '#cdd6ff' }}>少管我！</button>
+                    <button onClick={() => { setDayPrompt(null); trackEvent('无视今日提醒再看一场梦'); start({ override: true }); }} className="flex-1 py-2.5 rounded-xl text-[12px] font-semibold text-[#15121c]" style={{ background: '#cdd6ff' }}>少管我！</button>
                 </>}>
                 一天看太多梦，就不灵了。<br />真要再看一场吗？（今天最多 {DREAM_DAILY_TYPE_CAP} 种）
             </DreamPopup>
@@ -785,10 +788,10 @@ const DreamTheater: React.FC<{ char: CharacterProfile; onExit: () => void }> = (
                 <Ambient kind="stars" accent="#cdd6ff" />
                 <TopBar onBack={onExit} right={
                     <div className="flex items-center gap-2.5">
-                        <button onClick={() => setPhase('collection')} className="flex items-center gap-1 text-[11px] text-white/55 active:scale-95 transition">
+                        <button onClick={() => { setPhase('collection'); trackEvent('打开梦境盲盒收藏册'); }} className="flex items-center gap-1 text-[11px] text-white/55 active:scale-95 transition">
                             🐾 收藏册 <span className="tabular-nums opacity-70">{collectedCount}/{ALL_ARCHETYPES.length}</span>
                         </button>
-                        <button onClick={() => setShowHelp(true)} aria-label="梦境规则"
+                        <button onClick={() => { setShowHelp(true); trackEvent('打开梦境规则说明'); }} aria-label="梦境规则"
                             className="w-7 h-7 rounded-full flex items-center justify-center text-white/55 bg-white/[0.05] border border-white/[0.1] active:scale-90 transition">
                             <Question size={15} weight="bold" />
                         </button>
@@ -825,12 +828,12 @@ const DreamTheater: React.FC<{ char: CharacterProfile; onExit: () => void }> = (
 
                     {/* 入口：盲盒收藏册 / 梦的残页 */}
                     <div className="flex items-center gap-2.5 mt-7">
-                        <button onClick={() => setPhase('collection')}
+                        <button onClick={() => { setPhase('collection'); trackEvent('打开梦境盲盒收藏册'); }}
                             className="flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[11px] border border-white/[0.1] bg-white/[0.04] text-white/75 active:scale-95 transition">
                             🐾 盲盒收藏册 <span className="tabular-nums" style={{ color: '#cdd6ff' }}>{collectedCount}/{ALL_ARCHETYPES.length}</span>
                         </button>
                         {dreamLogs.length > 0 && (
-                            <button onClick={() => setPhase('archive')}
+                            <button onClick={() => { setPhase('archive'); trackEvent('打开梦的残页存档'); }}
                                 className="flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[11px] border border-white/[0.1] bg-white/[0.04] text-white/75 active:scale-95 transition">
                                 <MoonStars size={13} /> 梦的残页 <span className="tabular-nums opacity-70">{dreamLogs.length}</span>
                             </button>
@@ -904,7 +907,7 @@ const DreamTheater: React.FC<{ char: CharacterProfile; onExit: () => void }> = (
                         const lt = THEMES[log.archetype] || THEMES.starry;
                         return (
                             <button key={log.id}
-                                onClick={() => { if (lpFiredRef.current) { lpFiredRef.current = false; return; } log.script && replay(log.script); }}
+                                onClick={() => { if (lpFiredRef.current) { lpFiredRef.current = false; return; } trackEvent('重看一场存档梦境'); log.script && replay(log.script); }}
                                 disabled={!log.script}
                                 onContextMenu={(e) => { e.preventDefault(); setConfirmDelete(log); }}
                                 onTouchStart={() => { lpFiredRef.current = false; clearLp(); lpTimerRef.current = window.setTimeout(() => { lpFiredRef.current = true; setConfirmDelete(log); }, 500); }}
@@ -1092,7 +1095,7 @@ const DreamTheater: React.FC<{ char: CharacterProfile; onExit: () => void }> = (
                                     : <span className="px-2 py-0.5 rounded-full text-[10px] text-white/60 border border-white/15">已有 · 再抽到 ×{boxReveal.count}</span>}
                                 <span className="text-[12px] text-white/80" style={{ fontFamily: SERIF }}>{THEMES[boxReveal.archetype].label}喵</span>
                             </div>
-                            <button onClick={() => setPhase('collection')} className="mt-2 text-[11px] text-white/45 underline active:scale-95">
+                            <button onClick={() => { setPhase('collection'); trackEvent('打开梦境盲盒收藏册'); }} className="mt-2 text-[11px] text-white/45 underline active:scale-95">
                                 {boxReveal.isNew ? '已收入收藏册 · 去看看' : '查看收藏册'}
                             </button>
                         </div>

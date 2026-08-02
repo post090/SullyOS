@@ -268,6 +268,24 @@ describe('bubble vs notification differences', () => {
     expect(sanitizeForBubble('[[XHS_LIKE: 1]] hi')).toBe('[[XHS_LIKE: 1]] hi');
     expect(sanitizeForBubble('[[READ_NOTE: key]] hi')).toBe('[[READ_NOTE: key]] hi');
   });
+
+  // ─── LIFE / NEWS_CARD 的两条路 ────────────────────────────────────────────
+  // 前台聊天: chatParser.parseAndExecuteActions 直接从原文扫这两个标签执行 (LIFE 见
+  // chatParser.ts LIFE 分支, NEWS_CARD 见 NEWS_CARD_RE), 所以 bubble 侧必须原样留着。
+  // push: 副作用改走 classifier 的 life_record / news_card directive, 正文里剥光,
+  // 否则锁屏横幅直接显示标签源码。
+
+  it('notification 剥 LIFE / NEWS_CARD, bubble 原样保留', () => {
+    expect(sanitizeForNotification('你今天吃药了吗\n[[LIFE:MED|布洛芬]]')).toBe('你今天吃药了吗');
+    expect(sanitizeForNotification('看到个新闻\n[[NEWS_CARD: 微博|某某官宣]]')).toBe('看到个新闻');
+    // 无参形态 (生理期开始/结束) 同样剥掉
+    expect(sanitizeForNotification('记下了[[LIFE:PERIOD_START]]')).toBe('记下了');
+
+    expect(sanitizeForBubble('你今天吃药了吗\n[[LIFE:MED|布洛芬]]'))
+      .toBe('你今天吃药了吗\n[[LIFE:MED|布洛芬]]');
+    expect(sanitizeForBubble('看到个新闻\n[[NEWS_CARD: 微博|某某官宣]]'))
+      .toBe('看到个新闻\n[[NEWS_CARD: 微博|某某官宣]]');
+  });
 });
 
 // ─── sanitizeIntoSegments (amsg-instant 0.8+ pushPayloads) ─────────────────
@@ -476,6 +494,18 @@ describe('sanitizeIntoSegments', () => {
     expect(segs.map((s) => s.raw)).toEqual(['你好', '再见']);
   });
 
+  it('LIFE / NEWS_CARD 独占一行时整段消失, 不产生只有标签的 push', () => {
+    // 老行为: 这两个标签既不在 classifier 表里也不在 strip 表里, 于是原样切成独立
+    // segment 发出去 —— 锁屏横幅直接显示 `[[LIFE:MED|布洛芬]]`。
+    expect(sanitizeIntoSegments('你今天吃药了吗\n[[LIFE:MED|布洛芬]]'))
+      .toEqual([{ raw: '你今天吃药了吗', sanitized: '你今天吃药了吗' }]);
+    expect(sanitizeIntoSegments('刷到条新闻\n[[NEWS_CARD: 微博|某某官宣]]'))
+      .toEqual([{ raw: '刷到条新闻', sanitized: '刷到条新闻' }]);
+    // 跟正文同一行时也不留残骸
+    expect(sanitizeIntoSegments('记下啦[[LIFE:EXPENSE|38|打车]]'))
+      .toEqual([{ raw: '记下啦', sanitized: '记下啦' }]);
+  });
+
   it('幂等: sanitizeIntoSegments(joinAll) 跟原结果在等价 input 上保持稳定', () => {
     // 不是严格幂等 (raw 跟 sanitized 不同就不能直接 join 还原), 但对 sanitized-only
     // 视角应该幂等
@@ -486,5 +516,66 @@ describe('sanitizeIntoSegments', () => {
     // segs2 的 sanitized 应该等于 segs1 的 sanitized (经过一次 emoji 替换后已经是
     // [表情：笑] placeholder, 再过一遍 sanitize 不会变)
     expect(segs2.map((s) => s.sanitized)).toEqual(segs1.map((s) => s.sanitized));
+  });
+});
+
+// 引用标签独占一行是提示词教出来的常见形态（回复开头写 [[QUOTE:]]）。banner 侧会把它
+// 剥空，早先整段连 raw 一起丢掉，引用关系就永远到不了客户端——这是唯一一类「角色发了
+// 但用户收不到」的内容。现在攒着顺延到下一个文字段的 raw 开头。
+describe('sanitizeIntoSegments — 独占一行的引用不丢', () => {
+  it('引用行顺延到下一条文字段的 raw，banner 只显示正文', () => {
+    const segs = sanitizeIntoSegments('[[QUOTE: 我说的话]]\n消失了整整三十六个小时');
+    expect(segs).toHaveLength(1);
+    expect(segs[0].raw).toContain('[[QUOTE: 我说的话]]');
+    expect(segs[0].raw).toContain('消失了整整三十六个小时');
+    expect(segs[0].sanitized).toBe('消失了整整三十六个小时');
+  });
+
+  it('引用行后面隔着表情时，引用仍落到再后面的文字段上', () => {
+    const segs = sanitizeIntoSegments('[[QUOTE: 我说的话]]\n[[SEND_EMOJI: 有点生气]]\n你干嘛去了');
+    expect(segs.map((s) => s.sanitized)).toEqual(['[表情：有点生气]', '你干嘛去了']);
+    expect(segs[0].raw).not.toContain('QUOTE');
+    expect(segs[1].raw).toContain('[[QUOTE: 我说的话]]');
+  });
+
+  it('整条只有引用、没有正文 → 没东西可发，照旧不产 segment', () => {
+    expect(sanitizeIntoSegments('[[QUOTE: 我说的话]]')).toEqual([]);
+  });
+});
+
+// 「横幅响了一下、点进去一个气泡都没有」的成因：worker 只认识白名单里的标签，模型现编的
+// `[[拥抱]]` 原样留着就被当成有内容照发；客户端 chatParser.hasDisplayContent 剥光一切
+// `[[...]]` 后判空，这一条不落库。两端判空口径必须一致，横幅数才等于气泡数。
+describe('sanitizeIntoSegments — 未知 [[标签]] 不产生空气泡的横幅', () => {
+  it('模型现编的未知标签独占一行 → 整段丢掉，不发这条 push', () => {
+    expect(sanitizeIntoSegments('你今天还好吗\n[[拥抱]]'))
+      .toEqual([{ raw: '你今天还好吗', sanitized: '你今天还好吗' }]);
+    expect(sanitizeIntoSegments('[[轻轻抱住你]]')).toEqual([]);
+  });
+
+  it('未知标签跟正文同一行 → 照旧发，客户端那边也有正文能成气泡', () => {
+    const segs = sanitizeIntoSegments('抱一下[[拥抱]]');
+    expect(segs).toHaveLength(1);
+    expect(segs[0].raw).toBe('抱一下[[拥抱]]');
+  });
+
+  it('被丢掉的未知标签段不吃掉攒着的引用，引用继续顺延到后面的正文', () => {
+    const segs = sanitizeIntoSegments('[[QUOTE: 我说的话]]\n[[拥抱]]\n我在的');
+    expect(segs).toHaveLength(1);
+    expect(segs[0].raw).toContain('[[QUOTE: 我说的话]]');
+    expect(segs[0].sanitized).toBe('我在的');
+  });
+});
+
+describe('SEND_EMOJI 全角冒号容错', () => {
+  it('[[SEND_EMOJI：xx]] 当表情段处理，raw 按半角规范形态给客户端', () => {
+    expect(sanitizeIntoSegments('[[SEND_EMOJI：抱抱]]'))
+      .toEqual([{ raw: '[[SEND_EMOJI: 抱抱]]', sanitized: '[表情：抱抱]' }]);
+    expect(sanitizeIntoSegments('你看 [[SEND_EMOJI：笑]] 我没事的').map((s) => s.sanitized))
+      .toEqual(['你看', '[表情：笑]', '我没事的']);
+  });
+
+  it('notification 终态路径同样认全角冒号', () => {
+    expect(sanitizeForNotification('[[SEND_EMOJI：抱抱]]')).toBe('[表情：抱抱]');
   });
 });

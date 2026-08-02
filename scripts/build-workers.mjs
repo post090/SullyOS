@@ -54,6 +54,10 @@ const WORKERS = [
     name: 'post-office',
     skipPublicOut: true,
   },
+  // amsg = 主动消息 2.0 的单用户 worker（amsg-server/cloudflare, D1 + Cron Trigger）。
+  // public/ 副本给设置页「复制 Worker 代码」按钮 fetch。amsg-server 2.6.0-next.2 起
+  // 全 Web Crypto，和 instant 一样免 nodejs_compat flag。
+  { name: 'amsg', outName: 'amsg-worker.bundle.js' },
   // loyal-recruitment 是一次性忠实用户招募服务：独立 D1 / secrets / 路由，
   // 不与邮局或彼方活动共享运行时状态。
   {
@@ -72,6 +76,9 @@ const sharedOpts = {
   bundle: true,
   minify: false,
   conditions: ['worker', 'browser', 'import', 'default'],
+  // @capacitor/* 是浏览器原生桥（仅 APK WebView 里有），worker 永远跑不到这些代码路径，
+  // 但 db.ts → mcpClient.ts 的 import 链会把它拖进 bundle。标 external 让 esbuild 不去 resolve。
+  external: ['@capacitor/*'],
 };
 
 console.log(`Building ${WORKERS.length} worker bundle(s)...`);

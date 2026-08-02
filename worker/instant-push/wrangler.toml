@@ -2,6 +2,15 @@ name = "instant-push"
 main = "src/index.ts"
 compatibility_date = "2026-01-01"
 # amsg-instant 0.3.0+ uses only Web Crypto; no compatibility_flags needed.
+
+# wrangler deploy 会用本地这份配置整体覆盖 Cloudflare 面板上的设置——
+# 不显式写这段，面板里手动开的 Workers Logs（实时日志）会被一起关掉。
+[observability]
+enabled = true
+
+[observability.logs]
+enabled = true
+
 # Secrets — set via Dashboard 或 wrangler secret put NAME
 #   VAPID_PUBLIC_KEY
 #   VAPID_PRIVATE_KEY

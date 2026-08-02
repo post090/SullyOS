@@ -11,6 +11,7 @@ import {
     isMcpChatAvailable,
     getMcpUseNativeTools,
     setMcpUseNativeTools,
+    collectMcpFireServers,
     callMcpTool,
     normalizeMcpToolArguments,
     MCP_REQUEST_TIMEOUT_MS,
@@ -505,5 +506,45 @@ describe('群聊 MCP 工具循环', () => {
         expect(result.choices[0].message.content).toContain('你掷出了 4');
         expect(result.usage.total_tokens).toBe(29);
         expect(info).toHaveBeenCalled();
+    });
+});
+
+describe('collectMcpFireServers', () => {
+    it('只带 enabled + 已发现工具 + 公网地址; 剥代理字段、留 token', () => {
+        localStorage.setItem('aetheros.mcp.servers', JSON.stringify([
+            { id: 'a', name: 'ok', url: 'https://mcp.example.com', enabled: true, token: 'tok', proxyUrl: 'https://proxy.x', proxyKey: 'pk', charIds: ['c1'], tools: [{ name: 't1', inputSchema: { type: 'object' } }], updatedAt: 1 },
+            { id: 'b', name: 'disabled', url: 'https://x.com', enabled: false, tools: [{ name: 't' }], updatedAt: 1 },
+            { id: 'c', name: 'no-tools', url: 'https://y.com', enabled: true, tools: [], updatedAt: 1 },
+            { id: 'd', name: 'local', url: 'http://localhost:18061/mcp', enabled: true, tools: [{ name: 't' }], updatedAt: 1 },
+            { id: 'e', name: 'lan', url: 'http://192.168.1.5/mcp', enabled: true, tools: [{ name: 't' }], updatedAt: 1 },
+        ]));
+        const out = collectMcpFireServers();
+        expect(out.map((s) => s.id)).toEqual(['a']);
+        expect(out[0]).toEqual({
+            id: 'a', name: 'ok', url: 'https://mcp.example.com', token: 'tok',
+            charIds: ['c1'], tools: [{ name: 't1', inputSchema: { type: 'object' } }],
+        });
+        expect('proxyUrl' in out[0]).toBe(false);
+    });
+
+    it('其余 worker 够不着的地址一并挡掉（链路本地 / 占位地址 / 局域网域名 / IPv6 ULA）', () => {
+        const blocked = [
+            'http://169.254.1.1/mcp',      // IPv4 链路本地
+            'http://0.0.0.0:8080/mcp',     // 占位地址
+            'http://[::]/mcp',             // 同上, IPv6
+            'http://127.0.0.5:9000/mcp',   // 回环整段 127/8, 不只 127.0.0.1
+            'http://my-nas.local/mcp',     // mDNS
+            'http://foo.localhost/mcp',    // 本机后缀域名
+            'http://[fd12:3456::1]/mcp',   // IPv6 ULA (fd)
+            'http://[fc00::1]/mcp',        // IPv6 ULA (fc)
+            'ftp://files.example.com/mcp', // 非 http(s)
+            '这不是个地址',                  // URL 解析不了
+        ];
+        localStorage.setItem('aetheros.mcp.servers', JSON.stringify([
+            ...blocked.map((url, i) => ({ id: `bad${i}`, name: url, url, enabled: true, tools: [{ name: 't' }], updatedAt: 1 })),
+            { id: 'good', name: 'ok', url: 'https://mcp.example.com/mcp', enabled: true, tools: [{ name: 't' }], updatedAt: 1 },
+        ]));
+
+        expect(collectMcpFireServers().map((s) => s.id)).toEqual(['good']);
     });
 });

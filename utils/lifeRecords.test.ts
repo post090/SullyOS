@@ -157,20 +157,56 @@ describe('executeLifeDirectives 代记指令', () => {
         expect(card!.metadata.duplicate).toBe(true);
     });
 
-    it('总开关关闭：只剥 tag，不写任何东西', async () => {
+    // 主动消息是提前几小时打包的：打包时开着、送达前用户把开关关掉是常态。角色那句
+    // 「我帮你记下了」已经说满，记录却静默蒸发，用户只会觉得功能坏了 —— 留一条系统提示。
+    it('总开关关闭：不写库，但落一条系统提示说明没记成', async () => {
         const char = mkChar({ lifeRecordEnabled: false });
         const out = await executeLifeDirectives('记好了[[LIFE:MED|阿莫西林]]', char, noToast);
         expect(out).toBe('记好了');
         const records = (await DB.getAllLifeRecords()).filter(r => r.recordedBy === char.id);
         expect(records).toHaveLength(0);
+
+        const msgs = await DB.getMessagesByCharId(char.id, true);
+        expect(msgs.some((m: Message) => m.role === 'system' && m.content.includes('没记成')
+            && m.content.includes('生活记录功能已关闭'))).toBe(true);
     });
 
-    it('模块小开关关闭：该模块指令被静默丢弃', async () => {
+    it('模块小开关关闭：不写库，同样留一条系统提示（带模块名）', async () => {
         const char = mkChar({ lifeRecordExerciseEnabled: false });
         const out = await executeLifeDirectives('[[LIFE:EXERCISE|跑步|30分钟]]', char, noToast);
         expect(out).toBe('');
         const records = (await DB.getAllLifeRecords()).filter(r => r.recordedBy === char.id);
         expect(records).toHaveLength(0);
+
+        const msgs = await DB.getMessagesByCharId(char.id, true);
+        const note = msgs.find((m: Message) => m.role === 'system');
+        expect(note?.content).toContain('锻炼');
+        expect(note?.content).toContain('没记成');
+    });
+
+    it('格式非法的指令仍然静默剥掉（模型手滑，没什么可交代的）', async () => {
+        const char = mkChar();
+        const out = await executeLifeDirectives('[[LIFE:MED|]]好', char, noToast);
+        expect(out).toBe('好');
+        const msgs = await DB.getMessagesByCharId(char.id, true);
+        expect(msgs).toHaveLength(0);
+    });
+
+    it('传了 inheritMeta：生活卡和「没记成」提示都带上这条推送的标记', async () => {
+        const meta = { source: 'active_msg_2', activeMsg2: { messageId: 'push-life' } };
+
+        const charOn = mkChar({ name: '有开关' });
+        await executeLifeDirectives('[[LIFE:EXPENSE|66|奶茶]]', charOn, noToast, undefined, meta);
+        const card = (await DB.getMessagesByCharId(charOn.id, true))
+            .find((m: Message) => m.type === 'life_card');
+        expect(card!.metadata.activeMsg2.messageId).toBe('push-life');
+        expect(card!.metadata.recordId).toBeTruthy();   // 卡片自己的字段没被挤掉
+
+        const charOff = mkChar({ name: '没开关', lifeRecordEnabled: false });
+        await executeLifeDirectives('[[LIFE:MED|布洛芬]]', charOff, noToast, undefined, meta);
+        const note = (await DB.getMessagesByCharId(charOff.id, true))
+            .find((m: Message) => m.role === 'system');
+        expect(note!.metadata.activeMsg2.messageId).toBe('push-life');
     });
 
     it('EXPENSE：同步写银行流水，否决时回滚删除', async () => {
@@ -254,7 +290,7 @@ describe('executeLifeDirectives 代记指令', () => {
 
     it('注入的代记说明包含「一件事只记一次」防重复明示', async () => {
         const char = mkChar();
-        const s = await buildLifeRecordInjection(char, '洛洛');
+        const s = await buildLifeRecordInjection(char, '洛洛', { forFirePack: false });
         expect(s).toContain('一件事只记一次');
         expect(s).toContain('已经记过了');
     });
@@ -266,19 +302,22 @@ describe('全局隐藏模块（长按页签隐藏）', () => {
         await DB.saveLifeRecordSettings({ id: 'main', hiddenModules: [] });
     });
 
-    it('隐藏的模块：角色开关全开也不执行代记指令', async () => {
+    it('隐藏的模块：角色开关全开也不执行代记指令，只留一条系统提示', async () => {
         await DB.saveLifeRecordSettings({ id: 'main', hiddenModules: ['med'] });
         const char = mkChar();
         const out = await executeLifeDirectives('记下了[[LIFE:MED|感冒灵]]', char, noToast);
         expect(out).toBe('记下了');
         const records = (await DB.getAllLifeRecords()).filter(r => r.recordedBy === char.id);
         expect(records).toHaveLength(0);
+
+        const msgs = await DB.getMessagesByCharId(char.id, true);
+        expect(msgs.some((m: Message) => m.role === 'system' && m.content.includes('药盒'))).toBe(true);
     });
 
     it('隐藏的模块：注入里不出现对应数据与指令说明', async () => {
         await DB.saveLifeRecordSettings({ id: 'main', hiddenModules: ['med', 'exercise'] });
         const char = mkChar();
-        const text = await buildLifeRecordInjection(char, '小鱼');
+        const text = await buildLifeRecordInjection(char, '小鱼', { forFirePack: false });
         expect(text).toContain('生理期');
         expect(text).not.toContain('今日用药计划');
         expect(text).not.toContain('LIFE:MED');
@@ -289,7 +328,7 @@ describe('全局隐藏模块（长按页签隐藏）', () => {
     it('全部模块隐藏：整段注入为空', async () => {
         await DB.saveLifeRecordSettings({ id: 'main', hiddenModules: ['period', 'med', 'expense', 'exercise'] });
         const char = mkChar();
-        const text = await buildLifeRecordInjection(char, '小鱼');
+        const text = await buildLifeRecordInjection(char, '小鱼', { forFirePack: false });
         expect(text).toBe('');
     });
 });
@@ -325,5 +364,43 @@ describe('EXPENSE 去重窗口（同金额可以是两笔不同消费）', () =>
         await executeLifeDirectives('[[LIFE:EXPENSE|77.7|老数据]]', char, noToast);
         const txs = (await DB.getAllTransactions()).filter(t => t.amount === 77.7);
         expect(txs).toHaveLength(1);
+    });
+});
+
+// 主动消息的提示词是提前打包上云、到点才渲染的，中间可能隔几小时甚至几天。相对说法
+// （今日待服 / 生理期第 N 天）在打包那一刻就冻住了，角色到点会照着念成过时的事实：
+// 用户早上八点吃过药、晚上还被问「今天的药还没吃吧」。所以 fire_pack 里一律写绝对日期。
+describe('buildLifeRecordInjection — fire_pack 写绝对日期', () => {
+    afterAll(async () => {
+        await DB.saveLifeRecordSettings({ id: 'main', hiddenModules: [] });
+    });
+
+    it('经期中：前台写「第 N 天」，fire_pack 写起始日期', async () => {
+        await DB.saveLifeRecordSettings({ id: 'main', hiddenModules: [] });
+        // 同文件前面的用例往共享库里写过今天的 PERIOD_END，清干净再造一条今天开始的经期，
+        // 否则状态机判成「已结束」，前台也不会出现「第 N 天」，这条就验不到东西了。
+        const existing = await DB.getAllLifeRecords();
+        await Promise.all(existing.filter(r => r.module === 'period').map(r => DB.deleteLifeRecord(r.id)));
+        await DB.saveLifeRecord(mkPeriod('start', lifeToday()));
+        const char = mkChar();
+
+        const live = await buildLifeRecordInjection(char, '小鱼', { forFirePack: false });
+        const packed = await buildLifeRecordInjection(char, '小鱼', { forFirePack: true });
+
+        expect(live).toContain('生理期：**第');
+        expect(packed).toContain('本轮于');
+        // 注意别用宽泛的 /第 \d+ 天/：开头那段人设说明里有「生理期第 2 天」的举例，
+        // 那是固定文案不是数据，两种模式下都在。
+        expect(packed).not.toContain('生理期：**第');
+        expect(packed).toContain('以上记录截至');
+    });
+
+    it('fire_pack 里不出现任何「今日 X」式的断言', async () => {
+        await DB.saveLifeRecordSettings({ id: 'main', hiddenModules: [] });
+        const packed = await buildLifeRecordInjection(mkChar(), '小鱼', { forFirePack: true });
+
+        for (const stale of ['今日待服', '今日支出', '今日已练', '今日还没练', '今日暂无']) {
+            expect(packed, `fire_pack 不该出现会过期的「${stale}」`).not.toContain(stale);
+        }
     });
 });

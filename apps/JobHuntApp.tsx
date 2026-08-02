@@ -618,19 +618,25 @@ const JobHuntApp: React.FC = () => {
         for (const u of parsed.updates) {
             const existing = (await DB.getJobPositions()).find(p => p.code === u.code);
             if (existing) {
+                // 仅在 AI 显式传入 stage 时才更新阶段并添加 timeline 记录（project_memory 约定）
+                const newStage = u.stage ?? existing.stage;
                 const updated: JobPosition = {
                     ...existing,
-                    stage: u.stage,
+                    stage: newStage,
                     nextStep: u.nextStep || existing.nextStep,
-                    timeline: [...existing.timeline, { ts: now, stage: u.stage, note: u.nextStep || undefined }],
+                    timeline: u.stage != null
+                        ? [...existing.timeline, { ts: now, stage: newStage, note: u.nextStep || undefined }]
+                        : existing.timeline,
                     updatedAt: now,
                 };
                 await DB.saveJobPosition(updated);
             } else {
                 // prompt 教「已建档才记」，但 LLM 偶尔会自作主张——照单收下比丢数据强
+                // 新建岗位卡片：stage 未传入时用 'applied' 兜底（project_memory 约定）
+                const createdStage: JobStage = u.stage ?? 'applied';
                 const created: JobPosition = {
-                    id: genId('jpos'), code: u.code, title: u.code, stage: u.stage,
-                    nextStep: u.nextStep || undefined, timeline: [{ ts: now, stage: u.stage }],
+                    id: genId('jpos'), code: u.code, title: u.code, stage: createdStage,
+                    nextStep: u.nextStep || undefined, timeline: [{ ts: now, stage: createdStage }],
                     charId: session.charId, createdAt: now, updatedAt: now,
                 };
                 await DB.saveJobPosition(created);

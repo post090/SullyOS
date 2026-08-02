@@ -22,6 +22,7 @@ import { Share } from '@capacitor/share';
 import { WhiteDaySession, isWhiteDayEventAvailable, WHITEDAY_RECORD_KEY } from './WhiteDayEvent';
 import { Like520Session, isLike520EventAvailable, isLike520Past, LIKE520_RECORD_KEY } from './Like520Event';
 import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
+import { markAmsgStateDirty } from '../utils/amsgStateSync';
 
 // ============================================================
 // 情人节立绘 Sprite 映射 (占位 emoji，等图片整理好后替换为图床URL)
@@ -336,7 +337,7 @@ interface ValentineSessionProps {
 }
 
 export const ValentineSession: React.FC<ValentineSessionProps> = ({ charId, onClose }) => {
-    const { characters, activeCharacterId, apiConfig, userProfile, addToast, virtualTime, updateCharacter } = useOS();
+    const { characters, activeCharacterId, apiConfig, userProfile, addToast, virtualTime, updateCharacter, groups, realtimeConfig } = useOS();
 
     // 角色选择
     const [selectedCharId, setSelectedCharId] = useState<string>(charId || activeCharacterId || '');
@@ -591,6 +592,9 @@ export const ValentineSession: React.FC<ValentineSessionProps> = ({ charId, onCl
                 content: content,
                 metadata: { source: 'date', valentineEvent: true }
             });
+            // 节日推送落进的是通用聊天历史，也是主动消息 2.0 云端快照的素材：
+            // 落库点自己负责打脏，别指望下面那次 updateCharacter 顺带带上。
+            markAmsgStateDirty({ char: c, userProfile, groups, realtimeConfig });
 
             const previousRecords = c.specialMomentRecords || {};
             updateCharacter(cId, {

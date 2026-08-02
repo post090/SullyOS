@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { trackEvent } from '../../utils/analytics';
 
 /**
  * 麦当劳 MCP 工具结果卡片
@@ -296,6 +297,7 @@ const MenuList: React.FC<{ items: any[]; pageSize?: number; onSendCart?: (items:
         if (!cart.length || !onSendCart) return;
         onSendCart(cart);
         setSelected({});
+        trackEvent('把麦当劳购物车发给角色');
     };
 
     return (
@@ -343,7 +345,7 @@ const MenuList: React.FC<{ items: any[]; pageSize?: number; onSendCart?: (items:
                     </div>
                     <button
                         type="button"
-                        onClick={() => setSelected({})}
+                        onClick={() => { setSelected({}); trackEvent('清空麦当劳购物车'); }}
                         className="text-[10px] text-yellow-700 px-2 py-1.5 active:scale-95"
                     >清空</button>
                     <button

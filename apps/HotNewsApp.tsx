@@ -11,6 +11,7 @@ import { DB } from '../utils/db';
 import { RealtimeContextManager } from '../utils/realtimeContext';
 import { nativeFetch } from '../utils/nativeFetch';
 import { getProxyWorkerUrl } from '../utils/proxyWorker';
+import { trackEvent } from '../utils/analytics';
 import type { HotNewsSnapshot, HotNewsItem } from '../types';
 
 const SLOT_WINDOW = ['00:00–04:00', '04:00–08:00', '08:00–12:00', '12:00–16:00', '16:00–20:00', '20:00–24:00'];
@@ -317,6 +318,7 @@ const HotNewsApp: React.FC = () => {
     const forceRefresh = useCallback(async () => {
         setLoading(true);
         setError(null);
+        trackEvent('手动刷新热点日报');
         try {
             const items = await RealtimeContextManager.getSlottedHotNews(realtimeConfig, true);
             const { id, label } = RealtimeContextManager.getHotNewsSlot();

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { trackEvent } from '../../utils/analytics';
 
 // SullyOS 冷启动「世界入场」电影化序列 —— 取代传统黑屏 spinner。
 // 目标：让人觉得「进入了一个小世界」，而不是「在等一个 App 加载完」。
@@ -58,7 +59,17 @@ const BootSequence: React.FC<Props> = ({ dataReady, wallpaper, onDone }) => {
     let raf = 0;
     const tick = () => {
       const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
-      if (dataReady && now - startRef.current >= HOLD) { setPhase('exit'); return; }
+      if (dataReady && now - startRef.current >= HOLD) {
+        setPhase('exit');
+        // 只报区间不报精确毫秒。注意这里的时长带 HOLD 下限（完整版 2000ms / 极短版 520ms），
+        // 真正有信息量的是 3-8s / 8s+ 这条尾巴 —— 数据加载慢才会落到那儿。
+        const waited = now - startRef.current;
+        trackEvent('冷启动等待数据就绪', {
+          等待档位: waited < 1000 ? '<1s' : waited < 3000 ? '1-3s' : waited < 8000 ? '3-8s' : '8s+',
+          开场版本: cinematic ? '完整版' : '极短版',
+        });
+        return;
+      }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -73,7 +84,15 @@ const BootSequence: React.FC<Props> = ({ dataReady, wallpaper, onDone }) => {
   }, [phase, EXIT, onDone]);
 
   // 轻触跳过：进入平滑退场（非硬切）。
-  const skip = () => { if (phase !== 'exit') setPhase('exit'); };
+  const skip = () => {
+    if (phase !== 'exit') {
+      setPhase('exit');
+      trackEvent('跳过开机动画', {
+        数据是否已就绪: dataReady ? '是' : '否',
+        开场版本: cinematic ? '完整版' : '极短版',
+      });
+    }
+  };
 
   // 漂浮尘埃（自下而上缓升）与闪烁星点（原地明灭）—— 仅完整版生成，只动 transform/opacity。
   const motes = useMemo(() =>

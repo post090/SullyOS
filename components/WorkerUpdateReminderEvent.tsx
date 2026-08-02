@@ -20,6 +20,7 @@ import {
   buildCloudflareDashboardUrl,
 } from '../utils/instantPushClient';
 import { INSTANT_WORKER_VERSION } from '../utils/instantWorkerVersion';
+import { trackEvent } from '../utils/analytics';
 
 // 记录用户「已确认过的 worker 版本号」。
 const WORKER_UPDATE_SEEN_KEY = 'sullyos_worker_build_seen';
@@ -36,6 +37,7 @@ const WORKER_UPDATE_SNOOZE_KEY = 'sullyos_worker_update_snooze_until';
 export const markWorkerBuildSeen = (): void => {
   try {
     localStorage.setItem(WORKER_UPDATE_SEEN_KEY, INSTANT_WORKER_VERSION);
+    trackEvent('标记 Worker 已部署新版');
   } catch { /* ignore */ }
 };
 
@@ -54,6 +56,7 @@ export const snoozeWorkerUpdateReminder = (days = 3): void => {
 export const rearmWorkerUpdateReminder = (): void => {
   try {
     localStorage.removeItem(WORKER_UPDATE_SEEN_KEY);
+    trackEvent('探测到 Worker 版本漂移');
   } catch { /* ignore */ }
 };
 
@@ -84,6 +87,10 @@ export const WorkerUpdateReminderPopup: React.FC<WorkerUpdateReminderPopupProps>
   const [copyStatus, setCopyStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [copyError, setCopyError] = useState('');
 
+  React.useEffect(() => {
+    trackEvent('弹出 Worker 更新提醒');
+  }, []);
+
   const cfg = loadInstantConfig();
   const dashboardUrl = buildCloudflareDashboardUrl(cfg.workerUrl);
   // workers.dev 子域才能推出确切的 worker name; 自定义域 / 反代退化成 workers 列表页。
@@ -96,11 +103,13 @@ export const WorkerUpdateReminderPopup: React.FC<WorkerUpdateReminderPopupProps>
     try {
       await copyInstantWorkerBundleToClipboard();
       setCopyStatus('done');
+      trackEvent('复制最新 Worker 代码', { 结果: '成功', 入口: '更新提醒弹窗' });
       setTimeout(() => setCopyStatus((s) => (s === 'done' ? 'idle' : s)), 2500);
     } catch (e) {
       const err = e as { message?: string } | null;
       setCopyError(err?.message ?? '未知错误');
       setCopyStatus('error');
+      trackEvent('复制最新 Worker 代码', { 结果: '失败', 入口: '更新提醒弹窗' });
     }
   };
 
@@ -108,11 +117,13 @@ export const WorkerUpdateReminderPopup: React.FC<WorkerUpdateReminderPopupProps>
     // 不在这里 markWorkerBuildSeen —— 用户可能只是先打开 dashboard, 还没真粘贴部署。
     // 等他再次回来发"对比已部署"时若一致, 那个流程会顺其自然不再触发提醒。
     window.open(dashboardUrl, '_blank', 'noopener,noreferrer');
+    trackEvent('打开 Worker 控制台');
   };
 
   const handleLater = () => {
     // 只贪睡, 不 markSeen —— 否则用户点完就永远想不起来更新, worker 长期漂在旧版
     snoozeWorkerUpdateReminder();
+    trackEvent('稍后处理 Worker 更新');
     onClose();
   };
 

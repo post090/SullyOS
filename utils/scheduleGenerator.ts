@@ -268,9 +268,6 @@ ${chatHistoryBlock ? `**重要：上面给了你最近和「${user.name}」的�
     return basePrompt;
 }
 
-/**
- * 根据当前小时数返回 flowNarrative 的 key。
- */
 export async function generateDailyScheduleForChar(
     char: CharacterProfile,
     userProfile: UserProfile,

@@ -38,11 +38,25 @@ const STALE_HOSTS = [/sully-n\.qegj567\.workers\.dev/i, /sullymeow\.ccwu213\.cc/
 
 const normalize = (url: string): string => url.trim().replace(/\/+$/, '');
 
+// 非浏览器运行时（amsg worker 等）没有 localStorage，靠这个显式注入用户配置的
+// 代理地址；浏览器端不设置，保持 localStorage 懒读不变。
+let runtimeOverrideUrl: string | null = null;
+
+/**
+ * 注入代理 worker 地址（无 localStorage 的运行时用，如 amsg worker 到点执行工具时）。
+ * 传空串/null 清除注入，回到 localStorage → 默认值 的正常解析顺序。
+ */
+export const setProxyWorkerUrlOverride = (url: string | null): void => {
+  const trimmed = normalize(url || '');
+  runtimeOverrideUrl = /^https?:\/\//i.test(trimmed) ? trimmed : null;
+};
+
 /**
  * 读取当前生效的主代理 worker 地址（已去尾斜杠）。懒读 localStorage，
  * 用户在设置里改完、新发起的请求立刻生效，无需刷新页面。
  */
 export const getProxyWorkerUrl = (): string => {
+  if (runtimeOverrideUrl) return runtimeOverrideUrl;
   try {
     const raw = localStorage.getItem(LS_KEY);
     if (!raw) return DEFAULT_PROXY_WORKER;

@@ -15,6 +15,7 @@ import {
   FRONT_HAIR_NAMES, BACK_HAIR_NAMES, EYE_NAMES,
 } from './pixelCharGenerator';
 import { processImage } from '../../utils/file';
+import { trackEvent } from '../../utils/analytics';
 
 interface Props {
   initial?: PixelCharConfig | null;
@@ -154,6 +155,7 @@ const PixelCharEditor: React.FC<Props> = ({ initial, target = 'char', targetLabe
 
   const handleSave = useCallback(() => {
     onSave(config, config.customSprite || previewUri);
+    trackEvent('保存捏好的像素形象');
   }, [config, previewUri, onSave]);
 
   const styleItems = useMemo(() => ({

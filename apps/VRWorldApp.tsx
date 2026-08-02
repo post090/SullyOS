@@ -77,6 +77,7 @@ import type { CharacterProfile, UserProfile, VRWorldNovel, VRNovelAnnotation, VR
 // ============ chibi 形象解析（vrState.chibi → 立绘 → 头像） ============
 import { getChibi } from '../utils/vrWorld/chibi';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
+import { trackEvent } from '../utils/analytics';
 
 type Tab = 'world' | 'library' | 'settings' | 'api';
 
@@ -303,6 +304,7 @@ const VRWorldApp: React.FC = () => {
         const interval = char.vrState?.intervalMinutes || VR_DEFAULT_INTERVAL_MIN;
         updateCharacter(char.id, { vrState: { ...(char.vrState || {}), enabled: true, intervalMinutes: interval } });
         VRScheduler.start(char.id, interval);
+        trackEvent('开启角色接入彼方', { action: 'enable' });
     };
     const requestEnable = (char: CharacterProfile) => {
         // 没设过专属 chibi → 先要求设定形象
@@ -351,7 +353,7 @@ const VRWorldApp: React.FC = () => {
             {/* Tab — 发丝下划线 */}
             <div className="relative flex px-5 gap-6 shrink-0 z-10 pb-px">
                 {([['world', '世界'], ['library', '书库'], ['settings', '接入'], ['api', 'API']] as [Tab, string][]).map(([t, label]) => (
-                    <button key={t} onClick={() => setTab(t)} className="relative pb-2 text-[13.5px] tracking-[0.22em] transition-colors"
+                    <button key={t} onClick={() => { setTab(t); trackEvent('切换彼方顶部标签', { tab: t }); }} className="relative pb-2 text-[13.5px] tracking-[0.22em] transition-colors"
                         style={{ fontFamily: `'Noto Serif SC',serif`, color: tab === t ? 'rgba(255,255,255,.95)' : 'rgba(255,255,255,.38)' }}>
                         {label}
                         {tab === t && <span className="absolute -bottom-px left-1/2 -translate-x-1/2 w-5 h-px"
@@ -371,7 +373,7 @@ const VRWorldApp: React.FC = () => {
                         onDeleteFeed={onDeleteFeed} onDeleteFeedMany={onDeleteFeedMany} />
                 ) : tab === 'library' ? (
                     <LibraryView novels={novels} characters={characters} onOpen={setReaderNovel}
-                        onAdd={() => setShowUpload(true)}
+                        onAdd={() => { setShowUpload(true); trackEvent('打开小说上架弹窗'); }}
                         onDelete={async (id) => { await DB.deleteVRNovel(id); await loadNovels(); addToast?.('已删除', 'success'); }} />
                 ) : tab === 'settings' ? (
                     <div className="space-y-3">
@@ -418,6 +420,7 @@ const VRWorldApp: React.FC = () => {
                             updateCharacter(charSnap.id, { vrState: { ...(charSnap.vrState || {}), chibi, enabled: true, intervalMinutes: interval } });
                             VRScheduler.start(charSnap.id, interval);
                             addToast?.(`${charSnap.name} 已接入彼方`, 'success');
+                            trackEvent('开启角色接入彼方', { action: 'enable' });
                         } else {
                             addToast?.('形象已更新', 'success');
                         }
@@ -718,7 +721,7 @@ const IdentityModal: React.FC<{ onImport: (code: string) => void; onClose: () =>
     const [input, setInput] = useState('');
     const [copied, setCopied] = useState(false);
     const copy = async () => {
-        try { await navigator.clipboard?.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* ignore */ }
+        try { await navigator.clipboard?.writeText(code); setCopied(true); trackEvent('复制邮局身份码'); setTimeout(() => setCopied(false), 1500); } catch { /* ignore */ }
     };
     return (
         <div className="fixed inset-0 z-[300] flex items-center justify-center px-6 bg-black/55 backdrop-blur-sm" onClick={onClose}>
@@ -1003,12 +1006,12 @@ const WorldView: React.FC<{
     return (
     <div className="space-y-4">
         {/* 顶部特殊活动 banner：信号坠落处（跨用户接龙诗） */}
-        <SignalBanner onOpen={() => onEnterRoom('signal')} />
+        <SignalBanner onOpen={() => { onEnterRoom('signal'); trackEvent('进入彼方房间', { room: 'signal' }); }} />
         <div className="grid grid-cols-2 gap-3">
             {shownRooms.map(room => {
                 const occupants = occupantsByRoom[room.id] || [];
                 return (
-                    <button key={room.id} onClick={() => room.implemented && onEnterRoom(room.id)}
+                    <button key={room.id} onClick={() => { if (room.implemented) { onEnterRoom(room.id); trackEvent('进入彼方房间', { room: room.id }); } }}
                         className={`relative rounded-2xl h-36 overflow-hidden text-left active:scale-[0.98] transition-transform ${room.implemented ? '' : 'opacity-65'}`}
                         style={{ boxShadow: '0 8px 28px rgba(0,0,0,.4)', border: room.implemented ? '1px solid rgba(255,255,255,.12)' : '1px solid rgba(255,255,255,.05)' }}>
                         <RoomBackground roomId={room.id} />
@@ -1262,6 +1265,7 @@ const PostOfficePanel: React.FC<{ addToast?: (m: string, t?: any) => void; chara
             await DB.saveVRLetters(batch.map((l, i) => ({ ...l, status: 'sent', remoteId: ids[i], sentAt: Date.now() })));
             bumpQuota(PO_SEND_QUOTA, batch.length);
             await load();
+            trackEvent('一键寄出漂流信');
             addToast?.(heldBack > 0
                 ? `已寄出 ${ids.length} 封，额度用完，还剩 ${heldBack} 封约 ${quotaResetHours(readQuota(PO_SEND_QUOTA).windowStart, PO_SEND_QUOTA.windowMs)} 小时后再寄`
                 : `已寄出 ${ids.length} 封漂流信`, 'success');
@@ -1300,6 +1304,7 @@ const PostOfficePanel: React.FC<{ addToast?: (m: string, t?: any) => void; chara
             bumpQuota(PO_REPLY_QUOTA, batch.length);
             await DB.saveVRLetters(batch.map(l => ({ ...l, replyStatus: 'sent' as const })));
             await load();
+            trackEvent('一键发送待发的回信');
             addToast?.(heldBack > 0
                 ? `已发出 ${payload.length} 封回信，今日额度用完，还剩 ${heldBack} 封约 ${quotaResetHours(readQuota(PO_REPLY_QUOTA).windowStart, PO_REPLY_QUOTA.windowMs)} 小时后再发`
                 : `已发出 ${payload.length} 封回信`, heldBack > 0 ? 'info' : 'success');
@@ -1354,6 +1359,7 @@ const PostOfficePanel: React.FC<{ addToast?: (m: string, t?: any) => void; chara
         VRScheduler.triggerNow(charId, 'postoffice', assignFor.id);
         const cname = enabledChars.find(c => c.id === charId)?.name;
         addToast?.(`${cname ?? '角色'} 正在去邮局回这封信…`, 'info');
+        trackEvent('指定角色去邮局回这封来信');
         setAssignFor(null);
         setTimeout(() => void load(), 5000);
     };
@@ -1376,6 +1382,7 @@ const PostOfficePanel: React.FC<{ addToast?: (m: string, t?: any) => void; chara
         if (!l.remoteLetterId) return;
         try {
             const r = await PostOffice.vote(l.remoteLetterId, vote);
+            trackEvent('给陌生来信点赞或举报', { vote: vote === 1 ? 'like' : vote === -1 ? 'report' : 'cancel' });
             if (r.deleted) { await DB.deleteVRLetter(l.id); await load(); addToast?.('这封信被举报够数，已移除', 'info'); return; }
             await DB.saveVRLetter({ ...l, likes: r.likes, dislikes: r.dislikes, myVote: vote }); await load();
         } catch (e: any) { addToast?.('操作失败：' + (e?.message || '检查网络'), 'error'); }
@@ -1443,7 +1450,7 @@ const PostOfficePanel: React.FC<{ addToast?: (m: string, t?: any) => void; chara
                     ] as const).map(t => {
                         const active = tab === t.key;
                         return (
-                            <button key={t.key} onClick={() => setTab(t.key)}
+                            <button key={t.key} onClick={() => { setTab(t.key); trackEvent('切换邮局信件分类', { category: t.key }); }}
                                 className="w-full rounded-lg px-1.5 py-2 text-left transition-colors"
                                 style={{ background: active ? 'rgba(255,255,255,.09)' : 'transparent', border: `1px solid ${active ? 'rgba(255,255,255,.14)' : 'transparent'}` }}>
                                 <div className="flex items-center gap-1">
@@ -2366,6 +2373,7 @@ const RoomScene: React.FC<{
         setBoard(await DB.getVRGuestbook());
         setGbPage(0);
         setConfirmClear(false);
+        trackEvent('清空彼方留言墙');
         addToast?.('留言墙已清空', 'success');
     };
 
@@ -2388,6 +2396,7 @@ const RoomScene: React.FC<{
         if (!np) return;
         if (music.current?.id === np.song.id) music.togglePlay();
         else { music.playSong(toSong(np.song)); startedRef.current = true; }
+        trackEvent('播放听歌房正在放的歌');
     };
     // 音乐只在听歌房内播放：离开场景时若仍在放我们起播的歌，暂停它
     useEffect(() => () => {
@@ -2968,6 +2977,7 @@ const UploadModal: React.FC<{
             });
             if (novel.segments.length === 0) { onError('正文是空的'); setBusy(false); return; }
             await onCommit(novel);
+            trackEvent('上架一本小说到书库');
         } catch (e) {
             console.error('[VRWorld] build novel failed', e);
             onError('处理失败，文件可能太大或格式异常');
@@ -3223,10 +3233,12 @@ const UserVRPanel: React.FC<{
         if (!chibi?.img) { onEditChibi(); return; } // 没捏小人 → 先捏，再回来开接入
         updateUserProfile({ vrState: { ...(uv || {}), enabled: true, currentRoom: room, activity: activity.trim(), updatedAt: Date.now() } });
         addToast?.('你已接入彼方', 'success');
+        trackEvent('开启用户本人接入彼方', { action: 'enable' });
     };
     const logout = () => {
         updateUserProfile({ vrState: { ...(uv || {}), enabled: false } });
         addToast?.('已从彼方登出', 'success'); // 登出后角色聊天里的"你在彼方"提示随之消失
+        trackEvent('开启用户本人接入彼方', { action: 'disable' });
     };
     const saveBroadcast = () => {
         updateUserProfile({ vrState: { ...(uv || {}), enabled: true, currentRoom: room, activity: activity.trim(), updatedAt: Date.now() } });
@@ -3305,6 +3317,7 @@ const SettingsView: React.FC<{
     const disable = (char: CharacterProfile) => {
         updateCharacter(char.id, { vrState: { ...(char.vrState || { intervalMinutes: VR_DEFAULT_INTERVAL_MIN }), enabled: false } as any });
         VRScheduler.stop(char.id);
+        trackEvent('开启角色接入彼方', { action: 'disable' });
     };
     const setInterval = (char: CharacterProfile, minutes: number) => {
         updateCharacter(char.id, { vrState: { ...(char.vrState || {}), enabled: char.vrState?.enabled ?? true, intervalMinutes: minutes } });

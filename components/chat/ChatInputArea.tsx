@@ -1,10 +1,12 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { ShareNetwork, Trash, Plus, Smiley, PaperPlaneTilt, Money, BookOpenText, GearSix, Image, Lock, ArrowsClockwise, ChatCircleDots, CalendarBlank, ForkKnife, Coffee, Code, Brain, PencilSimple, BellSimpleRinging, Sparkle, CaretDown, FadersHorizontal, Plugs, MagnifyingGlass, LinkSimple, Briefcase } from '@phosphor-icons/react';
+import { ShareNetwork, Trash, Plus, Smiley, PaperPlaneTilt, Money, BookOpenText, GearSix, Image, Lock, ArrowsClockwise, ChatCircleDots, CalendarBlank, ForkKnife, Coffee, Code, Brain, PencilSimple, BellSimpleRinging, Alarm, Sparkle, CaretDown, FadersHorizontal, Plugs, MagnifyingGlass, LinkSimple, Briefcase } from '@phosphor-icons/react';
 import { CharacterProfile, ChatTheme, EmojiCategory, Emoji } from '../../types';
 import { PRESET_THEMES } from './ChatConstants';
 import { AcnhActionTile } from '../os/acnhIcons';
 import NetImg from '../os/NetImg';
 import { isIOSStandaloneWebApp } from '../../utils/iosStandalone';
+import { trackEvent } from '../../utils/analytics';
+
 const EMOJI_PAGE_SIZE = 40;
 
 interface ChatInputAreaProps {
@@ -95,8 +97,6 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
     const [pendingDeleteThemeId, setPendingDeleteThemeId] = useState<string | null>(null);
     const [emojiSelectionMode, setEmojiSelectionMode] = useState(false);
     const [selectedEmojis, setSelectedEmojis] = useState<any[]>([]);
-    // 分组太多时横向拖不动：提供「展开全部分组」网格总览
-    const [showCategoryOverview, setShowCategoryOverview] = useState(false);
     // 手动分页避免旧版/第三方 WebView 不触发 IntersectionObserver，永远卡在「加载中」。
     const [emojiPage, setEmojiPage] = useState(0);
     const emojiPageCount = Math.max(1, Math.ceil(emojis.length / EMOJI_PAGE_SIZE));
@@ -282,7 +282,6 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
         if (showPanel !== 'emojis') {
             setEmojiSelectionMode(false);
             setSelectedEmojis([]);
-            setShowCategoryOverview(false);
         }
     }, [showPanel]);
 
@@ -358,13 +357,14 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
         : isDiscordStyle
           ? 'bg-slate-900/95 border-t border-white/10'
           : 'bg-slate-50 border-t border-slate-200/60';
-    const panelTopBarClass = acnh
-        ? 'h-10 bg-[#efe7d4] border-b-2 border-[#e0d6c0] flex items-center px-2 gap-2 overflow-x-auto no-scrollbar shrink-0'
+    const panelTopBarSurfaceClass = acnh
+        ? 'bg-[#efe7d4] border-b-2 border-[#e0d6c0]'
         : isPixelStyle
-        ? 'h-10 bg-[#eadfce] border-b-2 border-[#8f674a] flex items-center px-2 gap-2 overflow-x-auto no-scrollbar shrink-0'
+        ? 'bg-[#eadfce] border-b-2 border-[#8f674a]'
         : isDiscordStyle
-          ? 'h-10 bg-slate-950 border-b border-white/10 flex items-center px-2 gap-2 overflow-x-auto no-scrollbar shrink-0'
-          : 'h-10 bg-white border-b border-slate-100 flex items-center px-2 gap-2 overflow-x-auto no-scrollbar shrink-0';
+          ? 'bg-slate-950 border-b border-white/10'
+          : 'bg-white border-b border-slate-100';
+    const panelTopBarClass = 'h-10 min-w-0 flex-1 flex items-center px-2 gap-2 overflow-x-auto no-scrollbar';
     const inactiveCategoryClass = isPixelStyle
         ? 'bg-[#f3e7d6] text-[#8f674a] border border-[#8f674a]/30'
         : isDiscordStyle
@@ -413,7 +413,7 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                 <div className={`p-3 flex gap-2 ${isPixelStyle ? 'bg-[#f3e7d6]' : isDiscordStyle ? 'bg-slate-900/60 backdrop-blur-md' : 'bg-white/50 backdrop-blur-md'}`}>
                     {onForwardSelected && (
                         <button
-                            onClick={onForwardSelected}
+                            onClick={() => { onForwardSelected?.(); trackEvent('转发选中的消息'); }}
                             disabled={selectedCount === 0}
                             className={`flex-1 py-3 font-bold rounded-xl shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2 ${selectedCount === 0 ? 'bg-slate-200 text-slate-400 shadow-none' : 'bg-gradient-to-r from-blue-500 to-indigo-500 text-white shadow-blue-200'}`}
                         >
@@ -422,7 +422,7 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                         </button>
                     )}
                     <button
-                        onClick={onDeleteSelected}
+                        onClick={() => { onDeleteSelected(); trackEvent('批量删除选中的消息'); }}
                         className={`${onForwardSelected ? 'flex-1' : 'w-full'} py-3 bg-red-500 text-white font-bold rounded-xl shadow-lg active:scale-95 transition-transform flex items-center justify-center gap-2`}
                     >
                         <Trash className="w-5 h-5" weight="bold" />
@@ -479,7 +479,7 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                     {showPanel === 'emojis' && (
                         <>
                             {/* Categories Bar */}
-                            <div className="relative">
+                            <div className={`relative flex shrink-0 ${panelTopBarSurfaceClass}`}>
                                 {/* touch-action: pan-x —— 显式告诉浏览器"从分组 chip 上起手的触摸就是横向滚动"，
                                     防止 chip 的长按/点击手势让部分浏览器犹豫而吞掉滑动（分组多时滑不到末尾的 +） */}
                                 <div className={panelTopBarClass} style={{ touchAction: 'pan-x' }}>
@@ -505,9 +505,6 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                                         </button>
                                     ))}
                                     <button onClick={() => onPanelAction('add-category')} className={categoryAddButtonClass}>+</button>
-                                    {/* 尾部留白必须 ≥ 右侧浮动按钮区宽度（两个 w-6 + gap + px-3 ≈ 78px），
-                                        否则滚到最右时 + 按钮被浮动小药丸盖住点不到 */}
-                                    <div className="w-24 shrink-0 pointer-events-none" />
                                 </div>
                                 {emojiSelectionMode ? (
                                     <div 
@@ -531,23 +528,11 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                                         </button>
                                     </div>
                                 ) : (
-                                    <div className="absolute right-0 top-0 bottom-0 z-10 flex items-center justify-end gap-1.5 px-3 pointer-events-none">
-                                        {categories.length > 1 && (
-                                            <button
-                                                onClick={(e) => { e.stopPropagation(); setShowCategoryOverview(v => !v); }}
-                                                title="展开全部分组"
-                                                className={`w-6 h-6 rounded-full flex items-center justify-center transition-colors shadow-sm pointer-events-auto ${
-                                                    isPixelStyle ? 'bg-[#c99872] text-[#fff7ed] hover:bg-[#b07d57]' :
-                                                    isDiscordStyle ? 'bg-slate-700 text-slate-300 hover:bg-slate-600' :
-                                                    'bg-white/90 text-slate-600 hover:bg-slate-100 backdrop-blur-sm border border-slate-200/50'
-                                                }`}
-                                            >
-                                                <CaretDown className={`w-3.5 h-3.5 transition-transform ${showCategoryOverview ? 'rotate-180' : ''}`} weight="bold" />
-                                            </button>
-                                        )}
+                                    /* 编辑按钮占据独立列，滚动区在它左侧结束，末尾的 + 不会再被覆盖。 */
+                                    <div className="flex h-10 shrink-0 items-center pl-1 pr-3">
                                         <button
                                             onClick={(e) => { e.stopPropagation(); setEmojiSelectionMode(true); }}
-                                            className={`w-6 h-6 rounded-full flex items-center justify-center transition-colors shadow-sm pointer-events-auto ${
+                                            className={`w-6 h-6 rounded-full flex items-center justify-center transition-colors shadow-sm ${
                                                 isPixelStyle ? 'bg-[#c99872] text-[#fff7ed] hover:bg-[#b07d57]' :
                                                 isDiscordStyle ? 'bg-slate-700 text-slate-300 hover:bg-slate-600' :
                                                 'bg-white/90 text-slate-600 hover:bg-slate-100 backdrop-blur-sm border border-slate-200/50'
@@ -558,35 +543,6 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                                     </div>
                                 )}
                             </div>
-
-                            {/* 分组总览：换行网格 + 限高滚动，分组再多也不用横向拖 */}
-                            {showCategoryOverview && !emojiSelectionMode && (
-                                <div className={`shrink-0 max-h-24 overflow-y-auto overscroll-contain px-3 py-2 flex flex-wrap gap-1.5 border-b ${
-                                    isPixelStyle ? 'bg-[#eadfce] border-[#8f674a]/40' :
-                                    isDiscordStyle ? 'bg-slate-950 border-white/10' :
-                                    'bg-white border-slate-100'
-                                }`}>
-                                    {categories.map(cat => (
-                                        <button
-                                            key={cat.id}
-                                            onClick={() => { onPanelAction('select-category', cat.id); setShowCategoryOverview(false); }}
-                                            className={`px-3 py-1 text-xs rounded-full whitespace-nowrap max-w-full truncate transition-all select-none flex items-center gap-1 ${activeCategory === cat.id ? activeCategoryClass : inactiveCategoryClass}`}
-                                        >
-                                            {cat.name}
-                                            {cat.allowedCharacterIds && cat.allowedCharacterIds.length > 0 && (
-                                                <Lock className="w-3 h-3 opacity-60" weight="bold" />
-                                            )}
-                                        </button>
-                                    ))}
-                                    {/* 总览里也能新建分组：横向条分组多时 + 可能滑不到/被浮动按钮挡，这里保底 */}
-                                    <button
-                                        onClick={() => { onPanelAction('add-category'); setShowCategoryOverview(false); }}
-                                        className={`px-3 py-1 text-xs rounded-full whitespace-nowrap transition-all select-none ${inactiveCategoryClass}`}
-                                    >
-                                        + 新建分组
-                                    </button>
-                                </div>
-                            )}
 
                             <div className="flex-1 overflow-y-auto no-scrollbar p-4">
                                 {/* 4 列 → 5 列：面板缩略图整体缩小一档（吸收社区美化的共识密度）。
@@ -783,6 +739,15 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                                 {isProactiveActive && <span className={`absolute top-0 right-1 w-2.5 h-2.5 rounded-full border-2 ${isDiscordStyle ? 'bg-violet-400 border-slate-900' : 'bg-violet-500 border-white'}`} />}
                             </button>
 
+                            {/* 主动消息 2.0：云端 worker 定时任务，App 关闭后仍可收取。 */}
+                            <button onClick={() => onPanelAction('active-msg-2')} className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${acnh ? 'text-[#725d42]' : isDiscordStyle ? 'text-slate-200' : 'text-slate-600'}`}>
+                                {acnh ? <AcnhActionTile kind="proactive" /> : (
+                                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border ${isDiscordStyle ? 'bg-slate-800 text-indigo-300 border-indigo-400/20' : 'bg-indigo-50 text-indigo-500 border-indigo-100'}`}>
+                                    <Alarm className="w-6 h-6" weight="bold" />
+                                </div>)}
+                                <span className="text-xs font-bold">主动消息 2.0</span>
+                            </button>
+
                             {/* 上岸计划：求职快捷面板（岗位/笔记/简历 + 求职模式开关），占 HTML 模式原位，后续按钮顺延 */}
                             <button
                               onClick={() => onPanelAction('jobhunt-panel')}
@@ -860,7 +825,7 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
 
                           {/* Page 2: 提示音（第二页溢出顺延）+ 外部服务（麦当劳 / 瑞幸 MCP） */}
                           <div className={`p-6 grid grid-cols-4 gap-8 ${actionsPage === 2 ? '' : 'hidden'}`}>
-                            {/* 提示音：打开该角色专属的「白框提示音」弹窗（独立于白框可绑定/解绑） */}
+                            {/* 提示音：打开该角色专属的「白框提示音」弹窗（挨着白框，独立于白框可绑定/解绑） */}
                             <button
                               onClick={() => onPanelAction('chrome-sound')}
                               className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${acnh ? 'text-[#725d42]' : isDiscordStyle ? 'text-slate-200' : 'text-slate-600'}`}

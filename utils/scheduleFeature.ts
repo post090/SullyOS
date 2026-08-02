@@ -15,9 +15,9 @@ export function isScheduleFeatureOn(
     return !!char.scheduleStyle;
 }
 
-/** 根据当前小时数返回 flowNarrative 的时段 key。 */
-export function getFlowNarrativeKey(hour: number): 'morning' | 'afternoon' | 'evening' {
-    if (hour < 12) return 'morning';
-    if (hour < 18) return 'afternoon';
-    return 'evening';
-}
+/**
+ * 时段 key 的实现住在 utils/scheduleInjection.ts —— 那是日程渲染的纯叶子，
+ * 浏览器和 Cloudflare Worker（主动消息到点生成）共用同一份。这里转发一道，
+ * 让「日程开关」这个入口继续能一次取到需要的两样。
+ */
+export { getFlowNarrativeKey } from './scheduleInjection';

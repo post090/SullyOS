@@ -33,6 +33,7 @@ import { dmThreadsOf, groupThreadOf } from '../utils/worldHome/threads';
 import { safeFetchJson } from '../utils/safeApi';
 import { WORLD_API_KEY, WORLD_CUSTOM_STYLE_KEY } from '../utils/worldHome/localBackup';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
+import { trackEvent } from '../utils/analytics';
 import type { WorldProfile, WorldEpisode, WorldHomeMode, WorldTimeMode, WorldHouse, WorldThread, WorldChatMessage, WorldNarrativeStyle, CharacterProfile, WorldCharBeat, APIConfig, ApiPreset } from '../types';
 
 /**
@@ -296,7 +297,10 @@ const PhoneModal: React.FC<{
     const [renamingGroup, setRenamingGroup] = useState<string | null>(null);
     useEffect(() => { setConfirmDel(false); }, [editing]);
     const submitEdit = async (newText: string | null) => {
-        if (editing && onEditContent) await onEditContent(editing.target, newText);
+        if (editing && onEditContent) {
+            await onEditContent(editing.target, newText);
+            trackEvent('编辑角色手机里的内容', { action: newText === null ? 'delete' : 'edit' });
+        }
         setEditing(null);
     };
 
@@ -306,6 +310,7 @@ const PhoneModal: React.FC<{
         try {
             await DB.saveMessage({ charId: ownerId, role: 'assistant', type: 'text', content: `【家园 · ${world.name}】${ownerName} 发了条动态：\n${text}` });
             setSharedKeys(prev => new Set(prev).add(key));
+            trackEvent('转发角色动态到聊天');
         } catch { /* ignore */ }
     };
 
@@ -336,7 +341,7 @@ const PhoneModal: React.FC<{
                         {/* Tab */}
                         <div className="px-3 flex gap-1 shrink-0">
                             {([['feed', '动态', Article, feed.length], ['dm', '私信', ChatCircleDots, dmCount], ['group', '群聊', UsersThree, group?.messages.length || 0], ['memo', '备忘', NotePencil, memos.length]] as const).map(([id, label, Icon, count]) => (
-                                <button key={id} onClick={() => setTab(id)}
+                                <button key={id} onClick={() => { setTab(id); trackEvent('切换角色手机分区', { tab: id }); }}
                                     className={`flex-1 py-1.5 rounded-xl text-[10px] font-bold flex items-center justify-center gap-0.5 transition-colors ${tab === id ? 'bg-white text-slate-900' : 'bg-white/10 text-white/60'}`}>
                                     <Icon size={11} weight="bold" />{label}
                                     <span className={`text-[8px] px-1 rounded-full ${tab === id ? 'bg-slate-900/10' : 'bg-white/10'}`}>{count}</span>
@@ -608,6 +613,7 @@ const WorldEditor: React.FC<{
         const api = w.api?.baseUrl ? w.api : apiConfig;
         if (!api?.baseUrl) { addToast('还没有可用的 API（先在设置里配一个，或给这个世界选个预设）', 'error'); return; }
         setRolling(true);
+        trackEvent('用 AI roll 出 NPC');
         try {
             const baseUrl = api.baseUrl.replace(/\/+$/, '');
             const data = await safeFetchJson(`${baseUrl}/chat/completions`, {
@@ -725,6 +731,7 @@ const WorldEditor: React.FC<{
                             } else {
                                 upd({ timeMode: tm });
                             }
+                            trackEvent('选择世界时间模式', { timeMode: tm });
                         }}
                             className={`w-full text-left px-3.5 py-2.5 rounded-xl border transition-all disabled:opacity-40 ${on ? 'bg-stone-900 border-stone-900 text-white shadow-lg' : 'bg-white border-stone-200 text-stone-700'}`}>
                             <div className="text-[12px] font-bold flex items-center gap-2">
@@ -783,7 +790,7 @@ const WorldEditor: React.FC<{
             <div className={sectionCls}>
                 <div className={labelCls}>模式（你在这个世界里的存在感）</div>
                 {(Object.keys(MODE_INFO) as WorldHomeMode[]).map(m => (
-                    <button key={m} onClick={() => upd({ mode: m })}
+                    <button key={m} onClick={() => { upd({ mode: m }); trackEvent('选择世界存在感模式', { mode: m }); }}
                         className={`w-full text-left px-3.5 py-2.5 rounded-xl border transition-all ${w.mode === m ? 'bg-stone-900 border-stone-900 text-white shadow-lg' : 'bg-white border-stone-200 text-stone-700'}`}>
                         <div className="text-[12px] font-bold flex items-center gap-2">
                             {MODE_INFO[m].name}
@@ -1308,6 +1315,7 @@ const WorldView: React.FC<{
         }
         setProgress({ done: 0, total: members.length });
         WorldScheduler.triggerNow(world.id);
+        trackEvent('触发一轮世界观测');
         addToast(world.timeMode === 'sim' ? '观测开始——世界推进一段（早/中/晚/凌晨），可以先去做别的' : '观测开始——演绎现实中刚过去的这一段，可以先去做别的', 'success');
     };
 
@@ -1317,6 +1325,7 @@ const WorldView: React.FC<{
         if (!latest) { addToast('还没有可重演的一轮', 'error'); return; }
         setProgress({ done: 0, total: 1, charName });
         window.dispatchEvent(new CustomEvent('world-reroll-request', { detail: { worldId: world.id, charId, episodeId: latest.id, direction: direction.trim() || undefined } }));
+        trackEvent('重演某个角色这一段');
         addToast(`正在重演 ${charName} 这一段…`, 'success');
         setRerollTarget(null); setRerollDir('');
     };
@@ -1329,6 +1338,7 @@ const WorldView: React.FC<{
         if (!beat) { addToast('这一轮 ta 还没演出来', 'error'); return; }
         try {
             await injectWorldCard(world, beat, latest.round, latest.storyTime);
+            trackEvent('补发观测到聊天');
             addToast(`已把这段观测发到和 ${beat.charName} 的聊天里`, 'success');
         } catch {
             addToast('发送失败，稍后再试', 'error');
@@ -1442,11 +1452,13 @@ const WorldView: React.FC<{
     const sendDirective = (charId: string, impulseText: string, text: string) => {
         const d = { id: `wd_${Date.now().toString(36)}`, charId, impulseText, text, createdRound: world.storyClock };
         void mutateWorld({ directives: [...(world.directives || []), d] });
+        trackEvent('给角色传一句心声');
         addToast('心声已传达，下一轮生效', 'success');
     };
 
     const armSeed = (seedId: string) => {
         void mutateWorld({ seeds: (world.seeds || []).map(s => s.id === seedId ? { ...s, status: 'armed' as const } : s) });
+        trackEvent('点燃一条伏笔');
         addToast('伏笔已点燃——下一轮观测时爆发', 'success');
     };
 
@@ -1770,7 +1782,7 @@ const WorldView: React.FC<{
                                                     beat={beatOf(r.id)}
                                                     t={t}
                                                     world={world}
-                                                    onPhone={() => setPhoneView({ ownerId: r.id })}
+                                                    onPhone={() => { setPhoneView({ ownerId: r.id }); trackEvent('打开角色手机面板'); }}
                                                     onDirective={(impulseText, text) => sendDirective(r.id, impulseText, text)}
                                                     onReroll={latest?.beats.some(b => b.charId === r.id) ? () => { setRerollDir(''); setRerollTarget({ charId: r.id, charName: r.name }); } : undefined}
                                                     onInject={world.timeMode !== 'sim' && world.injectToChat !== false && latest?.beats.some(b => b.charId === r.id) ? () => injectBeatToChat(r.id) : undefined}
@@ -2079,6 +2091,7 @@ const WorldHomeApp: React.FC<{ embedded?: boolean; onFullscreen?: (full: boolean
             createdAt: Date.now(), updatedAt: Date.now(),
         });
         setView('edit');
+        trackEvent('新建家园世界');
     };
 
     const saveWorld = async (w: WorldProfile) => {
@@ -2201,7 +2214,7 @@ const WorldHomeApp: React.FC<{ embedded?: boolean; onFullscreen?: (full: boolean
                         const ms = w.memberIds.map(id => characters.find(c => c.id === id)).filter(Boolean) as CharacterProfile[];
                         const night = isNightWorld(w);
                         return (
-                            <button key={w.id} onClick={() => { setActiveId(w.id); setView('world'); }}
+                            <button key={w.id} onClick={() => { setActiveId(w.id); setView('world'); trackEvent('进入家园世界'); }}
                                 className="w-full rounded-2xl overflow-hidden text-left shadow-[0_6px_18px_rgba(120,100,180,.18)] active:scale-[0.99] transition-transform border border-white/70">
                                 {/* 世界缩略天空（淡紫梦幻） */}
                                 <div className="relative h-14 flex items-end px-3.5 pb-1.5" style={{ background: night ? 'linear-gradient(180deg,#3a3566,#5b5590)' : 'linear-gradient(180deg,#b3a6dd,#d8d2ee)' }}>

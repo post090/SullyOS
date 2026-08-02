@@ -15,7 +15,9 @@ import {
     CHANGELOG_2026_06_21,
     CHANGELOG_2026_06_26,
     CHANGELOG_2026_07_10,
+    CHANGELOG_2026_08_03,
 } from '../components/UpdateNotificationEvent';
+import { trackEvent } from '../utils/analytics';
 
 const FAQ_DATA = [
     {
@@ -107,6 +109,14 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG_ENTRIES: ChangelogEntry[] = [
+    {
+        id: CHANGELOG_2026_08_03,
+        title: '2026 年 8 月 3 日 · 主动消息 2.0',
+        subtitle: '角色到点自己发消息，App 关着也收得到 · 三种排任务的方式（面板 / 聊天里说一句 / 角色给自己排）· 到点现取时间天气节日热搜与当天作息 · 连发不重样、只做事时不推空消息 · 后台照样能用 MCP 与搜索 · 想找话说的那类会让路，闹钟和承诺照发 · 需自部署 Cloudflare Worker + D1',
+        date: '2026-08-03',
+        src: 'changelogs/2026-8-3.html',
+        accent: 'from-violet-100 to-sky-100 border-violet-200',
+    },
     {
         id: CHANGELOG_2026_07_10,
         title: '2026 年 7 月 10 日 · 生活统计',
@@ -246,7 +256,7 @@ const FAQApp: React.FC = () => {
                 <div className="shrink-0 bg-white/60 backdrop-blur-md border-b border-slate-200/60 px-4 py-2">
                     <div className="inline-flex bg-slate-100 rounded-full p-1 gap-1">
                         <button
-                            onClick={() => setTab('faq')}
+                            onClick={() => { setTab('faq'); trackEvent('切换常见问题标签页', { tab: 'faq' }); }}
                             className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${
                                 tab === 'faq'
                                     ? 'bg-white text-indigo-600 shadow-sm'
@@ -256,7 +266,7 @@ const FAQApp: React.FC = () => {
                             常见问题
                         </button>
                         <button
-                            onClick={() => setTab('changelog')}
+                            onClick={() => { setTab('changelog'); trackEvent('切换常见问题标签页', { tab: 'changelog' }); }}
                             className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${
                                 tab === 'changelog'
                                     ? 'bg-white text-indigo-600 shadow-sm'

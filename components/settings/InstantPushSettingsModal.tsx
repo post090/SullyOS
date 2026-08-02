@@ -19,6 +19,7 @@ import {
   markWorkerBuildSeen,
 } from '../WorkerUpdateReminderEvent';
 import { INSTANT_WORKER_VERSION } from '../../utils/instantWorkerVersion';
+import { trackEvent } from '../../utils/analytics';
 import { FAQ_TARGET_SECTION_KEY, CHANGELOG_2026_05_27 } from '../UpdateNotificationEvent';
 import { InstantPushConfig, AppID } from '../../types';
 
@@ -131,11 +132,13 @@ export const InstantPushSettingsModal: React.FC<InstantPushSettingsModalProps> =
     try {
       await copyInstantWorkerBundleToClipboard();
       setCopyStatus('已复制');
+      trackEvent('复制 Instant Push Worker 代码', { result: 'success' });
       setTimeout(() => setCopyStatus(''), 2000);
     } catch (e) {
       const err = e as { message?: string } | null;
       setCopyStatus('');
       addToast(`复制失败：${err?.message ?? '未知错误'}`, 'error');
+      trackEvent('复制 Instant Push Worker 代码', { result: 'fail' });
     }
   };
 
@@ -144,6 +147,7 @@ export const InstantPushSettingsModal: React.FC<InstantPushSettingsModalProps> =
     if (!normalizedWorkerUrl) {
       setVersionCheck('stale');
       setVersionCheckDetail('请先填 Worker URL');
+      trackEvent('对比已部署 Worker 版本', { result: 'no_url', clientVersion: INSTANT_WORKER_VERSION });
       return;
     }
     setVersionCheck('checking');
@@ -152,14 +156,17 @@ export const InstantPushSettingsModal: React.FC<InstantPushSettingsModalProps> =
     if (result.ok) {
       setVersionCheck('latest');
       setVersionCheckDetail('');
+      trackEvent('对比已部署 Worker 版本', { result: 'latest', clientVersion: INSTANT_WORKER_VERSION });
     } else {
       // 任何拉取失败 / 版本不匹配 → 一律视为旧版, 不再细分 404/405/网络错误。
       setVersionCheck('stale');
       setVersionCheckDetail(result.error ?? '未知错误');
+      trackEvent('对比已部署 Worker 版本', { result: 'stale', clientVersion: INSTANT_WORKER_VERSION });
     }
   };
 
   const handleOpenTutorial = () => {
+    trackEvent('打开 Instant Push 视频教程');
     try {
       sessionStorage.setItem(FAQ_TARGET_SECTION_KEY, CHANGELOG_2026_05_27);
     } catch { /* ignore */ }
@@ -168,6 +175,7 @@ export const InstantPushSettingsModal: React.FC<InstantPushSettingsModalProps> =
   };
 
   const handleOpenCF = () => {
+    trackEvent('打开 Cloudflare Dashboard');
     window.open('https://dash.cloudflare.com/?to=/:account/workers-and-pages/create', '_blank');
   };
 
@@ -177,15 +185,18 @@ export const InstantPushSettingsModal: React.FC<InstantPushSettingsModalProps> =
     try {
       await copyDenoLoaderToClipboard();
       setDenoCopyStatus('已复制');
+      trackEvent('复制 Deno Loader', { result: 'success' });
       setTimeout(() => setDenoCopyStatus(''), 2000);
     } catch (e) {
       const err = e as { message?: string } | null;
       setDenoCopyStatus('');
       addToast(`复制失败：${err?.message ?? '未知错误'}`, 'error');
+      trackEvent('复制 Deno Loader', { result: 'fail' });
     }
   };
 
   const handleOpenDeno = () => {
+    trackEvent('打开 Deno 控制台');
     window.open('https://app.deno.com', '_blank');
   };
 
@@ -213,6 +224,13 @@ export const InstantPushSettingsModal: React.FC<InstantPushSettingsModalProps> =
         setCapabilityStatus(`连接失败：${errorText ?? '未知错误'}`);
         setCapabilityStatusKind('error');
         saveInstantConfig({ ...cfg, d1Available: false, useD1BlobStore: false });
+        // 「要 token」和「token 不对」统一收敛成 fail_auth: 只区分这两种就等于把
+        // 用户有没有配 token 报上去了。原始 error 文本只留在界面上, 不进上报。
+        trackEvent('检测 Instant Push Worker 连接', {
+          result: result.error === 'X-Client-Token required' || result.error === 'X-Client-Token invalid'
+            ? 'fail_auth'
+            : 'fail_other',
+        });
         return;
       }
 
@@ -229,6 +247,7 @@ export const InstantPushSettingsModal: React.FC<InstantPushSettingsModalProps> =
           d1CheckedAt: checkedAt,
           d1CheckedWorkerUrl: checkedWorkerUrl,
         });
+        trackEvent('检测 Instant Push Worker 连接', { result: 'ok_with_d1' });
       } else {
         const reasonText = result.d1Reason === 'DB binding missing'
           ? 'Worker 没有绑定 DB'
@@ -237,6 +256,15 @@ export const InstantPushSettingsModal: React.FC<InstantPushSettingsModalProps> =
         setCapabilityStatus(`连接正常，未检测到 D1：${reasonText ?? 'Worker 没有绑定 DB'}`);
         setCapabilityStatusKind('warning');
         saveInstantConfig({ ...cfg, d1Available: false, useD1BlobStore: false });
+        // d1Reason 是 worker 回的字符串, 只把两种已知情况映射成固定枚举, 其余一律 other。
+        trackEvent('检测 Instant Push Worker 连接', {
+          result: 'ok_no_d1',
+          d1Reason: result.d1Reason === 'DB binding missing'
+            ? 'binding_missing'
+            : result.d1Reason === 'D1 schema init failed'
+              ? 'schema_init_failed'
+              : 'other',
+        });
       }
     } catch (e) {
       const err = e as { message?: string } | null;
@@ -244,6 +272,7 @@ export const InstantPushSettingsModal: React.FC<InstantPushSettingsModalProps> =
       setCapabilityStatus(`检测失败：${err?.message ?? String(e)}`);
       setCapabilityStatusKind('error');
       saveInstantConfig({ ...cfg, d1Available: false, useD1BlobStore: false });
+      trackEvent('检测 Instant Push Worker 连接', { result: 'fail_other' });
     } finally {
       setCapabilityBusy(false);
     }
@@ -253,6 +282,7 @@ export const InstantPushSettingsModal: React.FC<InstantPushSettingsModalProps> =
     if (testBusy) return;
     if (!isPushVapidReady()) {
       setTestStatus('请先到「推送凭据 (VAPID)」生成密钥对');
+      trackEvent('发送 Instant Push 测试推送', { result: 'vapid_missing' });
       return;
     }
     const cfg = currentCfg();
@@ -263,18 +293,22 @@ export const InstantPushSettingsModal: React.FC<InstantPushSettingsModalProps> =
       const { sub, reason } = await getOrCreateInstantSubscription();
       if (!sub) {
         setTestStatus(`订阅失败：${reason ?? '未知'}`);
+        trackEvent('发送 Instant Push 测试推送', { result: 'subscribe_failed' });
         return;
       }
       setTestStatus('调用 LLM 并推送中…');
       const result = await sendTestInstantPush(apiConfig);
       if (result.ok) {
         setTestStatus('推送已发出，请查看系统通知');
+        trackEvent('发送 Instant Push 测试推送', { result: 'pushed' });
       } else {
         setTestStatus(`失败：${result.error ?? '未知错误'}`);
+        trackEvent('发送 Instant Push 测试推送', { result: 'push_failed' });
       }
     } catch (e) {
       const err = e as { message?: string } | null;
       setTestStatus(`错误：${err?.message ?? String(e)}`);
+      trackEvent('发送 Instant Push 测试推送', { result: 'error' });
     } finally {
       setTestBusy(false);
     }
@@ -350,7 +384,10 @@ export const InstantPushSettingsModal: React.FC<InstantPushSettingsModalProps> =
             {onOpenVapid && (
               <button
                 type="button"
-                onClick={onOpenVapid}
+                onClick={() => {
+                  trackEvent('跳去配置推送凭据 (VAPID)');
+                  onOpenVapid?.();
+                }}
                 className={`shrink-0 px-3 py-2 text-[11px] rounded-xl font-bold ${vapidReady ? 'bg-white text-emerald-700 border border-emerald-300 hover:bg-emerald-50' : 'bg-rose-500 text-white hover:bg-rose-600'}`}
               >
                 {vapidReady ? '查看 / 重生成' : '去生成 →'}
@@ -564,6 +601,7 @@ export const InstantPushSettingsModal: React.FC<InstantPushSettingsModalProps> =
               href={INSTANT_PUSH_BUNDLE_URL}
               target="_blank"
               rel="noopener noreferrer"
+              onClick={() => trackEvent('点击复制失败兜底的 GitHub bundle 链接')}
               className="text-[11px] text-slate-400 hover:text-slate-600 underline-offset-2 hover:underline"
             >
               复制失败？去 GitHub 打开 worker.bundle.js →

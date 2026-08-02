@@ -605,9 +605,8 @@ ${observeBlock}`;
 
 /**
  * 历史构建（send / reroll 共用）：
- * 1. 开了记忆宫殿 → 按高水位线过滤掉已被向量记忆替代的旧消息（chat 是在 DB 层做的；
- *    这里 allMsgs 用 includeProcessed=true 因为见面记录展示 + injectMemoryPalace
- *    还需要全集，所以手动过一遍）。
+ * 1. 开了记忆宫殿 → 按高水位线过滤掉已被向量记忆替代的旧消息。调用方传入
+ *    includeProcessed=true 的最近窗口，避免 DateApp 为一次见面把全角色历史读进内存。
  * 2. 复用 ChatPrompts.buildMessageHistory 压缩各类卡片。
  * 3. 排除最后一条（待重发的 user msg），由调用方单独追加带 System Note 的版本。
  */
@@ -693,7 +692,7 @@ ${extraBlock ? `\n${extraBlock}` : ''}${isObserveOn(char) ? `\n${buildObserveBlo
 
     /**
      * Session（send / reroll 共用）。
-     * allMsgs 须为 includeProcessed=true 的全量消息，且最后一条是本轮要重新追加的
+     * allMsgs 须为 includeProcessed=true 的最近消息窗口，且最后一条是本轮要重新追加的
      * user 消息（send：刚落库的输入；reroll：触发上一条 AI 回复的那条）。
      */
     buildSessionPayload: async (input: {

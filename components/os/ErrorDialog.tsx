@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { trackEvent } from '../../utils/analytics';
 
 interface ErrorDialogProps {
     isOpen: boolean;
@@ -31,8 +32,10 @@ const ErrorDialog: React.FC<ErrorDialogProps> = ({ isOpen, title, details, onClo
             }
             setCopied(true);
             setTimeout(() => setCopied(false), 1500);
+            trackEvent('复制报错详情', { 复制结果: '成功' });
         } catch {
             setCopied(false);
+            trackEvent('复制报错详情', { 复制结果: '失败' });
         }
     };
 

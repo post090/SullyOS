@@ -5,6 +5,7 @@ import { useBackGuard } from '../hooks/useBackGuard';
 import { useMusic, musicApi, normalizeCookie, toHttps, Song } from '../context/MusicContext';
 import { getProxyWorkerUrl } from '../utils/proxyWorker';
 import { DB } from '../utils/db';
+import { trackEvent } from '../utils/analytics';
 import { Gear, User as UserIcon, Crosshair, Play as PlayIcon, Pause as PauseIcon } from '@phosphor-icons/react';
 import {
   C, Sparkle, CrossStar, MizuHeader, SearchBar, SongRow, MiniPlayer,
@@ -79,6 +80,7 @@ const MusicApp: React.FC = () => {
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
       addToast('已下载', 'success');
+      trackEvent('下载生成的歌到本地文件');
     } catch {
       addToast('下载失败', 'error');
     }
@@ -88,6 +90,7 @@ const MusicApp: React.FC = () => {
     const order: ('loop' | 'single' | 'shuffle')[] = ['loop', 'single', 'shuffle'];
     const next = order[(order.indexOf(playMode) + 1) % order.length];
     setPlayMode(next);
+    trackEvent('切换播放模式', { mode: next });
     addToast(next === 'loop' ? '列表循环' : next === 'single' ? '单曲循环' : '随机播放', 'info');
   }, [playMode, setPlayMode, addToast]);
 
@@ -283,6 +286,7 @@ const MusicApp: React.FC = () => {
   const doSearch = useCallback(async (kwArg?: string) => {
     const kw = (kwArg ?? keyword).trim(); if (!kw) return;
     setSearching(true);
+    trackEvent('搜索一首歌');
     try {
       const r = await musicApi.search(cfg, kw);
       const songs: Song[] = (r?.result?.songs || []).map((s: any) => ({
@@ -396,7 +400,7 @@ const MusicApp: React.FC = () => {
             duration={fmtTime(s.duration)}
             isVip={s.fee === 1}
             isActive={current?.id === s.id}
-            onClick={() => playSong(s)}
+            onClick={() => { playSong(s); trackEvent('播放搜索结果里的一首歌'); }}
             onMore={() => setSearchSheetSong(s)}
           />
         ))}
@@ -408,14 +412,14 @@ const MusicApp: React.FC = () => {
           artists={current.artists}
           albumPic={current.albumPic}
           playing={playing}
-          onTap={() => setView('player')}
-          onPrev={prevSong}
+          onTap={() => { setView('player'); trackEvent('打开播放页'); }}
+          onPrev={() => { prevSong(); trackEvent('切歌（上一首/下一首）', { direction: 'prev' }); }}
           onToggle={togglePlay}
-          onNext={nextSong}
+          onNext={() => { nextSong(); trackEvent('切歌（上一首/下一首）', { direction: 'next' }); }}
           userAvatar={userProfile?.avatar}
           userName={userProfile?.name}
           companions={companions}
-          onKickCompanion={removeListeningPartner}
+          onKickCompanion={charId => { removeListeningPartner(charId); trackEvent('结束和角色的一起听'); }}
           charsWithSong={charsWithSong}
           regenStatus={isCurrentRegenerating ? regeneratingStatus : undefined}
         />
@@ -615,7 +619,13 @@ const MusicApp: React.FC = () => {
           <div className="shrink-0 relative">
             <Sparkle size={9} className="absolute top-1 left-[30%]" color={C.sakura} delay={0} />
             <Sparkle size={7} className="absolute top-3 right-[28%]" color={C.lavender} delay={1.2} />
-            <PlayControls playing={playing} loading={loadingSong} onPrev={prevSong} onToggle={togglePlay} onNext={nextSong} />
+            <PlayControls
+              playing={playing}
+              loading={loadingSong}
+              onPrev={() => { prevSong(); trackEvent('切歌（上一首/下一首）', { direction: 'prev' }); }}
+              onToggle={togglePlay}
+              onNext={() => { nextSong(); trackEvent('切歌（上一首/下一首）', { direction: 'next' }); }}
+            />
           </div>
 
           <div className="shrink-0 mt-2 w-full flex items-center justify-center gap-2">
@@ -663,11 +673,12 @@ const MusicApp: React.FC = () => {
           <div className="shrink-0 mt-3 w-full">
             <SubActions
               liked={liked}
-              onLike={toggleLike}
+              onLike={() => { toggleLike(); trackEvent('收藏或取消收藏当前歌', { action: liked ? 'unlike' : 'like' }); }}
               showSync={!!(current.local && current.localLyrics && lyric.length > 0)}
               onSync={() => {
                 setSyncDraft(lyric.map(l => l.t));
                 setShowLyricSync(true);
+                trackEvent('打开歌词对轴面板');
               }}
               showDownload={!!(current.local && current.localAssetKey)}
               onDownload={downloadCurrentLocal}
@@ -732,7 +743,7 @@ const MusicApp: React.FC = () => {
             </div>
             <div className="grid grid-cols-5 gap-1.5">
               {(['standard', 'higher', 'exhigh', 'lossless', 'hires'] as const).map(q => (
-                <button key={q} onClick={() => setDraft({ quality: q })}
+                <button key={q} onClick={() => { setDraft({ quality: q }); trackEvent('切换音质档位', { quality: q }); }}
                   className="py-2 rounded-xl text-[10px] transition-all"
                   style={{
                     background: cfg.quality === q ? `linear-gradient(135deg, ${C.primary}, ${C.accent})` : C.glass,
@@ -793,6 +804,7 @@ const MusicApp: React.FC = () => {
           <div className="space-y-3 pt-1">
             <button
               onClick={async () => {
+                trackEvent('运行音乐服务诊断');
                 const lines: string[] = [];
                 const ck = normalizeCookie(cfg.cookie);
                 lines.push(`Worker: ${cfg.workerUrl}`);
@@ -837,7 +849,7 @@ const MusicApp: React.FC = () => {
           onOpenPlayer={openPlayer}
           onOpenSearch={() => setView('search')}
           onOpenSettings={() => setView('settings')}
-          onVisitChar={id => { setVisitCharId(id); setView('visit_char'); }}
+          onVisitChar={id => { setVisitCharId(id); setView('visit_char'); trackEvent('进入角色音乐角落'); }}
           onOpenPlaylist={pl => { setPlDetail({ kind: 'netease', playlist: pl }); setView('playlist_detail'); }}
         />
       )}
@@ -874,6 +886,7 @@ const MusicApp: React.FC = () => {
           playSong(updated, { alsoSetQueue: false });
           setShowLyricSync(false);
           addToast('对轴已保存 ✦', 'success');
+          trackEvent('保存歌词对轴');
         };
 
         return (

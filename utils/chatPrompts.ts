@@ -17,6 +17,7 @@ import { getTtsProvider, getVoicePromptOverride } from './ttsProvider';
 import { resolveCharTimeZone, nowInTimeZone } from './timezone';
 import { buildLifeRecordInjection } from './lifeRecords';
 import { buildTaskSupervisionContext, buildTaskCommandGuide } from './taskContextInjector';
+import { isWorkerReachableUrl } from './amsgToolPack';
 import { getCharNameById } from './charNameRegistry';
 import { renderMemosForPrompt, renderMemoInstructionsOnly, MEMO_MAX_COUNT } from './memos';
 import { getLocalDateKey } from './localDate';
@@ -75,6 +76,31 @@ function summarizeGroupMsgContent(m: Message): string {
             return c.length > GROUP_MSG_TEXT_CAP ? c.slice(0, GROUP_MSG_TEXT_CAP) + '…' : c;
         }
     }
+}
+
+/**
+ * buildSystemPrompt / buildSystemPromptParts 的构建选项。
+ *
+ * `forFirePack` = 这份 prompt 是给主动消息打包的：模板在最后一次聊天时打好，到点才渲染。
+ * 「打包这一刻」的状态到触发时早就过期了，所以下面这些块一律不烤进去——
+ *
+ * | 块 | 不烤的原因 | 到点谁来补 |
+ * |---|---|---|
+ * | 「现在是 X」时间块 | 打包时刻的钟，到点已过期 | worker 填 AMSG_SLOT_CURRENT_TIME |
+ * | 【真实世界感知系统】（今日节日 / 天气 / 热搜） | 全是打包那天那一刻的，跨天说错节日、大晴天叫人带伞、同一批旧闻反复当「最近真实发生」 | worker 填 AMSG_SLOT_REALTIME_WORLD（到点自己去拉一次） |
+ * | 日程当前时段 + 此刻在听的歌 | 3am 触发会说「我在健身房呢」 | worker 填 AMSG_SLOT_SCENE（随包带整天作息表现算） |
+ * | 「你刚刚和对方结束了一通电话 / 见面」 | 打包时刚挂电话，到点可能是第二天凌晨 | 不补 |
+ * | 「用户此刻也在《彼方》里」 | 说的是用户当下挂在哪个房间，人下线几小时后角色还在说「看你小人挂在听歌房」 | 不补（worker 够不着用户此刻的彼方状态） |
+ * | 群聊背景的「约 X 分钟前」 | 打包时的「刚才」到点变成昨天 | 保留绝对时间戳 |
+ * | 生活记录的代记工具说明 | 后台没有用户新说的话，记下来的一定是重复或臆造 | 不补（摘要数据仍保留） |
+ * | `[schedule_message]` 教学 | 排的是浏览器里的本地定时消息，App 关着没人派发 | worker 追加自己的排程工具说明 |
+ */
+export interface PromptBuildOptions {
+    forFirePack?: boolean;
+    /** 任务监督注入粒度：false=只注入任务状态不教命令语法（主动消息用，省 token） */
+    taskCommandGuide?: boolean;
+    /** 注入备忘录管理能力说明（仅单聊用；其他场景只读不教） */
+    memoManagement?: boolean;
 }
 
 export const ChatPrompts = {
@@ -165,12 +191,12 @@ export const ChatPrompts = {
         } | null,
         isListeningTogether?: boolean,
         musicCfg?: MusicCfg,
-        options?: { taskCommandGuide?: boolean },
+        promptOptions?: PromptBuildOptions,
     ): Promise<string> => {
         const parts = await ChatPrompts.buildSystemPromptParts(
             char, userProfile, groups, emojis, categories, currentMsgs,
             realtimeConfig, evolvedNarrative, userListeningContext, isListeningTogether, musicCfg,
-            undefined, options,
+            undefined, promptOptions,
         );
         return parts.stable + parts.volatileState + parts.recencyTail;
     },
@@ -210,12 +236,11 @@ export const ChatPrompts = {
         musicCfg?: MusicCfg,
         // 刚才一起听途中歌被切了（char 还没重新加入）—— 注入"察觉换歌"提示。
         recentTrackSwitch?: { songName: string; artists: string } | null,
-        // 任务监督注入粒度控制：
-        //  - undefined / { taskCommandGuide: true }（默认）：注入任务状态 + 操作命令说明（私聊用）
-        //  - { taskCommandGuide: false }：只注入任务状态，不教 LLM 命令语法（主动消息用，省 token）
-        //  - { memoManagement: true }：注入备忘录管理能力说明（仅单聊用；其他场景只读不教）
-        options?: { taskCommandGuide?: boolean; memoManagement?: boolean },
+        promptOptions?: PromptBuildOptions,
     ): Promise<{ stable: string; volatileState: string; recencyTail: string }> => {
+        // 主动消息的模板是最后一次聊天时打好、到点才渲染的，凡是「打包这一刻」的状态
+        // 到触发时都已经过期，一律不烤进模板。见 PromptBuildOptions 的清单。
+        const forFirePack = promptOptions?.forFirePack === true;
         // ── 分段计时（定位瓶颈用）──
         const perfT0 = performance.now();
         const timings: Record<string, number> = {};
@@ -243,7 +268,10 @@ export const ChatPrompts = {
         // 开头一行框定，让模型明白这条出现在历史之后的 system 消息是"此刻的状态"，
         // 人设与规则仍以最上方的系统设定为准。
         let volatileState = `\n[System: 实时状态 (Live Context)]\n（以下是此刻的实时状态——当前时间、你正在做的事、你的情绪底色、周边动态。你的人设与聊天规则见最上方的系统设定，此处不再重复。）\n\n`;
-        volatileState += ContextBuilder.buildVolatileCoreState(char, { includeDetailedMemories: true, timeOptions: { userTimezone: userProfile?.timezone } });
+        volatileState += ContextBuilder.buildVolatileCoreState(char, {
+            includeDetailedMemories: true,
+            timeOptions: { userTimezone: userProfile?.timezone, skipTimeAwareness: forFirePack },
+        });
 
         // ── 并发发起所有独立的异步取数（网络 + IndexedDB），下面按原顺序拼接 ──
         // 原来是 7 段串行 await，总耗时 = 各段之和；现在取 max。
@@ -256,10 +284,26 @@ export const ChatPrompts = {
         // 1. 实时世界信息（天气/新闻/时间）
         //    角色级「地区与热点」覆盖（char.regionConfig）：城市触发双城市天气；
         //    订阅白名单 + 占比权重在 buildFullContext 里做过滤 / 加权抽样。
+        //
+        // fire_pack 整块不要：这一段里从时间、节日、天气到热搜全是打包那一刻的读数，
+        // 而且抬头写着「⚠️ 以下信息来自真实世界」，措辞比任何免责声明都硬——跨时段触发时
+        // 角色会照着一份过期的世界说话（大晴天叫人带伞、第二天还在祝七夕快乐、
+        // 同一批旧闻当成「最近真实发生」说三遍）。
+        //
+        // 主动消息不是因此就没有这一段：模板里留着 AMSG_SLOT_REALTIME_WORLD，worker 到点
+        // 自己去拉一次天气热搜、按角色时区判今天是不是节日，再填进去（见 worker/amsg 的
+        // realtimeWorld）。两边的取数与措辞都来自 realtimeWorldCore，是同一份。
         const realtimePromise: Promise<string> = (async () => {
+            if (forFirePack) return '';
             try {
                 if (config.weatherEnabled || config.newsEnabled) {
-                    const realtimeContext = await RealtimeContextManager.buildFullContext(config, charTz, char.regionConfig);
+                    // 时间行跟着角色的「时间感知」开关走：关掉的角色不该从天气块里读到
+                    // 「当前真实时间」，那是这个开关本来要挡住的东西。
+                    // char.regionConfig：城市触发双城市天气；订阅白名单 + 占比权重在 buildFullContext 里做过滤 / 加权抽样。
+                    const realtimeContext = await RealtimeContextManager.buildFullContext(
+                        config, charTz, char.regionConfig,
+                        { includeTime: char.timeAwarenessEnabled !== false },
+                    );
                     return `\n${realtimeContext}\n`;
                 }
                 // 基础当前时间 + 时差提示已由 ContextBuilder.buildCoreContext 统一注入（受 timeAwarenessEnabled
@@ -316,9 +360,15 @@ export const ChatPrompts = {
                     return getCharNameById(m.charId) || '群友';
                 };
                 const groupLogStr = recentGroupMsgs.map(m => {
-                    const dateStr = new Date(m.timestamp).toLocaleString([], {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'});
-                    const relativeAge = formatRelativeAge(m.timestamp);
-                    return `[${dateStr} · ${relativeAge}] [群：${m.groupName}] ${speakerOf(m)}: ${summarizeGroupMsgContent(m)}`;
+                    // 时间戳按角色所在时区读：同一份 prompt 里私聊历史用的就是角色的钟
+                    // （下面 buildMessageHistory 走 formatDate(ts, charTz)），群聊这行要是
+                    // 跟着设备走，纽约角色会看到两套时间。
+                    const dateStr = ChatPrompts.formatDate(m.timestamp, charTz);
+                    // 「约 X 分钟前」是相对打包时刻算的，fire_pack 到点渲染时早就不是那个「刚才」了
+                    // ——角色会把昨天的群聊说成「刚才群里说晚上一起吃饭」。绝对时间戳留着，角色
+                    // 自己对着当前时间就能判断远近。
+                    const relativeAge = forFirePack ? '' : ` · ${formatRelativeAge(m.timestamp)}`;
+                    return `[${dateStr}${relativeAge}] [群：${m.groupName}] ${speakerOf(m)}: ${summarizeGroupMsgContent(m)}`;
                 }).join('\n');
                 return `\n### 【群聊背景 · 你亲历的近期群聊】
 （以下是你所在群里最近的真实聊天记录，按时间排序，发言人已标注；标「你」的就是你自己说的话。这些事你都亲身经历、记得清楚——私聊里对方问起或话题相关时，自然地接上就好，不要装作不知道；也不必刻意逐条汇报群里的动静。）
@@ -381,7 +431,9 @@ ${groupLogStr}\n`;
         })();
 
         // 7. 生活记录（档案 App）注入 — 总开关关闭时 buildLifeRecordInjection 直接返回 ''
-        const lifeRecordPromise: Promise<string> = buildLifeRecordInjection(char, userProfile.name)
+        //    fire_pack 只要摘要数据，不要代记工具说明：后台生成时用户没在说话，那时候
+        //    输出的 [[LIFE:...]] 只可能是把历史里早就记过的事再记一遍。
+        const lifeRecordPromise: Promise<string> = buildLifeRecordInjection(char, userProfile.name, { forFirePack })
             .catch(e => {
                 console.error('Failed to inject life record context:', e);
                 return '';
@@ -426,7 +478,8 @@ ${groupLogStr}\n`;
         volatileState += realtimeText;
 
         // 2a. 日程注入（当前时段 + 意识流独白，每轮都可能变）
-        if (schedule) {
+        //     fire_pack 不烤：改由 worker 到点用 AMSG_SLOT_SCENE 现挑时段（见 amsgFireScene）。
+        if (schedule && !forFirePack) {
             try {
                 const scheduleContext = ContextBuilder.buildScheduleInjection(schedule, evolvedNarrative, charNow);
                 if (scheduleContext) volatileState += `\n${scheduleContext}\n`;
@@ -438,7 +491,10 @@ ${groupLogStr}\n`;
         // 2b. 音乐氛围（复用同一份 schedule）
         //     - 同步：从 schedule 里算 char 当前"正在听"哪首歌
         //     - 异步（可选）：拉一段歌词片段让这首歌真能影响 char 心境
-        try {
+        //     fire_pack 不烤：这首歌是按打包时刻的时段抽的，跟日程一起挪到 AMSG_SLOT_SCENE。
+        //     那边只渲染「你此刻在听什么」一句——一起听状态要读用户此刻的播放器、歌词要拉网络，
+        //     worker 两样都够不着。
+        if (!forFirePack) try {
             let charListening: {
                 songId?: number; songName: string; artists: string; vibe?: string; lyricSnippet?: string[];
             } | null = null;
@@ -487,7 +543,7 @@ ${groupLogStr}\n`;
         // - 有任务时注入状态块（verbose=true）。命令说明按 options.taskCommandGuide 决定：
         //   私聊默认 true；主动消息路径传 false 省 token（角色主动找用户时只需知道状态，不需要
         //   被教语法，因为 ta 主动发的消息一般不会输出 [[TASK_DONE]] 这种用户确认才用的命令）。
-        const includeCmdGuide = options?.taskCommandGuide !== false;
+        const includeCmdGuide = promptOptions?.taskCommandGuide !== false;
         try {
             const taskBlock = await buildTaskSupervisionContext(
                 char.id,
@@ -525,7 +581,7 @@ ${groupLogStr}\n`;
 
         // 备忘录管理能力（仅单聊场景注入；其他场景只读，由 buildCoreContext 注入列表本身）
         // 空备忘录也注入——让 AI 知道这个能力存在、什么时候想用就用
-        if (options?.memoManagement) {
+        if (promptOptions?.memoManagement) {
             baseSystemPrompt += `\n${renderMemoInstructionsOnly()}\n\n`;
         }
 
@@ -540,7 +596,10 @@ ${groupLogStr}\n`;
             // 强调这只是虚拟空间的挂机状态，不代表用户本人真的在场——避免角色据此误判现实。
             // 注意：用户登出（vrState.enabled=false）后这段自然不再注入。
             // 用户所在房间/状态实时变 → 进 volatileState（《彼方》是什么的框定仍留在稳定段）。
-            const uv = userProfile?.vrState;
+            // 打包时不注入：这一段说的是「用户此刻挂在哪个房间」，烤进模板之后，用户下线
+            // 好几个小时了角色还在说「看你小人挂在听歌房」。它没有对应的到点槽位——
+            // worker 够不着用户此刻的彼方状态，所以是「不补」的那一类。
+            const uv = forFirePack ? null : userProfile?.vrState;
             if (uv?.enabled) {
                 const VR_ROOM_NAMES: Record<string, string> = {
                     library: '图书馆', music: '听歌房', guestbook: '留言簿', gym: '娱乐室', postoffice: '邮局', cafe: '糯米鸡研发中心',
@@ -562,8 +621,19 @@ ${uname} 的化身正挂在《彼方》的【${roomName}】${act ? `，状态写
         // Per-character XHS: 必须由角色自己的开关显式打开（UI 默认关闭）。
         // 不再回退到全局 realtimeConfig.xhsEnabled —— 否则配置了 lite/MCP 后，
         // 即使角色开关显示为关，未显式设置过(undefined)的角色仍会收到小红书提示词。
-        const mcpXhsAvailable = !!(realtimeConfig?.xhsMcpConfig?.enabled && realtimeConfig?.xhsMcpConfig?.serverUrl);
+        const xhsServerUrl = realtimeConfig?.xhsMcpConfig?.serverUrl;
+        // 打包给主动消息时还要看 worker 够不够得着：小红书服务器多半跑在用户自己电脑上，
+        // CF 那头连不上。教了角色它就会去用，然后把一次没发生的搜索说成发生过。
+        const mcpXhsAvailable = !!(
+            realtimeConfig?.xhsMcpConfig?.enabled && xhsServerUrl
+            && (!forFirePack || isWorkerReachableUrl(xhsServerUrl))
+        );
         const xhsEnabled = !!(char.xhsEnabled && mcpXhsAvailable);
+        // `[schedule_message]` 排的是本地定时消息：存在浏览器里，靠 OSContext 那个 5 秒
+        // 轮询的 React 定时器派发，App 关着就不存在。主动消息 2.0 到点生成走的是另一条路
+        // （worker 到点跑，不需要 App 开着），它有自己的排程工具，worker 会把说明追加在
+        // fire_pack 末尾。两套一起教，角色会挑错的那套，然后「我到点叫你」就落空了。
+        const scheduleMessageTagEnabled = !forFirePack;
 
         baseSystemPrompt += `### 聊天 App 行为规范 (Chat App Rules)
             **严格注意，你正在手机聊天，无论之前是什么模式，哪怕上一句话你们还面对面在一起，当前，你都是已经处于线上聊天状态了，请不要输出你的行为**
@@ -604,7 +674,7 @@ ${uname} 的化身正挂在《彼方》的【${roomName}】${act ? `，状态写
    - **记账（你的钱包会真实变动）**: 当你在聊天里**真的发生了**一笔花销或进账时（比如你说自己买了咖啡、点了外卖、打车了，或收到稿费/兼职钱），在那句话的末尾附上: 花钱 \`[[ACTION:SPEND:金额|用途]]\`，进账 \`[[ACTION:INCOME:金额|来源]]\`（如 \`[[ACTION:SPEND:32|一杯燕麦拿铁]]\`）。规则: ①只记你**此刻实际发生**的收支，回忆过去/计划将来/打比方都不记；②金额按物价合理估，跟你的经济状况匹配；③工资、房租、月供这类固定收支系统会自动扣，**不要**用这个指令重复记；④转账走 TRANSFER，不要用 SPEND/INCOME 记转账；⑤买日用品/耗材时把**品名**写进用途（如 \`[[ACTION:SPEND:25|钢笔墨水]]\`），家里对应的补给库存会自动补上。这个账本影响你的"钱的直觉"，记了钱就真的少了/多了。` : ''}
    - 调取记忆: \`[[RECALL: YYYY-MM]]\`，请注意，当用户提及具体某个月份时，或者当你想仔细想某个月份的事情时，欢迎你随时使该动作
    - **添加纪念日**: 如果你觉得今天是个值得纪念的日子（或者你们约定了某天），你可以**主动**将它添加到用户的日历中。单独起一行输出: \`[[ACTION:ADD_EVENT | 标题(Title) | YYYY-MM-DD]]\`。
-   - **定时发送消息**: 如果你想在未来某个时间主动发消息（比如晚安、早安或提醒），请单独起一行输出: \`[schedule_message | YYYY-MM-DD HH:MM:SS | fixed | 消息内容]\`，分行可以多输出很多该类消息。
+${scheduleMessageTagEnabled ? `   - **定时发送消息**: 如果你想在未来某个时间主动发消息（比如晚安、早安或提醒），请单独起一行输出: \`[schedule_message | YYYY-MM-DD HH:MM:SS | fixed | 消息内容]\`，分行可以多输出很多该类消息。` : ''}
 ${notionEnabled ? `   - **翻阅日记(Notion)**: 你的记忆本身是完整可靠的，回忆过去优先靠记忆和 \`[[RECALL]]\`，**不需要**靠翻日记来"想起"事情。只有当你**自己**特别想重温那天日记里写下的心情、措辞或私密小细节时，才翻阅: \`[[READ_DIARY: 日期]]\`。支持格式: \`昨天\`、\`前天\`、\`3天前\`、\`1月15日\`、\`2024-01-15\`。` : ''}${feishuEnabled ? `
    - **翻阅日记(飞书)**: 同上——回忆优先靠记忆和 \`[[RECALL]]\`，只有你自己想重温那天日记的内容时才用: \`[[FS_READ_DIARY: 日期]]\`。支持格式同上。` : ''}${notionNotesEnabled ? `
    - **翻阅用户笔记**: 当你想看${userProfile.name}写的某篇笔记的详细内容时，使用: \`[[READ_NOTE: 标题关键词]]\`。系统会搜索匹配的笔记并返回内容给你。` : ''}
@@ -870,8 +940,10 @@ ${xhsEnabled ? `${[notionEnabled, feishuEnabled, notionNotesEnabled].filter(Bool
 
 `;
 
-        // 「刚结束见面/通话」的切换提示由倒数第二条消息推导，随对话推进而变 → 易变段
-        const previousMsg = currentMsgs.length > 1 ? currentMsgs[currentMsgs.length - 2] : null;
+        // 「刚结束见面/通话」的切换提示由倒数第二条消息推导，随对话推进而变 → 易变段。
+        // fire_pack 不烤：打包时确实刚挂电话，但那条主动消息可能是第二天凌晨才发出去的，
+        // 角色照着这句接一句「刚才电话里说的那个……」就穿帮了。
+        const previousMsg = (currentMsgs.length > 1 && !forFirePack) ? currentMsgs[currentMsgs.length - 2] : null;
         if (previousMsg && previousMsg.metadata?.source === 'date') {
             volatileState += `\n\n[System Note: You just finished a face-to-face meeting. You are now back on the phone. Switch back to texting style.]`;
         }
