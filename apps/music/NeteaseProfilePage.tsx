@@ -252,15 +252,23 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
         setRecords(arr);
       }
 
-      // 云盘歌曲
+      // 云盘歌曲：/user/cloud 每条记录形如
+      //   { songId, songName, artist, album, simpleSong: { id, name, ar[], al:{name,picUrl}, ... } }
+      // 顶层 artist/album 是字符串但常为空，封面也只在 simpleSong.al.picUrl 里。
+      // 优先取 simpleSong 的完整字段，顶层做兜底。
       if (clRes.status === 'fulfilled' && clRes.value) {
-        const arr = (clRes.value.data || []).map((s: any) => ({
-          id: s.songId,
-          name: s.songName || '未知',
-          artists: (s.ar || []).map((a: any) => a.name).join('/'),
-          album: s.al?.name || '',
-          albumPic: toHttps(s.al?.picUrl || ''),
-        }));
+        const arr = (clRes.value.data || []).map((s: any) => {
+          const ss = s.simpleSong || {};
+          const ar = Array.isArray(ss.ar) ? ss.ar.map((a: any) => a.name).filter(Boolean)
+            : (s.artist ? [s.artist] : []);
+          return {
+            id: s.songId ?? ss.id,
+            name: s.songName || ss.name || '未知',
+            artists: ar.join('/') || '未知歌手',
+            album: ss.al?.name || s.album || '',
+            albumPic: toHttps(ss.al?.picUrl || ''),
+          };
+        });
         setCloud(arr);
       }
 
