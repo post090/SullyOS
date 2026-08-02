@@ -899,11 +899,12 @@ const Settings: React.FC = () => {
       if (!name.trim() || !baseUrl.trim() || !apiKey.trim() || !model.trim()) { addToast('站名 / URL / KEY / 模型都要填', 'error'); return; }
       const lbl = label.trim() || model.trim();
       // 底层就是一条官方预设：「站名（模型标签）」，跟老命名习惯完全一致
+      // label 同时独立存一份，别名含括号也不会被 splitPresetName 截断
       addApiPreset(presetNameFor(name.trim(), lbl), {
           baseUrl: baseUrl.trim(), apiKey: apiKey.trim(), model: model.trim(),
           stream: apiConfig.stream === true,
           temperature: typeof apiConfig.temperature === 'number' ? apiConfig.temperature : 0.85,
-      });
+      }, lbl);
       renameStationInMeta(stationKey(baseUrl, apiKey), name.trim());
       updateApiConfig({ baseUrl: baseUrl.trim(), apiKey: apiKey.trim(), model: model.trim() });
       setShowNewStation(false);
@@ -919,11 +920,12 @@ const Settings: React.FC = () => {
       if (!model.trim()) { addToast('模型 id 不能空', 'error'); return; }
       if (st.models.some(m => m.model === model.trim())) { addToast('这个模型已经在站里了', 'error'); return; }
       const first = st.models[0];
-      addApiPreset(presetNameFor(st.name, label.trim() || model.trim()), {
+      const lbl = label.trim() || model.trim();
+      addApiPreset(presetNameFor(st.name, lbl), {
           baseUrl: st.baseUrl, apiKey: st.apiKey, model: model.trim(),
           stream: first ? first.stream : false, // 继承站内既有模型的流式/温度习惯
           temperature: first ? first.temperature : 0.85,
-      });
+      }, lbl);
       setNewModel({ model: '', label: '' });
       addToast('模型已加入站点', 'success');
   };
@@ -3775,7 +3777,7 @@ const Settings: React.FC = () => {
           <div className="space-y-3">
               <div>
                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 block">站名</label>
-                  <input value={newStation.name} onChange={e => setNewStation(s => ({ ...s, name: e.target.value }))} className="w-full bg-slate-100 rounded-xl px-4 py-3 text-sm focus:outline-primary" autoFocus placeholder="例如：肘子" />
+                  <input value={newStation.name} onChange={e => setNewStation(s => ({ ...s, name: e.target.value }))} className="w-full bg-slate-100 rounded-xl px-4 py-3 text-sm focus:outline-primary" autoFocus placeholder="给这个站点起个名字" />
               </div>
               <div>
                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 block">URL</label>

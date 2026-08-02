@@ -448,6 +448,9 @@ export interface ApiPreset {
   id: string;
   name: string;
   config: APIConfig;
+  /** 模型别名（站点视图专用，独立于 name 存储，避免别名含括号时被 splitPresetName 截断）。
+   *  旧备份没有这个字段 → deriveStations 回退到从 name 解析括号内容。 */
+  label?: string;
 }
 
 /** 情绪/日程提示词模板（全局共通，存 localStorage） */

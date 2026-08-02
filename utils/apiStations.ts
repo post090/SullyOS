@@ -65,7 +65,9 @@ export const markStationViewConfirmed = (): void => {
 export const stationKey = (baseUrl: string, apiKey: string): string =>
     `${(baseUrl || '').trim().replace(/\/+$/, '')}|${(apiKey || '').trim()}`;
 
-// 「肘子（3.1P）」→ { prefix: '肘子', label: '3.1P' }；没有括号 → label 空
+// 「站名（别名）」→ { prefix: '站名', label: '别名' }；没有括号 → label 空
+// 仅用于兼容旧备份（没有 ApiPreset.label 字段时从 name 解析）。
+// 别名含括号时此正则会截断，新数据走 ApiPreset.label 字段不再依赖它。
 const splitPresetName = (name: string): { prefix: string; label: string } => {
     const m = name.match(/^(.*?)[（(]([^（()）]+)[)）]\s*$/);
     if (m) return { prefix: m[1].trim(), label: m[2].trim() };
@@ -107,11 +109,14 @@ export const deriveStations = (presets: ApiPreset[], meta?: StationMeta): Statio
             baseUrl: group[0].config.baseUrl,
             apiKey: group[0].config.apiKey,
             models: group.map(p => {
-                const { label } = splitPresetName(p.name);
+                // 新数据：p.label 字段直接存了别名，不再依赖 name 解析
+                // 旧数据：从 name 的括号里解析（别名含括号会截断，但旧数据已那样了，保持现状）
+                const parsedLabel = splitPresetName(p.name).label;
+                const label = p.label ?? (parsedLabel || p.config.model);
                 return {
                     presetId: p.id,
                     model: p.config.model,
-                    label: label || p.config.model,
+                    label,
                     stream: p.config.stream === true,
                     temperature: typeof p.config.temperature === 'number' ? p.config.temperature : 0.85,
                 };

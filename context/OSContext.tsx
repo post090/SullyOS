@@ -313,7 +313,7 @@ interface OSContextType {
   
   // API Presets
   apiPresets: ApiPreset[];
-  addApiPreset: (name: string, config: APIConfig) => void;
+  addApiPreset: (name: string, config: APIConfig, label?: string) => void;
   savePresets: (presets: ApiPreset[]) => void; // 批量覆写（站点视图的增删改用）
   updateApiPreset: (id: string, name: string, config: APIConfig) => void;
   removeApiPreset: (id: string) => void;
@@ -3238,7 +3238,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     localStorage.setItem('os_remote_vector_config', JSON.stringify(newConfig));
   };
   const saveModels = (models: string[]) => { setAvailableModels(models); localStorage.setItem('os_available_models', JSON.stringify(models)); };
-  const addApiPreset = (name: string, config: APIConfig) => { setApiPresets(prev => { const next = [...prev, { id: Date.now().toString(), name, config }]; localStorage.setItem('os_api_presets', JSON.stringify(next)); return next; }); };
+  const addApiPreset = (name: string, config: APIConfig, label?: string) => { setApiPresets(prev => { const next = [...prev, { id: Date.now().toString(), name, config, ...(label ? { label } : {}) }]; localStorage.setItem('os_api_presets', JSON.stringify(next)); return next; }); };
   const updateApiPreset = (id: string, name: string, config: APIConfig) => { setApiPresets(prev => { const next = prev.map(p => p.id === id ? { ...p, name, config } : p); localStorage.setItem('os_api_presets', JSON.stringify(next)); return next; }); };
   const removeApiPreset = (id: string) => { setApiPresets(prev => { const next = prev.filter(p => p.id !== id); localStorage.setItem('os_api_presets', JSON.stringify(next)); return next; }); };
   const savePresets = (presets: ApiPreset[]) => { setApiPresets(presets); localStorage.setItem('os_api_presets', JSON.stringify(presets)); };

@@ -132,6 +132,8 @@ const MusicApp: React.FC = () => {
   const [playerFrom, setPlayerFrom] = useState<View>('profile');
   // 播放页歌曲操作半屏菜单（跟歌单行三点按钮同一个 Sheet）
   const [playerSheetSong, setPlayerSheetSong] = useState<Song | null>(null);
+  // 搜索结果曲目操作半屏菜单
+  const [searchSheetSong, setSearchSheetSong] = useState<Song | null>(null);
   const openPlayer = () => {
     setPlayerFrom(view);
     setView('player');
@@ -297,6 +299,7 @@ const MusicApp: React.FC = () => {
             isVip={s.fee === 1}
             isActive={current?.id === s.id}
             onClick={() => playSong(s)}
+            onMore={() => setSearchSheetSong(s)}
           />
         ))}
       </div>
@@ -951,6 +954,17 @@ const MusicApp: React.FC = () => {
           song={playerSheetSong}
           onClose={() => setPlayerSheetSong(null)}
           onOpenComments={s => { setPlayerSheetSong(null); setCommentSong(s); setCommentsFrom('player'); setView('comments'); }}
+          onOpenArtist={openArtist}
+          onOpenAlbum={openAlbum}
+        />
+      )}
+
+      {/* 搜索结果曲目操作半屏菜单（跟歌单行三点按钮同款） */}
+      {searchSheetSong && (
+        <SongActionsSheet
+          song={searchSheetSong}
+          onClose={() => setSearchSheetSong(null)}
+          onOpenComments={s => { setSearchSheetSong(null); setCommentSong(s); setCommentsFrom('search'); setView('comments'); }}
           onOpenArtist={openArtist}
           onOpenAlbum={openAlbum}
         />

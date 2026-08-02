@@ -6,6 +6,7 @@ import React, { useEffect } from 'react';
 import {
   ArrowLeft, X, MagnifyingGlass,
   Play, Pause, SkipBack, SkipForward,
+  DotsThreeVertical,
 } from '@phosphor-icons/react';
 import { useBlobRefUrl } from '../../utils/blobRef';
 
@@ -176,11 +177,11 @@ export const SongRow: React.FC<{
   isVip: boolean;
   isActive: boolean;
   onClick: () => void;
-}> = ({ name, artists, album, albumPic, duration, isVip, isActive, onClick }) => {
+  onMore?: () => void;             // 右侧三点菜单（跟歌单行同款半屏操作菜单）
+}> = ({ name, artists, album, albumPic, duration, isVip, isActive, onClick, onMore }) => {
   const resolvedAlbumPic = useBlobRefUrl(albumPic) || '';
   return (
-  <button
-    onClick={onClick}
+  <div
     className="w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl transition-all mb-1.5 mx-1"
     style={{
       background: isActive
@@ -191,24 +192,36 @@ export const SongRow: React.FC<{
       boxShadow: isActive ? `0 2px 16px ${C.glow}15` : 'none',
     }}
   >
-    {/* 封面 — 圆角 + 水光边框 */}
-    <div className="relative shrink-0">
-      <img src={resolvedAlbumPic} alt="" className="w-11 h-11 rounded-xl object-cover"
-        style={{ border: `1.5px solid ${isActive ? C.accent + '60' : C.faint + '40'}` }} />
-      {isActive && <div className="absolute -top-0.5 -right-0.5"><Sparkle size={8} color={C.glow} delay={0.3} /></div>}
-    </div>
-    <div className="flex-1 min-w-0 text-left">
-      <div className="flex items-center gap-1.5 text-sm truncate" style={{ color: C.text }}>
-        {isVip && (
-          <span className="text-[8px] px-1.5 py-[1px] rounded-full text-white font-medium shrink-0"
-            style={{ background: `linear-gradient(135deg, ${C.vip}, #e0b88a)`, letterSpacing: '0.05em' }}>VIP</span>
-        )}
-        <span className="truncate font-normal">{name}</span>
+    <button onClick={onClick} className="flex items-center gap-3 flex-1 min-w-0 text-left">
+      {/* 封面 — 圆角 + 水光边框 */}
+      <div className="relative shrink-0">
+        <img src={resolvedAlbumPic} alt="" className="w-11 h-11 rounded-xl object-cover"
+          style={{ border: `1.5px solid ${isActive ? C.accent + '60' : C.faint + '40'}` }} />
+        {isActive && <div className="absolute -top-0.5 -right-0.5"><Sparkle size={8} color={C.glow} delay={0.3} /></div>}
       </div>
-      <div className="text-[11px] truncate mt-0.5" style={{ color: C.muted }}>{artists} · {album}</div>
-    </div>
-    <div className="text-[10px] shrink-0 tabular-nums" style={{ color: C.faint }}>{duration}</div>
-  </button>
+      <div className="flex-1 min-w-0 text-left">
+        <div className="flex items-center gap-1.5 text-sm truncate" style={{ color: C.text }}>
+          {isVip && (
+            <span className="text-[8px] px-1.5 py-[1px] rounded-full text-white font-medium shrink-0"
+              style={{ background: `linear-gradient(135deg, ${C.vip}, #e0b88a)`, letterSpacing: '0.05em' }}>VIP</span>
+          )}
+          <span className="truncate font-normal">{name}</span>
+        </div>
+        <div className="text-[11px] truncate mt-0.5" style={{ color: C.muted }}>{artists} · {album}</div>
+      </div>
+      <div className="text-[10px] shrink-0 tabular-nums" style={{ color: C.faint }}>{duration}</div>
+    </button>
+    {onMore && (
+      <button
+        onClick={onMore}
+        className="p-2 shrink-0 transition-transform active:scale-90"
+        style={{ color: C.faint }}
+        title="歌曲操作（下一首/收藏/评论/歌手/分享）"
+      >
+        <DotsThreeVertical size={17} />
+      </button>
+    )}
+  </div>
   );
 };
 
