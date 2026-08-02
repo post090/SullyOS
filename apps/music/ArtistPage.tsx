@@ -193,11 +193,12 @@ const ArtistPage: React.FC<Props> = ({ artistId, artistName, onBack, onOpenPlaye
                 style={{ borderColor: `${C.faint}40`, borderTopColor: C.primary }} />
             )}
           </div>
-          {/* 歌曲列表（SongRow 统一样式） */}
+          {/* 歌曲列表（SongRow 统一样式 + 序号） */}
           <div className="px-1">
-            {allSongs.map(s => (
+            {allSongs.map((s, i) => (
               <SongRow
                 key={s.id}
+                index={i + 1}
                 name={s.name}
                 artists={s.artists}
                 album={s.album}
@@ -326,11 +327,12 @@ const ArtistPage: React.FC<Props> = ({ artistId, artistName, onBack, onOpenPlaye
                 <span className="text-[10px]" style={{ color: C.faint }}>前 {hotSongs.length} 首</span>
               </div>
             )}
-            {/* 歌曲列表（SongRow 统一样式） */}
+            {/* 歌曲列表（SongRow 统一样式 + 序号） */}
             <div className="px-1">
-              {hotSongs.map(s => (
+              {hotSongs.map((s, i) => (
                 <SongRow
                   key={s.id}
+                  index={i + 1}
                   name={s.name}
                   artists={s.artists}
                   album={s.album}

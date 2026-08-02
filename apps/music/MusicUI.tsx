@@ -178,7 +178,8 @@ export const SongRow: React.FC<{
   isActive: boolean;
   onClick: () => void;
   onMore?: () => void;             // 右侧三点菜单（跟歌单行同款半屏操作菜单）
-}> = ({ name, artists, album, albumPic, duration, isVip, isActive, onClick, onMore }) => {
+  index?: number;                  // 序号（艺人页/全屏歌单用，不传则不显示）
+}> = ({ name, artists, album, albumPic, duration, isVip, isActive, onClick, onMore, index }) => {
   const resolvedAlbumPic = useBlobRefUrl(albumPic) || '';
   return (
   <div
@@ -193,6 +194,16 @@ export const SongRow: React.FC<{
     }}
   >
     <button onClick={onClick} className="flex items-center gap-3 flex-1 min-w-0 text-left">
+      {/* 序号（艺人页/全屏歌单用，当前播放行显示为播放波纹而非数字） */}
+      {index != null && (
+        <div className="w-5 shrink-0 text-center">
+          {isActive ? (
+            <Sparkle size={8} color={C.glow} delay={0.3} />
+          ) : (
+            <span className="text-[11px] tabular-nums" style={{ color: C.faint }}>{index}</span>
+          )}
+        </div>
+      )}
       {/* 封面 — 圆角 + 水光边框 */}
       <div className="relative shrink-0">
         <img src={resolvedAlbumPic} alt="" className="w-11 h-11 rounded-xl object-cover"

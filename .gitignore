@@ -28,6 +28,9 @@ public/instant-worker.bundle.js
 *.sln
 *.sw?
 
+# Claude Code 本地配置/缓存（不入仓库）
+.claude/
+
 # xiaohongshu-skills (cloned dependency)
 xiaohongshu-skills/
 
