@@ -34,6 +34,10 @@ export interface Song {
   albumPic: string;
   duration: number;
   fee: number;
+  /** 歌手 id 列表（与 artists 的 ' / ' 分隔顺序一一对应）。缺失时歌手名不可点击。 */
+  artistIds?: number[];
+  /** 专辑 id（点专辑名进专辑页用，缺失则不可点）。 */
+  albumId?: number;
   // ── Local-source extensions (used for AI-generated songs from 写歌 App) ──
   /** True for songs not from netease — play them via blob from IndexedDB. */
   local?: boolean;
@@ -302,6 +306,25 @@ export const musicApi = {
   },
   playlistTrackAll(cfg: MusicCfg, id: number, limit = 50, offset = 0) {
     return musicApi.call(cfg, '/playlist/track/all', { id, limit, offset });
+  },
+  album(cfg: MusicCfg, id: number) {
+    return musicApi.call(cfg, '/album', { id });
+  },
+  /** 我收藏的专辑列表（用户专属，不缓存） */
+  albumSublist(cfg: MusicCfg, limit = 50, offset = 0) {
+    return musicApi.call(cfg, '/album/sublist', { limit, offset });
+  },
+  /** 歌手详情（头像/简介/作品数） */
+  artist(cfg: MusicCfg, id: number) {
+    return musicApi.call(cfg, '/artists', { id });
+  },
+  /** 歌手热门歌曲 */
+  artistSongs(cfg: MusicCfg, id: number, limit = 50) {
+    return musicApi.call(cfg, '/artist/songs', { id, limit });
+  },
+  /** 歌手专辑列表 */
+  artistAlbums(cfg: MusicCfg, id: number, limit = 30, offset = 0) {
+    return musicApi.call(cfg, '/artist/album', { id, limit, offset });
   },
   recommendSongs(cfg: MusicCfg) {
     return musicApi.call(cfg, '/recommend/songs', {});

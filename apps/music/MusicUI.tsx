@@ -212,6 +212,39 @@ export const SongRow: React.FC<{
   );
 };
 
+/* ══════════ 可点击歌手名 — 多歌手按 ' / ' 分隔、逐个可点；id 对不上时降级纯文本 ══════════ */
+export const ArtistLinks: React.FC<{
+  artists: string;
+  artistIds?: number[];
+  onOpenArtist: (id: number, name: string) => void;
+  className?: string;
+  style?: React.CSSProperties;
+}> = ({ artists, artistIds, onOpenArtist, className = '', style }) => {
+  const names = (artists || '').split(' / ').map(s => s.trim()).filter(Boolean);
+  if (names.length === 0) return null;
+  // 本地歌 / 老数据没有完整 id 时不可点，保持纯文本展示
+  const clickable = Array.isArray(artistIds) && artistIds.length === names.length;
+  if (!clickable) {
+    return <span className={className} style={style}>{artists}</span>;
+  }
+  return (
+    <span className={className} style={style}>
+      {names.map((n, i) => (
+        <React.Fragment key={i}>
+          {i > 0 && <span style={{ color: C.faint }}> / </span>}
+          <button
+            onClick={(e) => { e.stopPropagation(); onOpenArtist(artistIds![i], n); }}
+            className="hover:underline underline-offset-2 transition-colors"
+            style={{ color: C.primary }}
+          >
+            {n}
+          </button>
+        </React.Fragment>
+      ))}
+    </span>
+  );
+};
+
 /* ══════════ 小头像 — 处理 emoji / URL / data: 三种 avatar ══════════ */
 const TinyAvatar: React.FC<{
   avatar?: string;

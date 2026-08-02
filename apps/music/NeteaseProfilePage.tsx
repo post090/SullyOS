@@ -12,6 +12,7 @@ import {
 import { MagnifyingGlass, Gear, User as UserIcon } from '@phosphor-icons/react';
 import NeteaseLoginPanel from './NeteaseLoginPanel';
 import { neteaseCacheGet, neteaseCacheSet } from '../../utils/neteaseCache';
+import type { AlbumSource } from './AlbumDetailPage';
 
 export interface Playlist {
   id: number;
@@ -22,17 +23,10 @@ export interface Playlist {
   creatorNickname?: string;
 }
 
-interface RecordItem {
-  song: Song;
-  score: number;
-  playCount: number;
-}
-
-/** 「我的」页三件套的离线快照（IndexedDB，SWR：先上屏再后台刷新） */
+/** 「我的」页的离线快照（IndexedDB，SWR：先上屏再后台刷新） */
 interface HomeSnapshot {
   playlists: Playlist[];
-  records: RecordItem[];
-  cloud: Song[];
+  albums: AlbumSource[];
 }
 
 interface Props {
@@ -43,6 +37,8 @@ interface Props {
   onVisitChar?: (charId: string) => void;
   /** 点歌单行进统一歌单详情页（只读全曲目） */
   onOpenPlaylist?: (pl: Playlist) => void;
+  /** 点专辑进专辑详情页 */
+  onOpenAlbum?: (album: AlbumSource) => void;
 }
 
 // ─── 「一起写的歌」本地专辑卡 — 写歌 App 同步过来的 ACE-Step / MiniMax 出歌 ───
@@ -159,7 +155,7 @@ const LocalAlbumCard: React.FC<LocalAlbumCardProps> = ({ songs, expanded, setExp
   </div>
 );
 
-const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearch, onOpenSettings, onVisitChar, onOpenPlaylist }) => {
+const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearch, onOpenSettings, onVisitChar, onOpenPlaylist, onOpenAlbum }) => {
   const { addToast, characters, userProfile } = useOS();
   const {
     cfg, setCfg, profile, refreshProfile, playSong,
@@ -180,10 +176,9 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
       .map(c => ({ id: c.id, name: c.name, avatar: c.avatar }));
   }, [listeningTogetherWith, characters]);
 
-  const [tab, setTab] = useState<'playlist' | 'record' | 'cloud'>('playlist');
+  const [tab, setTab] = useState<'created' | 'collected' | 'albums'>('created');
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
-  const [records, setRecords] = useState<RecordItem[]>([]);
-  const [cloud, setCloud] = useState<Song[]>([]);
+  const [albums, setAlbums] = useState<AlbumSource[]>([]);
   const [loading, setLoading] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
 
@@ -212,16 +207,14 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
     if (!uid || !curCfg.cookie) return;
     setLoading(true);
     try {
-      const [plRes, recRes, clRes] = await Promise.allSettled([
+      const [plRes, albRes] = await Promise.allSettled([
         musicApi.userPlaylist(curCfg, uid),
-        musicApi.userRecord(curCfg, uid, 1),
-        musicApi.userCloud(curCfg),
+        musicApi.albumSublist(curCfg, 60),
       ]);
 
       // 本次拉到的新鲜数据（null = 该项失败，落快照时用旧值兜底）
       let nextPl: Playlist[] | null = null;
-      let nextRec: RecordItem[] | null = null;
-      let nextCloud: Song[] | null = null;
+      let nextAlb: AlbumSource[] | null = null;
 
       if (plRes.status === 'fulfilled') {
         const arr = (plRes.value?.playlist || []).map((p: any): Playlist => ({
@@ -236,47 +229,26 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
         setPlaylists(arr);
       }
 
-      if (recRes.status === 'fulfilled') {
-        const weekly = recRes.value?.weekData || recRes.value?.allData || [];
-        const mapped: RecordItem[] = weekly.map((r: any): RecordItem => ({
-          score: r.score || 0,
-          playCount: r.playCount || 0,
-          song: {
-            id: r.song?.id,
-            name: r.song?.name || '',
-            artists: (r.song?.ar || []).map((a: any) => a.name).join(' / '),
-            album: r.song?.al?.name || '',
-            albumPic: toHttps(r.song?.al?.picUrl || ''),
-            duration: (r.song?.dt || 0) / 1000,
-            fee: r.song?.fee ?? 0,
-          },
+      if (albRes.status === 'fulfilled') {
+        const list = albRes.value?.data || albRes.value?.albums || [];
+        const arr: AlbumSource[] = (Array.isArray(list) ? list : []).map((a: any) => ({
+          id: a.id,
+          name: a.name,
+          coverImgUrl: toHttps(a.picUrl || a.coverImgUrl || ''),
+          artistName: a.artist?.name,
+          artistId: a.artist?.id,
+          trackCount: a.size,
         }));
-        nextRec = mapped;
-        setRecords(mapped);
-      }
-
-      if (clRes.status === 'fulfilled') {
-        const clData = clRes.value?.data || [];
-        const mapped: Song[] = clData.map((c: any): Song => ({
-          id: c.songId || c.simpleSong?.id,
-          name: c.songName || c.simpleSong?.name || '',
-          artists: c.artist || (c.simpleSong?.ar || []).map((a: any) => a.name).join(' / '),
-          album: c.album || c.simpleSong?.al?.name || '',
-          albumPic: toHttps(c.simpleSong?.al?.picUrl || ''),
-          duration: (c.simpleSong?.dt || 0) / 1000,
-          fee: 0,
-        }));
-        nextCloud = mapped;
-        setCloud(mapped);
+        nextAlb = arr;
+        setAlbums(arr);
       }
 
       // 落离线快照：失败的项用旧快照兜底，别拿空数组把好数据盖没了
-      if (nextPl || nextRec || nextCloud) {
+      if (nextPl || nextAlb) {
         const prev = await neteaseCacheGet<HomeSnapshot>(`home:${uid}`);
         neteaseCacheSet(`home:${uid}`, {
           playlists: nextPl ?? prev?.data.playlists ?? [],
-          records: nextRec ?? prev?.data.records ?? [],
-          cloud: nextCloud ?? prev?.data.cloud ?? [],
+          albums: nextAlb ?? prev?.data.albums ?? [],
         } satisfies HomeSnapshot);
       }
     } catch (e: any) {
@@ -294,8 +266,7 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
     neteaseCacheGet<HomeSnapshot>(`home:${uid}`).then(hit => {
       if (cancelled || !hit) return;
       setPlaylists(prev => (prev.length ? prev : hit.data.playlists || []));
-      setRecords(prev => (prev.length ? prev : hit.data.records || []));
-      setCloud(prev => (prev.length ? prev : hit.data.cloud || []));
+      setAlbums(prev => (prev.length ? prev : hit.data.albums || []));
     });
     return () => { cancelled = true; };
   }, [uid]);
@@ -691,9 +662,9 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
         {/* Tabs */}
         <div className="mx-4 mt-5 flex items-center gap-1 shizuku-glass rounded-full p-1">
           {([
-            { k: 'playlist', label: '歌单' },
-            { k: 'record', label: '最近' },
-            { k: 'cloud', label: '云盘' },
+            { k: 'created', label: '创建' },
+            { k: 'collected', label: '收藏' },
+            { k: 'albums', label: '专辑' },
           ] as const).map(t => (
             <button
               key={t.k}
@@ -717,7 +688,7 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
           </div>
         )}
 
-        {tab === 'playlist' && (
+        {tab === 'created' && (
           <div className="px-3 mt-3 space-y-2">
             {localAlbumSongs.length > 0 && (
               <LocalAlbumCard
@@ -730,83 +701,98 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
                 onRemove={removeLocalSong}
               />
             )}
-            {playlists.length === 0 && !loading && localAlbumSongs.length === 0 && (
-              <div className="text-center text-[11px] py-10" style={{ color: C.faint }}>还没有歌单</div>
-            )}
-            {playlists.map(pl => (
-              <div key={pl.id} className="rounded-2xl shizuku-glass overflow-hidden">
-                <button
-                  onClick={() => onOpenPlaylist?.(pl)}
-                  className="w-full flex items-center gap-3 p-2.5 text-left"
-                >
-                  <img src={pl.coverImgUrl} alt=""
-                    className="w-12 h-12 rounded-xl object-cover"
-                    style={{ border: `1px solid ${C.faint}30` }} />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm truncate" style={{ color: C.text }}>{pl.name}</div>
-                    <div className="text-[10px] truncate" style={{ color: C.muted }}>
-                      {pl.trackCount} 首 · {pl.subscribed ? '收藏' : '创建'}
-                      {pl.creatorNickname && ` · ${pl.creatorNickname}`}
+            {(() => {
+              const mine = playlists.filter(p => !p.subscribed);
+              if (mine.length === 0 && !loading && localAlbumSongs.length === 0) {
+                return <div className="text-center text-[11px] py-10" style={{ color: C.faint }}>还没有创建的歌单</div>;
+              }
+              return mine.map(pl => (
+                <div key={pl.id} className="rounded-2xl shizuku-glass overflow-hidden">
+                  <button
+                    onClick={() => onOpenPlaylist?.(pl)}
+                    className="w-full flex items-center gap-3 p-2.5 text-left"
+                  >
+                    <img src={pl.coverImgUrl} alt=""
+                      className="w-12 h-12 rounded-xl object-cover"
+                      style={{ border: `1px solid ${C.faint}30` }} />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm truncate" style={{ color: C.text }}>{pl.name}</div>
+                      <div className="text-[10px] truncate" style={{ color: C.muted }}>
+                        {pl.trackCount} 首
+                      </div>
                     </div>
+                    <div className="text-[10px] shrink-0" style={{ color: C.accent }}>›</div>
+                  </button>
+                </div>
+              ));
+            })()}
+          </div>
+        )}
+
+        {tab === 'collected' && (
+          <div className="px-3 mt-3 space-y-2">
+            {(() => {
+              const saved = playlists.filter(p => p.subscribed);
+              if (saved.length === 0 && !loading) {
+                return <div className="text-center text-[11px] py-10" style={{ color: C.faint }}>还没有收藏的歌单</div>;
+              }
+              return saved.map(pl => (
+                <div key={pl.id} className="rounded-2xl shizuku-glass overflow-hidden">
+                  <button
+                    onClick={() => onOpenPlaylist?.(pl)}
+                    className="w-full flex items-center gap-3 p-2.5 text-left"
+                  >
+                    <img src={pl.coverImgUrl} alt=""
+                      className="w-12 h-12 rounded-xl object-cover"
+                      style={{ border: `1px solid ${C.faint}30` }} />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm truncate" style={{ color: C.text }}>{pl.name}</div>
+                      <div className="text-[10px] truncate" style={{ color: C.muted }}>
+                        {pl.trackCount} 首{pl.creatorNickname ? ` · ${pl.creatorNickname}` : ''}
+                      </div>
+                    </div>
+                    <div className="text-[10px] shrink-0" style={{ color: C.accent }}>›</div>
+                  </button>
+                </div>
+              ));
+            })()}
+          </div>
+        )}
+
+        {tab === 'albums' && (
+          <div className="px-3 mt-3">
+            {albums.length === 0 && !loading && (
+              <div className="text-center text-[11px] py-10" style={{ color: C.faint }}>还没有收藏的专辑</div>
+            )}
+            <div className="grid grid-cols-3 gap-2.5">
+              {albums.map(a => (
+                <button
+                  key={a.id}
+                  onClick={() => onOpenAlbum?.(a)}
+                  className="text-left group"
+                >
+                  <div className="relative rounded-xl overflow-hidden"
+                    style={{ boxShadow: `0 2px 12px ${C.glow}25` }}>
+                    {a.coverImgUrl ? (
+                      <img src={a.coverImgUrl} alt=""
+                        className="w-full aspect-square object-cover transition-transform group-active:scale-95" />
+                    ) : (
+                      <div className="w-full aspect-square flex items-center justify-center"
+                        style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.accent})` }}>
+                        <span className="text-[9px] text-white">专辑</span>
+                      </div>
+                    )}
+                    <div className="absolute -top-0.5 -right-0.5"><Sparkle size={7} color={C.glow} delay={0.4} /></div>
                   </div>
-                  <div className="text-[10px] shrink-0" style={{ color: C.accent }}>
-                    ›
+                  <div className="text-[10px] mt-1 leading-snug line-clamp-2" style={{ color: C.text }}>
+                    {a.name}
+                  </div>
+                  <div className="text-[9px] truncate" style={{ color: C.faint }}>
+                    {a.artistName || ''}{a.trackCount ? ` · ${a.trackCount}首` : ''}
                   </div>
                 </button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {tab === 'record' && (
-          <div className="px-3 mt-3 space-y-1">
-            {records.length === 0 && !loading && (
-              <div className="text-center text-[11px] py-10" style={{ color: C.faint }}>最近一周还没有播放记录</div>
-            )}
-            {records.map((r, i) => (
-              <button key={r.song.id + '-' + i}
-                onClick={() => {
-                  const q = records.map(x => x.song);
-                  playSong(r.song, { replaceQueue: q, startIdx: i });
-                  onOpenPlayer();
-                }}
-                className="w-full flex items-center gap-3 p-2 rounded-2xl text-left transition-all"
-                style={{ background: 'rgba(255,255,255,0.06)' }}
-              >
-                <div className="text-[10px] w-5 text-center shrink-0" style={{ color: C.faint }}>{i + 1}</div>
-                <img src={r.song.albumPic} alt="" className="w-10 h-10 rounded-lg object-cover" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm truncate" style={{ color: C.text }}>{r.song.name}</div>
-                  <div className="text-[10px] truncate" style={{ color: C.muted }}>{r.song.artists}</div>
-                </div>
-                <div className="text-[9px] shrink-0 text-right" style={{ color: C.accent }}>
-                  <div>×{r.playCount}</div>
-                  <div className="opacity-60">{Math.round(r.score)}°</div>
-                </div>
-              </button>
-            ))}
-          </div>
-        )}
-
-        {tab === 'cloud' && (
-          <div className="px-3 mt-3 space-y-1">
-            {cloud.length === 0 && !loading && (
-              <div className="text-center text-[11px] py-10" style={{ color: C.faint }}>云盘里还没有歌曲</div>
-            )}
-            {cloud.map((s, i) => (
-              <button key={s.id + '-' + i}
-                onClick={() => { playSong(s, { replaceQueue: cloud, startIdx: i }); onOpenPlayer(); }}
-                className="w-full flex items-center gap-3 p-2 rounded-2xl text-left transition-all"
-                style={{ background: 'rgba(255,255,255,0.06)' }}
-              >
-                <img src={s.albumPic || 'https://p1.music.126.net/y19E5SadGUmSR8SZxkrNtw==/109951163965029180.jpg'}
-                  alt="" className="w-10 h-10 rounded-lg object-cover" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm truncate" style={{ color: C.text }}>{s.name}</div>
-                  <div className="text-[10px] truncate" style={{ color: C.muted }}>{s.artists} · {s.album}</div>
-                </div>
-              </button>
-            ))}
+              ))}
+            </div>
           </div>
         )}
       </div>

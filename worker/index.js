@@ -737,6 +737,7 @@ const NETEASE_CACHE_TTL = {
   'album':                    1800,     // 30分
   'artists':                  1800,
   'artist/songs':             1800,
+  'artist/album':             1800,
   'mv/detail':                1800,
   // 中期
   'search':                    600,     // 10分
@@ -797,8 +798,10 @@ const NETEASE_ACTION_REWRITE = {
   "lyric/new": "/lyric/new",
   "comment/music": "/comment/music",
   "album": "/album",
+  "album/sublist": "/album/sublist",
   "artists": "/artists",
   "artist/songs": "/artist/songs",
+  "artist/album": "/artist/album",
   "mv/detail": "/mv/detail",
   "mv/url": "/mv/url",
 };

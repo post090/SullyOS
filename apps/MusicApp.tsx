@@ -9,12 +9,14 @@ import { Gear, User as UserIcon, Crosshair, Play as PlayIcon, Pause as PauseIcon
 import {
   C, Sparkle, CrossStar, MizuHeader, SearchBar, SongRow, MiniPlayer,
   VinylDisc, GlassProgress, PlayControls, BokehBg,
-  MetaChip, SubActions,
+  MetaChip, SubActions, ArtistLinks,
 } from './music/MusicUI';
 import NeteaseProfilePage from './music/NeteaseProfilePage';
 import CharVisitPage from './music/CharVisitPage';
 import PlaylistDetailPage, { PlaylistSource } from './music/PlaylistDetailPage';
 import SongCommentsPage from './music/SongCommentsPage';
+import AlbumDetailPage, { AlbumSource } from './music/AlbumDetailPage';
+import ArtistPage, { ArtistSource } from './music/ArtistPage';
 import {
   MINIPLAYER_ENABLED_KEY, MINIPLAYER_CMD_EVENT, MiniPlayerCmd,
 } from '../components/os/GlobalMiniPlayer';
@@ -27,7 +29,7 @@ const fmtTime = (s: number) => {
   return `${m}:${ss.toString().padStart(2, '0')}`;
 };
 
-type View = 'search' | 'settings' | 'player' | 'profile' | 'visit_char' | 'playlist_detail' | 'comments';
+type View = 'search' | 'settings' | 'player' | 'profile' | 'visit_char' | 'playlist_detail' | 'comments' | 'album_detail' | 'artist';
 
 // ========================= 主组件 =========================
 const MusicApp: React.FC = () => {
@@ -118,6 +120,21 @@ const MusicApp: React.FC = () => {
   const [plDetail, setPlDetail] = useState<PlaylistSource | null>(null);
   const [commentSong, setCommentSong] = useState<Song | null>(null);
   const [commentsFrom, setCommentsFrom] = useState<View>('player'); // 评论区返回哪一页
+  // 专辑详情页 / 歌手页的路由状态（记住来源页，返回时回到来的地方）
+  const [albumDetail, setAlbumDetail] = useState<AlbumSource | null>(null);
+  const [albumFrom, setAlbumFrom] = useState<View>('profile');
+  const [artist, setArtist] = useState<ArtistSource | null>(null);
+  const [artistFrom, setArtistFrom] = useState<View>('profile');
+  const openAlbum = (album: AlbumSource) => {
+    setAlbumFrom(view);
+    setAlbumDetail(album);
+    setView('album_detail');
+  };
+  const openArtist = (id: number, name: string) => {
+    setArtistFrom(view);
+    setArtist({ id, name });
+    setView('artist');
+  };
 
   // 系统返回手势：先关弹层，再按页面栈回退（评论→来处，歌单详情→角色主页/我的主页…），最后才关 App
   useBackGuard([
@@ -126,6 +143,8 @@ const MusicApp: React.FC = () => {
       [view === 'comments', () => setView(commentsFrom)],
       [view === 'playlist_detail', () => setView(plDetail?.kind === 'char' ? 'visit_char' : 'profile')],
       [view === 'visit_char', () => { setView('profile'); setVisitCharId(null); }],
+      [view === 'album_detail', () => setView(albumFrom)],
+      [view === 'artist', () => setView(artistFrom)],
       [view !== 'profile', () => setView('profile')],
   ]);
   const [keyword, setKeyword] = useState('');
@@ -156,6 +175,7 @@ const MusicApp: React.FC = () => {
       const songs: Song[] = (r?.result?.songs || []).map((s: any) => ({
         id: s.id, name: s.name,
         artists: (s.ar || s.artists || []).map((a: any) => a.name).join(' / '),
+        artistIds: (s.ar || s.artists || []).map((a: any) => a.id),
         album: s.al?.name || s.album?.name || '',
         albumPic: toHttps(s.al?.picUrl || s.album?.picUrl || ''),
         duration: (s.dt || s.duration || 0) / 1000,
@@ -346,7 +366,11 @@ const MusicApp: React.FC = () => {
             </h2>
             <p className="text-[10px] uppercase opacity-70"
               style={{ color: C.muted, fontFamily: `'Space Grotesk','SF Mono',monospace`, letterSpacing: '0.2em' }}>
-              {current.artists}
+              <ArtistLinks
+                artists={current.artists}
+                artistIds={current.artistIds}
+                onOpenArtist={openArtist}
+              />
             </p>
           </section>
 
@@ -672,6 +696,7 @@ const MusicApp: React.FC = () => {
           onOpenSettings={() => setView('settings')}
           onVisitChar={id => { setVisitCharId(id); setView('visit_char'); }}
           onOpenPlaylist={pl => { setPlDetail({ kind: 'netease', playlist: pl }); setView('playlist_detail'); }}
+          onOpenAlbum={openAlbum}
         />
       )}
       {/* 手动对轴 modal — 全屏覆盖，不开新 view */}
@@ -854,6 +879,29 @@ const MusicApp: React.FC = () => {
           onBack={() => setView(plDetail.kind === 'char' ? 'visit_char' : 'profile')}
           onOpenPlayer={() => setView('player')}
           onOpenComments={s => { setCommentSong(s); setCommentsFrom('playlist_detail'); setView('comments'); }}
+          onOpenArtist={openArtist}
+        />
+      )}
+
+      {view === 'album_detail' && albumDetail && (
+        <AlbumDetailPage
+          album={albumDetail}
+          onBack={() => setView(albumFrom)}
+          onOpenPlayer={() => setView('player')}
+          onOpenArtist={openArtist}
+          onOpenComments={s => { setCommentSong(s); setCommentsFrom('album_detail'); setView('comments'); }}
+        />
+      )}
+
+      {view === 'artist' && artist && (
+        <ArtistPage
+          artistId={artist.id}
+          artistName={artist.name}
+          onBack={() => setView(artistFrom)}
+          onOpenPlayer={() => setView('player')}
+          onOpenAlbum={openAlbum}
+          onOpenArtist={openArtist}
+          onOpenComments={s => { setCommentSong(s); setCommentsFrom('artist'); setView('comments'); }}
         />
       )}
 
