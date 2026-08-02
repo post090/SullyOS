@@ -565,6 +565,21 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setProfile(fresh);
       saveCachedProfile(cfg.cookie, fresh);
       setProfileError(false);
+      // loginStatus 返回的 follows/followeds 经常是 0，补一次 /user/detail 拿准确数
+      if (p.userId && (!fresh.followeds || !fresh.follows)) {
+        try {
+          const detail: any = await musicApi.userDetail(cfg, p.userId);
+          const dp = detail?.profile || detail;
+          if (dp && (dp.followeds != null || dp.follows != null)) {
+            setProfile(prev => prev ? {
+              ...prev,
+              followeds: dp.followeds ?? prev.followeds,
+              follows: dp.follows ?? prev.follows,
+            } : prev);
+            saveCachedProfile(cfg.cookie, { ...fresh, followeds: dp.followeds ?? fresh.followeds, follows: dp.follows ?? fresh.follows });
+          }
+        } catch { /* userDetail 失败不影响主流程，用 loginStatus 的值撑着 */ }
+      }
     } catch {
       // 网络/服务端错误：cookie 可能仍有效 —— 有快照就继续用快照撑着，别把页面打回加载卡
       setProfile(prev => prev || null);

@@ -176,8 +176,13 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [loading, setLoading] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
+  // 关注/粉丝列表弹窗（展示已生成音乐人格的 char，纯 APP 内虚拟互关）
+  const [followListOpen, setFollowListOpen] = useState<'follows' | 'followeds' | null>(null);
 
   const uid = profile?.userId;
+  // 已生成音乐人格的 char = 与你"互关"的角色
+  const musicChars = useMemo(() => characters.filter(c => c.musicProfile?.initializedAt), [characters]);
+  const musicCharCount = musicChars.length;
 
   // 把不稳定的引用（每秒重建的 addToast 和 cfg 对象）收到 ref 里，
   // 否则 reload 的 deps 会爆炸 → useEffect 循环触发。
@@ -496,11 +501,11 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
             </div>
           </div>
 
-          {/* 统计行 */}
+          {/* 统计行 —— 关注/粉丝含已生成音乐人格的 char（APP 内虚拟互关），可点开看列表 */}
           <div className="grid grid-cols-3 gap-2 mt-3 text-center">
             <StatCell label="歌单" value={playlists.length || profile.playlistCount || 0} />
-            <StatCell label="关注" value={profile.follows ?? 0} />
-            <StatCell label="粉丝" value={profile.followeds ?? 0} />
+            <StatCell label="关注" value={(profile.follows ?? 0) + musicCharCount} onClick={musicCharCount > 0 ? () => setFollowListOpen('follows') : undefined} />
+            <StatCell label="粉丝" value={(profile.followeds ?? 0) + musicCharCount} onClick={musicCharCount > 0 ? () => setFollowListOpen('followeds') : undefined} />
           </div>
 
           {/* 快捷按钮 */}
@@ -753,15 +758,72 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
           regenStatus={current.id === regeneratingId ? regeneratingStatus : undefined}
         />
       )}
+
+      {/* 关注/粉丝列表 —— 已生成音乐人格的 char（APP 内虚拟互关），点进 ta 的主页 */}
+      {followListOpen && (
+        <div className="fixed inset-0 z-[60] flex flex-col justify-end">
+          <div className="absolute inset-0 bg-black/40 animate-fade-in" onClick={() => setFollowListOpen(null)} />
+          <div className="relative w-full rounded-t-3xl px-4 pt-3 pb-6 animate-slide-up shizuku-glass-strong"
+            style={{ background: C.bg, maxHeight: '70vh' }}>
+            <div className="w-10 h-1 rounded-full mx-auto mb-3" style={{ background: C.faint }} />
+            <div className="flex items-center justify-between mb-3 px-1">
+              <div className="text-[11px] tracking-[0.2em] uppercase" style={{ color: C.muted }}>
+                {followListOpen === 'follows' ? '我的关注' : '我的粉丝'}
+              </div>
+              <button onClick={() => setFollowListOpen(null)} className="text-[10px]" style={{ color: C.faint }}>关闭</button>
+            </div>
+            <div className="overflow-y-auto shizuku-scrollbar space-y-1">
+              {musicChars.map(c => {
+                const avatar = c.avatar || '';
+                const isImg = avatar.startsWith('data:') || avatar.startsWith('http');
+                return (
+                  <button key={c.id}
+                    onClick={() => { setFollowListOpen(null); onVisitChar?.(c.id); }}
+                    className="w-full flex items-center gap-3 p-2 rounded-2xl active:scale-[0.98] transition-transform text-left"
+                    style={{ background: 'rgba(255,255,255,0.5)' }}
+                  >
+                    {isImg ? (
+                      <img src={avatar} alt="" className="w-10 h-10 rounded-full object-cover"
+                        style={{ border: `1.5px solid ${C.glow}60` }} />
+                    ) : (
+                      <div className="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm"
+                        style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.accent})` }}>
+                        {c.name.slice(0, 1)}
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[13px] font-semibold truncate" style={{ color: C.text }}>{c.name}</div>
+                      <div className="text-[10px] truncate" style={{ color: C.muted }}>
+                        {c.musicProfile?.bio || '音乐角落已开启'}
+                      </div>
+                    </div>
+                    <div className="shrink-0 px-2 py-0.5 rounded-full text-[9px]"
+                      style={{ background: `${C.primary}15`, color: C.primary }}>互相关注</div>
+                  </button>
+                );
+              })}
+              {musicChars.length === 0 && (
+                <div className="text-center text-[11px] py-6" style={{ color: C.faint }}>
+                  还没有互关的角色 · 去拜访页生成音乐人格
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
 
-const StatCell: React.FC<{ label: string; value: number }> = ({ label, value }) => (
-  <div className="rounded-xl py-1.5 shizuku-glass">
+const StatCell: React.FC<{ label: string; value: number; onClick?: () => void }> = ({ label, value, onClick }) => (
+  <button
+    onClick={onClick}
+    disabled={!onClick}
+    className={`rounded-xl py-1.5 shizuku-glass text-center ${onClick ? 'active:scale-95 transition-transform cursor-pointer' : 'cursor-default'}`}
+  >
     <div className="text-base font-light" style={{ color: C.primary, fontFamily: `'Noto Serif', serif` }}>{value}</div>
     <div className="text-[9px] tracking-wider" style={{ color: C.muted }}>{label}</div>
-  </div>
+  </button>
 );
 
 export default NeteaseProfilePage;
