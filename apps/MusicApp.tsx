@@ -1107,25 +1107,24 @@ const MusicApp: React.FC = () => {
           <MizuHeader
             title="选择歌词"
             onBack={() => { setLyricSelectMode(false); setSelectedLyricIndices(new Set()); }}
-            right={
-              <div className="flex items-center gap-2">
-                {/* 单/双语切换 */}
-                <button
-                  onClick={() => setLyricDisplayMode(m => m === 'bilingual' ? 'mono' : 'bilingual')}
-                  className="px-2 py-0.5 rounded-full text-[9px] font-bold transition-colors"
-                  style={{
-                    background: lyricDisplayMode === 'bilingual' ? `${C.primary}20` : 'rgba(255,255,255,0.4)',
-                    color: lyricDisplayMode === 'bilingual' ? C.primary : C.muted,
-                  }}
-                >
-                  {lyricDisplayMode === 'bilingual' ? '双语' : '单语'}
-                </button>
-                <span className="text-[10px]" style={{ color: C.muted }}>
-                  已选 {selectedLyricIndices.size}
-                </span>
-              </div>
-            }
           />
+          {/* 控件行 —— 从 header 挪到内容区顶部，避免被挤成竖排 */}
+          <div className="flex items-center justify-between px-4 py-2 shrink-0 relative z-10"
+            style={{ borderBottom: `1px solid ${C.faint}20` }}>
+            <button
+              onClick={() => setLyricDisplayMode(m => m === 'bilingual' ? 'mono' : 'bilingual')}
+              className="px-2.5 py-1 rounded-full text-[10px] font-bold transition-colors"
+              style={{
+                background: lyricDisplayMode === 'bilingual' ? `${C.primary}20` : 'rgba(255,255,255,0.4)',
+                color: lyricDisplayMode === 'bilingual' ? C.primary : C.muted,
+              }}
+            >
+              {lyricDisplayMode === 'bilingual' ? '双语' : '单语'}
+            </button>
+            <span className="text-[10px]" style={{ color: C.muted }}>
+              已选 {selectedLyricIndices.size}
+            </span>
+          </div>
           <div className="flex-1 overflow-y-auto relative z-10 shizuku-scrollbar px-2 pb-28">
             <div className="space-y-3 py-6">
               {lyric.length === 0 ? (
