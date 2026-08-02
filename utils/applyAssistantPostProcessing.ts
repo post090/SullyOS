@@ -1493,9 +1493,41 @@ ${lines.join(String.fromCharCode(10))}
                     setMessages(latest);
                 } catch { /* 刷新失败不影响落库，下次重进聊天可见 */ }
             }
-            rejected.forEach(r => console.warn('💼 [JobHunt] 拒绝指令:', r));
-        } catch (e) {
+            // 失败指令：回灌给 AI（下轮历史可见，让其自我纠正）+ 落一条 system 消息让用户可见
+            if (rejected.length > 0) {
+                const rejectedText = rejected.map(r => `· ${r}`).join('\n');
+                try {
+                    await DB.saveMessage({
+                        charId: char.id,
+                        role: 'system',
+                        type: 'job_card',
+                        content: `⚠️ 工具调用失败：\n${rejectedText}`,
+                        metadata: { source: 'job-error', charName: char.name, charAvatar: char.avatar, isJobError: true },
+                    });
+                    const latest = await DB.getRecentMessagesByCharId(char.id, 200);
+                    setMessages(latest);
+                } catch (msgErr) {
+                    console.warn('💼 [JobHunt] saveMessage for error result failed:', msgErr);
+                }
+                rejected.forEach(r => console.warn('💼 [JobHunt] 拒绝指令:', r));
+                addToast(`💼 ${char.name} 有 ${rejected.length} 条指令执行失败`, 'error');
+            }
+        } catch (e: any) {
             console.error('💼 [JobHunt] 指令处理失败:', e);
+            // 整体解析/执行崩了：同样回灌给 AI + 落 system 消息让用户可见
+            const errMsg = e?.message || String(e);
+            try {
+                await DB.saveMessage({
+                    charId: char.id,
+                    role: 'system',
+                    type: 'job_card',
+                    content: `⚠️ 求职工作台处理失败：${errMsg}`,
+                    metadata: { source: 'job-error', charName: char.name, charAvatar: char.avatar, isJobError: true },
+                });
+                const latest = await DB.getRecentMessagesByCharId(char.id, 200);
+                setMessages(latest);
+            } catch { /* 落库失败就算了 */ }
+            addToast(`💼 求职指令处理失败`, 'error');
         }
     }
 
