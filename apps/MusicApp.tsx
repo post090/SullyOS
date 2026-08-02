@@ -140,6 +140,8 @@ const MusicApp: React.FC = () => {
   const [lyricSelectMode, setLyricSelectMode] = useState(false);
   const [selectedLyricIndices, setSelectedLyricIndices] = useState<Set<number>>(new Set());
   const [lyricShareOpen, setLyricShareOpen] = useState(false);
+  // 歌词显示模式：bilingual 双语（默认）/ mono 单语
+  const [lyricDisplayMode, setLyricDisplayMode] = useState<'bilingual' | 'mono'>('bilingual');
   // 歌词分享 · 角色选择 + 附言
   const [lyricShareCharId, setLyricShareCharId] = useState<string | null>(null);
   const [lyricShareNote, setLyricShareNote] = useState('');
@@ -181,16 +183,20 @@ const MusicApp: React.FC = () => {
     });
     if (navigator.vibrate) navigator.vibrate(8);
   };
-  // 已选歌词拼接文本（按时间顺序）
+  // 已选歌词拼接文本（按时间顺序，双语模式下带翻译）
   const selectedLyricText = useMemo(() => {
     if (selectedLyricIndices.size === 0) return '';
-    return lyric
-      .map((l, i) => ({ l, i }))
-      .filter(({ i }) => selectedLyricIndices.has(i))
-      .map(({ l }) => l.text)
-      .filter(Boolean)
-      .join('\n');
-  }, [selectedLyricIndices, lyric]);
+    const lines: string[] = [];
+    lyric.forEach((l, i) => {
+      if (!selectedLyricIndices.has(i) || !l.text) return;
+      lines.push(l.text);
+      if (lyricDisplayMode === 'bilingual') {
+        const tr = tlyric.find(t => Math.abs(t.t - l.t) < 0.2);
+        if (tr?.text) lines.push(tr.text);
+      }
+    });
+    return lines.join('\n');
+  }, [selectedLyricIndices, lyric, tlyric, lyricDisplayMode]);
   // 歌词分享给角色（落 music_card，intent=share_lyric，复用分享卡片但中间显示歌词）
   const shareLyricToChar = async () => {
     if (!lyricShareCharId || !selectedLyricText) return;
@@ -1102,9 +1108,22 @@ const MusicApp: React.FC = () => {
             title="选择歌词"
             onBack={() => { setLyricSelectMode(false); setSelectedLyricIndices(new Set()); }}
             right={
-              <span className="text-[10px]" style={{ color: C.muted }}>
-                已选 {selectedLyricIndices.size}
-              </span>
+              <div className="flex items-center gap-2">
+                {/* 单/双语切换 */}
+                <button
+                  onClick={() => setLyricDisplayMode(m => m === 'bilingual' ? 'mono' : 'bilingual')}
+                  className="px-2 py-0.5 rounded-full text-[9px] font-bold transition-colors"
+                  style={{
+                    background: lyricDisplayMode === 'bilingual' ? `${C.primary}20` : 'rgba(255,255,255,0.4)',
+                    color: lyricDisplayMode === 'bilingual' ? C.primary : C.muted,
+                  }}
+                >
+                  {lyricDisplayMode === 'bilingual' ? '双语' : '单语'}
+                </button>
+                <span className="text-[10px]" style={{ color: C.muted }}>
+                  已选 {selectedLyricIndices.size}
+                </span>
+              </div>
             }
           />
           <div className="flex-1 overflow-y-auto relative z-10 shizuku-scrollbar px-2 pb-28">
@@ -1117,17 +1136,18 @@ const MusicApp: React.FC = () => {
                 const isActive = i === activeLyricIdx;
                 const mm = Math.floor(l.t / 60);
                 const ss = Math.floor(l.t % 60).toString().padStart(2, '0');
+                const tr = lyricDisplayMode === 'bilingual' ? tlyric.find(t => Math.abs(t.t - l.t) < 0.2) : null;
                 return (
-                  <button
+                  <div
                     key={i}
                     onClick={() => toggleLyricSelect(i)}
-                    className="w-full text-left px-4 py-2 rounded-xl transition-all active:scale-[0.99] flex items-start gap-3"
+                    className="w-full text-left px-4 py-2 rounded-xl flex items-start gap-3 cursor-pointer"
                     style={{
                       background: selected ? `${C.primary}18` : 'transparent',
                       border: selected ? `1px solid ${C.primary}50` : '1px solid transparent',
                     }}
                   >
-                    <div className="shrink-0 mt-0.5 w-4 h-4 rounded-full flex items-center justify-center transition-all"
+                    <div className="shrink-0 mt-0.5 w-4 h-4 rounded-full flex items-center justify-center"
                       style={{
                         background: selected ? `linear-gradient(135deg, ${C.primary}, ${C.accent})` : 'rgba(255,255,255,0.4)',
                         border: selected ? 'none' : `1px solid ${C.faint}60`,
@@ -1148,6 +1168,16 @@ const MusicApp: React.FC = () => {
                         }}>
                         {l.text}
                       </span>
+                      {/* 双语：翻译行 */}
+                      {tr?.text && (
+                        <span className="block text-[11px] leading-[1.4] mt-0.5"
+                          style={{
+                            color: selected ? C.muted : `${C.faint}`,
+                            fontFamily: `'Noto Serif','Georgia',serif`,
+                          }}>
+                          {tr.text}
+                        </span>
+                      )}
                       {/* 当前播放行：左侧时间 + 横向定位线（时间在横线左边，网易云选择歌词样式） */}
                       {isActive && (
                         <div className="flex items-center gap-2 mt-1">
@@ -1156,7 +1186,7 @@ const MusicApp: React.FC = () => {
                         </div>
                       )}
                     </div>
-                  </button>
+                  </div>
                 );
               })}
             </div>
