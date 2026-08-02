@@ -281,6 +281,15 @@ async function prepareCallAvatar(avatar?: string): Promise<string> {
   if (!src.startsWith('data:image') && !src.startsWith('blob:')) return '';
   const cached = avatarCache.get(src);
   if (cached != null) return cached;
+  // data URI 直接透传 —— Intent extras 上限 1MB，给到 800KB 余量；
+  // 不在 JS 端再走 canvas 压缩（APK WebView 里 canvas 跨域/tainted 容易失败，反而丢头像）
+  if (src.startsWith('data:image')) {
+    const out = src.length < 800_000 ? src : '';
+    avatarCache.clear();
+    avatarCache.set(src, out);
+    return out;
+  }
+  // blob: 走 canvas 压缩成 dataURL 再传
   let out = '';
   try {
     const img = new Image();
@@ -298,7 +307,7 @@ async function prepareCallAvatar(avatar?: string): Promise<string> {
       const s = Math.min(img.width, img.height);
       ctx.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, size, size);
       const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
-      if (dataUrl.length < 200_000) out = dataUrl;
+      if (dataUrl.length < 800_000) out = dataUrl;
     }
   } catch { /* 取不到就不带头像 */ }
   avatarCache.clear();

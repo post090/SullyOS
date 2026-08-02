@@ -1905,12 +1905,12 @@ const CallApp: React.FC = () => {
         </div>
         {/* analyzing status + waveform */}
         <div className={`${isProLight ? 'mt-2 gap-1' : 'mt-5 gap-2'} flex flex-col items-center`}>
-          <div className="text-center leading-tight flex items-center justify-center gap-2">
-            {isBusy && <span className="inline-block w-3.5 h-3.5 rounded-full border-2 border-white/25 animate-spin shrink-0" style={{ borderTopColor: accentColor }} />}
-            <div>
-              <div className="text-sm text-white/85">{analyzeLabel.cn}{(waveActive || isBusy) ? '…' : ''}</div>
-              {!isProLight && <div className="text-[9px] tracking-[0.3em] text-white/35 mt-0.5">{analyzeLabel.en}</div>}
-            </div>
+          <div className="relative text-center leading-tight">
+            {isBusy && (
+              <span className="inline-block w-3.5 h-3.5 rounded-full border-2 border-white/25 animate-spin shrink-0 absolute right-full mr-2 top-1/2 -translate-y-1/2" style={{ borderTopColor: accentColor }} />
+            )}
+            <div className="text-sm text-white/85">{analyzeLabel.cn}{(waveActive || isBusy) ? '…' : ''}</div>
+            {!isProLight && <div className="text-[9px] tracking-[0.3em] text-white/35 mt-0.5">{analyzeLabel.en}</div>}
           </div>
           {!isProLight && (
             <div className="flex items-center justify-center gap-[3px] h-7">
