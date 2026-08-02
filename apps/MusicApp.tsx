@@ -18,6 +18,7 @@ import SongCommentsPage from './music/SongCommentsPage';
 import AlbumDetailPage, { AlbumSource } from './music/AlbumDetailPage';
 import ArtistPage, { ArtistSource } from './music/ArtistPage';
 import CharRecentPage from './music/CharRecentPage';
+import SongActionsSheet from './music/SongActionsSheet';
 import {
   MINIPLAYER_ENABLED_KEY, MINIPLAYER_CMD_EVENT, MiniPlayerCmd,
 } from '../components/os/GlobalMiniPlayer';
@@ -129,6 +130,8 @@ const MusicApp: React.FC = () => {
   const [artistFrom, setArtistFrom] = useState<View>('profile');
   // 播放页来源 —— 系统返回手势要从播放页回到进播放器前停留的界面，而不是直接回主页
   const [playerFrom, setPlayerFrom] = useState<View>('profile');
+  // 播放页歌曲操作半屏菜单（跟歌单行三点按钮同一个 Sheet）
+  const [playerSheetSong, setPlayerSheetSong] = useState<Song | null>(null);
   const openPlayer = () => {
     setPlayerFrom(view);
     setView('player');
@@ -177,8 +180,8 @@ const MusicApp: React.FC = () => {
   }, [activeLyricIdx, view]);
 
   // ── 搜索 ──
-  const doSearch = useCallback(async () => {
-    const kw = keyword.trim(); if (!kw) return;
+  const doSearch = useCallback(async (kwArg?: string) => {
+    const kw = (kwArg ?? keyword).trim(); if (!kw) return;
     setSearching(true);
     try {
       const r = await musicApi.search(cfg, kw);
@@ -202,6 +205,15 @@ const MusicApp: React.FC = () => {
       setSearching(false);
     }
   }, [keyword, cfg, addToast]);
+
+  /** 用指定关键词跳搜索页并自动搜索（角色钟爱的原声等场景） */
+  const openSearchWithKeyword = useCallback((kw: string) => {
+    const clean = kw.trim();
+    setKeyword(clean);
+    setResults([]);
+    setView('search');
+    if (clean) doSearch(clean);
+  }, [doSearch]);
 
   // ════════════════ 搜索页 ════════════════
   const renderSearch = () => (
@@ -231,7 +243,7 @@ const MusicApp: React.FC = () => {
           </div>
         }
       />
-      <SearchBar value={keyword} onChange={setKeyword} onSearch={doSearch} searching={searching} />
+      <SearchBar value={keyword} onChange={setKeyword} onSearch={() => doSearch()} searching={searching} />
 
       {/* 用户状态 — 玻璃标签 */}
       {profile && (
@@ -543,6 +555,7 @@ const MusicApp: React.FC = () => {
               onCyclePlayMode={cyclePlayMode}
               showComments={!current.local}
               onComments={() => { setCommentSong(current); setCommentsFrom('player'); setView('comments'); }}
+              onMore={() => setPlayerSheetSong(current)}
             />
           </div>
         </div>
@@ -706,7 +719,6 @@ const MusicApp: React.FC = () => {
           onOpenSettings={() => setView('settings')}
           onVisitChar={id => { setVisitCharId(id); setView('visit_char'); }}
           onOpenPlaylist={pl => { setPlDetail({ kind: 'netease', playlist: pl }); setView('playlist_detail'); }}
-          onOpenAlbum={openAlbum}
         />
       )}
       {/* 手动对轴 modal — 全屏覆盖，不开新 view */}
@@ -880,7 +892,7 @@ const MusicApp: React.FC = () => {
           onBack={() => { setView('profile'); setVisitCharId(null); }}
           onOpenPlayer={openPlayer}
           onOpenArtist={openArtist}
-          onOpenAlbum={openAlbum}
+          onOpenSearch={openSearchWithKeyword}
           onOpenRecent={id => { setRecentCharId(id); setView('char_recent'); }}
           onOpenPlaylist={plId => { setPlDetail({ kind: 'char', charId: visitCharId, playlistId: plId }); setView('playlist_detail'); }}
         />
@@ -931,6 +943,17 @@ const MusicApp: React.FC = () => {
 
       {view === 'comments' && commentSong && (
         <SongCommentsPage song={commentSong} onBack={() => setView(commentsFrom)} />
+      )}
+
+      {/* 播放页歌曲操作半屏菜单（跟歌单行三点按钮同款） */}
+      {playerSheetSong && (
+        <SongActionsSheet
+          song={playerSheetSong}
+          onClose={() => setPlayerSheetSong(null)}
+          onOpenComments={s => { setPlayerSheetSong(null); setCommentSong(s); setCommentsFrom('player'); setView('comments'); }}
+          onOpenArtist={openArtist}
+          onOpenAlbum={openAlbum}
+        />
       )}
     </div>
   );

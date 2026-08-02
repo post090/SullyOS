@@ -78,6 +78,45 @@
 - 角色聊天里花钱/挣钱会**真扣真进账**，工资、房租、月供按日期自动结算，钱包随身物品和栖居住所物品双向对账防打架；转账真扣钱，买东西也会自动同步钱包余额和家里库存——钱少了，东西多了，逻辑闭环。
 - 做了一套和原版模型配置并存的 API 设置方案：**多站点、各自多个模型的切换都变得方便**，覆盖了所有模型配置界面，想回退到原版配置也方便。还配了个悬浮球，任何 App 里都能快捷切换主 API 的站点+模型，不用专门跑去设置页。
 
+## 🚀 NuiAPK 部署指南（只讲 Nui 的）
+
+Nui 联网能力全走 **Cloudflare Worker**，本地数据（角色、记忆、备份）都在你自己的设备上，不需要任何服务器。下面按「必须 → 可选 → 不用管」列：
+
+### ① 必须 · 主代理 Worker（联网总开关）
+
+Nui 的搜索、热点、WebDAV/GitHub 云备份、Notion、飞书、点单 MCP、网页抓取、TTS、音乐生成、**网易云音乐**、小红书 Lite 全走这一个 Worker（单文件 `worker/index.js`，小红书 Lite 已并入它，见 `worker/xhs-lite/README.md`）。
+
+**部署**（约 2 分钟）：
+
+```bash
+npx wrangler deploy worker/index.js --name <你的Worker名> --compatibility-date 2024-01-01
+```
+
+然后到 App「**设置 → 网络代理 (Worker)**」填你部署出来的地址，联网能力一键全切到你自己名下；不想让用户手动填的话，打包时固化：
+
+```bash
+VITE_PROXY_WORKER=https://你的地址.workers.dev npm run build
+```
+
+> 网易云走的是 `worker/index.js` 里 `NETEASE_UPSTREAMS`（默认作者部署的 api-enhanced），不换也能用；想自建就把自己的 Vercel 地址填进去重新部署。
+
+### ② 可选 · 推送类（想要"锁屏也有动静"就配）
+
+| 功能 | 部署位置 | 要配什么 | 说明 |
+|---|---|---|---|
+| **Instant Push**（即时推送，锁屏收角色回复） | `worker/instant-push/` | VAPID 密钥对 + 部署 | 设置 → Instant Push → 配置里生成密钥对；App 里有「复制 Deno Loader」，贴到 app.deno.com 的 Playground 部署即可，后续自动追新 |
+| **主动消息推送**（角色自己找你说事） | `worker/proactive-push/` | VAPID + 建 D1 表 | 完整步骤见 `worker/proactive-push/README.md` |
+| 网易云（可选覆盖） | — | — | 播放器设置里可单独填，不填跟随主代理 |
+
+> Instant Push 可选的 D1 BlobStore：部署时给 worker 加 `DB` binding 即启用（`worker/instant-push/wrangler.toml` 有注释好的配置），不配也能跑。
+
+### ③ 不用管 · 已经/默认走作者或本地的
+
+- **APK 构建**：仓库里的 GitHub Actions workflow（`.github/workflows/build-apk.yml`，手动触发）会打包 + 签名 + 生成草稿 Release，你只要给仓库配好 `ANDROID_DEBUG_KEYSTORE_B64` 密钥。
+- **彼方邮局 / 信号坠落处**：连作者共用的后端 `noir2.cc.cd`，fork 玩不用部署；**二次发布请删掉**（源码 `worker/post-office/`）。
+- **Netlify `/api/v1/*` 消息 API**（`netlify/functions/`）：Instant Push 的消息中转，默认走作者托管的 API base，不用自己搭。
+- **角色数据 / 记忆 / 备份**：全在本地 IndexedDB，备份走主代理 Worker 到你的 WebDAV/GitHub。
+
 ---
 
 以下是**原版 README**（已跟随上游同步到 2026-07-23，功能概览 / 数据存储 / 后端代理 / 鸣谢等都更到最新）。往下就是 Sully 的地盘了，我 Kaka 先撤：

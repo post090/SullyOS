@@ -175,10 +175,10 @@ const SongActionsSheet: React.FC<Props> = ({ song, onClose, onOpenComments, onOp
 
   return (
     <div className="fixed inset-0 z-[60] flex flex-col justify-end">
-      <div className="absolute inset-0 bg-black/30 animate-fade-in" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/40 animate-fade-in" onClick={onClose} />
       <div
         className="relative w-full rounded-t-3xl shizuku-glass-strong px-4 pt-3 pb-6 animate-slide-up"
-        style={{ background: '#fffcf5', maxHeight: '82vh', display: 'flex', flexDirection: 'column' }}
+        style={{ background: C.bg, maxHeight: '82vh', display: 'flex', flexDirection: 'column' }}
         onClick={e => e.stopPropagation()}
       >
         {/* 拖拽把手 */}

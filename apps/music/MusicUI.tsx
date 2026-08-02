@@ -542,7 +542,8 @@ export const SubActions: React.FC<{
   onAdd?: () => void;
   onComments?: () => void;         // 打开真实评论区 (仅网易云歌显示)
   showComments?: boolean;
-}> = ({ onLike, liked, onSync, showSync, onDownload, showDownload, playMode = 'loop', onCyclePlayMode, onAdd, onComments, showComments }) => {
+  onMore?: () => void;             // 打开歌曲操作半屏菜单 (跟歌单行三点按钮一致)
+}> = ({ onLike, liked, onSync, showSync, onDownload, showDownload, playMode = 'loop', onCyclePlayMode, onAdd, onComments, showComments, onMore }) => {
   const Item = ({ icon, label, onClick, active }: { icon: React.ReactNode; label: string; onClick?: () => void; active?: boolean }) => (
     <button onClick={onClick}
       className="flex flex-col items-center gap-1 transition-opacity active:scale-95"
@@ -608,6 +609,13 @@ export const SubActions: React.FC<{
       <path d="M5 20h14" />
     </svg>
   );
+  const moreSvg = (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill={C.primary} stroke="none">
+      <circle cx="12" cy="5" r="1.6" />
+      <circle cx="12" cy="12" r="1.6" />
+      <circle cx="12" cy="19" r="1.6" />
+    </svg>
+  );
 
   const playModeLabel: Record<SubPlayMode, string> = { loop: 'Loop', single: 'One', shuffle: 'Mix' };
 
@@ -619,6 +627,7 @@ export const SubActions: React.FC<{
       {showDownload && onDownload && <Item onClick={onDownload} active label="Save" icon={downloadSvg} />}
       {onCyclePlayMode && <Item onClick={onCyclePlayMode} active={playMode !== 'loop'} label={playModeLabel[playMode]} icon={loopSvg} />}
       {onAdd && <Item onClick={onAdd} label="Add" icon={addSvg} />}
+      {onMore && <Item onClick={onMore} active label="More" icon={moreSvg} />}
     </div>
   );
 };

@@ -12,7 +12,6 @@ import {
 import { MagnifyingGlass, Gear, User as UserIcon } from '@phosphor-icons/react';
 import NeteaseLoginPanel from './NeteaseLoginPanel';
 import { neteaseCacheGet, neteaseCacheSet } from '../../utils/neteaseCache';
-import type { AlbumSource } from './AlbumDetailPage';
 
 export interface Playlist {
   id: number;
@@ -26,7 +25,6 @@ export interface Playlist {
 /** 「我的」页的离线快照（IndexedDB，SWR：先上屏再后台刷新） */
 interface HomeSnapshot {
   playlists: Playlist[];
-  albums: AlbumSource[];
 }
 
 interface Props {
@@ -37,8 +35,6 @@ interface Props {
   onVisitChar?: (charId: string) => void;
   /** 点歌单行进统一歌单详情页（只读全曲目） */
   onOpenPlaylist?: (pl: Playlist) => void;
-  /** 点专辑进专辑详情页 */
-  onOpenAlbum?: (album: AlbumSource) => void;
 }
 
 // ─── 「一起写的歌」本地专辑卡 — 写歌 App 同步过来的 ACE-Step / MiniMax 出歌 ───
@@ -155,7 +151,7 @@ const LocalAlbumCard: React.FC<LocalAlbumCardProps> = ({ songs, expanded, setExp
   </div>
 );
 
-const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearch, onOpenSettings, onVisitChar, onOpenPlaylist, onOpenAlbum }) => {
+const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearch, onOpenSettings, onVisitChar, onOpenPlaylist }) => {
   const { addToast, characters, userProfile } = useOS();
   const {
     cfg, setCfg, profile, refreshProfile, playSong,
@@ -176,9 +172,8 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
       .map(c => ({ id: c.id, name: c.name, avatar: c.avatar }));
   }, [listeningTogetherWith, characters]);
 
-  const [tab, setTab] = useState<'created' | 'collected' | 'albums'>('created');
+  const [tab, setTab] = useState<'created' | 'collected'>('created');
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
-  const [albums, setAlbums] = useState<AlbumSource[]>([]);
   const [loading, setLoading] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
 
@@ -207,17 +202,13 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
     if (!uid || !curCfg.cookie) return;
     setLoading(true);
     try {
-      const [plRes, albRes] = await Promise.allSettled([
-        musicApi.userPlaylist(curCfg, uid),
-        musicApi.albumSublist(curCfg, 60),
-      ]);
+      const plRes = await musicApi.userPlaylist(curCfg, uid);
 
       // 本次拉到的新鲜数据（null = 该项失败，落快照时用旧值兜底）
       let nextPl: Playlist[] | null = null;
-      let nextAlb: AlbumSource[] | null = null;
 
-      if (plRes.status === 'fulfilled') {
-        const arr = (plRes.value?.playlist || []).map((p: any): Playlist => ({
+      if (plRes) {
+        const arr = (plRes.playlist || []).map((p: any): Playlist => ({
           id: p.id,
           name: p.name,
           coverImgUrl: toHttps(p.coverImgUrl || ''),
@@ -229,31 +220,11 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
         setPlaylists(arr);
       }
 
-      if (albRes.status === 'fulfilled') {
-        // 兼容三种返回形态：data 数组 / data.albums / 顶层 albums
-        const body = albRes.value || {};
-        const list = body.data?.albums || body.data || body.albums || [];
-        const arr: AlbumSource[] = (Array.isArray(list) ? list : []).map((a: any) => ({
-          id: a.id,
-          name: a.name,
-          coverImgUrl: toHttps(a.picUrl || a.coverImgUrl || ''),
-          artistName: a.artist?.name || a.artists?.[0]?.name,
-          artistId: a.artist?.id || a.artists?.[0]?.id,
-          trackCount: a.size,
-        }));
-        nextAlb = arr;
-        setAlbums(arr);
-      } else {
-        // albumSublist 是用户专属接口，失败多半是 cookie 失效/未登录——不能像公共接口那样静默
-        toastRef.current('专辑列表加载失败，可能是登录已过期', 'error');
-      }
-
       // 落离线快照：失败的项用旧快照兜底，别拿空数组把好数据盖没了
-      if (nextPl || nextAlb) {
+      if (nextPl) {
         const prev = await neteaseCacheGet<HomeSnapshot>(`home:${uid}`);
         neteaseCacheSet(`home:${uid}`, {
           playlists: nextPl ?? prev?.data.playlists ?? [],
-          albums: nextAlb ?? prev?.data.albums ?? [],
         } satisfies HomeSnapshot);
       }
     } catch (e: any) {
@@ -263,7 +234,7 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
     }
   }, [uid]);
 
-  // 离线快照水合：进页先把上次的三件套上屏（秒开），reload 拉到最新后自然覆盖。
+  // 离线快照水合：进页先把上次的歌单上屏（秒开），reload 拉到最新后自然覆盖。
   // 用函数式 set + 非空检查：网络比 IDB 先回来时，旧快照不会倒车盖新数据。
   useEffect(() => {
     if (!uid) return;
@@ -271,7 +242,6 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
     neteaseCacheGet<HomeSnapshot>(`home:${uid}`).then(hit => {
       if (cancelled || !hit) return;
       setPlaylists(prev => (prev.length ? prev : hit.data.playlists || []));
-      setAlbums(prev => (prev.length ? prev : hit.data.albums || []));
     });
     return () => { cancelled = true; };
   }, [uid]);
@@ -671,7 +641,6 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
           {([
             { k: 'created', label: '创建' },
             { k: 'collected', label: '收藏' },
-            { k: 'albums', label: '专辑' },
           ] as const).map(t => (
             <button
               key={t.k}
@@ -763,43 +732,6 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
                 </div>
               ));
             })()}
-          </div>
-        )}
-
-        {tab === 'albums' && (
-          <div className="px-3 mt-3">
-            {albums.length === 0 && !loading && (
-              <div className="text-center text-[11px] py-10" style={{ color: C.faint }}>还没有收藏的专辑</div>
-            )}
-            <div className="grid grid-cols-3 gap-2.5">
-              {albums.map(a => (
-                <button
-                  key={a.id}
-                  onClick={() => onOpenAlbum?.(a)}
-                  className="text-left group"
-                >
-                  <div className="relative rounded-xl overflow-hidden"
-                    style={{ boxShadow: `0 2px 12px ${C.glow}25` }}>
-                    {a.coverImgUrl ? (
-                      <img src={a.coverImgUrl} alt=""
-                        className="w-full aspect-square object-cover transition-transform group-active:scale-95" />
-                    ) : (
-                      <div className="w-full aspect-square flex items-center justify-center"
-                        style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.accent})` }}>
-                        <span className="text-[9px] text-white">专辑</span>
-                      </div>
-                    )}
-                    <div className="absolute -top-0.5 -right-0.5"><Sparkle size={7} color={C.glow} delay={0.4} /></div>
-                  </div>
-                  <div className="text-[10px] mt-1 leading-snug line-clamp-2" style={{ color: C.text }}>
-                    {a.name}
-                  </div>
-                  <div className="text-[9px] truncate" style={{ color: C.faint }}>
-                    {a.artistName || ''}{a.trackCount ? ` · ${a.trackCount}首` : ''}
-                  </div>
-                </button>
-              ))}
-            </div>
           </div>
         )}
       </div>

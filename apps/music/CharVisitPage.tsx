@@ -17,7 +17,6 @@ import { CharPlaylist } from '../../types';
 import { CharMusicPersona } from '../../utils/charMusicPersona';
 import { computeCurrentListening } from '../../utils/charMusicSchedule';
 import { C, Sparkle, MizuHeader, BokehBg, MiniPlayer, gradientFor } from './MusicUI';
-import { AlbumSource } from './AlbumDetailPage';
 import { MusicNote, Plus, Check, Star, FilmSlate, GameController, Popcorn, MonitorPlay, ArrowClockwise, PencilSimple, Trash, X, Play as PlayIcon } from '@phosphor-icons/react';
 import { getDailyScheduleForChar } from '../../utils/dailySchedule';
 import { useLocalDateKey } from '../../hooks/useLocalDateKey';
@@ -31,13 +30,13 @@ interface Props {
   onOpenPlaylist: (playlistId: string) => void;
   /** 点「钟爱的人」头像 → 歌手页（无 artistId 时先搜，查不到 toast） */
   onOpenArtist?: (id: number, name: string) => void;
-  /** 点「钟爱的原声」封面 → 专辑页（先用标题搜，查不到 toast） */
-  onOpenAlbum?: (album: AlbumSource) => void;
+  /** 点「钟爱的原声」封面 → 用标题搜歌（跳搜索页自动搜） */
+  onOpenSearch?: (keyword: string) => void;
   /** 最近常听「播放全部」→ 全屏歌单页 */
   onOpenRecent?: (charId: string) => void;
 }
 
-const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer, onOpenPlaylist, onOpenArtist, onOpenAlbum, onOpenRecent }) => {
+const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer, onOpenPlaylist, onOpenArtist, onOpenSearch, onOpenRecent }) => {
   const { characters, updateCharacter, userProfile, apiConfig, addToast } = useOS();
   const {
     cfg,
@@ -250,24 +249,13 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer, onOpenPl
     addToast(`查不到「${a.name}」的歌手页`, 'info');
   }, [cfg, onOpenArtist, addToast]);
 
-  /** 点「钟爱的原声」→ 专辑页：先用标题搜专辑，查不到给提示 */
-  const jumpToOst = useCallback(async (s: { title: string; coverUrl?: string; type?: string }) => {
-    if (!onOpenAlbum) return;
-    try {
-      const r: any = await musicApi.call(cfg, '/search', { keyword: s.title, limit: 3, offset: 0, type: 10 });
-      const hit = r?.result?.albums?.[0];
-      if (hit?.id) {
-        onOpenAlbum({
-          id: hit.id,
-          name: hit.name || s.title,
-          coverImgUrl: toHttps(hit.picUrl || s.coverUrl || ''),
-          artistName: hit.artist?.name,
-        });
-        return;
-      }
-    } catch { /* 走下方提示 */ }
-    addToast(`查不到「${s.title}」的专辑页`, 'info');
-  }, [cfg, onOpenAlbum, addToast]);
+  /** 点「钟爱的原声」→ 用标题搜歌（跳搜索页自动搜） */
+  const jumpToOst = useCallback((s: { title: string; coverUrl?: string; type?: string }) => {
+    if (!onOpenSearch) return;
+    const kw = (s.title || '').trim();
+    if (!kw) { addToast('这个原声没有标题，没法搜', 'info'); return; }
+    onOpenSearch(kw);
+  }, [onOpenSearch, addToast]);
 
   /** 新建一个空歌单，建完直接跳进详情页加歌 */
   const createPlaylist = useCallback((title: string) => {
@@ -820,7 +808,7 @@ const EditNameModal: React.FC<{
     >
       <div
         className="w-full max-w-sm rounded-2xl p-4 shizuku-glass-strong"
-        style={{ background: '#fffcf5' }}
+        style={{ background: C.bg }}
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-3">
@@ -908,7 +896,7 @@ const NewPlaylistModal: React.FC<{
     >
       <div
         className="w-full max-w-sm rounded-2xl p-4 shizuku-glass-strong"
-        style={{ background: '#fffcf5' }}
+        style={{ background: C.bg }}
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-3">
