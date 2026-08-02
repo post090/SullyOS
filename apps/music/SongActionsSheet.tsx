@@ -11,7 +11,7 @@ import { useMusic, musicApi, Song, toHttps } from '../../context/MusicContext';
 import { DB } from '../../utils/db';
 import { toCharPlaylistSong } from '../../utils/charPlaylistFill';
 import { AlbumSource } from './AlbumDetailPage';
-import { C } from './MusicUI';
+import { C, gradientFor } from './MusicUI';
 import {
   Play as PlayIcon, Plus, Heart, ChatCircleDots, User as UserIcon, Disc,
   ShareNetwork, X, CaretLeft, MusicNote, Check, PaperPlaneTilt,
@@ -130,12 +130,18 @@ const SongActionsSheet: React.FC<Props> = ({ song, onClose, onOpenComments, onOp
     try {
       if (!profile?.userId) { addToast('未登录网易云，无法收藏到云歌单', 'info'); return; }
       const r: any = await musicApi.userPlaylist(cfg, profile.userId);
-      const list: NeteasePl[] = (r?.playlist || []).map((p: any) => ({
-        id: p.id, name: p.name, trackCount: p.trackCount || 0,
-        coverImgUrl: toHttps(p.coverImgUrl || p.picUrl || ''),
-      }));
+      // 只列出自己创建的歌单 —— 收藏的别人歌单不能往里加歌，藏起来免得误点报错
+      const list: NeteasePl[] = (r?.playlist || [])
+        .filter((p: any) => {
+          const creatorId = p.creator?.userId ?? p.userId;
+          return creatorId === profile.userId;
+        })
+        .map((p: any) => ({
+          id: p.id, name: p.name, trackCount: p.trackCount || 0,
+          coverImgUrl: toHttps(p.coverImgUrl || p.picUrl || ''),
+        }));
       setNeteasePls(list);
-      if (list.length === 0) addToast('你的网易云账号还没有歌单', 'info');
+      if (list.length === 0) addToast('没有可以收藏的自建歌单', 'info');
     } catch (e: any) {
       addToast(`获取网易云歌单失败：${e.message || '未知错误'}`, 'error');
     } finally {
@@ -309,13 +315,14 @@ const SongActionsSheet: React.FC<Props> = ({ song, onClose, onOpenComments, onOp
                             onClick={() => collectToChar(c.id, pl.id)}
                             className="w-full flex items-center gap-3 p-2.5 text-left active:scale-[0.99] transition-transform"
                           >
-                            {c.avatar ? (
-                              <img src={c.avatar} alt="" className="w-12 h-12 rounded-xl object-cover"
+                            {/* 歌单封面 —— 跟角色主页一致：有首歌封面用封面，否则用渐变+音符 */}
+                            {pl.songs[0]?.albumPic ? (
+                              <img src={toHttps(pl.songs[0].albumPic)} alt="" className="w-12 h-12 rounded-xl object-cover shrink-0"
                                 style={{ border: `1px solid ${C.faint}30` }} />
                             ) : (
-                              <div className="w-12 h-12 rounded-xl flex items-center justify-center text-white text-base shrink-0"
-                                style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.accent})` }}>
-                                {c.name.slice(0, 1)}
+                              <div className="w-12 h-12 rounded-xl flex items-center justify-center text-white shrink-0"
+                                style={{ background: gradientFor(pl.coverStyle) }}>
+                                <MusicNote size={18} weight="bold" />
                               </div>
                             )}
                             <div className="flex-1 min-w-0">

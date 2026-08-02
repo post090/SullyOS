@@ -21,6 +21,7 @@ import { MusicNote, Plus, Check, Star, FilmSlate, GameController, Popcorn, Monit
 import { getDailyScheduleForChar } from '../../utils/dailySchedule';
 import { useLocalDateKey } from '../../hooks/useLocalDateKey';
 import { resolveCharTimeZone } from '../../utils/timezone';
+import { RemoteImg } from '../../utils/remoteImgCache';
 
 interface Props {
   charId: string;
@@ -439,7 +440,7 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer, onOpenPl
                       style={{ background: gradientFor(`gradient-0${(i % 6) + 1}`) }}
                     >
                       {a.picUrl ? (
-                        <img src={toHttps(a.picUrl)} alt={a.name} className="w-full h-full object-cover" />
+                        <RemoteImg url={toHttps(a.picUrl)} alt={a.name} className="w-full h-full object-cover" />
                       ) : (
                         <span className="text-lg font-semibold" style={{ fontFamily: `'Noto Serif', serif` }}>
                           {a.name.slice(0, 1)}
@@ -498,7 +499,7 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer, onOpenPl
                         style={{ background: gradientFor(`gradient-0${(i % 6) + 1}`) }}
                       >
                         {s.coverUrl ? (
-                          <img src={toHttps(s.coverUrl)} alt={s.title} className="w-full h-full object-cover" />
+                          <RemoteImg url={toHttps(s.coverUrl)} alt={s.title} className="w-full h-full object-cover" />
                         ) : (
                           <span>{typeIcon(s.type)}</span>
                         )}
