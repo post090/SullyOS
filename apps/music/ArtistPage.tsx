@@ -128,14 +128,26 @@ const ArtistPage: React.FC<Props> = ({ artistId, artistName, onBack, onOpenPlaye
     onOpenPlayer();
   }, [hotSongs, playSong, onOpenPlayer]);
 
-  // 加载全部歌曲（全屏歌单页用，limit 拉满 200）
+  // 加载全部歌曲（分页拉取直到拉完或到 10000 上限）
   const loadAllSongs = useCallback(async () => {
     if (allSongs.length > 0) { setShowAllSongs(true); return; }
     setLoadingAll(true);
     try {
-      const r = await musicApi.artistSongs(cfgRef.current, artistId, 200);
-      const list = r?.songs || r?.hotSongs || [];
-      if (Array.isArray(list)) setAllSongs(list.map(mapTrack));
+      const PAGE = 100;
+      const HARD_CAP = 10000;
+      const collected: Song[] = [];
+      let offset = 0;
+      // 分页循环：每页 100，直到某页不满（到尾）或达上限
+      while (offset < HARD_CAP) {
+        const r = await musicApi.artistSongs(cfgRef.current, artistId, PAGE, offset);
+        const list = r?.songs || r?.hotSongs || [];
+        if (!Array.isArray(list) || list.length === 0) break;
+        collected.push(...list.map(mapTrack));
+        offset += list.length;
+        if (list.length < PAGE) break; // 最后一页
+      }
+      // 硬上限截断（防止异常接口返回过多）
+      setAllSongs(collected.slice(0, HARD_CAP));
       setShowAllSongs(true);
     } catch (e: any) {
       toastRef.current(`加载全部歌曲失败：${e?.message || ''}`, 'error');

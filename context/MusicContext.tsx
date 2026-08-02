@@ -322,9 +322,9 @@ export const musicApi = {
   artist(cfg: MusicCfg, id: number) {
     return musicApi.call(cfg, '/artists', { id });
   },
-  /** 歌手热门歌曲 */
-  artistSongs(cfg: MusicCfg, id: number, limit = 50) {
-    return musicApi.call(cfg, '/artist/songs', { id, limit });
+  /** 歌手热门歌曲（支持分页，offset 默认 0） */
+  artistSongs(cfg: MusicCfg, id: number, limit = 50, offset = 0) {
+    return musicApi.call(cfg, '/artist/songs', { id, limit, offset });
   },
   /** 歌手专辑列表 */
   artistAlbums(cfg: MusicCfg, id: number, limit = 30, offset = 0) {

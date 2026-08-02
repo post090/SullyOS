@@ -136,9 +136,9 @@ const MusicApp: React.FC = () => {
   const [searchSheetSong, setSearchSheetSong] = useState<Song | null>(null);
   // 歌手页曲目操作半屏菜单
   const [artistSheetSong, setArtistSheetSong] = useState<Song | null>(null);
-  // 歌词选择模式（长按歌词进入，点歌词弹复制/分享菜单）
+  // 歌词选择模式（长按歌词进全屏选择界面，可多选，底部复制/分享）
   const [lyricSelectMode, setLyricSelectMode] = useState(false);
-  const [lyricSheetText, setLyricSheetText] = useState<string | null>(null);
+  const [selectedLyricIndices, setSelectedLyricIndices] = useState<Set<number>>(new Set());
   const [lyricShareOpen, setLyricShareOpen] = useState(false);
   const longPressTimer = useRef<number | null>(null);
   const longPressStart = useRef<{ x: number; y: number } | null>(null);
@@ -146,13 +146,13 @@ const MusicApp: React.FC = () => {
     if (longPressTimer.current) { window.clearTimeout(longPressTimer.current); longPressTimer.current = null; }
     longPressStart.current = null;
   };
-  // 长按歌词 → 进选择模式（移动端振动反馈）
-  const onLyricPointerDown = (e: React.PointerEvent, text: string) => {
+  // 长按歌词 → 进全屏选择界面（移动端振动反馈）
+  const onLyricPointerDown = (e: React.PointerEvent) => {
     longPressStart.current = { x: e.clientX, y: e.clientY };
     clearLongPress();
     longPressTimer.current = window.setTimeout(() => {
       setLyricSelectMode(true);
-      setLyricSheetText(text);
+      setSelectedLyricIndices(new Set());
       if (navigator.vibrate) navigator.vibrate(15);
     }, 500);
   };
@@ -162,6 +162,25 @@ const MusicApp: React.FC = () => {
     const dy = e.clientY - longPressStart.current.y;
     if (Math.abs(dx) > 10 || Math.abs(dy) > 10) clearLongPress();
   };
+  // 全屏选择界面：切换单行选中
+  const toggleLyricSelect = (i: number) => {
+    setSelectedLyricIndices(prev => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i); else next.add(i);
+      return next;
+    });
+    if (navigator.vibrate) navigator.vibrate(8);
+  };
+  // 已选歌词拼接文本（按时间顺序）
+  const selectedLyricText = useMemo(() => {
+    if (selectedLyricIndices.size === 0) return '';
+    return lyric
+      .map((l, i) => ({ l, i }))
+      .filter(({ i }) => selectedLyricIndices.has(i))
+      .map(({ l }) => l.text)
+      .filter(Boolean)
+      .join('\n');
+  }, [selectedLyricIndices, lyric]);
   const openPlayer = () => {
     setPlayerFrom(view);
     setView('player');
@@ -179,6 +198,8 @@ const MusicApp: React.FC = () => {
 
   // 系统返回手势：先关弹层，再按页面栈回退（评论→来处，播放页→来处，歌单详情→角色主页/我的主页…），最后才关 App
   useBackGuard([
+      [lyricShareOpen, () => setLyricShareOpen(false)],
+      [lyricSelectMode, () => { setLyricSelectMode(false); setSelectedLyricIndices(new Set()); }],
       [showLyricSync, () => setShowLyricSync(false)],
       [showQueue, () => setShowQueue(false)],
       [view === 'comments', () => setView(commentsFrom)],
@@ -458,15 +479,6 @@ const MusicApp: React.FC = () => {
               </div>
             ) : (
               <div className="space-y-4 py-8">
-                {/* 选择模式提示栏 */}
-                {lyricSelectMode && (
-                  <div className="sticky top-0 z-20 -mx-2 px-3 py-1.5 flex items-center justify-between"
-                    style={{ background: `${C.primary}15`, backdropFilter: 'blur(8px)', borderRadius: '0 0 12px 12px' }}>
-                    <span className="text-[10px]" style={{ color: C.primary }}>长按选中 · 点歌词操作</span>
-                    <button onClick={() => { setLyricSelectMode(false); setLyricSheetText(null); }}
-                      className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: C.primary, color: 'white' }}>退出</button>
-                  </div>
-                )}
                 {lyric.map((l, i) => {
                   const tr = tlyric.find(t => Math.abs(t.t - l.t) < 0.2);
                   const active = i === activeLyricIdx;
@@ -479,12 +491,8 @@ const MusicApp: React.FC = () => {
                         transform: active ? 'scale(1.05)' : 'scale(1)',
                         transformOrigin: 'center center',
                         opacity: active ? 1 : 0.45,
-                        cursor: lyricSelectMode ? 'pointer' : 'default',
                       }}
-                      onPointerDown={(e) => {
-                        if (lyricSelectMode) { setLyricSheetText(l.text); if (navigator.vibrate) navigator.vibrate(10); }
-                        else if (l.text) onLyricPointerDown(e, l.text);
-                      }}
+                      onPointerDown={(e) => { if (l.text) onLyricPointerDown(e); }}
                       onPointerMove={onLyricPointerMove}
                       onPointerUp={clearLongPress}
                       onPointerCancel={clearLongPress}
@@ -1042,34 +1050,95 @@ const MusicApp: React.FC = () => {
         />
       )}
 
-      {/* 歌词操作菜单（长按歌词选中后弹出：复制 / 分享给角色） */}
-      {lyricSheetText && !lyricShareOpen && (
-        <div className="fixed inset-0 z-[60] flex flex-col justify-end">
-          <div className="absolute inset-0 bg-black/40 animate-fade-in" onClick={() => { setLyricSheetText(null); setLyricSelectMode(false); }} />
-          <div className="relative w-full rounded-t-3xl px-4 pt-3 pb-6 animate-slide-up shizuku-glass-strong"
-            style={{ background: C.bg }} onClick={e => e.stopPropagation()}>
-            <div className="w-10 h-1 rounded-full mx-auto mb-3" style={{ background: C.faint }} />
-            <div className="text-[10px] tracking-[0.2em] uppercase mb-2" style={{ color: C.muted }}>选中歌词</div>
-            <div className="rounded-2xl p-3 mb-3 max-h-32 overflow-y-auto shizuku-scrollbar"
-              style={{ background: 'rgba(255,255,255,0.5)', fontFamily: `'Noto Serif','Georgia',serif` }}>
-              <p className="text-[13px] leading-relaxed whitespace-pre-wrap" style={{ color: C.text }}>{lyricSheetText}</p>
+      {/* 全屏歌词选择界面（长按歌词进入，可多选，底部复制/分享） */}
+      {lyricSelectMode && (
+        <div className="fixed inset-0 z-[60] flex flex-col"
+          style={{ background: `linear-gradient(180deg, ${C.bg} 0%, ${C.bgDeep} 100%)` }}>
+          <BokehBg />
+          <MizuHeader
+            title="选择歌词"
+            onBack={() => { setLyricSelectMode(false); setSelectedLyricIndices(new Set()); }}
+            right={
+              <span className="text-[10px]" style={{ color: C.muted }}>
+                已选 {selectedLyricIndices.size}
+              </span>
+            }
+          />
+          <div className="flex-1 overflow-y-auto relative z-10 shizuku-scrollbar px-2 pb-28">
+            <div className="space-y-3 py-6">
+              {lyric.length === 0 ? (
+                <div className="text-center text-[11px] py-10" style={{ color: C.faint }}>暂无歌词</div>
+              ) : lyric.map((l, i) => {
+                if (!l.text) return null;
+                const selected = selectedLyricIndices.has(i);
+                const isActive = i === activeLyricIdx;
+                const mm = Math.floor(l.t / 60);
+                const ss = Math.floor(l.t % 60).toString().padStart(2, '0');
+                return (
+                  <button
+                    key={i}
+                    onClick={() => toggleLyricSelect(i)}
+                    className="w-full text-left px-4 py-2 rounded-xl transition-all active:scale-[0.99] flex items-start gap-3"
+                    style={{
+                      background: selected ? `${C.primary}18` : 'transparent',
+                      border: selected ? `1px solid ${C.primary}50` : '1px solid transparent',
+                    }}
+                  >
+                    <div className="shrink-0 mt-0.5 w-4 h-4 rounded-full flex items-center justify-center transition-all"
+                      style={{
+                        background: selected ? `linear-gradient(135deg, ${C.primary}, ${C.accent})` : 'rgba(255,255,255,0.4)',
+                        border: selected ? 'none' : `1px solid ${C.faint}60`,
+                        boxShadow: selected ? `0 2px 8px ${C.primary}40` : 'none',
+                      }}>
+                      {selected && (
+                        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth={4}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                        </svg>
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <span className="block text-[14px] leading-[1.5]"
+                        style={{
+                          color: selected ? C.text : (isActive ? C.text : C.muted),
+                          fontFamily: `'Noto Serif','Georgia',serif`,
+                          fontWeight: selected || isActive ? 500 : 400,
+                        }}>
+                        {l.text}
+                      </span>
+                      {/* 当前播放行：左侧时间 + 横向定位线（时间在横线左边，网易云选择歌词样式） */}
+                      {isActive && (
+                        <div className="flex items-center gap-2 mt-1">
+                          <span className="text-[9px] tracking-wider font-mono shrink-0" style={{ color: C.primary }}>{mm}:{ss}</span>
+                          <div className="flex-1 h-px" style={{ background: `${C.primary}50` }} />
+                        </div>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
             </div>
+          </div>
+          {/* 底部固定操作栏 */}
+          <div className="relative z-20 px-4 pt-3 pb-5 shizuku-glass-strong"
+            style={{ borderTop: `1px solid ${C.faint}30` }}>
             <div className="grid grid-cols-2 gap-2">
               <button
                 onClick={async () => {
-                  try { await navigator.clipboard.writeText(lyricSheetText); addToast('已复制', 'success'); }
+                  if (!selectedLyricText) return;
+                  try { await navigator.clipboard.writeText(selectedLyricText); addToast('已复制', 'success'); }
                   catch { addToast('复制失败', 'error'); }
-                  setLyricSheetText(null); setLyricSelectMode(false);
                 }}
-                className="py-2.5 rounded-2xl text-[11px] font-bold flex items-center justify-center gap-1.5 active:scale-95 transition-transform"
+                disabled={selectedLyricIndices.size === 0}
+                className="py-2.5 rounded-2xl text-[11px] font-bold flex items-center justify-center gap-1.5 active:scale-95 transition-transform disabled:opacity-40"
                 style={{ background: 'rgba(255,255,255,0.6)', color: C.primary, border: `1px solid ${C.faint}40` }}
               >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11v14z" /></svg>
-                复制
+                复制 {selectedLyricIndices.size > 0 ? `(${selectedLyricIndices.size})` : ''}
               </button>
               <button
                 onClick={() => setLyricShareOpen(true)}
-                className="py-2.5 rounded-2xl text-[11px] font-bold flex items-center justify-center gap-1.5 active:scale-95 transition-transform text-white"
+                disabled={selectedLyricIndices.size === 0}
+                className="py-2.5 rounded-2xl text-[11px] font-bold flex items-center justify-center gap-1.5 active:scale-95 transition-transform text-white disabled:opacity-40"
                 style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.accent})` }}
               >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 21s-8-5.3-8-11.5C4 6 6.5 3.5 9.5 3.5c1.6 0 3 .8 2.5 2.2C11.5 4.3 12.9 3.5 14.5 3.5 17.5 3.5 20 6 20 9.5 20 15.7 12 21 12 21z" /></svg>
@@ -1080,8 +1149,8 @@ const MusicApp: React.FC = () => {
         </div>
       )}
 
-      {/* 歌词分享 · 角色选择 */}
-      {lyricShareOpen && lyricSheetText && (
+      {/* 歌词分享 · 角色选择（基于已选多句拼接文本） */}
+      {lyricShareOpen && selectedLyricText && (
         <div className="fixed inset-0 z-[61] flex flex-col justify-end">
           <div className="absolute inset-0 bg-black/40 animate-fade-in" onClick={() => setLyricShareOpen(false)} />
           <div className="relative w-full rounded-t-3xl px-4 pt-3 pb-6 animate-slide-up shizuku-glass-strong"
@@ -1092,13 +1161,13 @@ const MusicApp: React.FC = () => {
               {characters.map(c => (
                 <button key={c.id}
                   onClick={async () => {
-                    const line = `「${current?.name || '这首歌'}」的歌词：\n${lyricSheetText}`;
+                    const line = `「${current?.name || '这首歌'}」的歌词：\n${selectedLyricText}`;
                     try {
                       await DB.saveMessage({ charId: c.id, role: 'user', type: 'text', content: line });
                       window.dispatchEvent(new CustomEvent('active-msg-open', { detail: { charId: c.id } }));
                       addToast(`已分享歌词给 ${c.name}`, 'success');
                     } catch { addToast('分享失败', 'error'); }
-                    setLyricShareOpen(false); setLyricSheetText(null); setLyricSelectMode(false);
+                    setLyricShareOpen(false); setLyricSelectMode(false); setSelectedLyricIndices(new Set());
                   }}
                   className="w-full flex items-center gap-2.5 px-3 py-2 rounded-2xl active:scale-[0.98] transition-transform text-left"
                   style={{ background: 'rgba(255,255,255,0.5)' }}
