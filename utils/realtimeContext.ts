@@ -127,6 +127,9 @@ export const defaultRealtimeConfig: RealtimeConfig = {
 let weatherCacheMap = new Map<string, { data: WeatherData; timestamp: number }>();
 let newsCache: { data: NewsItem[]; timestamp: number } = { data: [], timestamp: 0 };
 
+// Upstream moved the hot_news API from orz.ai to news.orz.ai on 2026-08-01.
+export const HOTNEWS_API_BASE_URL = 'https://news.orz.ai/api/v1/dailynews';
+
 // Open-Meteo 地名解析缓存：城市名 → 坐标，避免每次取天气都多打一次 geocoding
 const geocodeCache = new Map<string, { latitude: number; longitude: number; name: string }>();
 
@@ -415,7 +418,7 @@ export const RealtimeContextManager = {
         return weather;
     },
 
-    // hot_news（orz.ai）平台 key → 中文展示名。用于 source 标注，让提示词读起来自然。
+    // hot_news（news.orz.ai）平台 key → 中文展示名。用于 source 标注，让提示词读起来自然。
     HOTNEWS_PLATFORM_LABELS: {
         baidu: '百度', sspai: '少数派', weibo: '微博', zhihu: '知乎', tskr: '36氪',
         ftpojie: '吾爱破解', bilibili: 'B站', douban: '豆瓣', hupu: '虎扑', tieba: '贴吧',
@@ -538,7 +541,7 @@ export const RealtimeContextManager = {
     },
 
     /**
-     * 使用 hot_news（orz.ai）获取中文多平台热榜。
+     * 使用 hot_news（news.orz.ai）获取中文多平台热榜。
      * 免鉴权、半小时刷新。浏览器端优先直连；若被 CORS 拦截则本调用返回 []，
      * 由 fetchNews 自然回落到 Brave / Hacker News。
      * 多平台并发拉取，每平台取前几条后 round-robin 交错合并，避免单一平台霸屏。
@@ -551,7 +554,7 @@ export const RealtimeContextManager = {
         const perPlatformResults = await Promise.all(list.map(async (p): Promise<NewsItem[]> => {
             const label = RealtimeContextManager.HOTNEWS_PLATFORM_LABELS[p] || p;
             try {
-                const res = await fetchWithTimeout(`https://orz.ai/api/v1/dailynews/?platform=${encodeURIComponent(p)}`, 10_000, {
+                const res = await fetchWithTimeout(`${HOTNEWS_API_BASE_URL}/?platform=${encodeURIComponent(p)}`, 10_000, {
                     headers: { 'Accept': 'application/json' },
                 });
                 if (!res.ok) {
@@ -564,8 +567,12 @@ export const RealtimeContextManager = {
                     .filter(it => it && it.title)
                     .slice(0, perPlatform)
                     .map(it => {
-                        const desc = typeof it.desc === 'string' ? it.desc.replace(/\s+/g, ' ').trim() : '';
-                        return { title: String(it.title), source: label, origin: p, url: it.url, desc: desc || undefined };
+                        const rawDesc = typeof it.desc === 'string'
+                            ? it.desc
+                            : typeof it.content === 'string' ? it.content : '';
+                        const desc = rawDesc.replace(/\s+/g, ' ').trim();
+                        const normalizedDesc = desc && desc !== String(it.title).trim() ? desc : undefined;
+                        return { title: String(it.title), source: label, origin: p, url: it.url, desc: normalizedDesc };
                     });
                 const withDesc = picked.filter(x => x.desc).length;
                 console.log(`[hot_news] ${label}(${p}) ✓ 取 ${picked.length}/${items.length} 条（含简介 ${withDesc} 条）`);

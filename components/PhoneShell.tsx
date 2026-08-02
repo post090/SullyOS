@@ -565,20 +565,14 @@ const PhoneShell: React.FC = () => {
   // 「致用户的一封信」已下线：常量置 false，保留变量让下面弹窗链的条件继续成立（恒真/恒不显示）。
   const showAuthorLetter = false;
 
-  // Version update popup (2026-04) — forced once per user who hasn't seen it yet
-  const [showUpdateNotification, setShowUpdateNotification] = useState(() => {
-    try {
-      return !!(localStorage.getItem(DISCLAIMER_KEY)) && shouldShowUpdateNotification();
-    } catch { return false; }
-  });
+  // 本次版本首映：数据就绪且解锁后出现一次，避免按钮打开的 App 被锁屏挡在背后。
+  const [showUpdateNotification, setShowUpdateNotification] = useState(false);
 
   useEffect(() => {
-    if (!showDisclaimer && !showImportRecoveryPrompt && !showAuthorLetter && !showUpdateNotification) {
-      if (shouldShowUpdateNotification()) {
-        setShowUpdateNotification(true);
-      }
-    }
-  }, [showDisclaimer, showImportRecoveryPrompt, showAuthorLetter, showUpdateNotification]);
+    if (showDisclaimer || showImportRecoveryPrompt || showAuthorLetter || showUpdateNotification) return;
+    if (!isDataLoaded || isLocked) return;
+    if (shouldShowUpdateNotification()) setShowUpdateNotification(true);
+  }, [showDisclaimer, showImportRecoveryPrompt, showAuthorLetter, showUpdateNotification, isDataLoaded, isLocked]);
 
   // 520 特别活动弹窗（2026-05-20 当天，且没被 dismiss / completed）
   // 一次性：用户点过任何按钮就标记 dismissed，下次刷新不再出现；
@@ -979,7 +973,7 @@ const PhoneShell: React.FC = () => {
          />
        )}
 
-       {/* Version update popup (2026-04) — forced until acknowledged */}
+       {/* 见面 · 剧情首映：解锁后一次性出现 */}
        {!showDisclaimer && !showImportRecoveryPrompt && !showAuthorLetter && showUpdateNotification && (
          <UpdateNotificationController onClose={() => setShowUpdateNotification(false)} />
        )}

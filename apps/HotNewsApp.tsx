@@ -489,7 +489,7 @@ const HotNewsApp: React.FC = () => {
                     return (
                         <div className="mx-3 mt-6">
                             <p className="text-center text-[9px] tracking-wide" style={{ color: theme.faint }}>
-                                数据来自 hot_news（orz.ai）多平台热榜{rssLabel}
+                                数据来自 hot_news（news.orz.ai）多平台热榜{rssLabel}
                             </p>
                             <p className="text-center text-[9px] tracking-wide mt-0.5" style={{ color: theme.faint }}>
                                 每天 6 个时段自动更新 · 点右上角可手动真·刷新

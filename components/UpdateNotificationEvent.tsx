@@ -1,32 +1,29 @@
 /**
- * UpdateNotificationEvent.tsx
- * 版本更新强制提醒弹窗 (2026.5.25 小更新)
+ * 全局版本更新提醒。
  *
- * 所有尚未确认过本次弹窗的用户，打开后都会被强制接到一次，
- * 点击"查看更新"后会跳转到使用帮助 App 的对应更新日志页。
+ * 每个版本使用独立的 localStorage key；用户明确选择「立刻体验」或「先逛逛」后
+ * 才会记为已读，避免仅仅渲染过一次就把通知吞掉。
  */
 
 import React from 'react';
+import { ArrowRight, Database, MagicWand, UsersThree } from '@phosphor-icons/react';
 import { useOS } from '../context/OSContext';
 import { AppID } from '../types';
+import { dateLaunch } from '../utils/dateLaunch';
 
-// 历史 key —— 保留, 让老用户的"已看过"状态延续到本月新弹窗判断里
+// 历史 key —— 保留给备份兼容与旧版本日志使用。
 export const UPDATE_NOTIFICATION_KEY = 'sullyos_update_2026_04_seen';
 export const UPDATE_NOTIFICATION_KEY_2026_05 = 'sullyos_update_2026_05_seen';
 export const UPDATE_NOTIFICATION_KEY_2026_05_10 = 'sullyos_update_2026_05_10_seen';
 export const UPDATE_NOTIFICATION_KEY_2026_05_17 = 'sullyos_update_2026_05_17_seen';
-// 历史 key —— 5.25 情绪 buff 也接入 Instant Push
 export const UPDATE_NOTIFICATION_KEY_2026_05_25 = 'sullyos_update_2026_05_25_seen';
-// 历史 key —— 6.5 「彼方」上线
 export const UPDATE_NOTIFICATION_KEY_2026_06_05 = 'sullyos_update_2026_06_05_seen';
-// 历史 key —— 6.14 「家园」上线 · 小屋翻新 + 瑞幸咖啡
 export const UPDATE_NOTIFICATION_KEY_2026_06_14 = 'sullyos_update_2026_06_14_seen';
-// 历史 key —— 6.21 「查手机」翻新 + 人格模拟 · 手游风外观 · 小红书分享
 export const UPDATE_NOTIFICATION_KEY_2026_06_21 = 'sullyos_update_2026_06_21_seen';
-// 历史 key —— 6.26 梦境盲盒 · 联系人模式 · char 的小手机 · 见面状态栏 · 时间感知归位 · 鱼声 TTS
 export const UPDATE_NOTIFICATION_KEY_2026_06_26 = 'sullyos_update_2026_06_26_seen';
-// 本次更新 key —— 7.10 生活统计 · 全服写诗 · 画风重构 · 角色分组 · 记忆宫殿门牌 等
 export const UPDATE_NOTIFICATION_KEY_2026_07_10 = 'sullyos_update_2026_07_10_seen';
+// 本次更新：见面 · 剧情首映。
+export const UPDATE_NOTIFICATION_KEY_2026_08_02 = 'sullyos_update_2026_08_02_story_seen';
 
 export const FAQ_TARGET_SECTION_KEY = 'sullyos_faq_target_section';
 export const CHANGELOG_2026_04 = 'changelog-2026-04';
@@ -42,81 +39,159 @@ export const CHANGELOG_2026_07_10 = 'changelog-2026-07-10';
 
 export const shouldShowUpdateNotification = (): boolean => {
     try {
-        return !localStorage.getItem(UPDATE_NOTIFICATION_KEY_2026_07_10);
+        return !localStorage.getItem(UPDATE_NOTIFICATION_KEY_2026_08_02);
     } catch {
         return false;
     }
+};
+
+const markCurrentUpdateSeen = (): void => {
+    try {
+        localStorage.setItem(UPDATE_NOTIFICATION_KEY_2026_08_02, Date.now().toString());
+    } catch { /* storage 不可用时不阻断按钮行为 */ }
 };
 
 interface UpdateNotificationPopupProps {
     onClose: () => void;
 }
 
+const FEATURES = [
+    {
+        icon: UsersThree,
+        eyebrow: '多人同场',
+        text: '一次邀请多位角色，进入同一幕。',
+    },
+    {
+        icon: MagicWand,
+        eyebrow: '你的剧本',
+        text: '原生预设、制作器与面具箱都已就位。',
+    },
+    {
+        icon: Database,
+        eyebrow: '记得刚好',
+        text: '事件盒或独立向量分区，剧情彼此不串线。',
+    },
+] as const;
+
 export const UpdateNotificationPopup: React.FC<UpdateNotificationPopupProps> = ({ onClose }) => {
     const { openApp } = useOS();
 
-    const handleView = () => {
-        try {
-            localStorage.setItem(UPDATE_NOTIFICATION_KEY_2026_07_10, Date.now().toString());
-            sessionStorage.setItem(FAQ_TARGET_SECTION_KEY, CHANGELOG_2026_07_10);
-        } catch { /* ignore */ }
-        openApp(AppID.FAQ);
+    const handleExperience = () => {
+        markCurrentUpdateSeen();
+        dateLaunch.request({ surface: 'story' });
+        openApp(AppID.Date);
         onClose();
     };
 
     const handleDismiss = () => {
-        try { localStorage.setItem(UPDATE_NOTIFICATION_KEY_2026_07_10, Date.now().toString()); } catch { /* ignore */ }
+        markCurrentUpdateSeen();
         onClose();
     };
 
     return (
-        <div className="fixed inset-0 z-[9998] flex items-center justify-center p-5 animate-fade-in">
-            <div className="absolute inset-0 bg-black/60 backdrop-blur-md" />
-            <div className="relative w-full max-w-sm bg-white/95 backdrop-blur-xl rounded-[2.5rem] shadow-2xl border border-white/30 overflow-hidden animate-slide-up">
-                <div className="pt-7 pb-3 px-6 text-center">
-                    <img
-                        src="https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f514.png"
-                        alt="update"
-                        className="w-10 h-10 mx-auto mb-2"
-                    />
-                    <h2 className="text-lg font-extrabold text-slate-800">大版本更新 · 生活统计</h2>
-                    <p className="text-[11px] text-slate-400 mt-1">2026 年 7 月 10 日 · 10 项更新</p>
-                </div>
+        <div
+            className="story-premiere-overlay fixed inset-0 z-[9998] flex items-start justify-center overflow-y-auto bg-[#17131f]/75 px-4 backdrop-blur-sm"
+            style={{
+                paddingTop: 'max(1rem, env(safe-area-inset-top))',
+                paddingBottom: 'max(1rem, env(safe-area-inset-bottom))',
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="story-premiere-title"
+        >
+            <style>{`
+                @keyframes storyPremiereOverlayIn {
+                    from { opacity: 0; }
+                    to { opacity: 1; }
+                }
+                @keyframes storyPremiereTicketIn {
+                    from { opacity: 0; transform: translateY(24px) scale(.975); }
+                    to { opacity: 1; transform: translateY(0) scale(1); }
+                }
+                @keyframes storyPremiereReveal {
+                    from { opacity: 0; transform: translateY(9px); }
+                    to { opacity: 1; transform: translateY(0); }
+                }
+                .story-premiere-overlay { animation: storyPremiereOverlayIn 220ms ease-out both; }
+                .story-premiere-ticket { animation: storyPremiereTicketIn 460ms cubic-bezier(.2,.8,.2,1) both; }
+                .story-premiere-reveal { animation: storyPremiereReveal 420ms ease-out both; }
+                @media (prefers-reduced-motion: reduce) {
+                    .story-premiere-overlay,
+                    .story-premiere-ticket,
+                    .story-premiere-reveal { animation: none !important; }
+                    .story-premiere-action { transition: none !important; }
+                }
+            `}</style>
 
-                <div className="px-6 pb-4 space-y-3">
-                    <div className="bg-gradient-to-br from-indigo-50 to-violet-50 border border-indigo-100 rounded-2xl p-4">
-                        <p className="text-[13px] text-slate-700 leading-relaxed">
-                            <strong className="text-indigo-600">「档案」</strong>新增<strong className="text-violet-600">生活统计</strong>：生理期 / 药盒 / 记账 / 锻炼四模块，还能让角色<strong>注入代记</strong>——聊天时随口说吃药了、花了多少，ta 帮你记。
-                        </p>
-                        <p className="text-[12px] text-slate-500 leading-relaxed mt-2">
-                            <strong className="text-indigo-600">「彼方」</strong>开了场<strong>全服写诗</strong>；<strong className="text-violet-600">捏人</strong>换新画风 + PSD 批量导入 + 手办区；<strong>神经链接</strong>支持<strong>角色分组</strong>。
-                        </p>
-                        <p className="text-[12px] text-slate-500 leading-relaxed mt-2">
-                            还有：<strong>小屋</strong>装修大升级 + 家园新增「凌晨」段；<strong className="text-violet-600">记忆宫殿</strong>门牌（测试中）；<strong>专属提示铃声</strong>；壁纸/小屋图改存 Blob；一大批 iOS 适配与散修。
+            <section className="story-premiere-ticket relative my-auto w-full max-w-[23rem] overflow-hidden rounded-[2rem] bg-[#fbf7ef] text-[#292334] shadow-[0_28px_80px_rgba(13,9,20,0.45)] ring-1 ring-white/20">
+                <div className="relative overflow-hidden bg-[#292334] px-6 pb-7 pt-6 text-[#fbf7ef]">
+                    <div className="absolute inset-x-0 top-0 flex justify-around px-4 pt-2 opacity-35" aria-hidden="true">
+                        {Array.from({ length: 9 }).map((_, index) => (
+                            <span key={index} className="h-1.5 w-3 rounded-[2px] bg-[#fbf7ef]" />
+                        ))}
+                    </div>
+
+                    <div className="story-premiere-reveal flex items-center justify-between pt-2" style={{ animationDelay: '90ms' }}>
+                        <p className="text-[9px] font-bold tracking-[0.32em] text-[#cdbdff]">NIGHT SCREENING</p>
+                        <span className="rounded-full border border-[#cdbdff]/45 px-2.5 py-1 text-[9px] font-bold tracking-[0.16em] text-[#ddcffd]">NEW · 剧情</span>
+                    </div>
+
+                    <div className="story-premiere-reveal mt-8" style={{ animationDelay: '150ms' }}>
+                        <p className="mb-2 text-[10px] font-semibold tracking-[0.24em] text-[#a993ee]">见面模式 · 新功能首映</p>
+                        <h2 id="story-premiere-title" className="max-w-[18rem] text-[27px] font-black leading-[1.25] tracking-[-0.035em]">
+                            见面，现在可以<br />一起写一场故事。
+                        </h2>
+                        <p className="mt-3 text-[12px] leading-6 text-[#d7d0df]">
+                            多角色、原生预设与独立剧情记忆，已经抵达放映室。
                         </p>
                     </div>
-                    <div className="bg-violet-50 border border-violet-200 rounded-2xl p-3">
-                        <p className="text-[12px] font-bold text-violet-600 text-center">
-                            点下方按钮看完整更新说明
-                        </p>
-                    </div>
+
+                    <div className="absolute -bottom-3 -left-3 h-6 w-6 rounded-full bg-[#fbf7ef]" aria-hidden="true" />
+                    <div className="absolute -bottom-3 -right-3 h-6 w-6 rounded-full bg-[#fbf7ef]" aria-hidden="true" />
                 </div>
 
-                <div className="px-6 pb-7 pt-2 space-y-2">
-                    <button
-                        onClick={handleView}
-                        className="w-full py-3.5 bg-gradient-to-r from-violet-500 to-purple-500 text-white font-bold rounded-2xl shadow-lg shadow-violet-200 active:scale-95 transition-transform text-sm"
-                    >
-                        看看这次更新了啥
-                    </button>
-                    <button
-                        onClick={handleDismiss}
-                        className="w-full py-2 text-slate-400 font-medium text-xs active:scale-95 transition-transform"
-                    >
-                        以后再说
-                    </button>
+                <div className="px-6 pb-5 pt-5">
+                    <div className="divide-y divide-[#ded7ca]">
+                        {FEATURES.map(({ icon: Icon, eyebrow, text }, index) => (
+                            <div
+                                key={eyebrow}
+                                className="story-premiere-reveal flex items-start gap-3 py-3 first:pt-0"
+                                style={{ animationDelay: `${230 + index * 70}ms` }}
+                            >
+                                <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#eee7ff] text-[#6f43da]">
+                                    <Icon size={18} weight="duotone" />
+                                </div>
+                                <div className="min-w-0">
+                                    <p className="text-[12px] font-extrabold tracking-[0.08em] text-[#4c3b70]">{eyebrow}</p>
+                                    <p className="mt-1 text-[12px] leading-5 text-[#6f6876]">{text}</p>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+
+                    <p className="story-premiere-reveal mt-2 border-l-2 border-[#b99cf8] pl-3 text-[10px] leading-[1.7] text-[#8b8291]" style={{ animationDelay: '470ms' }}>
+                        楼层与剧情记忆支持长按编辑；完整备份也会把它们一起带走。
+                    </p>
+
+                    <div className="story-premiere-reveal mt-5" style={{ animationDelay: '530ms' }}>
+                        <button
+                            type="button"
+                            onClick={handleExperience}
+                            className="story-premiere-action flex w-full items-center justify-center gap-2 rounded-2xl bg-[#7547e8] px-5 py-3.5 text-[13px] font-extrabold tracking-[0.05em] text-white shadow-[0_10px_24px_rgba(117,71,232,0.28)] transition-transform duration-200 active:scale-[0.975]"
+                        >
+                            立刻体验
+                            <ArrowRight size={16} weight="bold" />
+                        </button>
+                        <button
+                            type="button"
+                            onClick={handleDismiss}
+                            className="story-premiere-action mt-1.5 w-full py-2.5 text-[11px] font-semibold text-[#918998] transition-colors active:text-[#4f4755]"
+                        >
+                            先逛逛
+                        </button>
+                    </div>
                 </div>
-            </div>
+            </section>
         </div>
     );
 };

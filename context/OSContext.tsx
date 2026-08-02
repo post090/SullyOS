@@ -7,6 +7,8 @@ import { extractImagesInPlace, deepCloneForExport } from '../utils/backupExport'
 import { isBlobRef, getBlobForRef, migrateDataUrlToRef, migrateAppearancePresetBlobRefs, resolveBlobRefsDeep, BLOBREF_PREFIX, deleteBlobRefIfUnreferenced, invalidateBlobRefUrlCache } from '../utils/blobRef';
 import { LEGACY_DEFAULT_WALLPAPER, isLegacyDefaultWallpaper, shouldPreserveLegacyDefaultWallpaper } from '../utils/wallpaperCompat';
 import { migrateSharkpanAssets } from '../utils/sharkpanAssetMigration';
+import { SULLY_DEFAULT_AVATAR_URL, shouldMigrateSullyAvatar } from '../utils/sullyAvatar';
+import { exportStoryTheaterAppearanceSetting, restoreStoryTheaterAppearanceSetting } from '../utils/storyTheaterBackup';
 import { createV2ArrayFieldWriter, writeV2Backup, assembleV2Backup, type BackupManifest, type ZipFileWriter, type ZipFileReader } from '../utils/backupFormat';
 import { encodeVectorsForBackup, encodeVectorsForBackupChunked } from '../utils/memoryPalace/db';
 import { ProactiveChat, getMissCount, incrementMissCount, resetMissCount, MISS_THRESHOLD, getNoResponseCount, incrementNoResponseCount, resetNoResponseCount } from '../utils/proactiveChat';
@@ -608,9 +610,7 @@ const defaultUserProfile: UserProfile = {
 const sullyV2: CharacterProfile = {
   id: 'preset-sully-v2', // Unique ID to prevent duplication
   name: 'Sully',
-  // 本地打包资源（public/sully/head.png），同源加载、不依赖图床/CDN，图床挂了也不受影响。
-  // BASE_URL 前缀兼容 GitHub Pages 的相对 base（见 vite.config.ts）。
-  avatar: `${(import.meta as any).env?.BASE_URL ?? '/'}sully/head.png`,
+  avatar: SULLY_DEFAULT_AVATAR_URL,
   description: 'AI助理 / 电波系黑客猫猫',
   
   systemPrompt: `[Role Definition]
@@ -1824,10 +1824,10 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                  const isCorrupted = !currentSprites['normal'] || !currentSprites['chibi'];
                  const needsWallUpdate = existingSully.roomConfig?.wallImage !== sullyV2.roomConfig?.wallImage;
                  const needsSkinSets = !existingSully.dateSkinSets || existingSully.dateSkinSets.length === 0;
-                 // 老用户头像仍是旧图床默认图（不稳定，常拉不到）→ 换成本地打包图；
-                 // 用户自己改过头像的（值不等于旧默认）保持不动。
-                 const OLD_SULLY_AVATAR = 'https://sharkpan.xyz/f/BZ3VSa/head.png';
-                 const needsAvatarUpdate = existingSully.avatar === OLD_SULLY_AVATAR;
+                 // 默认头像曾先后使用旧图床和依赖部署根路径的本地地址。
+                 // 这些地址在备份恢复或 GitHub Pages 子路径变化后会 404；统一迁移到资产仓库。
+                 // 用户自己改过的头像不在迁移名单内，保持不动。
+                 const needsAvatarUpdate = shouldMigrateSullyAvatar(existingSully.avatar);
                  // 之前误把家园 chibi 替换成了像素小屋的像素立绘 → 还原为原版 sharkpan 立绘
                  const hasMisplacedPixelChibi = typeof currentSprites['chibi'] === 'string'
                      && currentSprites['chibi'].startsWith('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADUAAAA4CAYAAABdeLCu');
@@ -3788,7 +3788,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               // 角色身上的 groupId 指向这张表，漏导会让导入端全员回落「未分组」
               'characters', 'character_groups', 'messages', 'themes', 'emojis', 'emoji_categories', 'assets', 'gallery',
               'user_profile', 'diaries', 'tasks', 'tasks_v2', 'anniversaries', 'room_todos',
-              'room_notes', 'groups', 'journal_stickers', 'social_posts', 'courses', 'games', 'worldbooks', 'novels', 'songs',
+              'room_notes', 'groups', 'journal_stickers', 'social_posts', 'courses', 'games', 'worldbooks', 'story_theaters', 'story_theater_presets', 'story_theater_masks', 'novels', 'songs',
               'bank_transactions', 'bank_data',
               'xhs_activities', 'xhs_stock',
               'quizzes', 'guidebook', 'scheduled_messages', 'life_sim',
@@ -3958,6 +3958,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               })() : undefined,
               bm25Mode: (mode === 'text_only' || mode === 'full') ? (localStorage.getItem('bm25_mode') || undefined) : undefined,
               lastActiveCharId: (mode === 'text_only' || mode === 'full') ? (localStorage.getItem('os_last_active_char_id') || undefined) : undefined,
+              storyTheaterAppearance: (mode === 'text_only' || mode === 'full') ? exportStoryTheaterAppearanceSetting() : undefined,
               eventNotifFlags: (mode === 'text_only' || mode === 'full') ? (() => {
                   const flags: Record<string, string> = {};
                   for (let i = 0; i < localStorage.length; i++) {
@@ -4060,6 +4061,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               'room_plates', 'digest_reports',
               'bank_transactions', 'scheduled_messages', 'memory_batches', 'hotnews_snapshots',
               'character_groups',
+              'story_theaters', 'story_theater_presets',
               'life_records', 'med_plans', 'life_record_settings'
           ]);
 
@@ -4098,6 +4100,9 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               courses: 'courses',
               games: 'games',
               worldbooks: 'worldbooks',
+              story_theaters: 'storyTheaters',
+              story_theater_presets: 'storyTheaterPresets',
+              story_theater_masks: 'storyTheaterMasks',
               novels: 'novels',
               songs: 'songs',
               bank_transactions: 'bankTransactions',
@@ -4292,6 +4297,9 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                   case 'courses': backupData.courses = processedData; break;
                   case 'games': backupData.games = processedData; break;
                   case 'worldbooks': backupData.worldbooks = processedData; break;
+                  case 'story_theaters': backupData.storyTheaters = processedData; break;
+                  case 'story_theater_presets': backupData.storyTheaterPresets = processedData; break;
+                  case 'story_theater_masks': backupData.storyTheaterMasks = processedData; break;
                   case 'novels': backupData.novels = processedData; break;
                   case 'songs': backupData.songs = processedData; break;
                   case 'bank_transactions': backupData.bankTransactions = processedData; break;
@@ -4753,6 +4761,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           }
           if (typeof data.bm25Mode === 'string') localStorage.setItem('bm25_mode', data.bm25Mode);
           if (typeof data.lastActiveCharId === 'string') localStorage.setItem('os_last_active_char_id', data.lastActiveCharId);
+          restoreStoryTheaterAppearanceSetting(data.storyTheaterAppearance);
           if (data.dreamCollection && typeof data.dreamCollection === 'object') localStorage.setItem('os_dream_collection', JSON.stringify(data.dreamCollection));
           if (typeof data.gotchiAccentHue === 'string' && /^\d+$/.test(data.gotchiAccentHue)) localStorage.setItem('tama_accent_hue', data.gotchiAccentHue);
           if (data.eventNotifFlags && typeof data.eventNotifFlags === 'object') {

@@ -16,6 +16,8 @@ import DateSettings from '../components/date/DateSettings';
 import { armDateResumeAttempt, clearDateResumeAttempt, takeCrashedDateResume } from '../utils/dateSessionRecovery';
 import { BookOpen, Sparkle, CaretLeft, GearSix } from '@phosphor-icons/react';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
+import StoryTheater from '../components/date/story/StoryTheater';
+import { dateLaunch } from '../utils/dateLaunch';
 
 const DateApp: React.FC = () => {
     const { closeApp, openApp, characters, activeCharacterId, setActiveCharacterId, apiConfig, addToast, updateCharacter, virtualTime, userProfile, memoryPalaceConfig, dateAutoStartCharId, consumeDateAutoStart, characterGroups } = useOS();
@@ -24,6 +26,7 @@ const DateApp: React.FC = () => {
     // 用本地 state（而非 context）承载：DateApp 切走即卸载，标记随之消失，不会泄漏到
     // 之后从桌面直接打开的见面会话里。
     const [cameFromChat, setCameFromChat] = useState(false);
+    const [meetSurface, setMeetSurface] = useState<'companion' | 'story'>(() => dateLaunch.peek()?.surface ?? 'companion');
 
     // 记忆宫殿（与聊天侧共用同一套上下文：同 charId、同高水位线）
     // 见面流也需要在 AI 回复后跑一次缓冲区检查 + 自动归档，否则只有"读"没有"写"。
@@ -41,6 +44,21 @@ const DateApp: React.FC = () => {
     const [mode, setMode] = useState<'select' | 'peek' | 'session' | 'settings' | 'history'>('select');
     // Track previous mode for Settings back navigation
     const [previousMode, setPreviousMode] = useState<'select' | 'peek'>('select');
+
+    // 全局更新弹窗等入口可直接落到「剧情」。peek 让首次渲染就显示目标页，
+    // subscribe 则覆盖 DateApp 已经打开的情况；应用后立即消费，绝不污染下次普通打开。
+    useEffect(() => {
+        const applyLaunchIntent = (intent: { surface: 'companion' | 'story' }) => {
+            setCameFromChat(false);
+            setMode('select');
+            setMeetSurface(intent.surface);
+            dateLaunch.consume();
+        };
+
+        const initialIntent = dateLaunch.peek();
+        if (initialIntent) applyLaunchIntent(initialIntent);
+        return dateLaunch.subscribe(applyLaunchIntent);
+    }, []);
 
     // 选择页分页（6 个角色一页，横向翻页）
     const SELECT_PAGE_SIZE = 6;
@@ -185,6 +203,7 @@ const DateApp: React.FC = () => {
         const target = characters.find(c => c.id === dateAutoStartCharId);
         consumeDateAutoStart();
         setCameFromChat(true);
+        setMeetSurface('companion');
         if (target) handleCharClick(target);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [dateAutoStartCharId]);
@@ -607,6 +626,10 @@ const DateApp: React.FC = () => {
 
     // --- Render ---
 
+    if (meetSurface === 'story' && mode === 'select' && !cameFromChat) {
+        return <StoryTheater onSwitchCompanion={() => setMeetSurface('companion')} onClose={closeApp} />;
+    }
+
     if (mode === 'select' || !char) {
         // 6 个角色一页，横向翻页（先按分组筛选，再切页）
         const selectChars = filterCharactersByGroup(characters, characterGroups, selectGroupId);
@@ -653,6 +676,10 @@ const DateApp: React.FC = () => {
                                 <span className="h-px w-10" style={{ background: `linear-gradient(270deg,transparent,${th.line})` }} />
                             </div>
                         </div>
+                    </div>
+                    <div className='mx-auto mt-4 mb-3 grid w-[min(18rem,calc(100%-2.5rem))] grid-cols-2 rounded-xl bg-white/45 p-1 shadow-sm'>
+                        <button className='rounded-lg bg-white py-2 text-xs font-bold text-[#715d99] shadow-sm'>陪伴</button>
+                        <button onClick={() => setMeetSurface('story')} className='rounded-lg py-2 text-xs font-bold text-[#8f7bb5]'>剧情</button>
                     </div>
                     {/* 分组筛选（没建分组时不渲染）。切组后回到第一页 */}
                     <CharacterGroupFilterBar characters={characters} groups={characterGroups} dark
