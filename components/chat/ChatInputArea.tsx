@@ -711,7 +711,7 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
 
                           </div>
 
-                          {/* Page 1: 进阶功能（第一页自然溢出 + 原第二页） */}
+                          {/* Page 1: 进阶功能（8 个一页：见面/主动消息/主动消息2.0/上岸计划/HTML模式/思考/聊天装扮/白框） */}
                           <div className={`p-6 grid grid-cols-4 gap-8 ${actionsPage === 1 ? '' : 'hidden'}`}>
                             {/* 见面：直接跳到该角色的见面模式（等同于进见面 App 并点击该角色） */}
                             <button onClick={() => onPanelAction('meetup')} className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${acnh ? 'text-[#725d42]' : isDiscordStyle ? 'text-slate-200' : 'text-slate-600'}`}>
@@ -719,14 +719,6 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                                     <Sparkle className="w-6 h-6" weight="fill" />
                                 </div>
                                 <span className="text-xs font-bold">见面</span>
-                            </button>
-
-                            <button onClick={() => onPanelAction('archive')} className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${acnh ? 'text-[#725d42]' : isDiscordStyle ? 'text-slate-200' : 'text-slate-600'}`}>
-                                {acnh ? <AcnhActionTile kind="archive" /> : (
-                                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border ${isDiscordStyle ? 'bg-slate-800 text-indigo-300 border-indigo-400/20' : 'bg-indigo-50 text-indigo-400 border-indigo-100'}`}>
-                                    <BookOpenText className="w-6 h-6" weight="bold" />
-                                </div>)}
-                                <span className="text-xs font-bold">{isSummarizing ? '归档中...' : '记忆归档'}</span>
                             </button>
 
                             {/* Proactive Message Button（从第一页移到第二页） */}
@@ -823,8 +815,16 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
 
                           </div>
 
-                          {/* Page 2: 提示音（第二页溢出顺延）+ 外部服务（麦当劳 / 瑞幸 MCP） */}
+                          {/* Page 2: 记忆归档 + 提示音 + 外部服务（麦当劳 / 瑞幸 MCP） */}
                           <div className={`p-6 grid grid-cols-4 gap-8 ${actionsPage === 2 ? '' : 'hidden'}`}>
+                            <button onClick={() => onPanelAction('archive')} className={`flex flex-col items-center gap-2 active:scale-95 transition-transform ${acnh ? 'text-[#725d42]' : isDiscordStyle ? 'text-slate-200' : 'text-slate-600'}`}>
+                                {acnh ? <AcnhActionTile kind="archive" /> : (
+                                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border ${isDiscordStyle ? 'bg-slate-800 text-indigo-300 border-indigo-400/20' : 'bg-indigo-50 text-indigo-400 border-indigo-100'}`}>
+                                    <BookOpenText className="w-6 h-6" weight="bold" />
+                                </div>)}
+                                <span className="text-xs font-bold">{isSummarizing ? '归档中...' : '记忆归档'}</span>
+                            </button>
+
                             {/* 提示音：打开该角色专属的「白框提示音」弹窗（挨着白框，独立于白框可绑定/解绑） */}
                             <button
                               onClick={() => onPanelAction('chrome-sound')}
