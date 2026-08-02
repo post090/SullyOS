@@ -435,6 +435,7 @@ const Settings: React.FC = () => {
   const [modelManageKey, setModelManageKey] = useState<string | null>(null);
   const [newModel, setNewModel] = useState({ model: '', label: '' });
   const [stationModelList, setStationModelList] = useState<string[]>([]);
+  const [modelSearch, setModelSearch] = useState(''); // 管理模型面板的搜索框（模型一多好找）
   const [stationModelLoading, setStationModelLoading] = useState(false);
   const [showCompatZone, setShowCompatZone] = useState(false); // 官方原版界面折叠区
   const [fbConfig, setFbConfig] = useState<FloatBallConfig>(() => loadFloatBallConfig());
@@ -3807,15 +3808,31 @@ const Settings: React.FC = () => {
       <Modal
           isOpen={!!modelManageKey}
           title={`管理模型 — ${stations.find(s => s.key === modelManageKey)?.name || ''}`}
-          onClose={() => { setModelManageKey(null); setStationModelList([]); }}
+          onClose={() => { setModelManageKey(null); setStationModelList([]); setModelSearch(''); }}
       >
           {(() => {
               const st = stations.find(s => s.key === modelManageKey);
               if (!st) return <p className="text-xs text-slate-400 text-center py-6">站点不存在（可能刚被删除）</p>;
+              const kw = modelSearch.trim().toLowerCase();
+              const matchKw = (...strs: string[]) => kw === '' || strs.some(s => s.toLowerCase().includes(kw));
+              const filteredModels = st.models.filter(m => matchKw(m.label, m.model));
+              const filteredFetched = stationModelList.filter(id => matchKw(id));
               return (
                   <div className="space-y-4">
+                      {/* 搜索框 —— 模型一多时好找（同时过滤已保存和拉取的列表） */}
+                      {(st.models.length > 6 || stationModelList.length > 6) && (
+                          <div className="relative">
+                              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5 text-slate-300 absolute left-3 top-1/2 -translate-y-1/2"><path fillRule="evenodd" d="M9 3.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11ZM2 9a7 7 0 1 1 12.452 4.391l3.328 3.329a.75.75 0 1 1-1.06 1.06l-3.329-3.328A7 7 0 0 1 2 9Z" clipRule="evenodd" /></svg>
+                              <input
+                                  value={modelSearch}
+                                  onChange={e => setModelSearch(e.target.value)}
+                                  className="w-full bg-slate-100 rounded-xl pl-8 pr-3 py-2 text-xs focus:outline-primary"
+                                  placeholder="搜索模型（id / 别名）"
+                              />
+                          </div>
+                      )}
                       <div className="space-y-2">
-                          {st.models.map(m => (
+                          {filteredModels.map(m => (
                               <div key={m.presetId} className="flex items-center bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 gap-2">
                                   <div className="flex-1 min-w-0">
                                       <p className="text-sm font-bold text-slate-600">{m.label}</p>
@@ -3833,6 +3850,7 @@ const Settings: React.FC = () => {
                               </div>
                           ))}
                           {st.models.length === 0 && <p className="text-xs text-slate-400 text-center py-4">这个站还没有模型</p>}
+                          {st.models.length > 0 && filteredModels.length === 0 && <p className="text-xs text-slate-400 text-center py-4">没有匹配「{modelSearch}」的模型</p>}
                       </div>
                       <div className="border-t border-slate-100 pt-3 space-y-2">
                           <div className="grid grid-cols-2 gap-2">
@@ -3847,7 +3865,7 @@ const Settings: React.FC = () => {
                           </div>
                           {stationModelList.length > 0 && (
                               <div className="max-h-[30vh] overflow-y-auto no-scrollbar space-y-1">
-                                  {stationModelList.map(id => (
+                                  {filteredFetched.map(id => (
                                       <button
                                           key={id}
                                           onClick={() => setNewModel(s => ({ ...s, model: id }))}
@@ -3856,6 +3874,7 @@ const Settings: React.FC = () => {
                                           {id}
                                       </button>
                                   ))}
+                                  {filteredFetched.length === 0 && <p className="text-xs text-slate-400 text-center py-3">没有匹配「{modelSearch}」的模型</p>}
                               </div>
                           )}
                       </div>

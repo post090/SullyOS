@@ -1134,8 +1134,6 @@ const MusicApp: React.FC = () => {
                 if (!l.text) return null;
                 const selected = selectedLyricIndices.has(i);
                 const isActive = i === activeLyricIdx;
-                const mm = Math.floor(l.t / 60);
-                const ss = Math.floor(l.t % 60).toString().padStart(2, '0');
                 const tr = lyricDisplayMode === 'bilingual' ? tlyric.find(t => Math.abs(t.t - l.t) < 0.2) : null;
                 return (
                   <div
@@ -1177,13 +1175,6 @@ const MusicApp: React.FC = () => {
                           }}>
                           {tr.text}
                         </span>
-                      )}
-                      {/* 当前播放行：左侧时间 + 横向定位线（时间在横线左边，网易云选择歌词样式） */}
-                      {isActive && (
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-[9px] tracking-wider font-mono shrink-0" style={{ color: C.primary }}>{mm}:{ss}</span>
-                          <div className="flex-1 h-px" style={{ background: `${C.primary}50` }} />
-                        </div>
                       )}
                     </div>
                   </div>

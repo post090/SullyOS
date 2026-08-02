@@ -21,6 +21,7 @@ public/instant-worker.bundle.js
 .vscode/*
 !.vscode/extensions.json
 .idea
+.qoder/
 .DS_Store
 *.suo
 *.ntvs*
@@ -46,3 +47,6 @@ scripts/.xhs-bridge-token
 
 # xiaohongshu-skills 本地克隆目录（用户重命名版，与已忽略的 xiaohongshu-skills/ 依赖不同）
 xiaohongshu-skills-main/
+
+# 本地审计/盘点稿（不入仓库）
+提示词注入审计清单.md

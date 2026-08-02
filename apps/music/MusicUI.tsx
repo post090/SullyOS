@@ -314,64 +314,67 @@ export const TogetherHeader: React.FC<{
   // 万一哪天同时和多个 char 听，改成主头像 + 叠头像组还能自然兼容。
   const main = companions[0];
   const extraCount = companions.length - 1;
+  const [showKickConfirm, setShowKickConfirm] = useState(false);
   return (
-    <div className="relative mb-2 pt-1 pb-2 rounded-2xl overflow-hidden"
-      style={{
-        background: `linear-gradient(135deg, ${C.sakura}18 0%, ${C.lavender}16 50%, ${C.glow}12 100%)`,
-        border: `1px solid ${C.sakura}35`,
-        boxShadow: `inset 0 1px 0 rgba(255,255,255,0.5), 0 2px 12px ${C.sakura}20`,
-      }}
-    >
-      {/* 背景光晕 */}
-      <div aria-hidden className="pointer-events-none absolute inset-0 opacity-60"
-        style={{
-          background: `radial-gradient(ellipse at 30% 40%, ${C.sakura}40 0%, transparent 45%),
-                       radial-gradient(ellipse at 70% 60%, ${C.lavender}38 0%, transparent 50%)`,
-        }} />
-      {/* 居中两头像 + 中间的心 */}
-      <div className="relative flex items-center justify-center gap-2">
-        <TinyAvatar avatar={userAvatar} name={userName} size={30} ring={C.glow} />
-        <div className="flex flex-col items-center justify-center -mx-1"
-          style={{ color: C.sakura }}>
-          <svg width="16" height="14" viewBox="0 0 24 22" fill="none"
-            style={{ filter: `drop-shadow(0 0 4px ${C.sakura})`, animation: 'shizuku-glow 2.2s ease-in-out infinite' }}>
-            <path d="M12 21s-8-5.3-8-11.5C4 6 6.5 3.5 9.5 3.5c1.6 0 3 .8 2.5 2.2C11.5 4.3 12.9 3.5 14.5 3.5 17.5 3.5 20 6 20 9.5 20 15.7 12 21 12 21z"
-              fill="currentColor" />
-          </svg>
-        </div>
-        <TinyAvatar avatar={main?.avatar} name={main?.name || ''} size={30} ring={C.sakura} />
-        {extraCount > 0 && (
-          <span className="ml-0.5 text-[9px] px-1.5 py-0.5 rounded-full"
-            style={{ background: `${C.lavender}33`, color: C.primary, border: `1px solid ${C.lavender}55` }}>
-            +{extraCount}
-          </span>
-        )}
+    <div className="relative py-1 px-2 flex items-center justify-center gap-2">
+      {/* 居中两头像 + 中间的心（去掉文案行，省版面） */}
+      <TinyAvatar avatar={userAvatar} name={userName} size={24} ring={C.glow} />
+      <div className="flex flex-col items-center justify-center -mx-1"
+        style={{ color: C.sakura }}>
+        <svg width="12" height="11" viewBox="0 0 24 22" fill="none"
+          style={{ filter: `drop-shadow(0 0 3px ${C.sakura})`, animation: 'shizuku-glow 2.2s ease-in-out infinite' }}>
+          <path d="M12 21s-8-5.3-8-11.5C4 6 6.5 3.5 9.5 3.5c1.6 0 3 .8 2.5 2.2C11.5 4.3 12.9 3.5 14.5 3.5 17.5 3.5 20 6 20 9.5 20 15.7 12 21 12 21z"
+            fill="currentColor" />
+        </svg>
       </div>
-      {/* 文案 */}
-      <div className="relative mt-1 flex items-center justify-center gap-1.5">
-        <div className="text-[10px] tracking-[0.25em] uppercase font-semibold"
-          style={{ color: C.primary, opacity: 0.75 }}>
-          Listening Together
-        </div>
-      </div>
-      <div className="relative mt-0.5 text-center text-[11px]"
-        style={{ color: C.primary, fontFamily: `'Noto Serif', serif` }}>
-        <span className="font-medium">{userName}</span>
-        <span className="mx-1 opacity-60">·</span>
-        <span className="font-medium">{main?.name || ''}</span>
-        {extraCount > 0 && <span className="opacity-70"> 等 {companions.length} 人</span>}
-      </div>
-      {/* 结束一起听 —— 右上角极淡小圆点（截图几乎看不见，点一下结束） */}
-      {onKick && main && (
+      {/* 伴听头像 —— 点击弹窗确认结束一起听（不做显眼退出按钮） */}
+      {main ? (
         <button
-          onClick={(e) => { e.stopPropagation(); onKick(main.id); }}
+          type="button"
+          onClick={() => setShowKickConfirm(true)}
           aria-label={`结束和 ${main.name} 的一起听`}
-          className="absolute top-1.5 right-1.5 transition-opacity"
-          style={{ color: C.primary, opacity: 0.18 }}
-          title="结束一起听"
+          className="rounded-full transition-transform active:scale-95"
         >
-          <svg width="6" height="6" viewBox="0 0 6 6" fill="currentColor"><circle cx="3" cy="3" r="2.5" /></svg>
+          <TinyAvatar avatar={main.avatar} name={main.name} size={24} ring={C.sakura} />
         </button>
+      ) : (
+        <TinyAvatar avatar={undefined} name="" size={24} ring={C.sakura} />
+      )}
+      {extraCount > 0 && (
+        <span className="ml-0.5 text-[9px] px-1.5 py-0.5 rounded-full"
+          style={{ background: `${C.lavender}33`, color: C.primary, border: `1px solid ${C.lavender}55` }}>
+          +{extraCount}
+        </span>
+      )}
+      {/* 退出确认弹窗 —— 点头像触发，遮罩点击关闭 */}
+      {showKickConfirm && main && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setShowKickConfirm(false)} />
+          <div
+            className="absolute top-full left-1/2 -translate-x-1/2 mt-2 z-50 rounded-2xl px-4 py-3"
+            style={{ background: C.bg, boxShadow: `0 8px 32px ${C.glow}40`, border: `1px solid ${C.sakura}40` }}
+          >
+            <div className="text-[11px] mb-3 text-center whitespace-nowrap" style={{ color: C.text }}>
+              结束和 {main.name} 的一起听？
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowKickConfirm(false)}
+                className="flex-1 px-3 py-1.5 rounded-xl text-[11px]"
+                style={{ background: C.bgTint, color: C.muted }}
+              >
+                取消
+              </button>
+              <button
+                onClick={() => { onKick && onKick(main.id); setShowKickConfirm(false); }}
+                className="flex-1 px-3 py-1.5 rounded-xl text-[11px] text-white"
+                style={{ background: `linear-gradient(135deg, ${C.sakura}, ${C.lavender})` }}
+              >
+                结束
+              </button>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );
