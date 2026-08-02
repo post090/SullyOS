@@ -20,7 +20,7 @@ import { JobNoteKind, JobStage, JobRoundKind, JobRoundStatus } from '../types';
 
 export interface ParsedJobUpdate {
     code: string;
-    stage: JobStage;
+    stage?: JobStage;
     nextStep: string;
     /** 键值对模式下的额外字段（title/projectName/location/salary/jd/next 等） */
     fields?: Partial<Record<JobSettableField, string>>;
@@ -266,7 +266,7 @@ export function parseJobHuntCommands(text: string): JobParseResult {
         // 第一段含冒号 → 键值对模式
         if (segments.length > 0 && segments[0].includes(':')) {
             const fields: Partial<Record<JobSettableField, string>> = {};
-            let stage: JobStage = 'applied';
+            let stage: JobStage | undefined;
             let nextStep = '';
             for (const seg of segments) {
                 const ci = seg.indexOf(':');
@@ -423,7 +423,8 @@ export const JOB_COMMAND_GUIDE = [
     '',
     '【岗位编辑类】',
     '1. 建卡/批量录入（推荐键值对，一次带全字段）：[[JOB_UPDATE:代号|stage:阶段|title:岗位名|project:项目|location:地点|salary:薪资|next:下一步|jd:岗位描述]]。字段可省，顺序无所谓。阶段限 watching(观望中)/applied(已投递)/written(笔试)/interview(面试)/offer_talk(沟通Offer)/offer(已接受Offer)/rejected(挂了)。例：[[JOB_UPDATE:C司|stage:面试|title:前端工程师|location:北京|salary:25k|next:准备二面]]。老格式 [[JOB_UPDATE:代号|阶段|下一步]] 仍兼容。用户提到新投了岗位就建卡（代号自拟，如 C司）；看上了但还没投用 watching。',
-    '2. 改短字段（覆盖语义，用于 title/project/location/salary/stage/next）：[[JOB_SET:代号|字段|值]]，一条改一个字段。例：[[JOB_SET:C司|salary|28k]]。只能改已建档的岗位。',
+    '   ⚠ JOB_UPDATE 代号匹配到已有岗位时只改你传的字段，没传的 stage/字段都保持原样（不会重置阶段）；代号匹配不到就建新卡。所以改已有岗位的某个字段，用 JOB_UPDATE 或 JOB_SET 都行；但只想改阶段不动别的，用 JOB_SET 更明确。',
+    '2. 改短字段（覆盖语义，用于 title/project/location/salary/stage/next）：[[JOB_SET:代号|字段|值]]，一条改一个字段。例：[[JOB_SET:C司|salary|28k]]。只能改已建档的岗位，找不到代号直接拒绝（不会建新卡）。改阶段也用它：[[JOB_SET:C司|stage|面试]]。',
     '3. 改长字段 jd / notes（片段替换，必须精确匹配旧片段）：[[JOB_EDIT:代号|字段|旧片段|新片段]]。旧片段必须在现有内容里精确出现，否则拒绝。例：[[JOB_EDIT:C司|jd|负责前端开发|负责 React 前端开发]]。没看过现有内容写不出旧片段 → 改不了 → 自然需要先 [[JOB_VIEW]] 看一眼。追加内容时找一个锚点片段替换成「锚点+新内容」。',
     '4. 环节轮次：[[JOB_ROUND:代号|轮次|类型|状态|时间]]。类型限 interview(面试)/written(笔试)；轮次 1~10；状态限 pending(待安排)/scheduled(待进行)/awaiting(等结果)/passed(通过)/failed(挂了)；时间可省，格式 M-D HH:mm（如 8-2 14:00），填「清除」删时间。例：[[JOB_ROUND:C司|3|面试|待进行|8-6 14:00]]。同代号同类型同轮次再发即更新该轮。',
     '5. 面试时间快捷：[[JOB_INTERVIEW:代号|M-D HH:mm]] / [[JOB_INTERVIEW:代号|清除]]；等反馈：[[JOB_WAITING:代号]]（开始）/ [[JOB_WAITING:代号|清除]]（结束）。',

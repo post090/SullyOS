@@ -440,24 +440,30 @@ export async function applyJobDirectives(
                 return next;
             };
             if (existing) {
+                // 只有 AI 显式传了 stage 才更新阶段 + 加 timeline，避免改个字段把阶段重置
+                const stageChanged = u.stage != null;
                 const updated = applyFields({
                     ...existing,
-                    stage: u.stage,
+                    stage: stageChanged ? u.stage! : existing.stage,
                     nextStep: u.nextStep || existing.nextStep,
-                    timeline: [...existing.timeline, { ts: now, stage: u.stage, note: u.nextStep || undefined }],
+                    timeline: stageChanged
+                        ? [...existing.timeline, { ts: now, stage: u.stage!, note: u.nextStep || undefined }]
+                        : existing.timeline,
                     updatedAt: now,
                 });
                 await DB.saveJobPosition(updated);
-                cards.push({ jobKind: 'update', code: u.code, stage: u.stage, stageLabel: STAGE_LABEL[u.stage] || u.stage, nextStep: u.nextStep || undefined, created: false });
+                cards.push({ jobKind: 'update', code: u.code, stage: updated.stage, stageLabel: STAGE_LABEL[updated.stage] || updated.stage, nextStep: u.nextStep || undefined, created: false });
             } else {
+                // 建新卡：stage 没传就用 applied 兜底
+                const initStage = u.stage || 'applied';
                 const created = applyFields({
                     id: genId('jpos'), code: u.code,
-                    title: f.title || u.code, stage: u.stage,
-                    nextStep: u.nextStep || undefined, timeline: [{ ts: now, stage: u.stage }],
+                    title: f.title || u.code, stage: initStage,
+                    nextStep: u.nextStep || undefined, timeline: [{ ts: now, stage: initStage }],
                     charId, createdAt: now, updatedAt: now,
                 });
                 await DB.saveJobPosition(created);
-                cards.push({ jobKind: 'update', code: u.code, stage: u.stage, stageLabel: STAGE_LABEL[u.stage] || u.stage, nextStep: u.nextStep || undefined, created: true });
+                cards.push({ jobKind: 'update', code: u.code, stage: initStage, stageLabel: STAGE_LABEL[initStage] || initStage, nextStep: u.nextStep || undefined, created: true });
             }
         } catch (e: any) { rejected.push(`JOB_UPDATE ${u.code}: ${e?.message || e}`); }
     }
