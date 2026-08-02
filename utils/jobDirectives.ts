@@ -383,10 +383,11 @@ export async function applyJobDirectives(
 
     // ── 查看类（不落库，结果合并回灌给 AI + 挂一张折叠卡片，不刷屏） ──
     const viewParts: string[] = [];
+    let viewText: string | null = null;
     if (parsed.view) {
         try {
-            const text = await buildJobViewResult();
-            viewParts.push(text);
+            viewText = await buildJobViewResult();
+            viewParts.push(viewText);
         } catch (e: any) { rejected.push(`JOB_VIEW: ${e?.message || e}`); }
     }
     for (const kw of parsed.searches) {
@@ -412,9 +413,7 @@ export async function applyJobDirectives(
         } catch (e: any) { rejected.push(`JOB_NOTE_READ ${title}: ${e?.message || e}`); }
     }
     // VIEW 结果单独挂一张卡片（search/note_read 各自挂了，不合并）
-    if (parsed.view && viewParts.length > 0) {
-        // 只把 VIEW 的结果放进 viewParts[0]（search/note_read 已单独处理）
-        const viewText = viewParts[0]; // buildJobViewResult 的结果
+    if (viewText !== null) {
         cards.unshift({ jobKind: 'view', resultText: viewText });
     }
     // 所有查看类结果合并回灌给 AI（下轮历史可见）

@@ -9,7 +9,7 @@ import { Gear, User as UserIcon, Crosshair, Play as PlayIcon, Pause as PauseIcon
 import {
   C, Sparkle, CrossStar, MizuHeader, SearchBar, SongRow, MiniPlayer,
   VinylDisc, GlassProgress, PlayControls, BokehBg,
-  MetaChip, SubActions, ArtistLinks,
+  MetaChip, SubActions, ArtistLinks, TogetherHeader,
 } from './music/MusicUI';
 import NeteaseProfilePage from './music/NeteaseProfilePage';
 import CharVisitPage from './music/CharVisitPage';
@@ -136,6 +136,32 @@ const MusicApp: React.FC = () => {
   const [searchSheetSong, setSearchSheetSong] = useState<Song | null>(null);
   // 歌手页曲目操作半屏菜单
   const [artistSheetSong, setArtistSheetSong] = useState<Song | null>(null);
+  // 歌词选择模式（长按歌词进入，点歌词弹复制/分享菜单）
+  const [lyricSelectMode, setLyricSelectMode] = useState(false);
+  const [lyricSheetText, setLyricSheetText] = useState<string | null>(null);
+  const [lyricShareOpen, setLyricShareOpen] = useState(false);
+  const longPressTimer = useRef<number | null>(null);
+  const longPressStart = useRef<{ x: number; y: number } | null>(null);
+  const clearLongPress = () => {
+    if (longPressTimer.current) { window.clearTimeout(longPressTimer.current); longPressTimer.current = null; }
+    longPressStart.current = null;
+  };
+  // 长按歌词 → 进选择模式（移动端振动反馈）
+  const onLyricPointerDown = (e: React.PointerEvent, text: string) => {
+    longPressStart.current = { x: e.clientX, y: e.clientY };
+    clearLongPress();
+    longPressTimer.current = window.setTimeout(() => {
+      setLyricSelectMode(true);
+      setLyricSheetText(text);
+      if (navigator.vibrate) navigator.vibrate(15);
+    }, 500);
+  };
+  const onLyricPointerMove = (e: React.PointerEvent) => {
+    if (!longPressStart.current) return;
+    const dx = e.clientX - longPressStart.current.x;
+    const dy = e.clientY - longPressStart.current.y;
+    if (Math.abs(dx) > 10 || Math.abs(dy) > 10) clearLongPress();
+  };
   const openPlayer = () => {
     setPlayerFrom(view);
     setView('player');
@@ -338,14 +364,28 @@ const MusicApp: React.FC = () => {
 
   const renderPlayer = () => {
     if (!current) return null;
+    const isTogether = companions.length > 0;
     return (
       <div className="flex flex-col h-full relative"
-        style={{ background: `linear-gradient(180deg, #ffffff 0%, ${C.bg} 60%, ${C.bgDeep} 100%)` }}>
+        style={{ background: isTogether
+          ? `linear-gradient(180deg, #fff5f8 0%, ${C.bg} 55%, ${C.bgDeep} 100%)`
+          : `linear-gradient(180deg, #ffffff 0%, ${C.bg} 60%, ${C.bgDeep} 100%)` }}>
         <BokehBg />
         <MizuHeader title="Now Playing" onBack={() => setView('search')} />
 
         <div className="flex-1 flex flex-col items-center px-5 pt-4 pb-3 relative z-10 overflow-hidden">
-          <div className="shrink-0 mt-1 relative">
+          {/* 一起听徽章 —— 进入特殊外观 */}
+          {isTogether && (
+            <div className="w-full max-w-xs mb-2">
+              <TogetherHeader
+                userAvatar={userProfile?.avatar}
+                userName={userProfile?.name}
+                companions={companions}
+                onKick={removeListeningPartner}
+              />
+            </div>
+          )}
+          <div className="shrink-0 mt-1 relative" style={isTogether ? { filter: `drop-shadow(0 0 22px ${C.sakura}66)` } : undefined}>
             <VinylDisc albumPic={current.albumPic} playing={playing} size={150} bitrate={bitrateMap[cfg.quality]} />
             {/* 重录中覆盖层 — 只在本地歌且 regeneratingId 匹配时显示 */}
             {isCurrentRegenerating && (
@@ -418,6 +458,15 @@ const MusicApp: React.FC = () => {
               </div>
             ) : (
               <div className="space-y-4 py-8">
+                {/* 选择模式提示栏 */}
+                {lyricSelectMode && (
+                  <div className="sticky top-0 z-20 -mx-2 px-3 py-1.5 flex items-center justify-between"
+                    style={{ background: `${C.primary}15`, backdropFilter: 'blur(8px)', borderRadius: '0 0 12px 12px' }}>
+                    <span className="text-[10px]" style={{ color: C.primary }}>长按选中 · 点歌词操作</span>
+                    <button onClick={() => { setLyricSelectMode(false); setLyricSheetText(null); }}
+                      className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: C.primary, color: 'white' }}>退出</button>
+                  </div>
+                )}
                 {lyric.map((l, i) => {
                   const tr = tlyric.find(t => Math.abs(t.t - l.t) < 0.2);
                   const active = i === activeLyricIdx;
@@ -430,7 +479,16 @@ const MusicApp: React.FC = () => {
                         transform: active ? 'scale(1.05)' : 'scale(1)',
                         transformOrigin: 'center center',
                         opacity: active ? 1 : 0.45,
-                      }}>
+                        cursor: lyricSelectMode ? 'pointer' : 'default',
+                      }}
+                      onPointerDown={(e) => {
+                        if (lyricSelectMode) { setLyricSheetText(l.text); if (navigator.vibrate) navigator.vibrate(10); }
+                        else if (l.text) onLyricPointerDown(e, l.text);
+                      }}
+                      onPointerMove={onLyricPointerMove}
+                      onPointerUp={clearLongPress}
+                      onPointerCancel={clearLongPress}
+                    >
                       <div className="flex items-center justify-center gap-2 px-3">
                         <CrossStar
                           size={12}
@@ -982,6 +1040,81 @@ const MusicApp: React.FC = () => {
           onOpenArtist={openArtist}
           onOpenAlbum={openAlbum}
         />
+      )}
+
+      {/* 歌词操作菜单（长按歌词选中后弹出：复制 / 分享给角色） */}
+      {lyricSheetText && !lyricShareOpen && (
+        <div className="fixed inset-0 z-[60] flex flex-col justify-end">
+          <div className="absolute inset-0 bg-black/40 animate-fade-in" onClick={() => { setLyricSheetText(null); setLyricSelectMode(false); }} />
+          <div className="relative w-full rounded-t-3xl px-4 pt-3 pb-6 animate-slide-up shizuku-glass-strong"
+            style={{ background: C.bg }} onClick={e => e.stopPropagation()}>
+            <div className="w-10 h-1 rounded-full mx-auto mb-3" style={{ background: C.faint }} />
+            <div className="text-[10px] tracking-[0.2em] uppercase mb-2" style={{ color: C.muted }}>选中歌词</div>
+            <div className="rounded-2xl p-3 mb-3 max-h-32 overflow-y-auto shizuku-scrollbar"
+              style={{ background: 'rgba(255,255,255,0.5)', fontFamily: `'Noto Serif','Georgia',serif` }}>
+              <p className="text-[13px] leading-relaxed whitespace-pre-wrap" style={{ color: C.text }}>{lyricSheetText}</p>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={async () => {
+                  try { await navigator.clipboard.writeText(lyricSheetText); addToast('已复制', 'success'); }
+                  catch { addToast('复制失败', 'error'); }
+                  setLyricSheetText(null); setLyricSelectMode(false);
+                }}
+                className="py-2.5 rounded-2xl text-[11px] font-bold flex items-center justify-center gap-1.5 active:scale-95 transition-transform"
+                style={{ background: 'rgba(255,255,255,0.6)', color: C.primary, border: `1px solid ${C.faint}40` }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11v14z" /></svg>
+                复制
+              </button>
+              <button
+                onClick={() => setLyricShareOpen(true)}
+                className="py-2.5 rounded-2xl text-[11px] font-bold flex items-center justify-center gap-1.5 active:scale-95 transition-transform text-white"
+                style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.accent})` }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 21s-8-5.3-8-11.5C4 6 6.5 3.5 9.5 3.5c1.6 0 3 .8 2.5 2.2C11.5 4.3 12.9 3.5 14.5 3.5 17.5 3.5 20 6 20 9.5 20 15.7 12 21 12 21z" /></svg>
+                分享给角色
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 歌词分享 · 角色选择 */}
+      {lyricShareOpen && lyricSheetText && (
+        <div className="fixed inset-0 z-[61] flex flex-col justify-end">
+          <div className="absolute inset-0 bg-black/40 animate-fade-in" onClick={() => setLyricShareOpen(false)} />
+          <div className="relative w-full rounded-t-3xl px-4 pt-3 pb-6 animate-slide-up shizuku-glass-strong"
+            style={{ background: C.bg, maxHeight: '60vh' }} onClick={e => e.stopPropagation()}>
+            <div className="w-10 h-1 rounded-full mx-auto mb-3" style={{ background: C.faint }} />
+            <div className="text-[10px] tracking-[0.2em] uppercase mb-2" style={{ color: C.muted }}>分享给角色</div>
+            <div className="overflow-y-auto shizuku-scrollbar space-y-1">
+              {characters.map(c => (
+                <button key={c.id}
+                  onClick={async () => {
+                    const line = `「${current?.name || '这首歌'}」的歌词：\n${lyricSheetText}`;
+                    try {
+                      await DB.saveMessage({ charId: c.id, role: 'user', type: 'text', content: line });
+                      window.dispatchEvent(new CustomEvent('active-msg-open', { detail: { charId: c.id } }));
+                      addToast(`已分享歌词给 ${c.name}`, 'success');
+                    } catch { addToast('分享失败', 'error'); }
+                    setLyricShareOpen(false); setLyricSheetText(null); setLyricSelectMode(false);
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-2xl active:scale-[0.98] transition-transform text-left"
+                  style={{ background: 'rgba(255,255,255,0.5)' }}
+                >
+                  {c.avatar
+                    ? <img src={c.avatar} alt="" className="w-8 h-8 rounded-full object-cover" />
+                    : <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs" style={{ background: C.primary }}>{c.name.slice(0, 1)}</div>}
+                  <span className="text-[12px] flex-1 truncate" style={{ color: C.text }}>{c.name}</span>
+                </button>
+              ))}
+              {characters.length === 0 && (
+                <div className="text-center text-[11px] py-4" style={{ color: C.faint }}>还没有角色，先去创建一个吧</div>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

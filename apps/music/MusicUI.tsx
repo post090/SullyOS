@@ -2,7 +2,7 @@
  * 雫 (shizuku) 主题 — 音乐 App 视觉组件
  * 水滴般清澈 + 二次元装饰: 玻璃拟态, 浮游粒子, 星芒, 柔光, 梦幻渐变
  */
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft, X, MagnifyingGlass,
   Play, Pause, SkipBack, SkipForward,
@@ -293,7 +293,7 @@ const TinyAvatar: React.FC<{
 };
 
 /* ══════════ 一起听徽章 — 居中 · 两个头像 · 粉紫高级感 ══════════ */
-const TogetherHeader: React.FC<{
+export const TogetherHeader: React.FC<{
   userAvatar?: string;
   userName?: string;
   companions: { id: string; name: string; avatar?: string }[];
@@ -350,16 +350,16 @@ const TogetherHeader: React.FC<{
         <span className="font-medium">{main?.name || ''}</span>
         {extraCount > 0 && <span className="opacity-70"> 等 {companions.length} 人</span>}
       </div>
-      {/* 结束一起听 —— 右上角小 × */}
+      {/* 结束一起听 —— 右上角极淡小圆点（截图几乎看不见，点一下结束） */}
       {onKick && main && (
         <button
           onClick={(e) => { e.stopPropagation(); onKick(main.id); }}
           aria-label={`结束和 ${main.name} 的一起听`}
-          className="absolute top-1 right-1.5 p-0.5 rounded-full transition-colors"
-          style={{ color: C.primary, background: 'rgba(255,255,255,0.5)' }}
+          className="absolute top-1.5 right-1.5 transition-opacity"
+          style={{ color: C.primary, opacity: 0.18 }}
           title="结束一起听"
         >
-          <X size={10} weight="bold" />
+          <svg width="6" height="6" viewBox="0 0 6 6" fill="currentColor"><circle cx="3" cy="3" r="2.5" /></svg>
         </button>
       )}
     </div>
@@ -395,21 +395,25 @@ export const MiniPlayer: React.FC<{
       animation: 'shizuku-glow 4s ease-in-out infinite',
     }}
   >
-    {/* 伴听徽章 — 居中两个头像 + 心 */}
-    {(companions && companions.length > 0) && (
-      <TogetherHeader
-        userAvatar={userAvatar}
-        userName={userName}
-        companions={companions}
-        onKick={onKickCompanion}
-      />
-    )}
+    {/* 伴听提示 — 只在封面加淡粉光环 + 小心形，不显示大徽章（避免挡内容） */}
     <div className="flex items-center gap-3">
       {/* 封面 — 水滴圆角 */}
       <div className="relative">
-        <img src={resolvedAlbumPic} alt="" className="w-10 h-10 rounded-xl object-cover"
-          style={{ border: `1.5px solid ${C.accent}40`, opacity: regenStatus ? 0.4 : 1 }} />
+        {/* 一起听时封面外圈淡粉光环 */}
+        {(companions && companions.length > 0) && (
+          <div className="absolute -inset-1 rounded-xl pointer-events-none"
+            style={{ background: `radial-gradient(circle, ${C.sakura}40 0%, transparent 70%)`, filter: 'blur(3px)' }} />
+        )}
+        <img src={resolvedAlbumPic} alt="" className="relative w-10 h-10 rounded-xl object-cover"
+          style={{ border: `1.5px solid ${companions && companions.length > 0 ? C.sakura + '80' : C.accent + '40'}`, opacity: regenStatus ? 0.4 : 1 }} />
         {playing && !regenStatus && <div className="absolute -bottom-1 -right-1"><Sparkle size={6} color={C.glow} /></div>}
+        {/* 一起听小心形标识 */}
+        {(companions && companions.length > 0) && (
+          <div className="absolute -top-1 -left-1 w-3 h-3 rounded-full flex items-center justify-center"
+            style={{ background: C.sakura, boxShadow: `0 0 6px ${C.sakura}80` }}>
+            <svg width="6" height="5" viewBox="0 0 24 22" fill="white"><path d="M12 21s-8-5.3-8-11.5C4 6 6.5 3.5 9.5 3.5c1.6 0 3 .8 2.5 2.2C11.5 4.3 12.9 3.5 14.5 3.5 17.5 3.5 20 6 20 9.5 20 15.7 12 21 12 21z" /></svg>
+          </div>
+        )}
         {regenStatus && (
           <div className="absolute inset-0 rounded-xl flex items-center justify-center"
             style={{ background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(2px)' }}>
@@ -653,24 +657,83 @@ export const GlassProgress: React.FC<{
   onSeek: (pct: number) => void;
 }> = ({ progress, duration, fmtTime, onSeek }) => {
   const pct = duration ? (progress / duration) * 100 : 0;
+  const [dragging, setDragging] = useState(false);
+  const [dragPct, setDragPct] = useState(0);
+  const [showBubble, setShowBubble] = useState(false);
+  const barRef = useRef<HTMLDivElement | null>(null);
+  const idleTimer = useRef<number | null>(null);
+  const bubbleTimer = useRef<number | null>(null);
+
+  const pctFromEvent = (clientX: number) => {
+    const el = barRef.current; if (!el) return 0;
+    const rect = el.getBoundingClientRect();
+    return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+  };
+
+  const clearIdle = () => {
+    if (idleTimer.current) { window.clearTimeout(idleTimer.current); idleTimer.current = null; }
+  };
+  const scheduleIdleSeek = () => {
+    // 拖动停顿超过 1.2s 自动 seek 当前位置并退出拖动（"挪完没动退回"语义）
+    clearIdle();
+    idleTimer.current = window.setTimeout(() => {
+      setDragging(false);
+      setShowBubble(false);
+    }, 1200);
+  };
+  const clearBubble = () => {
+    if (bubbleTimer.current) { window.clearTimeout(bubbleTimer.current); bubbleTimer.current = null; }
+  };
+  const scheduleBubbleHide = () => {
+    clearBubble();
+    bubbleTimer.current = window.setTimeout(() => setShowBubble(false), 1400);
+  };
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    e.preventDefault();
+    (e.target as Element).setPointerCapture?.(e.pointerId);
+    const p = pctFromEvent(e.clientX);
+    setDragging(true); setDragPct(p); setShowBubble(true);
+    clearIdle(); scheduleIdleSeek();
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!dragging) return;
+    const p = pctFromEvent(e.clientX);
+    setDragPct(p);
+    clearIdle(); scheduleIdleSeek();
+  };
+  const onPointerUp = (e: React.PointerEvent) => {
+    if (!dragging) return;
+    const p = pctFromEvent(e.clientX);
+    onSeek(p);
+    setDragging(false);
+    clearIdle();
+    scheduleBubbleHide();
+  };
+
+  const displayPct = dragging ? dragPct : pct;
+  const bubbleTime = duration ? dragPct * duration : 0;
+
   return (
-    <div className="w-full">
-      <div className="relative h-[6px] rounded-full cursor-pointer shizuku-glass"
+    <div className="w-full select-none">
+      <div ref={barRef}
+        className="relative h-[6px] rounded-full cursor-pointer shizuku-glass touch-none"
         style={{ boxShadow: `inset 0 1px 3px rgba(0,0,0,0.06)` }}
-        onClick={(e) => {
-          const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
-          onSeek((e.clientX - rect.left) / rect.width);
-        }}>
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+      >
         {/* 已播进度 */}
         <div className="absolute top-0 left-0 h-full rounded-full transition-[width] duration-150"
           style={{
-            width: `${pct}%`,
+            width: `${displayPct}%`,
             background: `linear-gradient(90deg, ${C.primary}, ${C.glow})`,
             boxShadow: `0 0 10px ${C.glow}40`,
           }} />
         {/* 水滴指示点 */}
         <div className="absolute top-1/2 -translate-y-1/2 transition-[left] duration-150"
-          style={{ left: `${pct}%`, transform: `translateX(-50%) translateY(-50%)` }}>
+          style={{ left: `${displayPct}%`, transform: `translateX(-50%) translateY(-50%)` }}>
           <div className="w-3 h-3 rounded-full"
             style={{
               background: `radial-gradient(circle at 35% 35%, white, ${C.glow})`,
@@ -678,8 +741,28 @@ export const GlassProgress: React.FC<{
             }} />
         </div>
       </div>
-      <div className="flex justify-between mt-1.5 px-0.5">
-        <span className="text-[9px] tracking-wider" style={{ color: C.muted, fontFamily: 'monospace' }}>{fmtTime(progress)}</span>
+      {/* 定位线 + 时间气泡（拖动时显示） */}
+      {showBubble && (
+        <>
+          <div className="absolute top-1/2 -translate-y-1/2 pointer-events-none transition-[left] duration-75"
+            style={{ left: `${displayPct}%`, transform: 'translateX(-50%) translateY(-50%)' }}>
+            <div className="w-px h-3" style={{ background: C.primary, opacity: 0.5 }} />
+          </div>
+          <div className="absolute pointer-events-none transition-[left] duration-75"
+            style={{ left: `${displayPct}%`, transform: 'translateX(-50%)', bottom: '14px' }}>
+            <div className="px-1.5 py-0.5 rounded-md text-[9px] tracking-wider whitespace-nowrap"
+              style={{
+                background: C.primary, color: 'white',
+                fontFamily: 'monospace',
+                boxShadow: `0 2px 8px ${C.primary}40`,
+              }}>
+              {fmtTime(bubbleTime)}
+            </div>
+          </div>
+        </>
+      )}
+      <div className="relative flex justify-between mt-1.5 px-0.5">
+        <span className="text-[9px] tracking-wider" style={{ color: C.muted, fontFamily: 'monospace' }}>{dragging ? fmtTime(bubbleTime) : fmtTime(progress)}</span>
         <span className="text-[9px] tracking-wider" style={{ color: C.muted, fontFamily: 'monospace' }}>{fmtTime(duration)}</span>
       </div>
     </div>

@@ -32,6 +32,7 @@ interface NeteasePl {
   id: number;
   name: string;
   trackCount: number;
+  coverImgUrl: string;
 }
 
 const MenuRow: React.FC<{
@@ -74,6 +75,13 @@ const SongActionsSheet: React.FC<Props> = ({ song, onClose, onOpenComments, onOp
       if (first) setShareCharId(first.id);
     }
   }, [stage, shareCharId, characters]);
+
+  // 进入收藏页 + 切到「我的歌单」时自动加载网易云歌单（不用手动点）
+  useEffect(() => {
+    if (stage === 'collect' && collectMode === 'netease' && !neteasePls && !plLoading && profile?.userId) {
+      loadNeteasePls();
+    }
+  }, [stage, collectMode, neteasePls, plLoading, profile?.userId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const char = (id: string) => characters.find(c => c.id === id);
 
@@ -124,6 +132,7 @@ const SongActionsSheet: React.FC<Props> = ({ song, onClose, onOpenComments, onOp
       const r: any = await musicApi.userPlaylist(cfg, profile.userId);
       const list: NeteasePl[] = (r?.playlist || []).map((p: any) => ({
         id: p.id, name: p.name, trackCount: p.trackCount || 0,
+        coverImgUrl: toHttps(p.coverImgUrl || p.picUrl || ''),
       }));
       setNeteasePls(list);
       if (list.length === 0) addToast('你的网易云账号还没有歌单', 'info');
@@ -160,6 +169,7 @@ const SongActionsSheet: React.FC<Props> = ({ song, onClose, onOpenComments, onOp
             id: song.id, name: song.name, artists: song.artists,
             album: song.album, albumPic: song.albumPic, duration: song.duration,
           },
+          intent: 'share',
         },
       });
       window.dispatchEvent(new CustomEvent('active-msg-open', { detail: { charId: shareCharId } }));
@@ -268,9 +278,9 @@ const SongActionsSheet: React.FC<Props> = ({ song, onClose, onOpenComments, onOp
 
           {stage === 'collect' && (
             <div className="space-y-1 pb-1">
-              {/* 顶部切换：角色歌单 / 网易云歌单 */}
+              {/* 顶部切换：角色歌单 / 我的歌单 */}
               <div className="flex items-center gap-1 shizuku-glass rounded-full p-1 mb-2">
-                {([['char', '角色歌单'], ['netease', '网易云歌单']] as const).map(([k, label]) => (
+                {([['char', '角色歌单'], ['netease', '我的歌单']] as const).map(([k, label]) => (
                   <button
                     key={k}
                     onClick={() => setCollectMode(k)}
@@ -289,47 +299,82 @@ const SongActionsSheet: React.FC<Props> = ({ song, onClose, onOpenComments, onOp
                 characters.length === 0 ? (
                   <div className="text-center text-[11px] py-6" style={{ color: C.faint }}>还没有角色</div>
                 ) : (
-                  characters.map(c => {
-                    const pls = c.musicProfile?.playlists || [];
-                    if (pls.length === 0) return null;
-                    return (
-                      <div key={c.id} className="mb-1.5">
-                        <div className="text-[10px] px-1 mb-0.5 flex items-center gap-1" style={{ color: C.muted }}>
-                          <span className="w-4 h-4 rounded-full flex items-center justify-center text-[8px] text-white shrink-0"
-                            style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.accent})` }}>
-                            {c.name.slice(0, 1)}
-                          </span>
-                          {c.name}
-                        </div>
-                        {pls.map(pl => (
-                          <MenuRow
-                            key={pl.id}
-                            icon={<Check size={13} weight="bold" />}
-                            label={`${pl.title}（${pl.songs.length} 首）`}
+                  <div className="space-y-2">
+                    {characters.map(c => {
+                      const pls = c.musicProfile?.playlists || [];
+                      if (pls.length === 0) return null;
+                      return pls.map(pl => (
+                        <div key={`${c.id}-${pl.id}`} className="rounded-2xl shizuku-glass overflow-hidden">
+                          <button
                             onClick={() => collectToChar(c.id, pl.id)}
-                          />
-                        ))}
-                      </div>
-                    );
-                  })
+                            className="w-full flex items-center gap-3 p-2.5 text-left active:scale-[0.99] transition-transform"
+                          >
+                            {c.avatar ? (
+                              <img src={c.avatar} alt="" className="w-12 h-12 rounded-xl object-cover"
+                                style={{ border: `1px solid ${C.faint}30` }} />
+                            ) : (
+                              <div className="w-12 h-12 rounded-xl flex items-center justify-center text-white text-base shrink-0"
+                                style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.accent})` }}>
+                                {c.name.slice(0, 1)}
+                              </div>
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm truncate" style={{ color: C.text }}>{pl.title}</div>
+                              <div className="text-[10px] truncate" style={{ color: C.muted }}>
+                                {c.name} · {pl.songs.length} 首
+                              </div>
+                            </div>
+                            <div className="text-[10px] shrink-0" style={{ color: C.accent }}>›</div>
+                          </button>
+                        </div>
+                      ));
+                    })}
+                  </div>
                 )
               ) : (
-                <div className="space-y-0.5">
-                  <button
-                    onClick={loadNeteasePls}
-                    className="w-full py-1.5 rounded-lg text-[11px] mb-1"
-                    style={{ color: C.primary, border: `1px dashed ${C.primary}40`, background: 'rgba(255,255,255,0.35)' }}
-                  >
-                    {neteasePls ? `刷新（${neteasePls.length} 个歌单）` : plLoading ? '加载中…' : '加载我的网易云歌单'}
-                  </button>
+                <div className="space-y-2">
+                  {(neteasePls || []).length === 0 && !plLoading && (
+                    <div className="text-center text-[11px] py-6" style={{ color: C.faint }}>
+                      {profile?.userId ? '没有找到歌单' : '未登录网易云'}
+                    </div>
+                  )}
+                  {plLoading && (
+                    <div className="text-center text-[11px] py-6" style={{ color: C.muted }}>
+                      <span className="inline-block w-3 h-3 border-2 rounded-full animate-spin align-middle mr-1"
+                        style={{ borderColor: `${C.faint}40`, borderTopColor: C.primary }} />
+                      加载中…
+                    </div>
+                  )}
                   {(neteasePls || []).map(pl => (
-                    <MenuRow
-                      key={pl.id}
-                      icon={<Heart size={13} weight="fill" />}
-                      label={`${pl.name}（${pl.trackCount} 首）`}
-                      onClick={() => collectToNetease(pl.id)}
-                    />
+                    <div key={pl.id} className="rounded-2xl shizuku-glass overflow-hidden">
+                      <button
+                        onClick={() => collectToNetease(pl.id)}
+                        className="w-full flex items-center gap-3 p-2.5 text-left active:scale-[0.99] transition-transform"
+                      >
+                        {pl.coverImgUrl ? (
+                          <img src={pl.coverImgUrl} alt="" className="w-12 h-12 rounded-xl object-cover"
+                            style={{ border: `1px solid ${C.faint}30` }} />
+                        ) : (
+                          <div className="w-12 h-12 rounded-xl flex items-center justify-center text-white shrink-0"
+                            style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.accent})` }}>
+                            <Heart size={18} weight="fill" />
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm truncate" style={{ color: C.text }}>{pl.name}</div>
+                          <div className="text-[10px] truncate" style={{ color: C.muted }}>{pl.trackCount} 首</div>
+                        </div>
+                        <div className="text-[10px] shrink-0" style={{ color: C.accent }}>›</div>
+                      </button>
+                    </div>
                   ))}
+                  {(neteasePls || []).length > 0 && (
+                    <button
+                      onClick={() => { setNeteasePls(null); loadNeteasePls(); }}
+                      className="w-full py-1.5 rounded-lg text-[10px] mt-1"
+                      style={{ color: C.faint, border: `1px dashed ${C.faint}40` }}
+                    >刷新</button>
+                  )}
                 </div>
               )}
             </div>

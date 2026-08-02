@@ -311,7 +311,7 @@ export function parseJobHuntCommands(text: string): JobParseResult {
         const c = (code || '').trim();
         const f = (field || '').trim().toLowerCase();
         const oldS = (oldSnip || '').trim();
-        const newS = (newSnip || '').trim();
+        const newS = (newSnip || '').replace(/^\r?\n+|\r?\n+$/g, '');
         if (c && (f === 'jd' || f === 'notes') && oldS) {
             edits.push({ code: c, field: f, oldSnippet: oldS, newSnippet: newS });
         }
@@ -355,7 +355,7 @@ export function parseJobHuntCommands(text: string): JobParseResult {
     cleanText = cleanText.replace(JOB_NOTE_EDIT_RE, (_m, title: string, oldSnip: string, newSnip: string) => {
         const t = (title || '').trim();
         const oldS = (oldSnip || '').trim();
-        const newS = (newSnip || '').trim();
+        const newS = (newSnip || '').replace(/^\r?\n+|\r?\n+$/g, '');
         if (t && oldS) noteEdits.push({ title: t, oldSnippet: oldS, newSnippet: newS });
         return '';
     });

@@ -2190,6 +2190,24 @@ const MessageItem = React.memo(({
                                                     </div>
                                                 );
                                             }
+                                            if (c.jobKind === 'edit') {
+                                                return (
+                                                    <div key={i}>
+                                                        <div className="flex items-center gap-1.5">
+                                                            <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0 bg-emerald-400" />
+                                                            <span className="text-[10px] font-bold text-emerald-600">[改片段]</span>
+                                                            <span className="text-[12px] text-slate-600 truncate">{c.fieldLabel}</span>
+                                                        </div>
+                                                        {c.oldSnippetPreview && c.newSnippetPreview && (
+                                                            <div className="text-[11px] text-slate-500 mt-0.5 pl-3 flex items-start gap-1">
+                                                                <span className="line-through opacity-50 truncate">{c.oldSnippetPreview}</span>
+                                                                <span className="shrink-0 opacity-60">→</span>
+                                                                <span className="truncate">{c.newSnippetPreview}</span>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                );
+                                            }
                                             if (c.jobKind === 'round') {
                                                 return (
                                                     <div key={i} className="flex items-center gap-1.5">
@@ -2265,6 +2283,43 @@ const MessageItem = React.memo(({
                             )}
                             <div className="mt-2 text-[10px] text-slate-400 text-right">点卡片打开上岸计划 →</div>
                         </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // 求职查看类结果折叠卡（JOB_VIEW/SEARCH/NOTE_READ 的回灌结果，避免纯文本刷屏）
+        if (m.metadata?.source === 'job-view-result' || m.metadata?.isViewResult) {
+            const meta = m.metadata as any;
+            const jCharName = String(meta.charName || charName || '—');
+            const jCharAvatar = String(meta.charAvatar || charAvatar || '');
+            const text = m.content || '';
+            const lineCount = text.split('\n').length;
+            return (
+                <div className={`flex items-center w-full ${selectionMode ? 'pl-8' : ''} animate-fade-in relative transition-[padding] duration-300`}>
+                    {selectionMode && (
+                        <div className="absolute left-2 top-1/2 -translate-y-1/2 cursor-pointer z-20" onClick={() => onToggleSelect(m.id)}>
+                            <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors ${isSelected ? 'bg-primary border-primary' : 'border-slate-300 bg-white/80'}`}>
+                                {isSelected && <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>}
+                            </div>
+                        </div>
+                    )}
+                    <div className="w-full px-5 my-2.5" {...interactionProps}>
+                        <details className="mx-auto max-w-[320px] rounded-2xl bg-gradient-to-br from-violet-50 to-white border border-violet-100 p-3 shadow-sm">
+                            <summary className="flex items-center gap-2.5 cursor-pointer list-none [&::-webkit-details-marker]:hidden">
+                                {jCharAvatar
+                                    ? <img src={jCharAvatar} alt={jCharName} className="h-8 w-8 rounded-full object-cover ring-2 ring-violet-100" loading="lazy" decoding="async" />
+                                    : <div className="h-8 w-8 rounded-full bg-white/80 flex items-center justify-center text-base ring-2 ring-violet-100">📋</div>}
+                                <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-1.5">
+                                        <span className="text-[10px]">📋</span>
+                                        <span className="text-[11px] font-bold text-slate-600 truncate">{jCharName} 查看了求职工作台</span>
+                                    </div>
+                                    <div className="text-[11px] text-slate-500 mt-0.5">{lineCount} 行结果 · 点击展开</div>
+                                </div>
+                            </summary>
+                            <pre className="mt-2 whitespace-pre-wrap text-[10.5px] leading-relaxed text-slate-600 bg-white/60 rounded-lg p-2 max-h-[40vh] overflow-y-auto shizuku-scrollbar">{text}</pre>
+                        </details>
                     </div>
                 </div>
             );
@@ -2464,12 +2519,58 @@ const MessageItem = React.memo(({
         }
     }
 
-    // --- Music Card Rendering (一起听 / 加入歌单) ---
+    // --- Music Card Rendering (一起听 / 加入歌单 / 分享) ---
     if (m.type === 'music_card' && m.metadata?.song) {
-        const song = m.metadata.song as { songId: number; name: string; artists: string; albumPic: string };
-        const intent = (m.metadata.intent || 'join') as 'join' | 'add' | 'join_and_add';
+        const song = m.metadata.song as { songId: number; name: string; artists: string; album: string; albumPic: string };
+        const intent = (m.metadata.intent || 'join') as 'join' | 'add' | 'join_and_add' | 'share';
         const isTogether = intent === 'join' || intent === 'join_and_add';
         const addedTo = m.metadata.addedToPlaylistTitle as string | undefined;
+
+        // 分享给角色：网易云风格横向卡片（不复用一起听卡片）
+        if (intent === 'share') {
+            return commonLayout(
+                <div className="w-64 rounded-2xl overflow-hidden shadow-sm border cursor-pointer active:opacity-90 transition-opacity"
+                    style={{ borderColor: '#eee8f0', background: '#fff' }}>
+                    <div className="flex items-center gap-3 p-3">
+                        <div className="w-14 h-14 rounded-lg overflow-hidden shrink-0 bg-slate-100">
+                            {song.albumPic ? (
+                                <img src={song.albumPic} alt="" className="w-full h-full object-cover" loading="lazy" referrerPolicy="no-referrer"
+                                    onError={(e: any) => {
+                                        const img = e.target;
+                                        const container = img.parentElement;
+                                        if (!container) return;
+                                        img.style.display = 'none';
+                                        if (container.querySelector('.share-cover-fallback')) return;
+                                        const fb = document.createElement('div');
+                                        fb.className = 'share-cover-fallback w-full h-full flex items-center justify-center';
+                                        fb.style.background = 'linear-gradient(135deg, #8b7ab8 0%, #6b95c7 100%)';
+                                        fb.innerHTML = `<div style="color:rgba(255,255,255,0.9);font-size:20px;">♪</div>`;
+                                        container.appendChild(fb);
+                                    }}
+                                />
+                            ) : (
+                                <div className="w-full h-full flex items-center justify-center"
+                                    style={{ background: 'linear-gradient(135deg, #8b7ab8 0%, #6b95c7 100%)' }}>
+                                    <span style={{ color: 'rgba(255,255,255,0.9)', fontSize: '20px' }}>♪</span>
+                                </div>
+                            )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                            <div className="font-semibold text-[13px] truncate" style={{ color: '#333', fontFamily: `'Noto Serif','Georgia',serif` }}>{song.name || '未命名'}</div>
+                            <div className="text-[11px] truncate mt-0.5" style={{ color: '#888' }}>{song.artists || '—'}</div>
+                            {song.album && <div className="text-[10px] truncate mt-0.5" style={{ color: '#bbb' }}>{song.album}</div>}
+                        </div>
+                    </div>
+                    <div className="px-3 py-1.5 flex items-center gap-1.5 border-t" style={{ borderColor: '#f5f5f5', background: '#fafafa' }}>
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" style={{ color: '#c20c0c' }}>
+                            <path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z" />
+                        </svg>
+                        <span className="text-[9px]" style={{ color: '#999' }}>来自网易云音乐</span>
+                        <span className="ml-auto text-[9px]" style={{ color: '#bbb' }}>{isUser ? '分享给Ta' : '分享'}</span>
+                    </div>
+                </div>
+            );
+        }
 
         // 头像渲染：有图用图，无图显姓名首字
         const renderAvatar = (src: string | undefined, name: string, ring: string) => (
