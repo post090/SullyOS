@@ -804,6 +804,7 @@ const NETEASE_ACTION_REWRITE = {
   "artist/album": "/artist/album",
   "mv/detail": "/mv/detail",
   "mv/url": "/mv/url",
+  "playlist/tracks": "/playlist/tracks",
 };
 
 // action 白名单 — 只允许 api-enhanced 已知的安全接口（防止被当成开放代理）

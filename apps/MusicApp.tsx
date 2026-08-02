@@ -17,6 +17,7 @@ import PlaylistDetailPage, { PlaylistSource } from './music/PlaylistDetailPage';
 import SongCommentsPage from './music/SongCommentsPage';
 import AlbumDetailPage, { AlbumSource } from './music/AlbumDetailPage';
 import ArtistPage, { ArtistSource } from './music/ArtistPage';
+import CharRecentPage from './music/CharRecentPage';
 import {
   MINIPLAYER_ENABLED_KEY, MINIPLAYER_CMD_EVENT, MiniPlayerCmd,
 } from '../components/os/GlobalMiniPlayer';
@@ -29,7 +30,7 @@ const fmtTime = (s: number) => {
   return `${m}:${ss.toString().padStart(2, '0')}`;
 };
 
-type View = 'search' | 'settings' | 'player' | 'profile' | 'visit_char' | 'playlist_detail' | 'comments' | 'album_detail' | 'artist';
+type View = 'search' | 'settings' | 'player' | 'profile' | 'visit_char' | 'playlist_detail' | 'comments' | 'album_detail' | 'artist' | 'char_recent';
 
 // ========================= 主组件 =========================
 const MusicApp: React.FC = () => {
@@ -116,6 +117,7 @@ const MusicApp: React.FC = () => {
   const [showLyricSync, setShowLyricSync] = useState(false);
   const [syncDraft, setSyncDraft] = useState<number[]>([]);
   const [visitCharId, setVisitCharId] = useState<string | null>(null);
+  const [recentCharId, setRecentCharId] = useState<string | null>(null);
   // 歌单详情页 / 评论区页的路由状态
   const [plDetail, setPlDetail] = useState<PlaylistSource | null>(null);
   const [commentSong, setCommentSong] = useState<Song | null>(null);
@@ -125,6 +127,12 @@ const MusicApp: React.FC = () => {
   const [albumFrom, setAlbumFrom] = useState<View>('profile');
   const [artist, setArtist] = useState<ArtistSource | null>(null);
   const [artistFrom, setArtistFrom] = useState<View>('profile');
+  // 播放页来源 —— 系统返回手势要从播放页回到进播放器前停留的界面，而不是直接回主页
+  const [playerFrom, setPlayerFrom] = useState<View>('profile');
+  const openPlayer = () => {
+    setPlayerFrom(view);
+    setView('player');
+  };
   const openAlbum = (album: AlbumSource) => {
     setAlbumFrom(view);
     setAlbumDetail(album);
@@ -136,13 +144,15 @@ const MusicApp: React.FC = () => {
     setView('artist');
   };
 
-  // 系统返回手势：先关弹层，再按页面栈回退（评论→来处，歌单详情→角色主页/我的主页…），最后才关 App
+  // 系统返回手势：先关弹层，再按页面栈回退（评论→来处，播放页→来处，歌单详情→角色主页/我的主页…），最后才关 App
   useBackGuard([
       [showLyricSync, () => setShowLyricSync(false)],
       [showQueue, () => setShowQueue(false)],
       [view === 'comments', () => setView(commentsFrom)],
+      [view === 'player', () => setView(playerFrom)],
       [view === 'playlist_detail', () => setView(plDetail?.kind === 'char' ? 'visit_char' : 'profile')],
       [view === 'visit_char', () => { setView('profile'); setVisitCharId(null); }],
+      [view === 'char_recent', () => { setView('visit_char'); setRecentCharId(null); }],
       [view === 'album_detail', () => setView(albumFrom)],
       [view === 'artist', () => setView(artistFrom)],
       [view !== 'profile', () => setView('profile')],
@@ -691,7 +701,7 @@ const MusicApp: React.FC = () => {
       {view === 'profile' && (
         <NeteaseProfilePage
           onBack={closeApp}
-          onOpenPlayer={() => setView('player')}
+          onOpenPlayer={openPlayer}
           onOpenSearch={() => setView('search')}
           onOpenSettings={() => setView('settings')}
           onVisitChar={id => { setVisitCharId(id); setView('visit_char'); }}
@@ -868,8 +878,21 @@ const MusicApp: React.FC = () => {
         <CharVisitPage
           charId={visitCharId}
           onBack={() => { setView('profile'); setVisitCharId(null); }}
-          onOpenPlayer={() => setView('player')}
+          onOpenPlayer={openPlayer}
+          onOpenArtist={openArtist}
+          onOpenAlbum={openAlbum}
+          onOpenRecent={id => { setRecentCharId(id); setView('char_recent'); }}
           onOpenPlaylist={plId => { setPlDetail({ kind: 'char', charId: visitCharId, playlistId: plId }); setView('playlist_detail'); }}
+        />
+      )}
+
+      {view === 'char_recent' && recentCharId && (
+        <CharRecentPage
+          charId={recentCharId}
+          charName={characters.find(c => c.id === recentCharId)?.name || '角色'}
+          onBack={() => { setView('visit_char'); setRecentCharId(null); }}
+          onOpenPlayer={openPlayer}
+          onOpenComments={s => { setCommentSong(s); setCommentsFrom('char_recent'); setView('comments'); }}
         />
       )}
 
@@ -877,9 +900,10 @@ const MusicApp: React.FC = () => {
         <PlaylistDetailPage
           source={plDetail}
           onBack={() => setView(plDetail.kind === 'char' ? 'visit_char' : 'profile')}
-          onOpenPlayer={() => setView('player')}
+          onOpenPlayer={openPlayer}
           onOpenComments={s => { setCommentSong(s); setCommentsFrom('playlist_detail'); setView('comments'); }}
           onOpenArtist={openArtist}
+          onOpenAlbum={openAlbum}
         />
       )}
 
@@ -887,7 +911,7 @@ const MusicApp: React.FC = () => {
         <AlbumDetailPage
           album={albumDetail}
           onBack={() => setView(albumFrom)}
-          onOpenPlayer={() => setView('player')}
+          onOpenPlayer={openPlayer}
           onOpenArtist={openArtist}
           onOpenComments={s => { setCommentSong(s); setCommentsFrom('album_detail'); setView('comments'); }}
         />
@@ -898,7 +922,7 @@ const MusicApp: React.FC = () => {
           artistId={artist.id}
           artistName={artist.name}
           onBack={() => setView(artistFrom)}
-          onOpenPlayer={() => setView('player')}
+          onOpenPlayer={openPlayer}
           onOpenAlbum={openAlbum}
           onOpenArtist={openArtist}
           onOpenComments={s => { setCommentSong(s); setCommentsFrom('artist'); setView('comments'); }}

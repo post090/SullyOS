@@ -219,7 +219,9 @@ export const ArtistLinks: React.FC<{
   onOpenArtist: (id: number, name: string) => void;
   className?: string;
   style?: React.CSSProperties;
-}> = ({ artists, artistIds, onOpenArtist, className = '', style }) => {
+  /** 可点击歌名的颜色；默认主题色，列表行里想低调可以用 muted */
+  buttonColor?: string;
+}> = ({ artists, artistIds, onOpenArtist, className = '', style, buttonColor = C.primary }) => {
   const names = (artists || '').split(' / ').map(s => s.trim()).filter(Boolean);
   if (names.length === 0) return null;
   // 本地歌 / 老数据没有完整 id 时不可点，保持纯文本展示
@@ -235,7 +237,7 @@ export const ArtistLinks: React.FC<{
           <button
             onClick={(e) => { e.stopPropagation(); onOpenArtist(artistIds![i], n); }}
             className="hover:underline underline-offset-2 transition-colors"
-            style={{ color: C.primary }}
+            style={{ color: buttonColor }}
           >
             {n}
           </button>

@@ -230,17 +230,22 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
       }
 
       if (albRes.status === 'fulfilled') {
-        const list = albRes.value?.data || albRes.value?.albums || [];
+        // 兼容三种返回形态：data 数组 / data.albums / 顶层 albums
+        const body = albRes.value || {};
+        const list = body.data?.albums || body.data || body.albums || [];
         const arr: AlbumSource[] = (Array.isArray(list) ? list : []).map((a: any) => ({
           id: a.id,
           name: a.name,
           coverImgUrl: toHttps(a.picUrl || a.coverImgUrl || ''),
-          artistName: a.artist?.name,
-          artistId: a.artist?.id,
+          artistName: a.artist?.name || a.artists?.[0]?.name,
+          artistId: a.artist?.id || a.artists?.[0]?.id,
           trackCount: a.size,
         }));
         nextAlb = arr;
         setAlbums(arr);
+      } else {
+        // albumSublist 是用户专属接口，失败多半是 cookie 失效/未登录——不能像公共接口那样静默
+        toastRef.current('专辑列表加载失败，可能是登录已过期', 'error');
       }
 
       // 落离线快照：失败的项用旧快照兜底，别拿空数组把好数据盖没了
@@ -544,6 +549,7 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
                   const songs: Song[] = (r?.data?.dailySongs || r?.recommend || []).map((s: any): Song => ({
                     id: s.id, name: s.name,
                     artists: (s.ar || s.artists || []).map((a: any) => a.name).join(' / '),
+                    artistIds: (s.ar || s.artists || []).map((a: any) => a.id),
                     album: s.al?.name || s.album?.name || '',
                     albumPic: toHttps(s.al?.picUrl || s.album?.picUrl || ''),
                     duration: (s.dt || s.duration || 0) / 1000,
@@ -566,6 +572,7 @@ const NeteaseProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearc
                   const songs: Song[] = (r?.data || []).map((s: any): Song => ({
                     id: s.id, name: s.name,
                     artists: (s.artists || s.ar || []).map((a: any) => a.name).join(' / '),
+                    artistIds: (s.artists || s.ar || []).map((a: any) => a.id),
                     album: s.album?.name || s.al?.name || '',
                     albumPic: toHttps(s.album?.picUrl || s.al?.picUrl || ''),
                     duration: (s.duration || s.dt || 0) / 1000,

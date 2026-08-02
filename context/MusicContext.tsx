@@ -314,6 +314,10 @@ export const musicApi = {
   albumSublist(cfg: MusicCfg, limit = 50, offset = 0) {
     return musicApi.call(cfg, '/album/sublist', { limit, offset });
   },
+  /** 网易云歌单加歌（写操作，不缓存；需要登录 cookie） */
+  playlistAdd(cfg: MusicCfg, pid: number, trackIds: number[]) {
+    return musicApi.call(cfg, '/playlist/tracks', { op: 'add', pid, tracks: trackIds });
+  },
   /** 歌手详情（头像/简介/作品数） */
   artist(cfg: MusicCfg, id: number) {
     return musicApi.call(cfg, '/artists', { id });
@@ -367,7 +371,7 @@ interface MusicContextType {
 
   // 播放队列 / 当前曲
   queue: Song[];
-  setQueue: (next: Song[]) => void;
+  setQueue: React.Dispatch<React.SetStateAction<Song[]>>;
   idx: number;
   current: Song | null;
 
@@ -490,7 +494,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setRegeneratingStatus(status);
   }, []);
 
-  const setQueue = useCallback((next: Song[]) => {
+  const setQueue = useCallback((next: React.SetStateAction<Song[]>) => {
     setQueueState(next);
   }, []);
 

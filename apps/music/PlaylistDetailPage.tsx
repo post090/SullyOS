@@ -14,9 +14,11 @@ import { CharPlaylist } from '../../types';
 import { removeSongsFromPlaylist } from '../../utils/charPlaylistEdit';
 import { pickSongsForPlaylist, songFromSearch, toCharPlaylistSong } from '../../utils/charPlaylistFill';
 import { C, Sparkle, MizuHeader, BokehBg, MiniPlayer, gradientFor, ArtistLinks } from './MusicUI';
+import { AlbumSource } from './AlbumDetailPage';
+import SongActionsSheet from './SongActionsSheet';
 import { neteaseCacheGet, neteaseCacheSet } from '../../utils/neteaseCache';
 import {
-  Play, Plus, Trash, Check, X, MagnifyingGlass, ChatCircleDots, MusicNote,
+  Play, Plus, Trash, Check, X, MagnifyingGlass, ChatCircleDots, MusicNote, DotsThreeVertical,
 } from '@phosphor-icons/react';
 
 /** 网易云歌单的轻量元信息（NeteaseProfilePage 列表行已有的字段，进页即可先渲染头部） */
@@ -40,6 +42,8 @@ interface Props {
   onOpenComments: (song: Song) => void;
   /** 点歌手名进歌手页（网易云歌单才有 id；角色歌单没有就整行纯文本） */
   onOpenArtist?: (id: number, name: string) => void;
+  /** 菜单里点专辑名进专辑页 */
+  onOpenAlbum?: (album: AlbumSource) => void;
 }
 
 const fmtTime = (s: number) => {
@@ -62,7 +66,7 @@ const mapTrack = (s: any): Song => ({
 
 const PAGE_RENDER = 120;   // 每次向下滚追加渲染的行数
 
-const PlaylistDetailPage: React.FC<Props> = ({ source, onBack, onOpenPlayer, onOpenComments, onOpenArtist }) => {
+const PlaylistDetailPage: React.FC<Props> = ({ source, onBack, onOpenPlayer, onOpenComments, onOpenArtist, onOpenAlbum }) => {
   const { characters, updateCharacter, addToast } = useOS();
   const {
     cfg, playSong,
@@ -97,6 +101,8 @@ const PlaylistDetailPage: React.FC<Props> = ({ source, onBack, onOpenPlayer, onO
   const [descExpanded, setDescExpanded] = useState(false);
   const [filter, setFilter] = useState('');
   const [visibleCount, setVisibleCount] = useState(80);
+  // 曲目行最后一个按钮 → 半屏操作菜单
+  const [sheetSong, setSheetSong] = useState<Song | null>(null);
 
   // ── 角色歌单专属 ──
   const [selecting, setSelecting] = useState(false);
@@ -478,64 +484,59 @@ const PlaylistDetailPage: React.FC<Props> = ({ source, onBack, onOpenPlayer, onO
             const checked = selectedIds.has(s.id);
             return (
               <div key={`${s.id}-${i}`}
-                className="rounded-xl transition-colors"
+                className="flex items-center gap-1 rounded-xl transition-colors"
                 style={{ background: active ? 'rgba(255,255,255,0.55)' : undefined }}>
-                <div className="flex items-center gap-1 px-2 pt-1.5">
-                  <button
-                    onClick={() => (selecting ? toggleSelected(s.id) : playAt(s))}
-                    className="flex-1 flex items-center gap-2.5 min-w-0 text-left"
-                  >
-                    {selecting ? (
-                      <span className="w-4 h-4 shrink-0 rounded-full border flex items-center justify-center"
-                        style={{ borderColor: checked ? C.primary : C.faint, background: checked ? C.primary : 'transparent' }}>
-                        {checked && <Check size={10} weight="bold" color="white" />}
-                      </span>
-                    ) : (
-                      <span className="text-[9px] w-6 text-center shrink-0 tabular-nums"
-                        style={{ color: active ? C.primary : C.faint }}>
-                        {active ? '▶' : i + 1}
-                      </span>
-                    )}
-                    <img src={s.albumPic} alt="" className="w-9 h-9 rounded-lg object-cover shrink-0"
-                      style={{ border: `1px solid ${C.faint}25` }} />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[12px] truncate"
-                          style={{ color: active ? C.primary : C.text, fontWeight: active ? 600 : 400 }}>
-                          {s.name}
-                        </span>
-                        {s.fee === 1 && (
-                          <span className="text-[8px] px-1 rounded shrink-0" style={{ color: C.vip, border: `1px solid ${C.vip}50` }}>VIP</span>
-                        )}
-                      </div>
-                    </div>
-                    <span className="text-[9px] shrink-0 tabular-nums" style={{ color: C.faint }}>{fmtTime(s.duration)}</span>
-                  </button>
-                  {!selecting && (
-                    <button
-                      onClick={() => onOpenComments(s)}
-                      className="p-2 shrink-0 transition-transform active:scale-90"
-                      style={{ color: C.faint }}
-                      title="看这首歌的评论区"
-                    >
-                      <ChatCircleDots size={15} />
-                    </button>
-                  )}
-                </div>
-                {/* 歌手行 — 独立于播放按钮，点歌手名进歌手页（无 id 时纯文本） */}
-                <div className="pl-[88px] pr-2 pb-1.5 -mt-0.5">
-                  {onOpenArtist ? (
-                    <ArtistLinks
-                      artists={s.artists}
-                      artistIds={s.artistIds}
-                      onOpenArtist={onOpenArtist}
-                      style={{ fontSize: '9.5px' }}
-                    />
+                <button
+                  onClick={() => (selecting ? toggleSelected(s.id) : playAt(s))}
+                  className="flex-1 flex items-center gap-2.5 min-w-0 text-left px-2 py-1.5"
+                >
+                  {selecting ? (
+                    <span className="w-4 h-4 shrink-0 rounded-full border flex items-center justify-center"
+                      style={{ borderColor: checked ? C.primary : C.faint, background: checked ? C.primary : 'transparent' }}>
+                      {checked && <Check size={10} weight="bold" color="white" />}
+                    </span>
                   ) : (
-                    <span className="text-[9.5px]" style={{ color: C.muted }}>{s.artists}</span>
+                    <span className="text-[9px] w-6 text-center shrink-0 tabular-nums"
+                      style={{ color: active ? C.primary : C.faint }}>
+                      {active ? '▶' : i + 1}
+                    </span>
                   )}
-                  {s.album ? <span className="text-[9.5px]" style={{ color: C.faint }}> · {s.album}</span> : null}
-                </div>
+                  <img src={s.albumPic} alt="" className="w-9 h-9 rounded-lg object-cover shrink-0"
+                    style={{ border: `1px solid ${C.faint}25` }} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[12px] truncate"
+                        style={{ color: active ? C.primary : C.text, fontWeight: active ? 600 : 400 }}>
+                        {s.name}
+                      </span>
+                      {s.fee === 1 && (
+                        <span className="text-[8px] px-1 rounded shrink-0" style={{ color: C.vip, border: `1px solid ${C.vip}50` }}>VIP</span>
+                      )}
+                    </div>
+                    <div className="text-[9.5px] truncate mt-0.5" style={{ color: C.muted }}>
+                      {onOpenArtist ? (
+                        <ArtistLinks
+                          artists={s.artists}
+                          artistIds={s.artistIds}
+                          onOpenArtist={onOpenArtist}
+                          buttonColor={C.muted}
+                        />
+                      ) : s.artists}
+                      {s.album ? ` · ${s.album}` : ''}
+                    </div>
+                  </div>
+                  <span className="text-[9px] shrink-0 tabular-nums" style={{ color: C.faint }}>{fmtTime(s.duration)}</span>
+                </button>
+                {!selecting && (
+                  <button
+                    onClick={() => setSheetSong(s)}
+                    className="p-2 shrink-0 transition-transform active:scale-90"
+                    style={{ color: C.faint }}
+                    title="歌曲操作（下一首/收藏/评论/歌手/分享）"
+                  >
+                    <DotsThreeVertical size={17} />
+                  </button>
+                )}
               </div>
             );
           })}
@@ -589,6 +590,17 @@ const PlaylistDetailPage: React.FC<Props> = ({ source, onBack, onOpenPlayer, onO
           existingIds={new Set(charPl.songs.map(s => s.id))}
           onAdd={addSongToPl}
           onClose={() => setShowAddSong(false)}
+        />
+      )}
+
+      {/* 曲目半屏操作菜单 */}
+      {sheetSong && (
+        <SongActionsSheet
+          song={sheetSong}
+          onClose={() => setSheetSong(null)}
+          onOpenComments={s => { setSheetSong(null); onOpenComments(s); }}
+          onOpenArtist={onOpenArtist}
+          onOpenAlbum={onOpenAlbum}
         />
       )}
     </div>

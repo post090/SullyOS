@@ -10,14 +10,15 @@
  * - 点歌单 → 统一歌单详情页（加歌 / 按品味填充 / 删歌 / 删歌单都在那边），这里还能新建歌单。
  * - 点任一首歌 → 用全局 MusicContext 播放 (沿用 user 的 cookie / 配额)。
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useOS } from '../../context/OSContext';
 import { useMusic, musicApi, toHttps } from '../../context/MusicContext';
 import { CharPlaylist } from '../../types';
 import { CharMusicPersona } from '../../utils/charMusicPersona';
 import { computeCurrentListening } from '../../utils/charMusicSchedule';
 import { C, Sparkle, MizuHeader, BokehBg, MiniPlayer, gradientFor } from './MusicUI';
-import { MusicNote, Plus, Check, Star, FilmSlate, GameController, Popcorn, MonitorPlay, ArrowClockwise, PencilSimple, X } from '@phosphor-icons/react';
+import { AlbumSource } from './AlbumDetailPage';
+import { MusicNote, Plus, Check, Star, FilmSlate, GameController, Popcorn, MonitorPlay, ArrowClockwise, PencilSimple, Trash, X, Play as PlayIcon } from '@phosphor-icons/react';
 import { getDailyScheduleForChar } from '../../utils/dailySchedule';
 import { useLocalDateKey } from '../../hooks/useLocalDateKey';
 import { resolveCharTimeZone } from '../../utils/timezone';
@@ -28,9 +29,15 @@ interface Props {
   onOpenPlayer: () => void;
   /** 点歌单行 / 新建完歌单 → 进统一歌单详情页 */
   onOpenPlaylist: (playlistId: string) => void;
+  /** 点「钟爱的人」头像 → 歌手页（无 artistId 时先搜，查不到 toast） */
+  onOpenArtist?: (id: number, name: string) => void;
+  /** 点「钟爱的原声」封面 → 专辑页（先用标题搜，查不到 toast） */
+  onOpenAlbum?: (album: AlbumSource) => void;
+  /** 最近常听「播放全部」→ 全屏歌单页 */
+  onOpenRecent?: (charId: string) => void;
 }
 
-const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer, onOpenPlaylist }) => {
+const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer, onOpenPlaylist, onOpenArtist, onOpenAlbum, onOpenRecent }) => {
   const { characters, updateCharacter, userProfile, apiConfig, addToast } = useOS();
   const {
     cfg,
@@ -211,6 +218,57 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer, onOpenPl
     setEditingEntry(null);
   }, [char, profile, editingEntry, updateCharacter]);
 
+  /** 删除艺人 / OST 条目 */
+  const deleteEntry = useCallback(() => {
+    if (!char || !profile || !editingEntry) return;
+    if (editingEntry.kind === 'artist') {
+      const next = [...profile.signatureArtists];
+      next.splice(editingEntry.index, 1);
+      updateCharacter(char.id, {
+        musicProfile: { ...profile, signatureArtists: next, updatedAt: Date.now() },
+      });
+    } else {
+      const next = [...(profile.favoriteSoundtracks || [])];
+      next.splice(editingEntry.index, 1);
+      updateCharacter(char.id, {
+        musicProfile: { ...profile, favoriteSoundtracks: next, updatedAt: Date.now() },
+      });
+    }
+    setEditingEntry(null);
+    addToast('已删除', 'success');
+  }, [char, profile, editingEntry, updateCharacter, addToast]);
+
+  /** 点「钟爱的人」→ 歌手页：有 artistId 直接用；没有先搜，查不到给提示 */
+  const jumpToArtist = useCallback(async (a: { name: string; artistId?: number }) => {
+    if (!onOpenArtist) return;
+    if (a.artistId != null) { onOpenArtist(a.artistId, a.name); return; }
+    try {
+      const r: any = await musicApi.call(cfg, '/search', { keyword: a.name, limit: 3, offset: 0, type: 100 });
+      const hit = r?.result?.artists?.[0];
+      if (hit?.id) { onOpenArtist(hit.id, hit.name || a.name); return; }
+    } catch { /* 走下方提示 */ }
+    addToast(`查不到「${a.name}」的歌手页`, 'info');
+  }, [cfg, onOpenArtist, addToast]);
+
+  /** 点「钟爱的原声」→ 专辑页：先用标题搜专辑，查不到给提示 */
+  const jumpToOst = useCallback(async (s: { title: string; coverUrl?: string; type?: string }) => {
+    if (!onOpenAlbum) return;
+    try {
+      const r: any = await musicApi.call(cfg, '/search', { keyword: s.title, limit: 3, offset: 0, type: 10 });
+      const hit = r?.result?.albums?.[0];
+      if (hit?.id) {
+        onOpenAlbum({
+          id: hit.id,
+          name: hit.name || s.title,
+          coverImgUrl: toHttps(hit.picUrl || s.coverUrl || ''),
+          artistName: hit.artist?.name,
+        });
+        return;
+      }
+    } catch { /* 走下方提示 */ }
+    addToast(`查不到「${s.title}」的专辑页`, 'info');
+  }, [cfg, onOpenAlbum, addToast]);
+
   /** 新建一个空歌单，建完直接跳进详情页加歌 */
   const createPlaylist = useCallback((title: string) => {
     if (!char || !profile) return;
@@ -385,8 +443,10 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer, onOpenPl
                   {/* 头像 + 星星：星星是 button 外的兄弟元素，绝对定位贴头像底边中央，
                       不受 button 的 overflow-hidden 裁切，也不跟底下名字抢位置 */}
                   <div className="relative w-14 h-14 mx-auto">
-                    <button
-                      onClick={() => setEditingEntry({ kind: 'artist', index: i })}
+                    <TapOrHoldButton
+                      onTap={() => jumpToArtist(a)}
+                      onHold={() => setEditingEntry({ kind: 'artist', index: i })}
+                      title="点击进歌手页 · 长按编辑/删除"
                       className="w-full h-full rounded-full flex items-center justify-center text-white relative overflow-hidden active:scale-95 transition-transform"
                       style={{ background: gradientFor(`gradient-0${(i % 6) + 1}`) }}
                     >
@@ -397,7 +457,7 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer, onOpenPl
                           {a.name.slice(0, 1)}
                         </span>
                       )}
-                    </button>
+                    </TapOrHoldButton>
                     {a.starred && (
                       <div className="absolute left-1/2 -translate-x-1/2 -bottom-1.5 z-20 pointer-events-none">
                         <div className="w-5 h-5 rounded-full flex items-center justify-center bg-amber-400">
@@ -442,8 +502,10 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer, onOpenPl
                     {/* 封面 + 星星：星星是 button 外的兄弟元素，绝对定位贴封面底边中央，
                         不受 button 的 overflow-hidden 裁切，也不跟底下名字抢位置 */}
                     <div className="relative w-14 h-14 mx-auto">
-                      <button
-                        onClick={() => setEditingEntry({ kind: 'soundtrack', index: i })}
+                      <TapOrHoldButton
+                        onTap={() => jumpToOst(s)}
+                        onHold={() => setEditingEntry({ kind: 'soundtrack', index: i })}
+                        title="点击进专辑页 · 长按编辑/删除"
                         className="w-full h-full rounded-2xl flex items-center justify-center text-white relative overflow-hidden active:scale-95 transition-transform"
                         style={{ background: gradientFor(`gradient-0${(i % 6) + 1}`) }}
                       >
@@ -452,7 +514,7 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer, onOpenPl
                         ) : (
                           <span>{typeIcon(s.type)}</span>
                         )}
-                      </button>
+                      </TapOrHoldButton>
                       {s.starred && (
                         <div className="absolute left-1/2 -translate-x-1/2 -bottom-1.5 z-20 pointer-events-none">
                           <div className="w-5 h-5 rounded-full flex items-center justify-center bg-amber-400">
@@ -543,6 +605,17 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer, onOpenPl
                 </div>
               ))}
             </div>
+            {/* 网易云式「播放全部」→ 全屏歌单页，列出所有常听 */}
+            {onOpenRecent && profile!.recentPlays.length > 0 && (
+              <button
+                onClick={() => onOpenRecent(char.id)}
+                className="w-full mt-1 py-2 rounded-xl flex items-center justify-center gap-1.5 text-[11px] transition-all active:scale-[0.99]"
+                style={{ color: C.primary, border: `1.5px dashed ${C.primary}40`, background: 'rgba(255,255,255,0.35)' }}
+              >
+                <PlayIcon size={12} weight="fill" />
+                播放全部 · {profile!.recentPlays.length} 首
+              </button>
+            )}
           </div>
         )}
 
@@ -630,6 +703,7 @@ const CharVisitPage: React.FC<Props> = ({ charId, onBack, onOpenPlayer, onOpenPl
             original={original || ''}
             onCancel={() => setEditingEntry(null)}
             onSave={saveEntryName}
+            onDelete={deleteEntry}
             onMatchImage={refreshArtImages}
             matching={refreshingArt}
           />
@@ -661,8 +735,58 @@ const SectionTitle: React.FC<{ children: React.ReactNode }> = ({ children }) => 
   </div>
 );
 
-/**
- * 编辑艺人/OST 名字弹窗。
+/** 点按 = onTap，按住 500ms = onHold（长按编辑用）；移动超过 8px 取消，避免滚动误触发 */
+const TapOrHoldButton: React.FC<{
+  onTap: () => void;
+  onHold: () => void;
+  holdDelay?: number;
+  className?: string;
+  style?: React.CSSProperties;
+  title?: string;
+  children: React.ReactNode;
+}> = ({ onTap, onHold, holdDelay = 500, className = '', style, title, children }) => {
+  const timer = useRef<number | null>(null);
+  const startPos = useRef<{ x: number; y: number } | null>(null);
+  const heldRef = useRef(false);
+
+  const cancel = () => {
+    if (timer.current != null) { clearTimeout(timer.current); timer.current = null; }
+    startPos.current = null;
+  };
+
+  return (
+    <button
+      title={title}
+      className={className}
+      style={style}
+      onPointerDown={(e) => {
+        startPos.current = { x: e.clientX, y: e.clientY };
+        heldRef.current = false;
+        timer.current = window.setTimeout(() => {
+          heldRef.current = true;
+          onHold();
+        }, holdDelay);
+      }}
+      onPointerMove={(e) => {
+        if (!startPos.current) return;
+        const dx = Math.abs(e.clientX - startPos.current.x);
+        const dy = Math.abs(e.clientY - startPos.current.y);
+        if (dx > 8 || dy > 8) cancel();
+      }}
+      onPointerUp={() => {
+        cancel();
+        if (!heldRef.current) onTap();
+      }}
+      onPointerCancel={cancel}
+      onPointerLeave={cancel}
+      onContextMenu={(e) => { e.preventDefault(); cancel(); onHold(); }}
+    >
+      {children}
+    </button>
+  );
+};
+
+/** 编辑艺人/OST 名字弹窗。
  * - 改完名字保存会清掉旧 picUrl/coverUrl（名字变了旧图失效）
  * - 「匹配图片」按钮直接调顶栏的批量匹配（先保存当前编辑内容更顺手，但用户可能只改名不刷新，
  *   所以这个按钮只在名字没改时才可用 —— 改了名字先存再刷新）
@@ -673,9 +797,10 @@ const EditNameModal: React.FC<{
   original: string;
   onCancel: () => void;
   onSave: (newName: string) => void;
+  onDelete?: () => void;
   onMatchImage: () => void;
   matching: boolean;
-}> = ({ title, original, onCancel, onSave, onMatchImage, matching }) => {
+}> = ({ title, original, onCancel, onSave, onDelete, onMatchImage, matching }) => {
   const [value, setValue] = useState(original);
   const trimmed = value.trim();
   const changed = trimmed !== original.trim() && trimmed.length > 0;
@@ -741,6 +866,20 @@ const EditNameModal: React.FC<{
             <ArrowClockwise size={12} weight="bold" className={`inline mr-1 ${matching ? 'animate-spin' : ''}`} />
             {matching ? '匹配中' : '匹配图片'}
           </button>
+          {onDelete && (
+            <button
+              onClick={() => {
+                if (typeof window !== 'undefined' && !window.confirm('删除这一项？')) return;
+                onDelete();
+              }}
+              title="删除这一项"
+              className="px-3 py-2 rounded-lg text-xs"
+              style={{ background: `${C.sakura}18`, color: '#c14d5d' }}
+            >
+              <Trash size={12} weight="bold" className="inline mr-1" />
+              删除
+            </button>
+          )}
         </div>
         <p className="text-[9px] mt-2 leading-relaxed" style={{ color: C.faint }}>
           改名保存后旧的匹配图片会清掉。点「匹配图片」会根据当前名字去网易云搜头像/封面。
