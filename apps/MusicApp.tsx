@@ -140,6 +140,16 @@ const MusicApp: React.FC = () => {
   const [lyricSelectMode, setLyricSelectMode] = useState(false);
   const [selectedLyricIndices, setSelectedLyricIndices] = useState<Set<number>>(new Set());
   const [lyricShareOpen, setLyricShareOpen] = useState(false);
+  // 歌词分享 · 角色选择 + 附言
+  const [lyricShareCharId, setLyricShareCharId] = useState<string | null>(null);
+  const [lyricShareNote, setLyricShareNote] = useState('');
+  // 打开歌词分享弹窗时默认选第一个角色
+  useEffect(() => {
+    if (lyricShareOpen && !lyricShareCharId) {
+      const first = characters[0];
+      if (first) setLyricShareCharId(first.id);
+    }
+  }, [lyricShareOpen, lyricShareCharId, characters]);
   const longPressTimer = useRef<number | null>(null);
   const longPressStart = useRef<{ x: number; y: number } | null>(null);
   const clearLongPress = () => {
@@ -181,6 +191,39 @@ const MusicApp: React.FC = () => {
       .filter(Boolean)
       .join('\n');
   }, [selectedLyricIndices, lyric]);
+  // 歌词分享给角色（落 music_card，intent=share_lyric，复用分享卡片但中间显示歌词）
+  const shareLyricToChar = async () => {
+    if (!lyricShareCharId || !selectedLyricText) return;
+    const c = characters.find(x => x.id === lyricShareCharId);
+    if (!c) return;
+    const songName = current?.name || '这首歌';
+    const artist = current?.artists || '';
+    const note = lyricShareNote.trim();
+    // content 给 AI 看：歌曲名+歌手+附言+歌词全文，让角色知道分享的是什么
+    const songLabel = artist ? `《${songName}》— ${artist}` : `《${songName}》`;
+    const contentParts = [note ? `${note}\n` : '', `分享${songLabel}的歌词：\n${selectedLyricText}`].join('');
+    try {
+      await DB.saveMessage({
+        charId: lyricShareCharId,
+        role: 'user',
+        type: 'music_card',
+        content: contentParts,
+        metadata: {
+          song: {
+            id: current?.id || 0, name: songName,
+            artists: artist, album: current?.album || '',
+            albumPic: current?.albumPic || '', duration: current?.duration || 0,
+          },
+          intent: 'share_lyric',
+          lyricText: selectedLyricText,
+        },
+      });
+      window.dispatchEvent(new CustomEvent('active-msg-open', { detail: { charId: lyricShareCharId } }));
+      addToast(`已把歌词分享给 ${c.name}`, 'success');
+    } catch { addToast('分享失败', 'error'); }
+    setLyricShareOpen(false); setLyricSelectMode(false); setSelectedLyricIndices(new Set());
+    setLyricShareCharId(null); setLyricShareNote('');
+  };
   const openPlayer = () => {
     setPlayerFrom(view);
     setView('player');
@@ -1149,39 +1192,68 @@ const MusicApp: React.FC = () => {
         </div>
       )}
 
-      {/* 歌词分享 · 角色选择（基于已选多句拼接文本） */}
+      {/* 歌词分享 · 角色选择 + 附言（仿分享歌曲界面） */}
       {lyricShareOpen && selectedLyricText && (
         <div className="fixed inset-0 z-[61] flex flex-col justify-end">
           <div className="absolute inset-0 bg-black/40 animate-fade-in" onClick={() => setLyricShareOpen(false)} />
           <div className="relative w-full rounded-t-3xl px-4 pt-3 pb-6 animate-slide-up shizuku-glass-strong"
-            style={{ background: C.bg, maxHeight: '60vh' }} onClick={e => e.stopPropagation()}>
+            style={{ background: C.bg, maxHeight: '75vh' }} onClick={e => e.stopPropagation()}>
             <div className="w-10 h-1 rounded-full mx-auto mb-3" style={{ background: C.faint }} />
-            <div className="text-[10px] tracking-[0.2em] uppercase mb-2" style={{ color: C.muted }}>分享给角色</div>
-            <div className="overflow-y-auto shizuku-scrollbar space-y-1">
-              {characters.map(c => (
-                <button key={c.id}
-                  onClick={async () => {
-                    const line = `「${current?.name || '这首歌'}」的歌词：\n${selectedLyricText}`;
-                    try {
-                      await DB.saveMessage({ charId: c.id, role: 'user', type: 'text', content: line });
-                      window.dispatchEvent(new CustomEvent('active-msg-open', { detail: { charId: c.id } }));
-                      addToast(`已分享歌词给 ${c.name}`, 'success');
-                    } catch { addToast('分享失败', 'error'); }
-                    setLyricShareOpen(false); setLyricSelectMode(false); setSelectedLyricIndices(new Set());
-                  }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-2xl active:scale-[0.98] transition-transform text-left"
-                  style={{ background: 'rgba(255,255,255,0.5)' }}
-                >
-                  {c.avatar
-                    ? <img src={c.avatar} alt="" className="w-8 h-8 rounded-full object-cover" />
-                    : <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs" style={{ background: C.primary }}>{c.name.slice(0, 1)}</div>}
-                  <span className="text-[12px] flex-1 truncate" style={{ color: C.text }}>{c.name}</span>
-                </button>
-              ))}
-              {characters.length === 0 && (
-                <div className="text-center text-[11px] py-4" style={{ color: C.faint }}>还没有角色，先去创建一个吧</div>
-              )}
+            <div className="text-[10px] tracking-[0.2em] uppercase mb-2" style={{ color: C.muted }}>分享歌词给角色</div>
+            {/* 歌词预览（小卡片，让用户确认分享内容） */}
+            <div className="rounded-2xl p-2.5 mb-3 max-h-24 overflow-y-auto shizuku-scrollbar"
+              style={{ background: 'rgba(255,255,255,0.5)', fontFamily: `'Noto Serif','Georgia',serif` }}>
+              <div className="text-[9px] tracking-wider mb-1" style={{ color: C.muted }}>
+                {current?.name || '这首歌'}{current?.artists ? ` · ${current.artists}` : ''}
+              </div>
+              <p className="text-[12px] leading-relaxed whitespace-pre-wrap" style={{ color: C.text }}>{selectedLyricText}</p>
             </div>
+            {/* 选角色 —— 头像横排（跟分享歌曲同一个样式） */}
+            {characters.length === 0 ? (
+              <div className="text-center text-[11px] py-4" style={{ color: C.faint }}>还没有角色，先去创建一个吧</div>
+            ) : (
+              <div className="flex items-center gap-2 overflow-x-auto pb-2 shizuku-scrollbar">
+                {characters.map(c => {
+                  const selected = lyricShareCharId === c.id;
+                  return (
+                    <button key={c.id}
+                      onClick={() => setLyricShareCharId(c.id)}
+                      className="shrink-0 text-center"
+                    >
+                      <div className="w-12 h-12 mx-auto rounded-full flex items-center justify-center text-white text-sm font-semibold transition-all"
+                        style={{
+                          background: selected ? `linear-gradient(135deg, ${C.primary}, ${C.accent})` : `linear-gradient(135deg, ${C.faint}, ${C.muted})`,
+                          border: selected ? `2px solid ${C.glow}` : '2px solid transparent',
+                          boxShadow: selected ? `0 2px 12px ${C.glow}40` : 'none',
+                        }}>
+                        {c.avatar?.startsWith('data:') || c.avatar?.startsWith('http')
+                          ? <img src={c.avatar} alt="" className="w-full h-full rounded-full object-cover" />
+                          : c.name.slice(0, 1)}
+                      </div>
+                      <div className="text-[9px] mt-1 max-w-[52px] truncate" style={{ color: selected ? C.primary : C.muted }}>{c.name}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {/* 附言 */}
+            <textarea
+              value={lyricShareNote}
+              onChange={e => setLyricShareNote(e.target.value)}
+              placeholder="写一句想说的话（可选）…"
+              rows={2}
+              className="w-full px-3 py-2 rounded-xl text-[12px] outline-none resize-none mt-2"
+              style={{ background: '#fff', border: `1px solid ${C.faint}40`, color: C.text }}
+            />
+            <button
+              onClick={shareLyricToChar}
+              disabled={!lyricShareCharId}
+              className="w-full py-2.5 rounded-xl text-xs text-white flex items-center justify-center gap-1.5 disabled:opacity-40 transition-all active:scale-[0.99] mt-2"
+              style={{ background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, boxShadow: `0 3px 18px ${C.glow}30` }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 21s-8-5.3-8-11.5C4 6 6.5 3.5 9.5 3.5c1.6 0 3 .8 2.5 2.2C11.5 4.3 12.9 3.5 14.5 3.5 17.5 3.5 20 6 20 9.5 20 15.7 12 21 12 21z" /></svg>
+              分享给 {lyricShareCharId ? characters.find(x => x.id === lyricShareCharId)?.name || '' : ''}
+            </button>
           </div>
         </div>
       )}

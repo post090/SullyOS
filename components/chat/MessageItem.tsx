@@ -2519,12 +2519,71 @@ const MessageItem = React.memo(({
         }
     }
 
-    // --- Music Card Rendering (一起听 / 加入歌单 / 分享) ---
+    // --- Music Card Rendering (一起听 / 加入歌单 / 分享 / 分享歌词) ---
     if (m.type === 'music_card' && m.metadata?.song) {
         const song = m.metadata.song as { songId: number; name: string; artists: string; album: string; albumPic: string };
-        const intent = (m.metadata.intent || 'join') as 'join' | 'add' | 'join_and_add' | 'share';
+        const intent = (m.metadata.intent || 'join') as 'join' | 'add' | 'join_and_add' | 'share' | 'share_lyric';
         const isTogether = intent === 'join' || intent === 'join_and_add';
         const addedTo = m.metadata.addedToPlaylistTitle as string | undefined;
+
+        // 分享歌词给角色：复用分享卡片样式，但中间改成歌词区
+        if (intent === 'share_lyric') {
+            const lyricText = (m.metadata.lyricText as string || '').trim();
+            // 歌词按行切，超过 4 行只显示前 3 行 + 省略号
+            const lyricLines = lyricText.split('\n').filter(Boolean);
+            const previewLines = lyricLines.slice(0, 3);
+            const truncated = lyricLines.length > previewLines.length;
+            return commonLayout(
+                <div className="w-64 rounded-2xl overflow-hidden shadow-sm border cursor-pointer active:opacity-90 transition-opacity"
+                    style={{ borderColor: '#eee8f0', background: '#fff' }}>
+                    <div className="flex items-center gap-3 p-3">
+                        <div className="w-14 h-14 rounded-lg overflow-hidden shrink-0 bg-slate-100">
+                            {song.albumPic ? (
+                                <img src={song.albumPic} alt="" className="w-full h-full object-cover" loading="lazy" referrerPolicy="no-referrer"
+                                    onError={(e: any) => {
+                                        const img = e.target;
+                                        const container = img.parentElement;
+                                        if (!container) return;
+                                        img.style.display = 'none';
+                                        if (container.querySelector('.share-cover-fallback')) return;
+                                        const fb = document.createElement('div');
+                                        fb.className = 'share-cover-fallback w-full h-full flex items-center justify-center';
+                                        fb.style.background = 'linear-gradient(135deg, #8b7ab8 0%, #6b95c7 100%)';
+                                        fb.innerHTML = `<div style="color:rgba(255,255,255,0.9);font-size:20px;">♪</div>`;
+                                        container.appendChild(fb);
+                                    }}
+                                />
+                            ) : (
+                                <div className="w-full h-full flex items-center justify-center"
+                                    style={{ background: 'linear-gradient(135deg, #8b7ab8 0%, #6b95c7 100%)' }}>
+                                    <span style={{ color: 'rgba(255,255,255,0.9)', fontSize: '20px' }}>♪</span>
+                                </div>
+                            )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                            <div className="font-semibold text-[13px] truncate" style={{ color: '#333', fontFamily: `'Noto Serif','Georgia',serif` }}>{song.name || '未命名'}</div>
+                            <div className="text-[11px] truncate mt-0.5" style={{ color: '#888' }}>{song.artists || '—'}</div>
+                        </div>
+                    </div>
+                    {/* 歌词区 —— 引用块样式，白底+左竖线 */}
+                    <div className="px-3 pb-2">
+                        <div className="rounded-lg p-2 pl-2.5" style={{ background: '#fafafa', borderLeft: '2.5px solid #c20c0c' }}>
+                            {previewLines.map((ln, i) => (
+                                <div key={i} className="text-[11px] leading-[1.5] truncate" style={{ color: '#555', fontFamily: `'Noto Serif','Georgia',serif` }}>{ln}</div>
+                            ))}
+                            {truncated && <div className="text-[10px] mt-0.5" style={{ color: '#bbb' }}>…共 {lyricLines.length} 行</div>}
+                        </div>
+                    </div>
+                    <div className="px-3 py-1.5 flex items-center gap-1.5 border-t" style={{ borderColor: '#f5f5f5', background: '#fafafa' }}>
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" style={{ color: '#c20c0c' }}>
+                            <path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z" />
+                        </svg>
+                        <span className="text-[9px]" style={{ color: '#999' }}>来自网易云音乐</span>
+                        <span className="ml-auto text-[9px]" style={{ color: '#bbb' }}>{isUser ? '分享歌词给Ta' : '分享歌词'}</span>
+                    </div>
+                </div>
+            );
+        }
 
         // 分享给角色：网易云风格横向卡片（不复用一起听卡片）
         if (intent === 'share') {
