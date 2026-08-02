@@ -6,3 +6,13 @@ allowBuilds:
   esbuild: true
   sharp: true
   workerd: true
+
+# pnpm 11 默认 minimumReleaseAge=1440（24h 冷静期）。
+# 上游 amsg2 多任务功能依赖 @rei-standard/amsg-* 的 -next 预发布版，
+# 经常刚发布就要用，排除这 5 个包让它们不受冷静期限制，其他包照常保护。
+minimumReleaseAgeExclude:
+  - "@rei-standard/amsg-client"
+  - "@rei-standard/amsg-instant"
+  - "@rei-standard/amsg-server"
+  - "@rei-standard/amsg-shared"
+  - "@rei-standard/amsg-sw"
