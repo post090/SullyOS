@@ -42,6 +42,7 @@ import {
   bytesToB64u,
   describePushCapabilityGap,
   isDeadPushEndpoint,
+  readBrowserPushState,
   subscribeWithRetry,
 } from './pushSubscribeShared';
 
@@ -159,7 +160,7 @@ export async function getOrCreateSubscription(vapidPublicKey: string): Promise<S
       return { sub: null, reason: '通知权限已被拒绝（请到浏览器站点设置里手动开启）' };
     }
     const fresh = await subscribeWithRetry(reg, vapidPublicKey, '[ProactivePush]');
-    if (!fresh.sub) return { sub: null, reason: fresh.reason };
+    if (!fresh.sub) return { sub: null, reason: fresh.failure?.text };
     sub = fresh.sub;
   }
 
@@ -536,7 +537,7 @@ export async function deepResetSubscription(): Promise<{ ok: boolean; reason?: s
 // ---------- Diagnostic info ----------
 
 export interface PushDiagnostics {
-  /** Browser feature support */
+  /** Web Push 三件套齐不齐：Service Worker / Push API / Notification */
   supported: boolean;
   /** Notification.permission (or 'unavailable' if API missing) */
   permission: 'default' | 'granted' | 'denied' | 'unavailable';
@@ -564,69 +565,11 @@ export interface PushDiagnostics {
   capacitorNative: boolean;
 }
 
-function detectChannelFromEndpoint(endpoint: string | null): string {
-  if (!endpoint) return '未知';
-  if (/fcm\.googleapis\.com|android\.googleapis\.com/i.test(endpoint)) return 'Google FCM (Chrome / Edge / 安卓)';
-  if (/updates\.push\.services\.mozilla\.com/i.test(endpoint)) return 'Mozilla autopush (Firefox)';
-  if (/notify\.windows\.com|wns2/i.test(endpoint)) return 'Windows WNS (Edge)';
-  if (/web\.push\.apple\.com/i.test(endpoint)) return 'Apple APNs (Safari / iOS PWA)';
-  return '未识别厂商';
-}
-
-/**
- * True when the page is running inside a Capacitor native shell
- * (Android/iOS WebView), as opposed to a regular browser tab.  We probe
- * the global rather than importing `@capacitor/core` so this util stays
- * tree-shakable in the SW bundle.
- */
-function detectCapacitorNative(): boolean {
-  if (typeof window === 'undefined') return false;
-  const cap = (window as any).Capacitor;
-  if (!cap) return false;
-  if (typeof cap.isNativePlatform === 'function') {
-    try { return !!cap.isNativePlatform(); } catch { /* ignore */ }
-  }
-  // Fallback for older Capacitor versions
-  return cap.platform === 'android' || cap.platform === 'ios';
-}
-
-function detectIosNeedsPwa(): boolean {
-  if (typeof navigator === 'undefined' || typeof window === 'undefined') return false;
-  const ua = navigator.userAgent || '';
-  const isIos = /iPad|iPhone|iPod/.test(ua) || (ua.includes('Macintosh') && 'ontouchend' in document);
-  if (!isIos) return false;
-  // Consider standalone if either iOS legacy `navigator.standalone` or display-mode media query says so.
-  const standalone =
-    (navigator as any).standalone === true ||
-    (typeof window.matchMedia === 'function' && window.matchMedia('(display-mode: standalone)').matches);
-  return !standalone;
-}
-
 export async function getPushDiagnostics(): Promise<PushDiagnostics> {
   const cfg = loadPushConfig();
-  const supported = typeof navigator !== 'undefined'
-    && 'serviceWorker' in navigator
-    && typeof window !== 'undefined'
-    && 'PushManager' in window;
-  const permission: PushDiagnostics['permission'] = typeof Notification === 'undefined'
-    ? 'unavailable'
-    : (Notification.permission as PushDiagnostics['permission']);
-
-  let swScope: string | null = null;
-  let swState = 'none';
-  let endpoint: string | null = null;
-  if (supported) {
-    try {
-      const reg = await navigator.serviceWorker.getRegistration();
-      if (reg) {
-        swScope = reg.scope;
-        const w = reg.active || reg.waiting || reg.installing;
-        swState = w ? w.state : 'none';
-        const sub = await reg.pushManager.getSubscription();
-        endpoint = sub?.endpoint || null;
-      }
-    } catch { /* ignore */ }
-  }
+  // 浏览器那一半（支持/权限/SW/端点/厂商/平台）读共用的 readBrowserPushState，
+  // 这里只补 proactive-push 自己的三样：worker 配没配、开关开没开、上次唤醒。
+  const browser = await readBrowserPushState();
 
   let lastWakeAt: number | null = null;
   let lastWakeChar: string | null = null;
@@ -637,19 +580,19 @@ export async function getPushDiagnostics(): Promise<PushDiagnostics> {
   } catch { /* ignore */ }
 
   return {
-    supported,
-    permission,
-    swScope,
-    swState,
-    endpoint,
-    endpointDead: isDeadSubscriptionEndpoint(endpoint),
-    channel: detectChannelFromEndpoint(endpoint),
+    supported: browser.supported,
+    permission: browser.permission === 'unavailable' ? 'unavailable' : browser.permission,
+    swScope: browser.swScope,
+    swState: browser.swState,
+    endpoint: browser.endpoint,
+    endpointDead: browser.endpointDead,
+    channel: browser.channel,
     workerConfigured: cfg.workerUrl.startsWith('https://') && isPushVapidReady(),
     enabled: cfg.enabled,
     lastWakeAt,
     lastWakeChar,
-    iosNeedsPwa: detectIosNeedsPwa(),
-    capacitorNative: detectCapacitorNative(),
+    iosNeedsPwa: browser.iosNeedsPwa,
+    capacitorNative: browser.capacitorNative,
   };
 }
 

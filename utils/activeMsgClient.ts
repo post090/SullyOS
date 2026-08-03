@@ -65,7 +65,9 @@ import {
   bytesToB64u,
   describePushCapabilityGap,
   isDeadPushEndpoint,
+  subscribeWithRetry,
   SUBSCRIBE_SETTLE_MS,
+  type SubscribeFailureKind,
 } from './pushSubscribeShared';
 
 export interface ActiveMsg2PushStatus {
@@ -75,6 +77,42 @@ export interface ActiveMsg2PushStatus {
   vapidConfigured: boolean;
   detail?: string;
 }
+
+/** worker 上登记的那份订阅（一个用户一行）。读不到时调用方拿 null。 */
+export interface AmsgRemotePushSubscription {
+  exists: boolean;
+  endpoint: string | null;
+  updatedAt: number | null;
+}
+
+/**
+ * 「worker 到点会不会推到这台设备」的结论。
+ *
+ * 中间那两档是主动消息最难自己发现的故障：任务建得成、界面全绿、到点一条都不来。
+ * 换过 worker（新库是空的）、或者在另一台设备上登记过（一个用户只存一份，后来的
+ * 顶掉先前的），都会落到这里。
+ */
+export type AmsgPushRegistrationState =
+  | 'worker-unset'    // 还没填 Worker 地址，无从谈起
+  | 'unreachable'     // 问不到 worker（断网，或那台 worker 没有这个端点）
+  | 'missing'         // worker 上没有登记
+  | 'other-endpoint'  // 登记着，但不是本机这个端点
+  | 'matched';        // 登记着，且就是本机
+
+/**
+ * 拿本机端点跟 worker 登记的那份对一下。纯函数，面板和单测共用同一套判定。
+ *
+ * 本机还没订阅（localEndpoint 为空）时，只要远端有登记就算 'other-endpoint'——
+ * 那份登记确实指向别的地方，说「已登记」会让用户以为这台设备收得到。
+ */
+export const compareRemotePushSubscription = (
+  localEndpoint: string | null | undefined,
+  remote: AmsgRemotePushSubscription | null,
+): AmsgPushRegistrationState => {
+  if (!remote) return 'unreachable';
+  if (!remote.exists || !remote.endpoint) return 'missing';
+  return remote.endpoint === localEndpoint ? 'matched' : 'other-endpoint';
+};
 
 /**
  * 库把载荷加解密留成了私有实现，而分页拉任务、init-tenant 这类库没封装的端点
@@ -153,11 +191,14 @@ export type AmsgFailKind =
   | '鉴权失败'
   | '端点不存在'
   | '建表失败'
+  | '配置缺失'
   | '网络失败'
   | '权限被拒'
   | '不支持推送'
   | 'worker没配VAPID'
   | '订阅失败'
+  | '推送通道不通'
+  | '端点僵尸'
   | '其他';
 
 const FAIL_KIND_PROP = '__amsgFailKind';
@@ -175,6 +216,42 @@ const withFailKind = <T extends Error>(error: T, kind: AmsgFailKind): T => {
 export const readAmsgFailKind = (error: unknown): AmsgFailKind => {
   const kind = (error as Record<string, unknown> | null | undefined)?.[FAIL_KIND_PROP];
   return typeof kind === 'string' ? (kind as AmsgFailKind) : '其他';
+};
+
+/**
+ * worker 自检的回执（`GET /config-check`，见 worker/amsg/src/index.ts 的 inspectWorkerEnv）。
+ * missing 是缺了就跑不起来的，warnings 是能跑但有一块功能是哑的。
+ */
+export interface AmsgWorkerEnvReport {
+  ok: boolean;
+  missing: string[];
+  /** worker 生成的整句，含「去哪儿补」，直接显示给用户。 */
+  message: string;
+  warnings: { code: string; message: string }[];
+}
+
+/**
+ * 问 worker 自己配齐了没。
+ *
+ * 拿不到结论一律返回 null，不抛：这个端点是后加的，旧 worker 会回 404；而网络本身
+ * 不通的话，紧接着的 init-tenant 会用它自己那套分类报出来，在这儿抢先报一遍只会让
+ * 用户同时看到两条口径不同的错误。
+ */
+const inspectWorkerConfig = async (config: ActiveMsg2GlobalConfig): Promise<AmsgWorkerEnvReport | null> => {
+  try {
+    const { status, body } = await fetchWithAuthRaw('config-check', config, { method: 'GET' }, '配置自检');
+    if (status !== 200 || !body?.success) return null;
+    // 只认形状对得上的回执。没有这个端点的 worker 回什么的都有（404 只是其中一种），
+    // 光看 success 就采信的话，会把一台好 worker 判成「配置缺失」——那比不自检还糟，
+    // 用户照着提示改哪儿都改不对。形状不对就当它不支持自检，走原来的流程。
+    const data = body.data;
+    if (typeof data?.ok !== 'boolean' || !Array.isArray(data.missing) || !Array.isArray(data.warnings)) {
+      return null;
+    }
+    return data as AmsgWorkerEnvReport;
+  } catch {
+    return null;
+  }
 };
 
 /** init-tenant 没成功时按 HTTP 状态归类：三种状态要用户去改的地方完全不同。 */
@@ -678,6 +755,106 @@ export const dropStaleSubscription = async (
 };
 
 /**
+ * 重置类操作的前置：Worker 地址填了、浏览器有推送能力、通知权限拿到了。
+ *
+ * 权限这一步会弹框（用户点的就是「重置订阅」，弹一次合理）；没给就直接抛，
+ * 别硬着头皮往下走——没有权限 subscribe() 必然失败，报「订阅失败」会把用户
+ * 引去查网络，实际上只要去站点设置里放开通知。
+ */
+const requirePushReady = async (): Promise<ActiveMsg2GlobalConfig> => {
+  const capabilityGap = describePushCapabilityGap();
+  if (capabilityGap) throw withFailKind(new Error(`${capabilityGap}。`), '不支持推送');
+
+  const config = await ensureWorkerReady();
+
+  let permission = Notification.permission;
+  if (permission !== 'granted') permission = await Notification.requestPermission();
+  if (permission !== 'granted') {
+    throw withFailKind(new Error('通知权限未授予，没法重建推送订阅。'), '权限被拒');
+  }
+
+  await KeepAlive.init();
+  return config;
+};
+
+/** 退掉当前这条浏览器订阅，并等浏览器把内部的 removed 标记清完再返回。 */
+const unsubscribeCurrentPush = async (): Promise<void> => {
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    const existing = await registration.pushManager.getSubscription();
+    if (!existing) return;
+    try { await existing.unsubscribe(); } catch { /* 退不掉也继续，下面重订会再试 */ }
+    // 不等的话，紧接着的 subscribe() 大概率直接吐 permanently-removed.invalid 哨兵。
+    await delay(SUBSCRIBE_SETTLE_MS);
+  } catch (error) {
+    console.warn('[ActiveMsg] 退订旧推送订阅时出错，继续重建', error);
+  }
+};
+
+/**
+ * 问 worker 要它自己签推送用的 VAPID 公钥。
+ *
+ * 各用户自部署 worker、各有各的 VAPID，运行时拉、不编译进前端。拿别人的公钥订阅，
+ * worker 推的时候会 403。
+ */
+const fetchWorkerVapidKey = async (client: ReiClient): Promise<string> => {
+  let vapidPublicKey: string;
+  try {
+    vapidPublicKey = await client.getVapidPublicKey();
+  } catch (error) {
+    throw normalizeActiveMsgApiError(error, '获取 Worker VAPID 公钥');
+  }
+  if (!vapidPublicKey) {
+    throw withFailKind(new Error('Worker 没返回 VAPID 公钥，请确认已配置 VAPID 并部署了最新 worker。'), 'worker没配VAPID');
+  }
+  return vapidPublicKey;
+};
+
+/**
+ * 建一条新的浏览器推送订阅，拿不到活端点就抛。
+ *
+ * 走共用的 subscribeWithRetry 而不是 `ReiClient.subscribePush`：后者是裸的
+ * `pushManager.subscribe()`，刚退订完的窗口期里浏览器会吐 permanently-removed.invalid
+ * 哨兵，它照单收下——那个死端点一旦被登记进 worker，用户看到「订阅成功」，到点却一条
+ * 都收不到，两边都没有任何报错。重试到底仍是僵尸的话挂 '端点僵尸' 代号，设置页据此
+ * 把「重置订阅」升级成「深度重置」。
+ */
+/** 共用层的失败分类 → 上报用的失败代号。两边都是源码里写死的枚举。 */
+const SUBSCRIBE_FAIL_KIND: Record<SubscribeFailureKind, AmsgFailKind> = {
+  'channel-unreachable': '推送通道不通',
+  unsupported: '不支持推送',
+  permission: '权限被拒',
+  state: '订阅失败',
+  zombie: '端点僵尸',
+  unknown: '订阅失败',
+};
+
+const subscribeOrThrow = async (
+  registration: ServiceWorkerRegistration,
+  vapidPublicKey: string,
+): Promise<PushSubscription> => {
+  const { sub, failure } = await subscribeWithRetry(registration, vapidPublicKey, ACTIVE_MSG_RUNTIME_HEADER);
+  if (sub) return sub;
+  // 提示原文（浏览器能力、重试了几次）留在 toast 和 console 里。挂上去的代号来自
+  // 上面那张写死的表，不是从异常对象上读出来的任何东西。
+  const message = failure?.text || '订阅创建失败';
+  throw withFailKind(new Error(message), failure ? SUBSCRIBE_FAIL_KIND[failure.kind] : '订阅失败');
+};
+
+/** 重置的公共尾段：拿 worker 的 VAPID → 重新订阅 → 覆盖登记回 worker。 */
+const resubscribeAndRegister = async (client: ReiClient): Promise<void> => {
+  const vapidPublicKey = await fetchWorkerVapidKey(client);
+  const registration = await navigator.serviceWorker.ready;
+  const sub = await subscribeOrThrow(registration, vapidPublicKey);
+
+  try {
+    await client.putPushSubscription(sub);
+  } catch (error) {
+    throw normalizeActiveMsgApiError(error, '登记推送订阅');
+  }
+};
+
+/**
  * 带鉴权头请求 worker，同时把 HTTP 状态一起交出来。
  * 状态只有「连接」那条路用得上（401/404/其它要引导用户去改的地方不同），
  * 其余调用方走下面那层薄壳，签名跟以前一样只拿 body。
@@ -733,6 +910,13 @@ export const ActiveMsgClient = {
     return copyWorkerBundleToClipboard('amsg-worker.bundle.js');
   },
 
+  // 复制 public/amsg-deno-proxy.ts —— 贴进 Deno Playground 当 worker 的门面用。
+  // 走的是同一套「fetch 站点静态文件 → 剪贴板」，只是这份不打包、原样发布，
+  // 因为用户要照着里面的注释改 UPSTREAM 那一行。
+  copyDenoProxyToClipboard(): Promise<void> {
+    return copyWorkerBundleToClipboard('amsg-deno-proxy.ts');
+  },
+
   async getPushStatus(): Promise<ActiveMsg2PushStatus> {
     const config = await ensureGlobalReady();
     const workerConfigured = Boolean(config.workerUrl.trim());
@@ -781,34 +965,17 @@ export const ActiveMsgClient = {
     await KeepAlive.init();
     const registration = await navigator.serviceWorker.ready;
 
-    // VAPID 公钥必须来自「这个 worker 自己」签推送用的那对密钥，否则 worker 推不动会 403。
-    // 各用户自部署 worker、各有各的 VAPID，运行时从 worker 拉、不编译进前端。
-    // **有旧订阅也要拉**：换过 VAPID 后旧订阅绑的还是老公钥，无条件复用等于把一个
-    // 必 403 的订阅继续写进新任务——自检就是拿目标公钥跟旧订阅比对（还有浏览器
-    // 僵尸化的死端点），不合格先退订再重订（见 dropStaleSubscription）。
+    // **有旧订阅也要拉公钥**：换过 VAPID 后旧订阅绑的还是老公钥，无条件复用等于把一个
+    // 必 403 的订阅继续写进新任务——自检就是拿目标公钥跟旧订阅比对（还有浏览器僵尸化
+    // 的死端点），不合格先退订再重订（见 dropStaleSubscription）。
     const client = createClient(config);
-    let vapidPublicKey: string;
-    try {
-      vapidPublicKey = await client.getVapidPublicKey();
-    } catch (error) {
-      throw normalizeActiveMsgApiError(error, '获取 Worker VAPID 公钥');
-    }
-    if (!vapidPublicKey) {
-      throw withFailKind(new Error('Worker 没返回 VAPID 公钥，请确认已配置 VAPID 并部署了最新 worker。'), 'worker没配VAPID');
-    }
+    const vapidPublicKey = await fetchWorkerVapidKey(client);
 
     const existing = await registration.pushManager.getSubscription();
     const reusable = await dropStaleSubscription(existing, vapidPublicKey);
     if (reusable) return reusable.toJSON();
 
-    try {
-      const subscription = await client.subscribePush(vapidPublicKey, registration);
-      return subscription.toJSON();
-    } catch (error) {
-      // 浏览器侧的订阅失败（没装 Google 服务的安卓、WebView 壳、FCM 连不上）。
-      // 提示原文由 pushSubscribeShared 翻译好后留在 toast 里，这里只留代号。
-      throw withFailKind(error instanceof Error ? error : new Error(String(error)), '订阅失败');
-    }
+    return (await subscribeOrThrow(registration, vapidPublicKey)).toJSON();
   },
 
   /**
@@ -835,10 +1002,150 @@ export const ActiveMsgClient = {
     }
   },
 
+  /**
+   * worker 上登记的那份订阅现状（不含密钥，只有 endpoint 和登记时间）。
+   *
+   * 问不到一律返回 null、不抛：设置页的状态面板会反复调它，断网或者对面是台没有
+   * 这个端点的旧 worker 时，面板显示「问不到」就够了，不该整块红着报错。
+   */
+  async getRemotePushSubscription(): Promise<AmsgRemotePushSubscription | null> {
+    try {
+      const config = await ensureWorkerReady();
+      const client = await initializeClient(config);
+      const response = await client.getPushSubscription();
+      if (!response?.success) return null;
+      const data = response.data;
+      // 形状对不上就当问不到。旧 worker 什么都可能回，照着猜会把「没登记」显示成
+      // 「已登记」——那正好是这一行要拆穿的故障，判反了还不如不显示。
+      if (typeof data?.exists !== 'boolean') return null;
+      return {
+        exists: data.exists,
+        endpoint: typeof data.endpoint === 'string' ? data.endpoint : null,
+        updatedAt: typeof data.updatedAt === 'number' ? data.updatedAt : null,
+      };
+    } catch {
+      return null;
+    }
+  },
+
+  /**
+   * 重置订阅：清掉现在这条，重新建一条，再覆盖登记回 worker。
+   *
+   * 三步缺一不可。只在浏览器重订不登记的话，worker 的 push_subscriptions 里还是
+   * 旧端点，到点推给一个已经不存在的地址——界面全绿、一条消息都收不到，正是这个
+   * 按钮要治的病，不能自己再犯一遍。
+   */
+  async resetPushSubscription(): Promise<void> {
+    const config = await requirePushReady();
+    const client = await initializeClient(config);
+
+    // 先让 worker 忘掉旧的那行。失败不拦：下面重新登记本来就是覆盖写，删不掉也不
+    // 影响结果，只是万一后面挂了，D1 里会多留一条已经没用的旧记录。
+    try {
+      await client.deletePushSubscription();
+    } catch (error) {
+      console.warn('[ActiveMsg] 重置订阅：删除 worker 上的旧订阅失败，继续重建', error);
+    }
+
+    await unsubscribeCurrentPush();
+    await resubscribeAndRegister(client);
+  },
+
+  /**
+   * 深度重置：在普通重置的基础上，把 Service Worker 整个注销再装一遍。
+   *
+   * 什么时候需要：Chromium 会把订阅锁死在内部的 MarkedForRemoval 状态，这时候
+   * `pushManager.unsubscribe()` 清不掉标记，重订多少次都只会拿到
+   * `permanently-removed.invalid`。唯一能从代码里走出来的路是换一个 SW 注册 id，
+   * 绑在旧 id 上的坏记录自然失效。
+   *
+   * 副作用：SW 会短暂下线（1 秒上下），这期间来的推送是真丢。但会点这个按钮的前提
+   * 就是「已经收不到了」，不存在把原本收得到的弄丢。主动消息 2.0 的排程存在 worker
+   * 的 D1 里、跟 SW 无关，不用像 proactive-push 那样重新推排程回去。
+   */
+  async deepResetPushSubscription(): Promise<void> {
+    const config = await requirePushReady();
+    const client = await initializeClient(config);
+
+    try {
+      await client.deletePushSubscription();
+    } catch (error) {
+      console.warn('[ActiveMsg] 深度重置：删除 worker 上的旧订阅失败，继续重建', error);
+    }
+
+    await unsubscribeCurrentPush();
+
+    try {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(registrations.map((registration) => registration.unregister().catch(() => false)));
+    } catch (error) {
+      console.warn('[ActiveMsg] 深度重置：注销 Service Worker 失败，继续走重装', error);
+    }
+
+    try {
+      await KeepAlive.reregister();
+      await navigator.serviceWorker.ready;
+    } catch (error) {
+      throw withFailKind(
+        new Error(`Service Worker 重新注册失败：${(error as Error)?.message || error}`),
+        '订阅失败',
+      );
+    }
+
+    await resubscribeAndRegister(client);
+  },
+
+  /**
+   * 「连接并验证」的收尾：把浏览器当前的推送订阅补登记到这台 worker 上。
+   *
+   * 订阅存在 worker 自己的 D1 里（push_subscriptions，一个用户一行）。换一台 worker
+   * 就是换一个空库，而浏览器这侧的订阅一个字都没变——SW 的 pushsubscriptionchange
+   * 不会响，refreshPushSubscriptionIfMarked 也就没有标记可消费。于是面板全绿、连接
+   * 验证通过，worker 到点却读不到订阅，直接抛 PUSH_SUBSCRIPTION_MISSING：消息一条
+   * 都发不出来，用户这侧看不到任何异常。所以连接这一步顺手覆盖写一次。
+   *
+   * 只在**权限已授予且浏览器已有订阅**时补。没订阅说明用户还没走「开启通知与推送
+   * 订阅」那步，那是引导流程该做的事——连接不替用户开推送，也不在这儿弹权限框。
+   *
+   * 返回值只为单测断言：'registered' 补了 / 'skipped' 条件不满足 / 'failed' 补失败了。
+   */
+  async reconcilePushSubscription(): Promise<'registered' | 'skipped' | 'failed'> {
+    try {
+      if (describePushCapabilityGap()) return 'skipped';
+      if (Notification.permission !== 'granted') return 'skipped';
+      await KeepAlive.init();
+      const registration = await navigator.serviceWorker.ready;
+      if (!await registration.pushManager.getSubscription()) return 'skipped';
+    } catch {
+      // 探测本身炸了（SW 没就绪 / 环境不支持）就算了，别为一句自检拦住连接。
+      return 'skipped';
+    }
+
+    try {
+      await this.registerPushSubscription();
+      return 'registered';
+    } catch (error) {
+      // init-tenant 过了、鉴权也通了，连接本身是成功的，这里不能往外抛：否则用户
+      // 会被指去改一堆根本没错的配置。补不上就等排程那步（scheduleTask 也会登记）。
+      console.warn('[ActiveMsg] 连接后补登记推送订阅失败', error);
+      return 'failed';
+    }
+  },
+
   // 单用户「连接」：先 POST /init-tenant 让 worker 在自己的 D1 里幂等建表
-  // （Dashboard 粘贴部署的用户不用碰 SQL），再拿一次 user key 验证地址与鉴权都通。
+  // （Dashboard 粘贴部署的用户不用碰 SQL），再拿一次 user key 验证地址与鉴权都通，
+  // 最后把推送订阅补登记上去（换 worker 后云端那份是空的，见 reconcilePushSubscription）。
   async connect() {
     const config = await ensureWorkerReady();
+
+    // 先问 worker 配齐了没：缺 D1 绑定或 master key 的话，下面的 init-tenant 必然失败，
+    // 而那一步只能按 HTTP 状态猜个大概（三种原因共用「建表失败」）。自检能直接说出
+    // 缺的是哪一样、去哪儿补，用户不用再去翻 Cloudflare 的日志。
+    const report = await inspectWorkerConfig(config);
+    if (report && !report.ok) {
+      throw withFailKind(new Error(report.message), '配置缺失');
+    }
+
     const { status, body: initResponse } = await fetchWithAuthRaw('init-tenant', config, { method: 'POST' }, '初始化数据库');
     if (!initResponse?.success) {
       throw withFailKind(
@@ -848,7 +1155,10 @@ export const ActiveMsgClient = {
     }
     await initializeClient(config);
     await ActiveMsgStore.saveGlobalConfig({ ...config, initializedAt: Date.now() });
-    return { ok: true, userId: config.userId };
+    await this.reconcilePushSubscription();
+    // warnings 是「连上了，但有一块功能是哑的」——比如 VAPID 没配齐，任务能建、到点
+    // 却一条都推不出去。连接本身算成功，交给调用方提示，别拦住流程。
+    return { ok: true, userId: config.userId, warnings: report?.warnings ?? [] };
   },
 
   // 分页全量：循环 messages?limit=100&offset=<n>，每页解密后读 tasks 与 pagination.hasMore，

@@ -12,6 +12,14 @@ compatibility_date = "2026-01-01"
 # 不写在这里的话，面板上手动加过的这个 flag 会被下一次 deploy 冲掉。
 compatibility_flags = ["global_fetch_strictly_public"]
 
+# 部署时保留面板上手填的环境变量。
+#
+# wrangler 默认「先删光所有 vars，再按配置文件里的 [vars] 重设」，而这份配置根本没有
+# [vars] 段——于是每次部署都会把面板上手加的明文变量清空。加密的 Secret 不受影响，
+# 但用户在面板上很容易把 AMSG_MASTER_KEY 存成 Text：那样一来它撑到下一次部署就没了，
+# worker 全线 503，而重新生成的又是另一串——之前加密存进 D1 的任务就再也解不开。
+keep_vars = true
+
 # wrangler deploy 会用本地这份配置整体覆盖 Cloudflare 面板上的设置——
 # 不显式写这段，面板里手动开的 Workers Logs（实时日志）会被一起关掉。
 # amsg2 排障（[amsg:expire-skip] / [amsg:agentic] / [amsg:fire-state-missing]

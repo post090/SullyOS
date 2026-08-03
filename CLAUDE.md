@@ -28,3 +28,9 @@
 
 > README 的「给想二改的人」区域信息量很大（数据流、ContextBuilder、Instant Push Phase 2、sfworker 清单），动后端 / 加功能前先扫一遍。
 > 本 Fork 的持续运行相关文档风格已在 `fork-governance.md` 中统一说明，旧的 `ALWAYS_ON_*` / `NATIVE_RUNTIME_PLAN` 作为历史保留，不再要求新 Agent 必须按原版 docs 表格风格重写。
+
+## 发版前改一下版本号
+
+[`utils/buildInfo.ts`](./utils/buildInfo.ts) 里的 `APP_VERSION`（形如 `v3.0 (Ambient Presence)`）是手工维护的，**做完一轮大功能或者性能优化就改一下**。
+
+它有两个用处：设置页底部显示的就是它；统计还拿版本号那半截当标签，面板按它切分数据。不改的话新旧版本的数字堆在同一个标签下，「这次优化有没有让首屏变快」「新版铺开多少了」就都答不出来。括号里的代号只在界面上显示，不进标签。构建 hash（`BUILD_LABEL`）是自动生成的，不用管。

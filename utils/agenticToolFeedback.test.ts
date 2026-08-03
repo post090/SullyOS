@@ -206,7 +206,7 @@ describe('buildDuplicateToolMessage', () => {
   it('说清这次没真去查，结果在上面', () => {
     const msg = buildDuplicateToolMessage('recall');
     expect(msg).toContain('调取某个月的记忆');
-    expect(msg).toContain('没有再去查');
+    expect(msg).toContain('没有再执行');
   });
 
   // 同上：被打回之后让它「把要发的消息写出来」，模型很容易连前面说过的话带标记一起重写，

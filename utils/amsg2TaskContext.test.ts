@@ -86,6 +86,40 @@ describe('buildAmsg2TaskContextText', () => {
     expect(text).toContain('已作废（到点时对话正在进行');
     expect(text).toContain('已被手动取消');
   });
+
+  // 回归守卫：工具循环的第二轮起，这份清单是现算的，里面会有角色本轮刚排好的任务。
+  // 不点名的话，角色分不清「这条是我刚排的」还是「这条本来就有」，回头又排一条一样的
+  // ——现场那次「一句『等会找我』排出 5 条」就是这么来的。
+  const otherTask: ActiveMsg2TaskRecord = {
+    ...pendingTask, taskUuid: 'eeff0011-0000-0000-0000-000000000000', clientTaskId: 'cid-eeff',
+    promptHint: '提醒喝水',
+  };
+
+  it('本轮刚排的那条点名标出来，别的任务不受影响', () => {
+    const text = buildAmsg2TaskContextText(
+      [pendingTask, otherTask], [], Date.now(), undefined,
+      new Set([otherTask.taskUuid]),
+    )!;
+    const lines = text.split('\n');
+    expect(lines.find((l) => l.includes('[aabbccdd]'))).not.toContain('本轮');
+    expect(lines.find((l) => l.includes('[eeff0011]'))).toContain('本轮刚排的');
+  });
+
+  it('有本轮新排的 → 末尾多一句别再排一样的', () => {
+    const text = buildAmsg2TaskContextText(
+      [pendingTask], [], Date.now(), undefined, new Set([pendingTask.taskUuid]),
+    )!;
+    expect(text).toContain('别再排一条一样的');
+  });
+
+  it('没传本轮清单 → 一个字都不多（首轮那份不该凭空长出提醒）', () => {
+    const plain = buildAmsg2TaskContextText([pendingTask], [], 1_800_000_000_000, undefined)!;
+    const empty = buildAmsg2TaskContextText(
+      [pendingTask], [], 1_800_000_000_000, undefined, new Set(),
+    )!;
+    expect(plain).not.toContain('本轮');
+    expect(empty).toBe(plain);
+  });
 });
 
 describe('buildUserCancelledNotices', () => {

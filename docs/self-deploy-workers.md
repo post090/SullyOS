@@ -106,12 +106,38 @@ Worker 的 **Overview** 页，标题下面那个 `https://xxx.workers.dev` 就�
 那个变量没设，或者设的时候点了 Encrypt。补的位置是 Worker → **Settings** → 往下找 **Build** → **Variables**（构建阶段才读得到），不是运行时的 Secret。加完重新部署一次。
 
 **部署成功了但 SullyOS 连不上？**
-先在浏览器直接打开 `https://你的地址/capabilities`：
+先在浏览器直接打开 `https://你的地址/config-check`，Worker 会自己报缺什么（这个地址不需要密钥，配了 `AMSG_SERVER_TOKEN` 也照样打得开）：
 
-- 返回一段 JSON → Worker 活着
-- 返回 `INVALID_CLIENT_TOKEN`（401）→ Worker 也活着，只是你配了 `AMSG_SERVER_TOKEN`，这个地址得带密钥才能访问
+- `"ok": true` → 配置齐全。连不上的话问题在地址填错，或者 `AMSG_SERVER_TOKEN` 两边不一致
+- `"ok": false` → 后面的 `message` 直接写了缺哪一样、去哪儿补
+- `warnings` 里每一条都是「能跑，但有一块是哑的」。最常见的是 VAPID 没配齐——任务建得成、界面全绿，到点一条都推不出去
+- 整个页面打不开 → Worker 没起来，去 Cloudflare 的 **Deployments** 看部署日志
 
-这两种都正常，问题在地址填错或者 `AMSG_SERVER_TOKEN` 两边不一致。什么都打不开才是 Worker 没起来，去 Cloudflare 看部署日志。
+SullyOS 里点「连接并验证」时也会先读一次这个自检，缺什么会直接写在提示里，不用自己来开这个地址。
+
+**找人帮忙看的时候，贴 `/debug` 的输出**
+
+`https://你的地址/debug` 比 `config-check` 多报库和定时任务的状况，一份就够对方判断问题在哪：
+
+```json
+{ "server": { "version": "2.6.0-next.12" },
+  "config": { "ok": true, "warnings": [] },
+  "storage": { "schemaReady": true, "missingColumns": [],
+               "pushSubscriptionRegistered": true, "pendingTasks": 0 },
+  "tick": "idle",
+  "vapidPublicKey": "BDQd..." }
+```
+
+怎么读：
+
+| 字段 | 不对劲的样子 | 说明 |
+|------|------|------|
+| `storage.missingColumns` | 列出了几个列名 | 换了新版本但没重新点「连接并验证」，定时任务会每分钟静默失败。点一次就好 |
+| `storage.pushSubscriptionRegistered` | `false` | 云端没有推送订阅，消息发不出去。去 SullyOS 把推送开关关掉再打开 |
+| `tick` | `stalled` | 有任务到点很久没被处理，多半是定时触发器没配（**Settings → Trigger events**）|
+| `vapidPublicKey` | 和 SullyOS 面板里的对不上 | 推送会被拒（403），表现是「一切正常但收不到」|
+
+这个地址是只读的，也不需要密钥，但它**不会**返回任何密钥的值、你的用户标识或消息内容——贴出来是安全的。
 
 **主动消息到点了没反应？**
 `amsg/` 靠定时触发器每分钟检查一次，配置里已经写好了（`crons = ["* * * * *"]`）。去 Worker 的 **Settings → Trigger events** 确认 Cron 那条在；不在的话通常是 Path 填错、部署的不是 `amsg` 目录。

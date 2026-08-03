@@ -5,6 +5,7 @@
  * 只会在别人按 F12 抓包时暴露。所以宁可测得啰嗦一点。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { APP_VERSION } from './buildInfo';
 
 const SCRIPT_URL = 'https://umami.example.com/script.js';
 const WEBSITE_ID = '00000000-0000-0000-0000-000000000000';
@@ -122,7 +123,7 @@ describe('构建时门禁', () => {
 });
 
 describe('tracker 标签', () => {
-    it('属性齐全：DNT、关掉自动上报', async () => {
+    it('属性齐全：DNT、关掉自动发的页面访问、开性能指标', async () => {
         const a = await loadModule(true);
         a.initAnalytics();
 
@@ -132,7 +133,30 @@ describe('tracker 标签', () => {
         expect(el.defer).toBe(true);
         expect(el.attrs['data-website-id']).toBe(WEBSITE_ID);
         expect(el.attrs['data-do-not-track']).toBe('true');
-        expect(el.attrs['data-auto-track']).toBe('false');
+        expect(el.attrs['data-auto-pageview']).toBe('false');
+        expect(el.attrs['data-performance']).toBe('true');
+    });
+
+    it('打上产品版本号，而且只打版本号那半截', async () => {
+        // 标签是拿来在面板里按版本切分数据的（尤其是性能数字，两版混着看等于没看），
+        // 所以要短到能当筛选项用——代号和括号留给设置页展示，别进标签。
+        const a = await loadModule(true);
+        a.initAnalytics();
+
+        const tag = appended[0].attrs['data-tag'];
+        expect(tag).toBe(APP_VERSION.split(' ')[0]);
+        expect(tag).toMatch(/^v[\d.]+$/);
+    });
+
+    it('不挂 data-auto-track —— 挂了性能指标整个不启动', async () => {
+        // umami 的 tracker 是 `if (autoTrack) init()`，而性能指标的观测器在 init 里面挂。
+        // 挂上 data-auto-track="false" 就等于把 data-performance 一起关掉，
+        // 而且是静默的：标签属性看着齐全，Performance 面板永远空着。
+        // 「不自动发页面访问」这件事由 data-auto-pageview 单独负责。
+        const a = await loadModule(true);
+        a.initAnalytics();
+
+        expect(appended[0].attrs['data-auto-track']).toBeUndefined();
     });
 
     it('不挂域名白名单 —— 挂自己域名反代官方站的人也要算进来', async () => {
@@ -181,6 +205,27 @@ describe('用户关掉开关', () => {
         a.setAnalyticsEnabled(false);
         a.initAnalytics();
         expect(appended).toHaveLength(0);
+    });
+
+    it('会话中途关掉，tracker 自己发的性能指标也当场停', async () => {
+        // 性能指标是 tracker 在页面隐藏 / 十秒后自己发的，不经过 trackEvent，
+        // 那边的开关判断拦不到它。唯一的拦截点就是 data-before-send 这道闸门。
+        const a = await loadModule(true);
+        a.initAnalytics();
+
+        const hookName = appended[0].attrs['data-before-send'];
+        expect(hookName).toBeTruthy();
+        const beforeSend = (globalThis as any).window[hookName] as (
+            type: string,
+            payload: unknown
+        ) => unknown;
+        expect(typeof beforeSend).toBe('function');
+
+        const payload = { website: WEBSITE_ID, lcp: 1200 };
+        expect(beforeSend('performance', payload)).toBe(payload);
+
+        a.setAnalyticsEnabled(false);
+        expect(beforeSend('performance', payload)).toBeNull();
     });
 
     it('会话中途关掉，后续 trackEvent 立刻停', async () => {

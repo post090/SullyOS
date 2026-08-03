@@ -15,6 +15,11 @@
  *   - env: AMSG_MASTER_KEY（64 位 hex）+ VAPID_EMAIL / VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY
  *          + 可选 AMSG_SERVER_TOKEN（配了则所有端点强制校验 X-Client-Token）
  *
+ * 上面这些漏了哪样，`GET /config-check` 会直接列出来（见 inspectWorkerEnv），
+ * 前端「连接并验证」也会读它，不用去翻 Cloudflare 的日志。排障时还有个信息更全的
+ * `GET /debug`：配置 + 库的 schema + cron 有没有在按时处理任务，全只读、不带敏感信息，
+ * 隔着屏幕帮人看部署时用它。
+ *
  * VAPID 必须和 SullyOS「推送凭据 (VAPID)」面板里的是同一对：整个站点
  * 共用一个浏览器 push 订阅，worker 用别的密钥对签推送会 403。
  */
@@ -793,6 +798,18 @@ export const amsgHooks = {
     const fail = (reason: string, extra?: Record<string, unknown>) =>
       fireStateError(reason, { taskId: ctx.task.id, charId, ...extra });
 
+    // 前端上传的云端状态可能被 packStateValue 压过（值以 gz1: 开头），读回来统一先过
+    // 一遍解压——没压过的原样穿过去，读侧不用赌客户端到底压了哪几份。带月度总结的
+    // tool_pack 就在压缩量级上，漏掉这一步整条 fire 链会卡死在「解析失败」。
+    // 解压失败说明数据真损坏了，和解析失败同款硬失败语义。
+    const unpackOrFail = async (label: string, value: string): Promise<string> => {
+      try {
+        return await unpackStateValue(value);
+      } catch (error) {
+        throw fail(`${label} 解压失败（数据损坏）`, { error: String(error) });
+      }
+    };
+
     const charRows = await ctx.readState(amsgStateNamespace(charId));
 
     const taskMeta = (ctx.task.metadata ?? {}) as Record<string, unknown>;
@@ -824,13 +841,7 @@ export const amsgHooks = {
     if (!packRow) throw fail('云端没有这个角色的 fire_pack');
 
     // 大值分块由 amsg-server 2.6.0-next.4+ 在存储层透明处理，readState 拿到的已是拼回的原文。
-    // 前端压过之后值以 gz1: 开头，unpackStateValue 按前缀解；内容太短没压的原样穿过去。
-    let packJson: string;
-    try {
-      packJson = await unpackStateValue(packRow.value);
-    } catch (error) {
-      throw fail('fire_pack 解压失败（数据损坏）', { error: String(error) });
-    }
+    const packJson = await unpackOrFail('fire_pack', packRow.value);
     const pack = parseFirePack(packJson);
     // 失败原因写清楚：升 fire_pack 版本要 worker bundle 和前端一起动，而设置页的版本门槛
     // 读的是上游 amsg-server 库的版本号，只改 SullyOS 自己这份 worker 代码时它不会亮。
@@ -887,10 +898,11 @@ export const amsgHooks = {
     if (!toolConfigRow) throw fail('云端没有 tool_config');
 
     // 两份数据和 fire_pack 同批原子上传（activeMsgClient 的 putClientStateOrThrow），
-    // 所以走到这里必然都在；解析不出来就是云端状态坏了，硬失败不降级。
-    const toolPack = parseToolPack(toolPackRow.value);
+    // 所以走到这里必然都在；和 fire_pack 一样先解压再解析（tool_pack 攒上几条月度总结
+    // 就会被前端压缩）。解析不出来就是云端状态坏了，硬失败不降级。
+    const toolPack = parseToolPack(await unpackOrFail('tool_pack', toolPackRow.value));
     if (!toolPack) throw fail('tool_pack 解析失败（格式不对或数据损坏）');
-    const toolConfig = parseToolConfig(toolConfigRow.value);
+    const toolConfig = parseToolConfig(await unpackOrFail('tool_config', toolConfigRow.value));
     if (!toolConfig) throw fail('tool_config 解析失败（格式不对或数据损坏）');
 
     // 通用 MCP：提示词块 / tools 数组与凭据同源同拍（都来自这一行 tool_config），
@@ -1269,4 +1281,286 @@ export const buildWorkerConfig = (env: Env) => {
   };
 };
 
-export default createSingleUserCloudflareWorker(buildWorkerConfig);
+/** 环境自检的结论。missing 为空就能正常干活，warnings 是「能跑但有一块是哑的」。 */
+export interface WorkerEnvReport {
+  ok: boolean;
+  /** 缺失项的变量名，`DB` 指 D1 绑定。给机器读的。 */
+  missing: string[];
+  /** 给人读的整句，含「去哪儿补」，前端直接显示。 */
+  message: string;
+  warnings: { code: string; message: string }[];
+}
+
+/** 缺了就一个请求都处理不了的两样东西，各自带一句「去哪儿补」。 */
+const REQUIRED_ENV = [
+  {
+    key: 'DB',
+    label: 'D1 数据库绑定',
+    // D1 绑定不在 Variables and Secrets 那一栏，指错地方比不指还费时间。
+    how: '在 Settings → Bindings 里加一条 D1 database，变量名填 DB',
+    isMissing: (env: Env) =>
+      typeof (env.DB as { prepare?: unknown } | null | undefined)?.prepare !== 'function',
+  },
+  {
+    key: 'AMSG_MASTER_KEY',
+    label: 'AMSG_MASTER_KEY',
+    how: '在 Settings → Variables and Secrets 里加，类型选 Secret',
+    isMissing: (env: Env) => !env.AMSG_MASTER_KEY?.trim(),
+  },
+] as const;
+
+/**
+ * 进上游库之前先看一眼 env 齐不齐。
+ *
+ * 存在的理由：这两样缺任何一样，上游都是在建配置那一步抛异常，被它的全局 catch
+ * 吞成一句「服务器内部错误」，而那个响应还不带 CORS 头——浏览器于是连这句话都不
+ * 让前端读，控制台只剩一个 "Failed to fetch"。用户拿着它既分不清是 D1 没绑还是
+ * 密钥没配，也分不清是不是自己网断了。所以缺什么在这儿就说什么。
+ */
+export const inspectWorkerEnv = (env: Env): WorkerEnvReport => {
+  const absent = REQUIRED_ENV.filter((item) => item.isMissing(env));
+  const warnings: WorkerEnvReport['warnings'] = [];
+
+  // 上游把 masterKey 当普通字符串做 SHA-256（deriveUserEncryptionKey），长度不对
+  // 照样跑得动，所以只提醒不拦——拦了会把已经在正常工作的实例打挂。真正的风险是
+  // 它一旦和当初不一致，之前加密存进 D1 的任务就再也解不开了。
+  const masterKey = env.AMSG_MASTER_KEY?.trim();
+  if (masterKey && !/^[0-9a-f]{64}$/i.test(masterKey)) {
+    warnings.push({
+      code: 'MASTER_KEY_FORMAT',
+      message: 'AMSG_MASTER_KEY 不是 64 位十六进制，可能是粘贴时少了几位。它必须和当初生成的那一串完全一致，换一串的话已存的任务就解不开了。',
+    });
+  }
+  // VAPID 缺了不影响读写任务，但 scheduled() 每分钟会整轮 return，到点消息一条
+  // 都发不出来——而界面上一切正常，这是最难自己查出来的一种坏法。
+  if (!env.VAPID_PUBLIC_KEY?.trim() || !env.VAPID_PRIVATE_KEY?.trim()) {
+    warnings.push({
+      code: 'VAPID_MISSING',
+      message: 'VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY 没配齐，到点消息不会推送出去。这两个要和站点「推送凭据 (VAPID)」面板里的是同一对。',
+    });
+  }
+  if (!env.AMSG_SERVER_TOKEN?.trim()) {
+    warnings.push({
+      code: 'SERVER_TOKEN_MISSING',
+      message: '没设 AMSG_SERVER_TOKEN，这个 Worker 地址对公网开放，知道地址的人都能读写你的任务。',
+    });
+  }
+
+  return {
+    ok: absent.length === 0,
+    missing: absent.map((item) => item.key),
+    message: absent.length
+      ? `Worker 配置不完整：${absent.map((item) => `缺 ${item.label}（${item.how}）`).join('；')}。`
+      : 'Worker 配置齐全。',
+    warnings,
+  };
+};
+
+// 跟上游 corsHeadersFor 放行的那一份保持一致：预检放行的头少一个，正式请求就会被
+// 浏览器拦下，而拦下的表现同样是没有下文的 "Failed to fetch"。
+const CORS_HEADERS: Record<string, string> = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+  'Access-Control-Allow-Headers':
+    'Content-Type, X-User-Id, X-Payload-Encrypted, X-Encryption-Version, X-Response-Encrypted, X-Client-Token',
+  'Access-Control-Max-Age': '86400',
+};
+
+const jsonWithCors = (status: number, body: unknown): Response =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json; charset=utf-8', ...CORS_HEADERS },
+  });
+
+// cron 触发时 CF 传进来的事件，只往上游转手，没必要为它引 workers-types。
+type CfScheduledEvent = { scheduledTime: number; cron: string };
+
+/** 上游 initSchema 建的表。少一张就说明「连接并验证」那步没跑成。 */
+const EXPECTED_TABLES = ['scheduled_messages', 'client_state', 'push_subscriptions'];
+
+/**
+ * 上游后加的列（amsg-server 2.6.0 的三个迁移）。
+ *
+ * 这是最值得单独查一眼的一项：换了新 bundle 却没重新点「连接并验证」时，已经存在的
+ * 表不会自己长出新列，而 cron 每分钟都会因为读不到这些列而挂——前端一切正常、任务
+ * 列表也在，就是一条都不发。缺列时这里会直接点名，省得对着「都正常啊」发呆。
+ */
+const EXPECTED_TASK_COLUMNS = ['lease_until', 'retry_after', 'serialize_group'];
+
+/** 到点多久还没被处理就算 cron 那侧出了问题。cron 每分钟一跳，留足重试余量。 */
+const TICK_STALL_MINUTES = 5;
+
+type D1Like = {
+  prepare(sql: string): {
+    bind(...values: unknown[]): { first<T = unknown>(): Promise<T | null> };
+    first<T = unknown>(): Promise<T | null>;
+    all<T = unknown>(): Promise<{ results?: T[] }>;
+  };
+};
+
+/**
+ * 只读地看一眼库里的状况：表齐不齐、列全不全、有没有到点却没人处理的任务。
+ *
+ * 全程不写库，也不读任何一条任务的内容——只数数和比对 schema。数出来的东西
+ * （待发条数、最老的一条过期了多久）不指向任何角色、时间点或正文。
+ */
+const inspectStorage = async (env: Env) => {
+  const db = env.DB as D1Like | undefined;
+  if (typeof db?.prepare !== 'function') return { reachable: false as const };
+
+  try {
+    const tables = await db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table'").all<{
+      name: string; sql: string | null;
+    }>();
+    const rows = tables.results || [];
+    const present = new Set(rows.map((row) => row.name));
+    // ALTER TABLE ADD COLUMN 会把新列写回 sqlite_master 的建表语句，所以照着它比对
+    // 就能看出迁移跑没跑，不用依赖 D1 对 PRAGMA 的支持程度。
+    const taskSql = rows.find((row) => row.name === 'scheduled_messages')?.sql || '';
+
+    const missingTables = EXPECTED_TABLES.filter((name) => !present.has(name));
+    const missingColumns = present.has('scheduled_messages')
+      ? EXPECTED_TASK_COLUMNS.filter((column) => !taskSql.includes(column))
+      : [];
+
+    if (missingTables.includes('scheduled_messages')) {
+      return { reachable: true as const, missingTables, missingColumns, schemaReady: false };
+    }
+
+    const nowIso = new Date().toISOString();
+    const stats = await db
+      .prepare(
+        `SELECT COUNT(*) AS pending,
+                SUM(CASE WHEN next_send_at <= ? THEN 1 ELSE 0 END) AS overdue,
+                MIN(CASE WHEN next_send_at <= ? THEN next_send_at END) AS oldest
+           FROM scheduled_messages WHERE status = 'pending'`,
+      )
+      .bind(nowIso, nowIso)
+      .first<{ pending: number; overdue: number | null; oldest: string | null }>();
+
+    const pushRow = present.has('push_subscriptions')
+      ? await db.prepare('SELECT COUNT(*) AS n FROM push_subscriptions').first<{ n: number }>()
+      : null;
+
+    return {
+      reachable: true as const,
+      schemaReady: missingTables.length === 0 && missingColumns.length === 0,
+      missingTables,
+      missingColumns,
+      // 单用户 worker 只存一行。到点却发不出去最常见的原因就是这行是空的——
+      // 换了一台 worker 之后云端订阅是空的，而浏览器那侧的订阅一个字都没变。
+      pushSubscriptionRegistered: (pushRow?.n ?? 0) > 0,
+      pendingTasks: stats?.pending ?? 0,
+      overdueTasks: stats?.overdue ?? 0,
+      oldestOverdueMinutes: stats?.oldest
+        ? Math.floor((Date.now() - Date.parse(stats.oldest)) / 60000)
+        : null,
+    };
+  } catch (error) {
+    // 报错类型而不是原文：原文可能带 SQL 片段，而这个端点是不设防的。
+    return { reachable: false as const, error: (error as Error)?.name || 'QueryFailed' };
+  }
+};
+
+/**
+ * cron 到底在不在跑。
+ *
+ * 不写心跳，靠「有没有到点了还没被处理的任务」反推——心跳要往用户库里建表、每分钟
+ * 写一次，而这个判断纯读、零副作用，问的还正好是用户真正关心的那件事（任务有没有
+ * 被按时处理），比「tick 有没有触发」更贴。代价是手上没有待发任务时无从判断，那种
+ * 情况下 cron 停没停也确实不影响什么。
+ */
+const judgeTick = (storage: Awaited<ReturnType<typeof inspectStorage>>) => {
+  if (!storage.reachable || !('pendingTasks' in storage)) return 'unknown';
+  if (!storage.pendingTasks) return 'idle';
+  const overdueMinutes = storage.oldestOverdueMinutes;
+  if (overdueMinutes === null || overdueMinutes < TICK_STALL_MINUTES) return 'healthy';
+  return 'stalled';
+};
+
+const upstream = createSingleUserCloudflareWorker(buildWorkerConfig);
+
+/**
+ * 版本号只有上游的 capabilities 才给，转手问它一次；问不到不算错，报 null。
+ * 配置不全时直接不问：那一问必然失败，还会在 Cloudflare 日志里留一条
+ * 「fetch() unhandled error」——排障的人正盯着日志看，别给他添噪音。
+ */
+const readServerVersion = async (request: Request, env: Env) => {
+  if (!inspectWorkerEnv(env).ok) return null;
+  try {
+    const url = new URL(request.url);
+    url.pathname = '/capabilities';
+    url.search = '';
+    const response = await upstream.fetch(new Request(url.toString(), { headers: request.headers }), env);
+    if (response.status !== 200) return null;
+    const body = await response.json() as { serverVersion?: string; features?: string[] };
+    return { version: body.serverVersion ?? null, featureCount: body.features?.length ?? 0 };
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * 在上游 worker 外面包一层配置自检。多出来的三个行为：
+ *   GET /config-check  配置齐不齐（只读 env，前端「连接并验证」用的就是它）
+ *   GET /debug         上面那些再加库和 cron 的状况，给隔着屏幕帮人排障用
+ *   其它请求           配置不全时直接 503 + 说明缺什么，不进上游
+ */
+// 两个 handler 都不往上游传 ctx —— 上游的签名只收 (request/event, env)，多传一个
+// 参数运行时无害，但类型对不上。CF 传给我们的那份直接丢掉即可。
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const pathname = new URL(request.url).pathname.replace(/\/+$/, '') || '/';
+    const method = request.method.toUpperCase();
+
+    if (pathname.endsWith('/config-check')) {
+      if (method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS_HEADERS });
+      // 刻意不校验 X-Client-Token：worker 配了口令而前端没填正是要诊断的情形之一，
+      // 校验了就查不出来。作为交换，这里只回「配没配」，不回任何值。
+      return jsonWithCors(200, { success: true, data: inspectWorkerEnv(env) });
+    }
+
+    if (pathname.endsWith('/debug')) {
+      if (method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS_HEADERS });
+      // 全只读、也不设防，所以能报什么是有边界的：只有配置齐不齐、schema 对不对、
+      // 数出来的条数，以及本来就公开的 VAPID 公钥。密钥的值、用户标识、任务正文、
+      // 推送 endpoint 一概不出现——不是没取到，是刻意不取。
+      const storage = await inspectStorage(env);
+      return jsonWithCors(200, {
+        success: true,
+        data: {
+          now: new Date().toISOString(),
+          config: inspectWorkerEnv(env),
+          server: await readServerVersion(request, env),
+          storage,
+          tick: judgeTick(storage),
+          vapidPublicKey: env.VAPID_PUBLIC_KEY?.trim() || null,
+        },
+      });
+    }
+
+    const report = inspectWorkerEnv(env);
+    if (!report.ok) {
+      // 预检也得放行：带自定义头的请求会先发 OPTIONS，这一步被挡住的话正式请求
+      // 根本发不出去，下面那句 503 用户就永远看不到。
+      if (method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS_HEADERS });
+      return jsonWithCors(503, {
+        success: false,
+        error: { code: 'WORKER_CONFIG_MISSING', message: report.message, missing: report.missing },
+      });
+    }
+
+    return upstream.fetch(request, env);
+  },
+
+  async scheduled(event: CfScheduledEvent, env: Env): Promise<void> {
+    // 定时任务这条路没人看得见，配置不全时上游只会抛一个堆栈。写明白点，
+    // wrangler tail 里一眼能看出是配置问题还是任务本身挂了。
+    const report = inspectWorkerEnv(env);
+    if (!report.ok) {
+      console.error(`[amsg] 定时任务整轮跳过：${report.message}`);
+      return;
+    }
+    return upstream.scheduled(event, env);
+  },
+};

@@ -62,6 +62,11 @@ const TOOL_LABELS: Record<string, string> = {
   // 漏在表外的话，回喂会拼出「你schedule_active_message，拿回了…」——内部工具名直接
   // 进了模型能看见的散文里。
   schedule_active_message: '给自己排下一条消息',
+  // 前台聊天里角色还能取消 / 改期 / 查清单（见 utils/amsg2ToolBridge.ts）。同样是漏在
+  // 表外就会把内部工具名拼进散文，所以三个一起登记。
+  cancel_active_message: '取消一条排好的消息',
+  renew_active_message: '把排好的消息改到别的时间',
+  list_active_messages: '查自己排了哪些消息',
 };
 
 /**
@@ -180,6 +185,8 @@ export const buildToolResultMessage = (opts: {
  */
 export const buildDuplicateToolMessage = (name: string): string => [
   `[系统: 你刚刚已经${describeTool(name)}过一次了，参数完全相同，结果就在上面。]`,
-  '[系统: 这一次没有再去查。别再重复同样的调用了——现在把要发的消息写出来，',
+  // 说「没有再执行」而不是「没有再去查」：这段话现在也管排程/取消/改期这类不是查询的
+  // 工具，说成「查」的话，角色收到的交代跟它刚做的事对不上。
+  '[系统: 这一次没有再执行。别再重复同样的调用了——现在把要发的消息写出来，',
   '或者换一个还没用过的工具。前面已经说出去的内容和标签不要重写，接着往下写就行。]',
 ].join('\n');

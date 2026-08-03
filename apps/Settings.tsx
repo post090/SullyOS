@@ -25,6 +25,7 @@ import { loadPushConfig, savePushConfig, registerScheduleOnWorker, startHeartbea
 import { ProactiveChat } from '../utils/proactiveChat';
 import { InstantPushSettingsModal } from '../components/settings/InstantPushSettingsModal';
 import { PushVapidSettingsModal } from '../components/settings/PushVapidSettingsModal';
+import PushSubscriptionPanel from '../components/settings/PushSubscriptionPanel';
 import ActiveMsgGlobalSettingsModal from '../components/settings/ActiveMsgGlobalSettingsModal';
 import { syncAmsgToolConfig, syncAmsgToolConfigAndPrompts } from '../utils/amsgStateSync';
 import { ActiveMsgClient } from '../utils/activeMsgClient';
@@ -3263,6 +3264,20 @@ const Settings: React.FC = () => {
             </button>
         </SettingsSection>
 
+        {/* ───────── 推送订阅状态（诊断 + 重置） ───────── */}
+        <SettingsSection
+            title="推送订阅状态"
+            icon={
+                <div className="p-2 bg-sky-100/60 rounded-xl text-sky-600">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12c0 1.268-.63 2.39-1.593 3.068a3.745 3.745 0 0 1-1.043 3.296 3.745 3.745 0 0 1-3.296 1.043A3.745 3.745 0 0 1 12 21c-1.268 0-2.39-.63-3.068-1.593a3.746 3.746 0 0 1-3.296-1.043 3.745 3.745 0 0 1-1.043-3.296A3.745 3.745 0 0 1 3 12c0-1.268.63-2.39 1.593-3.068a3.745 3.745 0 0 1 1.043-3.296 3.746 3.746 0 0 1 3.296-1.043A3.746 3.746 0 0 1 12 3c1.268 0 2.39.63 3.068 1.593a3.746 3.746 0 0 1 3.296 1.043 3.746 3.746 0 0 1 1.043 3.296A3.745 3.745 0 0 1 21 12Z" />
+                    </svg>
+                </div>
+            }
+        >
+            <PushSubscriptionPanel addToast={addToast} />
+        </SettingsSection>
+
         {/* ───────── 主动消息 Push 加速器（开关） ───────── */}
         {SHOW_PROACTIVE_PUSH_ACCEL_UI && ppAvailable && (
         <SettingsSection
@@ -3577,7 +3592,8 @@ const Settings: React.FC = () => {
                     </label>
                 </div>
                 <p className="text-xs text-slate-500 leading-relaxed">
-                    只数「哪个页面被打开了、哪个功能被用了一次」，以及记忆条数 / 角色数落在哪个区间。
+                    只数「哪个页面被打开了、哪个功能被用了一次」，记忆条数 / 角色数落在哪个区间，
+                    以及你这台设备打开页面花了多久（浏览器自己测的毫秒数）。
                     不碰你和角色的任何对话、记忆、设定，不碰你输入的任何文字，不碰 API 和 MCP 配置。
                 </p>
                 <p className="text-xs text-slate-500 leading-relaxed">
@@ -3587,7 +3603,7 @@ const Settings: React.FC = () => {
                 </p>
                 <p className="text-[10px] text-slate-400 leading-relaxed">
                     浏览器开了 Do Not Track 的话，不用动这个开关也会自动跳过。
-                    关掉之后下次启动连统计脚本都不会加载。想自己核实的话，按 F12 打开 Network 面板，
+                    关掉之后当场就不再发，下次启动连统计脚本都不会加载。想自己核实的话，按 F12 打开 Network 面板，
                     这个页面发出的每一个请求装了什么都在你自己的浏览器里。
                 </p>
             </div>

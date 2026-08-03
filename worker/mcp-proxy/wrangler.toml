@@ -2,6 +2,12 @@ name = "sullyos-mcp-proxy"
 main = "worker.js"
 compatibility_date = "2025-01-01"
 
+# 部署时保留面板上手填的环境变量。wrangler 默认「先删光所有 vars，再按配置里的
+# [vars] 重设」，而这份配置没有 [vars] 段——每次部署都会把面板上手加的明文变量清空。
+# 加密的 Secret 不受影响，但 PROXY_KEY 存成 Text 的话撑到下一次部署就没了，
+# 表现是防白嫖密钥悄悄失效（代理照常能用，所以没人会发现）。
+keep_vars = true
+
 # wrangler deploy 会用本地这份配置整体覆盖 Cloudflare 面板上的设置——
 # 不显式写这段，面板里手动开的 Workers Logs（实时日志）会被一起关掉。
 [observability]

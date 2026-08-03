@@ -103,8 +103,18 @@ export function buildAmsg2TaskContextText(
    * 位置参数不设默认值：这一段是给角色看的，调用方必须显式想过时间该按谁的钟写。
    */
   charTz: string | undefined,
+  /**
+   * 本轮工具循环里刚排出来的任务 uuid。
+   *
+   * 工具循环第二轮起这份清单是现算的，里面混着「本来就有的」和「角色刚排的」。不点名
+   * 的话角色分不清，容易当成别人排的、再排一条一样的——现场那次「一句『等会找我』排出
+   * 5 条」就有这一份。空集合等于没传：首轮那份是排程前的快照，不该凭空长出提醒。
+   */
+  createdThisTurn?: ReadonlySet<string>,
 ): string | null {
   if (!pending.length && !expired.length) return null;
+  const isNewThisTurn = (taskUuid: string) => !!createdThisTurn?.has(taskUuid);
+  const hasNewThisTurn = pending.some((t) => isNewThisTurn(t.taskUuid));
   const parts: string[] = ['【你的主动消息排程·仅你可见】'];
   // 闸自动作废 / 用户手动取消，两种回执给角色的交代完全不同（前者可以续期补上，
   // 后者是用户不要了），分成两段说。没有 kind 的老记录按自动作废处理。
@@ -118,9 +128,12 @@ export function buildAmsg2TaskContextText(
       // 是个好几天前的时刻，它会当成已经过去的排程，然后在对话里说漏嘴或重复排一条。
       const occurrenceMs = currentOccurrenceMs(t, nowMs);
       parts.push(`- [${shortTaskId(t.taskUuid)}] ${formatTaskTime(occurrenceMs ?? t.firstSendTime, charTz)} ${describeRecurrence(t.recurrenceType)}`
-        + ` · ${describeTaskMode(t)} · ${describeExpirePolicy(t.expirePolicy)}`);
+        + ` · ${describeTaskMode(t)} · ${describeExpirePolicy(t.expirePolicy)}`
+        + (isNewThisTurn(t.taskUuid) ? ' · 本轮刚排的' : ''));
     }
-    parts.push('（想调整就用 schedule/cancel/renew 工具；内容方向变了用 cancel + schedule 重建。）');
+    parts.push('（想调整就用 schedule/cancel/renew 工具；内容方向变了用 cancel + schedule 重建。'
+      + (hasNewThisTurn ? '标着「本轮刚排的」是你这次回复里已经排好的，别再排一条一样的。' : '')
+      + '）');
   }
 
   if (autoExpired.length) {
@@ -155,6 +168,14 @@ export interface Amsg2TaskContextResult {
   text: string | null;
   /** 本轮注入的回执 id（闸作废的 + 用户手动取消的），发送成功后 markExpiredNoticesNotified。 */
   expiredIds: string[];
+  /**
+   * 本轮要告知的回执原始记录。
+   *
+   * 工具循环里每发一次请求都要按最新任务清单重渲染这一块，但回执这半边是「检出 + 落台账」
+   * 的结果、带副作用，一轮只该算一次。把记录交出去，后续轮次直接拿它配上新的 pending 调
+   * buildAmsg2TaskContextText 就行，不用再碰 DB 和台账。
+   */
+  notices: Amsg2ExpiredNoticeRecord[];
 }
 
 export async function collectAmsg2TaskContext(char: CharacterProfile): Promise<Amsg2TaskContextResult> {
@@ -194,5 +215,6 @@ export async function collectAmsg2TaskContext(char: CharacterProfile): Promise<A
     // 两边对不上的话，纽约角色会在同一轮里读到差一个时差的两个「同一条任务」。
     text: buildAmsg2TaskContextText(pending, unnotified, now, resolveCharTimeZone(char)),
     expiredIds: unnotified.map((r) => r.id),
+    notices: unnotified,
   };
 }

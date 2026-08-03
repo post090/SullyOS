@@ -194,17 +194,64 @@ env.DB (sullyos-amsg)   D1 Database
 
 **SullyOS 里点「连接」失败**
 
+提示里如果直接写了「缺 XXX」，那就是后端自己报的，照着补完再点一次就行（第四步那张表）。
+
+其它情况按这几条排：
+
 - 地址是不是抄全了（要带 `https://`，末尾不要多斜杠）
 - 「共享密钥」和 Cloudflare 里的 `AMSG_SERVER_TOKEN` 是不是一模一样
-- 直接在浏览器打开 `你的地址/capabilities`：如果返回一段 JSON，说明后端活着；如果返回 `INVALID_CLIENT_TOKEN`，说明后端也活着，只是这个地址需要密钥才能访问——两种都算正常，问题在密钥没对上。什么都打不开才是后端没起来，去看第三步的构建日志。
+- 直接在浏览器打开 `你的地址/config-check`：后端会自己列出配置齐不齐。`"ok": true` 就是钥匙都填对了，问题在地址或密钥没对上；`"ok": false` 时后面的 `message` 会写明缺哪一样、去哪儿补。什么都打不开才是后端没起来，去看第三步的构建日志。
+- 上面这个地址挂梯子能打开、不挂就打不开：那是 `workers.dev` 在国内连不上，不是后端的问题，见下面「国内连不上 workers.dev 怎么办」。
 
-**打开 `你的地址/capabilities` 返回 `INTERNAL_ERROR`**
+**连上了，但 `config-check` 的 `warnings` 里有东西**
 
-后端起来了，但钥匙没填全——最常见的是漏了 `AMSG_MASTER_KEY`。回第四步核对那几条。想知道到底缺哪个，去 Worker 顶部的 **Observability** 标签，日志里会直接写出来（形如 `config.masterKey is required`）。
+那几条是「能跑，但有一块是哑的」，界面上看不出来，所以单独列在这儿：
+
+- `VAPID_MISSING`：任务建得成，到点一条都推不出去。回第四步补那两个密钥
+- `MASTER_KEY_FORMAT`：`AMSG_MASTER_KEY` 不是 64 位十六进制，多半是粘贴时少了几位
+- `SERVER_TOKEN_MISSING`：没设共享密钥，这个地址知道的人都能读写你的任务。介意的话回第 4a 步生成一个
+
+**上面都试过还是不行 / 想找人帮忙看**
+
+打开 `你的地址/debug`，把返回的那段 JSON 整个贴给对方。它比 `config-check` 多报数据库和定时任务的状况，一份就够判断问题出在哪。这个地址只读、不需要密钥，也不会返回任何密钥的值、你的用户标识或消息内容，贴出来是安全的。
+
+自己看的话重点是这几项：`storage.missingColumns` 有东西 = 换了新版本没重新点「连接并验证」；`storage.pushSubscriptionRegistered` 是 `false` = 云端没有推送订阅（去把推送开关关掉再打开）；`tick` 是 `stalled` = 有任务到点很久没被处理，多半是定时触发器没配。
 
 **构建失败，日志里写 `D1_DATABASE_ID 是空的`**
 
 那个变量没设，或者设的时候点了 Encrypt。回到 Worker → **Settings** → 往下找 **Build** → **Variables**，加一个 `D1_DATABASE_ID`（普通变量，不加密），值是第二步的 Database ID，然后重新部署。
+
+---
+
+## 国内连不上 workers.dev 怎么办
+
+`https://xxx.workers.dev` 这个域名在国内的网络环境下打不开。表现是第五步点「连接」一直失败，但把地址挂梯子打开又是正常的。
+
+办法是给它加一个门面：Worker、数据库、定时任务全都留在 Cloudflare 不动，只在外面套一层 Deno——它什么都不做，只把请求原样转给你的 Worker，再把回复原样送回来。Deno 给的是 `xxx.deno.net` 域名，国内能直连。
+
+**先知道两件事**
+
+- **收消息不走这一层。** 推送是 Cloudflare 直接发给手机的，跟你用什么地址打开设置面板是两条独立的路。所以这层就算挂了也收得到消息，只是改不了配置。
+- **不用绑卡。** 没验证过的 Deno 账号只有免费额度的 1%（每月一万次请求），但 SullyOS 只在你点「连接」、打开设置面板、开推送这几下才会请求 Worker，一万次够用很久。
+
+**动手**
+
+1. 打开 [console.deno.com](https://console.deno.com)，用 GitHub 账号登录，点右上角 **New Playground**
+2. 回 SullyOS：**系统设置** → **主动消息 2.0** → **配置**，在「WORKER 地址」下面点开 **这个地址连不上？在外面套一层 Deno**，点 **复制 Deno 代理代码**
+3. 回 Playground，编辑器里全选、粘贴覆盖
+4. 找到开头 `UPSTREAM` 那一行，把引号里的地址换成你自己的 `https://xxx.workers.dev`
+5. 点右上角 **Deploy**，等构建跑完，标题旁边会出现 `https://xxx.deno.net`
+6. 把这个 `deno.net` 地址填回 SullyOS 的「WORKER 地址」，替换掉原来的，重新点一次 **连接并启用**
+
+> 不想把 Worker 地址写在代码里的话，第 4 步可以不改，改成在 Playground 的 **Env Variables** 里加一个 `AMSG_UPSTREAM`，值填你的 Worker 地址。两种都行，环境变量优先。
+
+**怎么确认这层是活的**
+
+浏览器打开 `你的deno.net地址/__proxy-health`。看到 `"ok": true` 和你填的上游地址就对了；`"ok": false` 说明 `UPSTREAM` 那行还是原来的占位符，没改成自己的地址。
+
+**一个会变的地方**
+
+设置面板里「去 Cloudflare 控制台」那个链接原本能直接跳到你那个 Worker 的页面，靠的是从 `workers.dev` 域名反推 Worker 名字。换成 `deno.net` 之后推不出来了，会跳到 Worker 列表页，自己再点一下。
 
 ---
 

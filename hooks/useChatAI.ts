@@ -1,6 +1,6 @@
 
 import { useState, useRef, useEffect, MutableRefObject } from 'react';
-import { CharacterProfile, UserProfile, Message, Emoji, EmojiCategory, GroupProfile, RealtimeConfig, CharacterBuff } from '../types';
+import { CharacterProfile, UserProfile, Message, Emoji, EmojiCategory, GroupProfile, RealtimeConfig, CharacterBuff, Amsg2ExpiredNoticeRecord } from '../types';
 import { DB } from '../utils/db';
 import { ChatPrompts } from '../utils/chatPrompts';
 import { safeFetchJson, safeResponseJson, type StreamHooks } from '../utils/safeApi';
@@ -45,8 +45,9 @@ import {
 import { ActiveMsgStore } from '../utils/activeMsgStore';
 import { markAmsgStateDirty, startAmsgChatPresence, stopAmsgChatPresence } from '../utils/amsgStateSync';
 import { getLastRealUserMessageAt } from '../utils/amsg2ExpireGuard';
-import { hasActiveAiTask, isAmsg2EnabledForChar } from '../utils/amsg2Tasks';
-import { collectAmsg2TaskContext } from '../utils/amsg2TaskContext';
+import { getPendingTasks, hasActiveAiTask, isAmsg2EnabledForChar } from '../utils/amsg2Tasks';
+import { buildAmsg2TaskContextText, collectAmsg2TaskContext } from '../utils/amsg2TaskContext';
+import { resolveCharTimeZone } from '../utils/timezone';
 import { AMSG2_SUPPRESSED_TRACE } from '../utils/amsg2InstantConflict';
 import { appendInstantTraceEntry } from '../utils/instantTraceLog';
 import { AMSG2_TOOLS, AMSG2_TOOL_NAMES, createAmsg2ToolSession, executeAmsg2Tool, isAmsg2GlobalReady } from '../utils/amsg2ToolBridge';
@@ -756,12 +757,24 @@ export const useChatAI = ({
         const amsg2Session = createAmsg2ToolSession({
             char, userProfile, groups, realtimeConfig, apiConfig, updateCharacter,
         });
+        // 本轮里角色自己新排出来的任务。排程现状块每轮现算时靠它把这些点名标出来——不标
+        // 的话角色分不清清单上哪条是自己刚排的，回头又排一条一模一样的。
+        const amsg2CreatedThisTurn = new Set<string>();
         // amsg2 工具在三个工具循环（麦当劳 / 瑞幸 / 通用）里都可能出现，执行方式完全一样，
         // 只有各自的 loopMessages 不同。
         const runAmsg2ToolCall = async (tc: any, fname: string, args: any, loopMessages: any[]) => {
             setSearchStatus(`正在执行：${fname}...`);
+            const taskUuidsBefore = new Set(
+                (amsg2Session.getConfig()?.tasks ?? []).map((t) => t.taskUuid),
+            );
             const result = await executeAmsg2Tool(fname, args, amsg2Session);
-            loopMessages.push({ role: 'tool', tool_call_id: tc.id, content: result } as any);
+            // 新增了哪几条不看工具回话（那是给模型读的散文），直接比对清单前后差异——
+            // schedule 与 renew 都走这里，补发/替换出来的新任务一并算进去。
+            for (const task of amsg2Session.getConfig()?.tasks ?? []) {
+                if (!taskUuidsBefore.has(task.taskUuid)) amsg2CreatedThisTurn.add(task.taskUuid);
+            }
+            // 带上 name：Gemini 兼容层要求工具结果的 name 非空，缺了会被判 INVALID_ARGUMENT。
+            loopMessages.push(buildToolResultMessage(tc, result) as any);
             setSearchStatus('');
         };
 
@@ -1052,22 +1065,43 @@ export const useChatAI = ({
             // 是否注入在上面 thinking 门那里就算好了（amsg2ToolsInjected）。
             // amsg2 和 instant push 互斥，不需要额外判断。
             let amsg2ExpiredIds: string[] = [];
+            let amsg2Notices: Amsg2ExpiredNoticeRecord[] = [];
             if (amsg2ToolsInjected) {
                 baseReqBody.tools = [...(baseReqBody.tools || []), ...AMSG2_TOOLS];
                 if (!baseReqBody.tool_choice) baseReqBody.tool_choice = 'auto';
                 try {
+                    // 回执这半边是「检出 + 落台账」的结果，带副作用，一轮只算一次；
+                    // 进行中任务那半边每次发请求现取（见下面的 withAmsg2TaskContext）。
                     const taskContext = await collectAmsg2TaskContext(char);
-                    if (taskContext.text) {
-                        amsg2ExpiredIds = taskContext.expiredIds;
-                        baseReqBody.messages = [
-                            ...baseReqBody.messages,
-                            { role: 'system', content: taskContext.text },
-                        ];
-                    }
+                    amsg2ExpiredIds = taskContext.expiredIds;
+                    amsg2Notices = taskContext.notices;
                 } catch (e) {
-                    console.warn('[amsg2] 排程现状块构建失败，本轮跳过', e);
+                    // 挂掉的只是作废回执这半边（它要读历史消息和台账）。进行中清单在内存里，
+                    // 照常渲染——角色至少知道自己名下有哪些任务，不至于一问三不知再排一条。
+                    console.warn('[amsg2] 作废回执检出失败，本轮只带进行中清单', e);
                 }
             }
+
+            /**
+             * 把排程现状块贴到 messages 末尾，每次发请求都按「此刻」的任务清单现算。
+             *
+             * 不写死进 baseReqBody.messages、也不进 loopMessages，是因为工具循环里角色会
+             * 边聊边排：写死的话第二轮起看到的是**排程前**那份空清单，跟工具刚回的「已创建」
+             * 打架，角色于是把同一条再排一遍；攒进历史的话则是好几份互相矛盾的旧清单叠着。
+             * 现算 + 只留一份，角色每轮读到的都是自己名下真实的任务，本轮刚排的还会被点名。
+             */
+            const withAmsg2TaskContext = (messages: any[]): any[] => {
+                if (!amsg2ToolsInjected) return messages;
+                const now = Date.now();
+                const text = buildAmsg2TaskContextText(
+                    getPendingTasks(amsg2Session.getConfig(), now),
+                    amsg2Notices,
+                    now,
+                    resolveCharTimeZone(char),
+                    amsg2CreatedThisTurn,
+                );
+                return text ? [...messages, { role: 'system', content: text }] : messages;
+            };
 
             // ─── Instant Push 分支 ───
             // 与本地 fetch 对称：sendInstantPushAndAwaitReply 内部完成 sub 获取 / push 监听 /
@@ -1240,7 +1274,7 @@ export const useChatAI = ({
             try {
                 data = await safeFetchJson(`${baseUrl}/chat/completions`, {
                     method: 'POST', headers,
-                    body: JSON.stringify(baseReqBody)
+                    body: JSON.stringify({ ...baseReqBody, messages: withAmsg2TaskContext(baseReqBody.messages) })
                 }, 2, 120_000, { appName: '消息', charId: char.id, charName: char.name, purpose: '聊天回复', recalledMemories: charForGen.memoryPalaceRecalled?.slice() }, streamHooks);
             } catch (e) {
                 // 仅通用 MCP、且没有和其他工具模式混用时降级。部分 OpenAI 兼容中转
@@ -1250,7 +1284,12 @@ export const useChatAI = ({
                     && !payload.flags.luckinChatActive && !payload.flags.mcdActive && !payload.flags.luckinActive;
                 if (!mcpOnly || !baseReqBody.tools?.length || !shouldRetryMcpWithoutTools(e)) throw e;
                 console.warn('🔌 [MCP] 当前中转拒绝 tools 请求，降级为正文工具调用兼容模式');
-                const fallbackBody = buildMcpRejectedToolsFallbackBody(baseReqBody);
+                // 这条路把 tools 全删了，角色排不了新任务；排程现状照样要带——它得知道
+                // 自己名下已经有哪些承诺，否则又会在正文里许一遍。
+                const fallbackBody = buildMcpRejectedToolsFallbackBody({
+                    ...baseReqBody,
+                    messages: withAmsg2TaskContext(baseReqBody.messages),
+                });
                 data = await safeFetchJson(`${baseUrl}/chat/completions`, {
                     method: 'POST', headers,
                     body: JSON.stringify(fallbackBody)
@@ -1288,7 +1327,7 @@ export const useChatAI = ({
             //     成"+加进购物车"卡片。返回 ack 给模型继续走它的文字 reply。
             if (payload.flags.mcdActive && data.choices?.[0]?.message?.tool_calls?.length) {
                 const MAX_PROPOSE_LOOPS = 3;
-                let loopMessages = [...fullMessages];
+                let loopMessages = [...baseReqBody.messages];
                 for (let it = 0; it < MAX_PROPOSE_LOOPS; it++) {
                     const toolCalls = data.choices?.[0]?.message?.tool_calls;
                     if (!toolCalls || !toolCalls.length) break;
@@ -1398,7 +1437,7 @@ export const useChatAI = ({
             // 3.5 瑞幸小程序 propose_cart_items UI 钩子工具循环 (与麦当劳同构)
             if (payload.flags.luckinActive && data.choices?.[0]?.message?.tool_calls?.length) {
                 const MAX_PROPOSE_LOOPS = 3;
-                let loopMessages = [...fullMessages];
+                let loopMessages = [...baseReqBody.messages];
                 for (let it = 0; it < MAX_PROPOSE_LOOPS; it++) {
                     const toolCalls = data.choices?.[0]?.message?.tool_calls;
                     if (!toolCalls || !toolCalls.length) break;
@@ -1505,7 +1544,7 @@ export const useChatAI = ({
             //       结果只回填循环不落卡片。两类工具可同时在场, 按名字各走各的。
             if ((payload.flags.luckinChatActive || mcpToolResolve || amsg2ToolsInjected) && data.choices?.[0]?.message?.tool_calls?.length) {
                 const MAX_LOOPS = 6;
-                let loopMessages = [...fullMessages];
+                let loopMessages = [...baseReqBody.messages];
                 const loc = luckinChatRef?.current;
                 for (let it = 0; it < MAX_LOOPS; it++) {
                     const toolCalls = normalizeToolCallsForCompat(
@@ -1598,7 +1637,9 @@ export const useChatAI = ({
                     }
                     // 继续让角色多步推进 (保留 tools, 允许 query→search→preview 连续走)
                     if (mcpToolResolve) setSearchStatus('正在整理 MCP 工具结果...');
-                    const followBody = { ...baseReqBody, messages: loopMessages };
+                    // 排程现状现算一次贴上：本轮刚排的任务这时才进得了清单，角色下一轮
+                    // 看到的是自己名下真实的排程，不会对着排程前的空清单再排一条。
+                    const followBody = { ...baseReqBody, messages: withAmsg2TaskContext(loopMessages) };
                     data = await safeFetchJson(`${baseUrl}/chat/completions`, {
                         method: 'POST', headers,
                         body: JSON.stringify(followBody)
@@ -1636,7 +1677,7 @@ export const useChatAI = ({
                             ? `工具 ${call.exposedName} 执行成功, 结果: ${formatMcpToolResult(r.data)}`
                             : `工具 ${call.exposedName} 执行失败: ${r.error}`);
                     }
-                    if (!textLoopMessages) textLoopMessages = [...fullMessages];
+                    if (!textLoopMessages) textLoopMessages = [...baseReqBody.messages];
                     textLoopMessages.push({ role: 'assistant', content: contentNow });
                     textLoopMessages.push({
                         role: 'user',

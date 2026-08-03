@@ -21,15 +21,23 @@ const { reiClient } = vi.hoisted(() => ({
     subscribePush: vi.fn(),
     updateMessage: vi.fn(),
     putPushSubscription: vi.fn(),
+    getPushSubscription: vi.fn(),
+    deletePushSubscription: vi.fn(),
   },
 }));
 vi.mock('@rei-standard/amsg-client', () => ({ ReiClient: vi.fn(() => reiClient) }));
 // ensurePushSubscription 会先跑 KeepAlive.init()（注册 SW 等浏览器副作用），测里桩掉。
-vi.mock('./keepAlive', () => ({ KeepAlive: { init: vi.fn().mockResolvedValue(undefined) } }));
+// reregister 是深度重置那条路用的（注销 SW 再装回来），同理。
+vi.mock('./keepAlive', () => ({
+  KeepAlive: {
+    init: vi.fn().mockResolvedValue(undefined),
+    reregister: vi.fn().mockResolvedValue(undefined),
+  },
+}));
 
 import {
-  ActiveMsgClient, buildFirePack, clearNamespaceValuesOrThrow, dropStaleSubscription,
-  putClientStateOrThrow, readAmsgFailKind, toRemoteAvatarUrl,
+  ActiveMsgClient, buildFirePack, clearNamespaceValuesOrThrow, compareRemotePushSubscription,
+  dropStaleSubscription, putClientStateOrThrow, readAmsgFailKind, toRemoteAvatarUrl,
 } from './activeMsgClient';
 import {
   AMSG_SLOT_CURRENT_TIME, AMSG_SLOT_REALTIME_WORLD, AMSG_SLOT_SCENE,
@@ -38,6 +46,7 @@ import {
 import * as dailySchedule from './dailySchedule';
 import { ChatPrompts } from './chatPrompts';
 import { DB } from './db';
+import { KeepAlive } from './keepAlive';
 
 const TEST_USER_ID = '3f2b1c8a-9d4e-4a1b-8c2d-000000000001';
 
@@ -50,6 +59,8 @@ vi.mock('./activeMsgStore', () => ({
       workerUrl: 'https://amsg.example.workers.dev',
       serverToken: '',
     }),
+    // connect() 成功那条路会落盘 initializedAt，走失败分支的用例碰不到它。
+    saveGlobalConfig: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -223,6 +234,89 @@ describe('连接失败的归类（AmsgFailKind）', () => {
   it('没挂代号的错误一律「其他」，不会把异常对象上的东西漏出去', () => {
     expect(readAmsgFailKind(new Error('sk-LEAKED'))).toBe('其他');
     expect(readAmsgFailKind(undefined)).toBe('其他');
+  });
+});
+
+// 回归守卫：worker 缺 D1 绑定或 master key 时，上游是抛异常 → 被它的全局 catch 吞成
+// 一句「服务器内部错误」，而那个响应不带 CORS 头，浏览器连这句话都不让前端读，用户
+// 只看得到 "Failed to fetch"。connect 先问一次 /config-check，把缺的那一样直接说出来。
+describe('连接前的 worker 配置自检', () => {
+  /** 按路径分流的 fetch：没列到的路径一律当成功，模拟 init-tenant 那步是通的。 */
+  const routeFetch = (routes: Record<string, { status: number; body: unknown }>) => {
+    const spy = vi.fn(async (url: string) => {
+      const hit = Object.entries(routes).find(([path]) => String(url).includes(path));
+      const { status, body } = hit?.[1] ?? { status: 200, body: { success: true, data: {} } };
+      return {
+        status,
+        text: async () => JSON.stringify(body),
+        headers: new Headers({ 'content-type': 'application/json' }),
+      };
+    });
+    vi.stubGlobal('fetch', spy);
+    return spy;
+  };
+
+  const report = (patch: Record<string, unknown>) => ({
+    success: true,
+    data: { ok: true, missing: [], message: 'Worker 配置齐全。', warnings: [], ...patch },
+  });
+
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('worker 说缺 master key → 报「配置缺失」，并把「去哪儿补」原样交给用户', async () => {
+    routeFetch({
+      'config-check': {
+        status: 200,
+        body: report({
+          ok: false,
+          missing: ['AMSG_MASTER_KEY'],
+          message: 'Worker 配置不完整：缺 AMSG_MASTER_KEY（在 Settings → Variables and Secrets 里加，类型选 Secret）。',
+        }),
+      },
+    });
+
+    const error = await ActiveMsgClient.connect().then(() => null, (e) => e);
+    expect(readAmsgFailKind(error)).toBe('配置缺失');
+    expect((error as Error).message).toContain('AMSG_MASTER_KEY');
+    expect((error as Error).message).toContain('Secret');
+  });
+
+  it('配置缺失时不再去打 init-tenant——那一步注定失败，且只会报回一句更含糊的话', async () => {
+    const spy = routeFetch({
+      'config-check': { status: 200, body: report({ ok: false, missing: ['DB'], message: '缺 D1 绑定' }) },
+    });
+
+    await ActiveMsgClient.connect().catch(() => {});
+    expect(spy.mock.calls.some(([url]) => String(url).includes('init-tenant'))).toBe(false);
+  });
+
+  it('只有警告（VAPID 没配齐）→ 连接照样成功，但把警告带回去让界面提示', async () => {
+    routeFetch({
+      'config-check': {
+        status: 200,
+        body: report({ warnings: [{ code: 'VAPID_MISSING', message: 'VAPID 没配齐，到点消息不会推送出去。' }] }),
+      },
+    });
+
+    const result = await ActiveMsgClient.connect();
+    expect(result.ok).toBe(true);
+    expect(result.warnings.map((w) => w.code)).toEqual(['VAPID_MISSING']);
+  });
+
+  it('旧 worker 没有这个端点（404）→ 当它不支持自检，照常走原来的连接流程', async () => {
+    routeFetch({
+      'config-check': { status: 404, body: { success: false, error: { code: 'NOT_FOUND' } } },
+    });
+
+    await expect(ActiveMsgClient.connect()).resolves.toMatchObject({ ok: true, warnings: [] });
+  });
+
+  it('回执形状对不上就不采信：宁可不自检，也不能把一台好 worker 判成「配置缺失」', async () => {
+    // 未知路径回 200 + 一个没有 ok/missing 的 body。照 success 采信的话，ok 会是
+    // undefined，一台配置完好的 worker 就被判死了，用户照着提示改哪儿都改不对。
+    routeFetch({ 'config-check': { status: 200, body: { success: true, data: {} } } });
+
+    await expect(ActiveMsgClient.connect()).resolves.toMatchObject({ ok: true });
   });
 });
 
@@ -713,47 +807,89 @@ describe('dropStaleSubscription（① 死端点 / 公钥不一致先退订）', 
   });
 });
 
+// 回归守卫（补）：建订阅这一步不许走 ReiClient.subscribePush——那是裸的
+// pushManager.subscribe()，刚退订完的窗口期里浏览器会吐 permanently-removed.invalid
+// 哨兵，它照单收下。死端点一旦被登记进 worker，用户看到「订阅已准备完成」，到点却一条
+// 都收不到，两边都没有任何报错。这一组钉住「走带重试的共用实现」。
 describe('ActiveMsgClient.ensurePushSubscription（① 不再无条件复用旧订阅）', () => {
-  const stubPushEnv = (existing: any) => {
+  const FRESH_ENDPOINT = 'https://fcm.googleapis.com/send/fresh';
+
+  /** subscribe() 依次吐出 endpoints 里的端点；用尽后一直吐最后一个。 */
+  const stubPushEnv = (existing: any, endpoints: string[] = [FRESH_ENDPOINT]) => {
+    const queue = [...endpoints];
+    const subscribe = vi.fn().mockImplementation(async () => {
+      const endpoint = queue.length > 1 ? queue.shift()! : queue[0];
+      return {
+        endpoint,
+        options: { applicationServerKey: Uint8Array.from([1, 2, 3]).buffer },
+        unsubscribe: vi.fn().mockResolvedValue(true),
+        toJSON: () => ({ endpoint, keys: { p256dh: 'p2', auth: 'a2' } }),
+      };
+    });
     vi.stubGlobal('navigator', {
       serviceWorker: {
         ready: Promise.resolve({
-          pushManager: { getSubscription: vi.fn().mockResolvedValue(existing) },
+          pushManager: { getSubscription: vi.fn().mockResolvedValue(existing), subscribe },
         }),
       },
     });
     vi.stubGlobal('window', { PushManager: class {} });
     vi.stubGlobal('Notification', { permission: 'granted' });
+    return subscribe;
   };
 
   beforeEach(() => {
     reiClient.getVapidPublicKey.mockReset().mockResolvedValue(VAPID_AQID);
-    reiClient.subscribePush.mockReset().mockResolvedValue({
-      toJSON: () => ({ endpoint: 'https://fcm.googleapis.com/send/fresh', keys: { p256dh: 'p2', auth: 'a2' } }),
-    });
+    reiClient.subscribePush.mockReset();
   });
   afterEach(() => { vi.unstubAllGlobals(); });
 
   it('已有订阅是死端点 → 退订后重订，返回新订阅', async () => {
     const dead = makeSub('https://permanently-removed.invalid/x', [1, 2, 3]);
-    stubPushEnv(dead);
+    const subscribe = stubPushEnv(dead);
 
     const result = await runWithTimers(ActiveMsgClient.ensurePushSubscription());
 
     expect(dead.unsubscribe).toHaveBeenCalledTimes(1);
-    expect(reiClient.subscribePush).toHaveBeenCalledTimes(1);
-    expect((result as any).endpoint).toBe('https://fcm.googleapis.com/send/fresh');
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    expect((result as any).endpoint).toBe(FRESH_ENDPOINT);
   });
 
   it('已有订阅绑着旧 VAPID 公钥 → 退订后按 worker 当前公钥重订', async () => {
     const stale = makeSub('https://fcm.googleapis.com/send/x', [9, 9, 9]);
-    stubPushEnv(stale);
+    const subscribe = stubPushEnv(stale);
 
     const result = await runWithTimers(ActiveMsgClient.ensurePushSubscription());
 
     expect(stale.unsubscribe).toHaveBeenCalledTimes(1);
-    expect(reiClient.subscribePush).toHaveBeenCalledWith(VAPID_AQID, expect.anything());
-    expect((result as any).endpoint).toBe('https://fcm.googleapis.com/send/fresh');
+    expect(subscribe).toHaveBeenCalledWith(expect.objectContaining({ userVisibleOnly: true }));
+    expect((result as any).endpoint).toBe(FRESH_ENDPOINT);
+  });
+
+  it('订阅一律不经 ReiClient.subscribePush（它不做僵尸重试）', async () => {
+    stubPushEnv(null);
+
+    await runWithTimers(ActiveMsgClient.ensurePushSubscription());
+
+    expect(reiClient.subscribePush).not.toHaveBeenCalled();
+  });
+
+  it('重订第一次拿到僵尸哨兵、重试拿到活端点 → 返回活的那个', async () => {
+    const subscribe = stubPushEnv(null, ['https://permanently-removed.invalid/x', FRESH_ENDPOINT]);
+
+    const result = await runWithTimers(ActiveMsgClient.ensurePushSubscription());
+
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    expect((result as any).endpoint).toBe(FRESH_ENDPOINT);
+  });
+
+  it('重试到底还是僵尸 → 抛 端点僵尸，绝不把死端点交出去', async () => {
+    stubPushEnv(null, ['https://permanently-removed.invalid/x']);
+
+    const failure = await runWithTimers(ActiveMsgClient.ensurePushSubscription().catch((e) => e));
+
+    expect(failure).toBeInstanceOf(Error);
+    expect(readAmsgFailKind(failure)).toBe('端点僵尸');
   });
 
   it('已有订阅健康且公钥一致 → 原样复用，不重订', async () => {
@@ -823,6 +959,73 @@ describe('ActiveMsgClient.registerPushSubscription（② 订阅按用户登记�
     reiClient.putPushSubscription.mockRejectedValue(new Error('worker 拒绝了订阅'));
 
     await expect(ActiveMsgClient.registerPushSubscription()).rejects.toThrow('worker 拒绝了订阅');
+  });
+});
+
+// 回归守卫：换一台 worker 就是换一个空的 D1，而浏览器这侧的订阅一个字都没变——
+// SW 的 pushsubscriptionchange 不会响，refreshPushSubscriptionIfMarked 也就没有标记
+// 可消费。于是面板全绿、连接验证通过，worker 到点却读不到那份用户级订阅，直接抛
+// PUSH_SUBSCRIPTION_MISSING：消息一条都发不出来，用户这侧看不到任何异常。
+// 连接这一步必须顺手把当前订阅覆盖写回去。
+describe('ActiveMsgClient.connect（连接后补登记推送订阅）', () => {
+  const stubConnectEnv = (permission: string, existing: any) => {
+    vi.stubGlobal('navigator', {
+      serviceWorker: {
+        ready: Promise.resolve({
+          pushManager: { getSubscription: vi.fn().mockResolvedValue(existing) },
+        }),
+      },
+    });
+    vi.stubGlobal('window', { PushManager: class {} });
+    vi.stubGlobal('Notification', { permission });
+    // init-tenant 一律成功：这一组测的是它之后那步补登记。
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      status: 200,
+      text: async () => JSON.stringify({ success: true, data: {} }),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    }));
+  };
+
+  beforeEach(() => { reiClient.init.mockReset().mockResolvedValue(undefined); });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('浏览器已有订阅 → 连接后把它覆盖写到这台 worker 上', async () => {
+    stubConnectEnv('granted', makeSub('https://fcm.googleapis.com/send/x', [1, 2, 3]));
+    const register = vi.spyOn(ActiveMsgClient, 'registerPushSubscription').mockResolvedValue(undefined);
+
+    await expect(ActiveMsgClient.connect()).resolves.toMatchObject({ ok: true });
+
+    expect(register).toHaveBeenCalledTimes(1);
+  });
+
+  it('通知权限还没授予 → 不补登记，连接时也不弹权限框', async () => {
+    stubConnectEnv('default', null);
+    const register = vi.spyOn(ActiveMsgClient, 'registerPushSubscription').mockResolvedValue(undefined);
+
+    await expect(ActiveMsgClient.connect()).resolves.toMatchObject({ ok: true });
+
+    expect(register).not.toHaveBeenCalled();
+  });
+
+  it('权限有了但还没订阅 → 那是「开启通知与推送订阅」那步的事，连接不替用户开', async () => {
+    stubConnectEnv('granted', null);
+    const register = vi.spyOn(ActiveMsgClient, 'registerPushSubscription').mockResolvedValue(undefined);
+
+    await ActiveMsgClient.connect();
+
+    expect(register).not.toHaveBeenCalled();
+  });
+
+  // init-tenant 过了、鉴权也通了，连接本身就是成功的。补登记只是顺手的一句自检，
+  // 它挂了不该把连接判成失败——否则用户会被指去改一堆根本没错的配置。
+  it('补登记失败 → 连接照样算成功', async () => {
+    stubConnectEnv('granted', makeSub('https://fcm.googleapis.com/send/x', [1, 2, 3]));
+    vi.spyOn(ActiveMsgClient, 'registerPushSubscription').mockRejectedValue(new Error('worker 拒绝了订阅'));
+
+    await expect(ActiveMsgClient.connect()).resolves.toMatchObject({ ok: true });
   });
 });
 
@@ -1036,5 +1239,202 @@ describe('ActiveMsgClient.refreshCharPendingTaskRow — contactName', () => {
 
     expect((await ActiveMsgClient.refreshCharPendingTaskRow(char, { contactName: true })).status).toBe('no-tasks');
     expect(reiClient.updateMessage).not.toHaveBeenCalled();
+  });
+});
+
+// ─── ⑥ 设置页「推送订阅状态」面板 ───
+// 回归守卫：
+//   a. 重置订阅必须把新订阅**登记回 worker**。只在浏览器重订不登记的话，worker 的
+//      push_subscriptions 里还是旧端点，到点推给一个已经不存在的地址——界面全绿、
+//      一条消息都收不到，正是这个按钮要治的病。
+//   b. worker 登记的端点跟本机对不上时，面板必须判成异常。这一档正是「换过 worker /
+//      在另一台设备登记过」的静默失联，判成正常等于把唯一的线索也抹了。
+//   c. 重订仍拿到僵尸哨兵时挂 '端点僵尸' 代号——设置页据此把按钮升级成「深度重置」。
+//      裸 pushManager.subscribe() 会把哨兵原样交出来，登记上去就是往库里写死端点。
+
+describe('compareRemotePushSubscription（⑥b worker 登记的是不是本机）', () => {
+  const LOCAL = 'https://fcm.googleapis.com/send/local';
+
+  it('问不到 worker → unreachable', () => {
+    expect(compareRemotePushSubscription(LOCAL, null)).toBe('unreachable');
+  });
+
+  it('worker 上没登记 → missing', () => {
+    expect(compareRemotePushSubscription(LOCAL, { exists: false, endpoint: null, updatedAt: null }))
+      .toBe('missing');
+  });
+
+  it('登记的端点就是本机 → matched', () => {
+    expect(compareRemotePushSubscription(LOCAL, { exists: true, endpoint: LOCAL, updatedAt: 1 }))
+      .toBe('matched');
+  });
+
+  it('登记着别的端点 → other-endpoint（换过 worker / 换过设备的静默失联）', () => {
+    expect(compareRemotePushSubscription(LOCAL, {
+      exists: true,
+      endpoint: 'https://fcm.googleapis.com/send/another-device',
+      updatedAt: 1,
+    })).toBe('other-endpoint');
+  });
+
+  it('本机还没订阅、远端却登记着 → other-endpoint，不许显示成已登记', () => {
+    expect(compareRemotePushSubscription(null, {
+      exists: true,
+      endpoint: 'https://fcm.googleapis.com/send/another-device',
+      updatedAt: 1,
+    })).toBe('other-endpoint');
+  });
+});
+
+describe('ActiveMsgClient.resetPushSubscription（⑥a 重置后必须重新登记）', () => {
+  const FRESH = 'https://fcm.googleapis.com/send/fresh';
+
+  /** subscribe() 依次吐出这些端点；数组用尽后一直吐最后一个。 */
+  const stubResetEnv = (existing: any, endpoints: string[]) => {
+    const queue = [...endpoints];
+    const subscribe = vi.fn().mockImplementation(async () => {
+      const endpoint = queue.length > 1 ? queue.shift()! : queue[0];
+      return {
+        endpoint,
+        options: { applicationServerKey: Uint8Array.from([1, 2, 3]).buffer },
+        unsubscribe: vi.fn().mockResolvedValue(true),
+        toJSON: () => ({ endpoint, keys: { p256dh: 'p', auth: 'a' } }),
+      };
+    });
+    vi.stubGlobal('navigator', {
+      serviceWorker: {
+        ready: Promise.resolve({
+          pushManager: {
+            getSubscription: vi.fn().mockResolvedValue(existing),
+            subscribe,
+          },
+        }),
+        getRegistrations: vi.fn().mockResolvedValue([{ unregister: vi.fn().mockResolvedValue(true) }]),
+      },
+    });
+    vi.stubGlobal('window', { PushManager: class {} });
+    vi.stubGlobal('Notification', { permission: 'granted', requestPermission: vi.fn() });
+    return subscribe;
+  };
+
+  beforeEach(() => {
+    reiClient.init.mockReset().mockResolvedValue(undefined);
+    reiClient.getVapidPublicKey.mockReset().mockResolvedValue(VAPID_AQID);
+    reiClient.putPushSubscription.mockReset().mockResolvedValue({ success: true, data: { updatedAt: 1 } });
+    reiClient.deletePushSubscription.mockReset().mockResolvedValue({ success: true, data: { deleted: 1 } });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('退掉旧订阅、重订一条、并把新的覆盖登记到 worker', async () => {
+    const old = makeSub('https://fcm.googleapis.com/send/old', [1, 2, 3]);
+    stubResetEnv(old, [FRESH]);
+
+    await runWithTimers(ActiveMsgClient.resetPushSubscription());
+
+    expect(old.unsubscribe).toHaveBeenCalledTimes(1);
+    expect(reiClient.putPushSubscription).toHaveBeenCalledTimes(1);
+    expect(reiClient.putPushSubscription.mock.calls[0][0].endpoint).toBe(FRESH);
+  });
+
+  it('先让 worker 忘掉旧的那行，再登记新的', async () => {
+    stubResetEnv(makeSub('https://fcm.googleapis.com/send/old', [1, 2, 3]), [FRESH]);
+
+    await runWithTimers(ActiveMsgClient.resetPushSubscription());
+
+    expect(reiClient.deletePushSubscription).toHaveBeenCalledTimes(1);
+    expect(reiClient.deletePushSubscription.mock.invocationCallOrder[0])
+      .toBeLessThan(reiClient.putPushSubscription.mock.invocationCallOrder[0]);
+  });
+
+  it('删旧行失败不拦路——重新登记本来就是覆盖写', async () => {
+    stubResetEnv(makeSub('https://fcm.googleapis.com/send/old', [1, 2, 3]), [FRESH]);
+    reiClient.deletePushSubscription.mockRejectedValue(new Error('worker 说没有这一行'));
+
+    await runWithTimers(ActiveMsgClient.resetPushSubscription());
+
+    expect(reiClient.putPushSubscription.mock.calls[0][0].endpoint).toBe(FRESH);
+  });
+
+  it('重订第一次拿到僵尸哨兵、重试拿到活端点 → 登记的是活的那个', async () => {
+    stubResetEnv(null, ['https://permanently-removed.invalid/x', FRESH]);
+
+    await runWithTimers(ActiveMsgClient.resetPushSubscription());
+
+    expect(reiClient.putPushSubscription).toHaveBeenCalledTimes(1);
+    expect(reiClient.putPushSubscription.mock.calls[0][0].endpoint).toBe(FRESH);
+  });
+
+  it('⑥c 重试到底还是僵尸 → 抛 端点僵尸，且一个字都不往 worker 上写', async () => {
+    stubResetEnv(null, ['https://permanently-removed.invalid/x']);
+
+    const failure = await runWithTimers(ActiveMsgClient.resetPushSubscription().catch((e) => e));
+
+    expect(readAmsgFailKind(failure)).toBe('端点僵尸');
+    expect(reiClient.putPushSubscription).not.toHaveBeenCalled();
+  });
+
+  it('worker 没配 VAPID → 抛 worker没配VAPID，不去动浏览器订阅', async () => {
+    const subscribe = stubResetEnv(makeSub('https://fcm.googleapis.com/send/old', [1, 2, 3]), [FRESH]);
+    reiClient.getVapidPublicKey.mockResolvedValue('');
+
+    const failure = await runWithTimers(ActiveMsgClient.resetPushSubscription().catch((e) => e));
+
+    expect(readAmsgFailKind(failure)).toBe('worker没配VAPID');
+    expect(subscribe).not.toHaveBeenCalled();
+    expect(reiClient.putPushSubscription).not.toHaveBeenCalled();
+  });
+
+  it('通知权限被拒 → 抛 权限被拒，不去动浏览器订阅', async () => {
+    stubResetEnv(null, [FRESH]);
+    vi.stubGlobal('Notification', {
+      permission: 'default',
+      requestPermission: vi.fn().mockResolvedValue('denied'),
+    });
+
+    const failure = await runWithTimers(ActiveMsgClient.resetPushSubscription().catch((e) => e));
+
+    expect(readAmsgFailKind(failure)).toBe('权限被拒');
+    expect(reiClient.putPushSubscription).not.toHaveBeenCalled();
+  });
+
+  it('深度重置：注销 SW 并重装之后，同样要把新订阅登记回 worker', async () => {
+    stubResetEnv(makeSub('https://fcm.googleapis.com/send/old', [1, 2, 3]), [FRESH]);
+
+    await runWithTimers(ActiveMsgClient.deepResetPushSubscription());
+
+    expect(navigator.serviceWorker.getRegistrations).toHaveBeenCalledTimes(1);
+    expect(KeepAlive.reregister).toHaveBeenCalledTimes(1);
+    expect(reiClient.putPushSubscription.mock.calls[0][0].endpoint).toBe(FRESH);
+  });
+});
+
+describe('ActiveMsgClient.getRemotePushSubscription（⑥b 问不到就说问不到）', () => {
+  beforeEach(() => { reiClient.init.mockReset().mockResolvedValue(undefined); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('worker 回了完整回执 → 原样交出来', async () => {
+    reiClient.getPushSubscription.mockResolvedValue({
+      success: true,
+      data: { exists: true, endpoint: 'https://fcm.googleapis.com/send/x', updatedAt: 1700 },
+    });
+
+    await expect(ActiveMsgClient.getRemotePushSubscription()).resolves.toEqual({
+      exists: true,
+      endpoint: 'https://fcm.googleapis.com/send/x',
+      updatedAt: 1700,
+    });
+  });
+
+  it('回执形状对不上（旧 worker）→ null，不猜成「已登记」', async () => {
+    reiClient.getPushSubscription.mockResolvedValue({ success: true, data: { ok: 1 } });
+    await expect(ActiveMsgClient.getRemotePushSubscription()).resolves.toBeNull();
+  });
+
+  it('请求本身炸了 → null，不往外抛（面板会反复调它）', async () => {
+    reiClient.getPushSubscription.mockRejectedValue(new Error('offline'));
+    await expect(ActiveMsgClient.getRemotePushSubscription()).resolves.toBeNull();
   });
 });

@@ -4,6 +4,10 @@
  *
  * 工具定义注入 useChatAI 的 tools 数组；执行器在工具循环里分发。
  * 多任务：一个角色可同时挂多个任务，用短 id（taskUuid 前 8 位）定位。
+ *
+ * 防打转是这份文件的一部分职责：工具循环最多转 6 轮，模型一旦每轮都重复同一个 schedule，
+ * 每一轮都会在远端实打实建一条任务。所以执行器自带软硬两层——回话末尾明说这一步做完了，
+ * 同名同参的第二次直接打回。口径与 worker 的 fire 循环共用，见 utils/agenticToolFeedback.ts。
  */
 
 import {
@@ -17,6 +21,7 @@ import {
 } from '../types';
 import { ActiveMsgClient } from './activeMsgClient';
 import { ActiveMsgStore } from './activeMsgStore';
+import { buildDuplicateToolMessage, toolCallFingerprint, type ToolCallRecord } from './agenticToolFeedback';
 import { trackEvent } from './analytics';
 import {
   applyScheduledTask, currentOccurrenceMs, describeExpirePolicy, describeRecurrence,
@@ -137,6 +142,8 @@ export interface Amsg2ToolDeps {
   getConfig: () => ActiveMsg2CharacterConfig | undefined;
   /** 写回任务清单：刷新 getConfig 的来源，同时落 React state / DB。 */
   setConfig: (config: ActiveMsg2CharacterConfig) => void;
+  /** 本轮已经真跑过的调用（同名同参）。executeAmsg2Tool 自己维护，调用方只管传下去。 */
+  seenCalls: ToolCallRecord[];
 }
 
 /**
@@ -163,6 +170,7 @@ export const createAmsg2ToolSession = (base: {
     groups: base.groups,
     realtimeConfig: base.realtimeConfig,
     apiConfig: base.apiConfig,
+    seenCalls: [],
     getConfig: () => liveConfig,
     setConfig: (config) => {
       liveConfig = config;
@@ -171,24 +179,64 @@ export const createAmsg2ToolSession = (base: {
   };
 };
 
+/**
+ * 会改动任务清单的那几个工具：跑一次就是远端多一条 / 少一条任务，所以要防打转。
+ *
+ * list 不在里面——同一轮里排完再查，清单本来就该变，拦掉的话角色拿到的是「结果就在
+ * 上面」但上面那份已经过时了。
+ */
+const MUTATING_TOOLS = new Set([
+  'schedule_active_message',
+  'cancel_active_message',
+  'renew_active_message',
+]);
+
+/**
+ * 每次工具跑完都补的收尾话（软的那层，硬的那层是下面的指纹拦截）。
+ *
+ * 只回一句「已创建 [xxx]」的话，模型看不出这一步已经结束了：工具循环最多转 6 轮，
+ * 常驻提示词里但凡有一句「需要时直接调工具」，它每轮都会照做，一路把同一条任务排到
+ * 撞上限为止（现场：一句「等会找我」排出 5 条一模一样的）。措辞跟 worker 的 fire
+ * 循环共用一套口径，见 utils/agenticToolFeedback.ts。
+ */
+const TOOL_FOLLOW_UP = [
+  '[系统: 这一次调用已经处理完了，结果就在上面。同样的调用不要再来一遍——',
+  '现在把要对用户说的话写出来，或者用一个还没用过的工具。',
+  '前面已经说出去的内容不要重写，接着往下写就行。]',
+].join('\n');
+
 export const executeAmsg2Tool = async (
   toolName: string,
   args: Record<string, any>,
   deps: Amsg2ToolDeps,
 ): Promise<string> => {
+  const mutating = MUTATING_TOOLS.has(toolName);
+  // 同名同参第二次直接打回，一次网络请求都不发。上面那段软提示挡不住时靠它兜底，
+  // 与 worker 的 fire 循环同一道闸。只拦**完全一样**的调用——换时间、换方向照常放行，
+  // 多轮能力一点不减。
+  const fingerprint = mutating ? toolCallFingerprint(toolName, args) : '';
+  if (mutating && deps.seenCalls.some((r) => r.fingerprint === fingerprint)) {
+    return buildDuplicateToolMessage(toolName);
+  }
   try {
-    switch (toolName) {
-      case 'schedule_active_message':
-        return await handleSchedule(args, deps);
-      case 'cancel_active_message':
-        return await handleCancel(args, deps);
-      case 'renew_active_message':
-        return await handleRenew(args, deps);
-      case 'list_active_messages':
-        return await handleList(deps);
-      default:
-        return `未知工具 ${toolName}。`;
-    }
+    const result = await (() => {
+      switch (toolName) {
+        case 'schedule_active_message':
+          return handleSchedule(args, deps);
+        case 'cancel_active_message':
+          return handleCancel(args, deps);
+        case 'renew_active_message':
+          return handleRenew(args, deps);
+        case 'list_active_messages':
+          return handleList(deps);
+        default:
+          return Promise.resolve(`未知工具 ${toolName}。`);
+      }
+    })();
+    // 记账放在跑完之后：抛错的那次等于没跑成（远端没建出东西），把它记下来的话，
+    // 角色连一次原样重试的机会都没有。
+    if (mutating) deps.seenCalls.push({ name: toolName, fingerprint });
+    return mutating ? `${result}\n${TOOL_FOLLOW_UP}` : result;
   } catch (e: any) {
     return `操作失败：${e?.message || String(e)}`;
   }

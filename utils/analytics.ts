@@ -4,9 +4,11 @@
  * 这个文件是「会往外发什么」的唯一出口——想知道 SullyOS 到底上报了什么，
  * 读这一个文件加上全仓库对 trackEvent 的调用就够了，没有别的通道。
  *
- * 三条硬约束，改之前先读完：
+ * 四条硬约束，改之前先读完：
  *
- *   1. 只上报「哪个页面被打开了 / 哪个功能被用了一次」。永远不碰对话内容、记忆、
+ *   1. 只上报「哪个页面被打开了 / 哪个功能被用了一次」，外加一组页面加载快慢的数值
+ *      （LCP / INP / CLS / FCP / TTFB，浏览器自己测出来的毫秒数，跟页面内容无关）。
+ *      永远不碰对话内容、记忆、
  *      角色设定、用户设定、任何输入框里的文字、任何 API / MCP 配置值。
  *      事件属性只允许固定枚举值（房间名、模式名这种取值集合写死在代码里的东西），
  *      不允许出现任何来自用户输入或模型输出的字符串。
@@ -19,10 +21,16 @@
  *      标签页一关就没了。localStorage 里只有 os_analytics 一个键，存的是开关本身的
  *      状态（用户偏好），不是追踪状态。
  *
- * 另外刻意关掉了 umami 的自动上报（data-auto-track="false"），改成由本模块显式发
- * 页面访问。这样「所有出站请求都经过 trackEvent」这句话才是字面成立的，审计时不必
- * 再去推断 tracker 自己会不会背着我们多发。
+ *   4. 每条出站都要先过 data-before-send 那道闸门（挂在 window 上的一个函数），
+ *      开关关着就返回空、当场不发。性能指标是 tracker 自己在页面隐藏时发的，
+ *      不走 trackEvent，没有这道闸门的话，会话中途关掉开关拦不住它。
+ *
+ * 另外刻意关掉了 umami 自动发的页面访问（data-auto-pageview="false"），改成由本模块
+ * 显式发一次。tracker 自己会往外发的就只剩性能指标那一条，其余全部经过 trackEvent，
+ * 审计时看这一个函数加它的调用点就够。
  */
+
+import { APP_VERSION_TAG } from './buildInfo';
 
 // ===== 构建时开关 =====
 // 两个都配齐才会加载统计脚本。官方部署在构建环境里配，自部署默认没有。
@@ -31,6 +39,12 @@ const WEBSITE_ID = (import.meta.env.VITE_UMAMI_WEBSITE_ID || '').trim();
 
 /** 开关状态存这里，跟 os_theme / os_api_config 一样是本地的用户偏好。 */
 const SETTINGS_KEY = 'os_analytics';
+
+/**
+ * 出站闸门函数挂在 window 上的名字。umami 只认名字（`window[data-before-send]`），
+ * 传不了函数引用，所以必须占一个全局键。
+ */
+const BEFORE_SEND_HOOK = '__sullyosAnalyticsBeforeSend';
 
 declare global {
   interface Window {
@@ -142,8 +156,26 @@ export function initAnalytics(): void {
   // 角色 id 是稳定标识，进了库就是跨月关联器，一次都不能漏。
   script.setAttribute('data-exclude-search', 'true');
   script.setAttribute('data-exclude-hash', 'true');
-  // 关掉自动上报，页面访问由下面这行显式发——见文件头注释。
-  script.setAttribute('data-auto-track', 'false');
+  // 关掉 tracker 自动发的页面访问，改由下面那行显式发一次——见文件头注释。
+  // 这里用的是 data-auto-pageview 而不是 data-auto-track：后者会把 tracker 的整个
+  // 初始化一起跳过，性能指标也就跟着不启动了。代价是 tracker 会挂上它自带的点击上报
+  // （只认元素上的 data-umami-event-* 属性），仓库里一个都没有，所以它一条也发不出来——
+  // 想让某个按钮自己上报请照旧调 trackEvent，别去挂那个属性，不然就绕过了这里的收敛。
+  script.setAttribute('data-auto-pageview', 'false');
+  // 真实用户的加载体验：LCP / INP / CLS / FCP / TTFB，由 tracker 在页面隐藏或十秒后
+  // 自己发一条，跟着的上下文和页面访问那条一样（也就是被上面两行洗过的路径）。
+  script.setAttribute('data-performance', 'true');
+  // 每条记录（含性能那条）都带上当时的产品版本号，面板里能按版本切开看。
+  // 性能数字尤其需要这个轴——两个版本的数据混在一起，「这次优化到底有没有让首屏变快」
+  // 就问不出来了。值写死在 buildInfo 里，同一版的所有人是同一个字符串，不带个人特征，
+  // 也就不会给 docs/analytics.md「这是假名，不是匿名」里说的那个关联窗口添新维度。
+  script.setAttribute('data-tag', APP_VERSION_TAG);
+  // 出站前的最后一道闸门，见文件头第 4 条。要在脚本插进 DOM 之前挂好。
+  (window as unknown as Record<string, unknown>)[BEFORE_SEND_HOOK] = (
+    _type: string,
+    payload: unknown
+  ) => (isAnalyticsEnabled() ? payload : null);
+  script.setAttribute('data-before-send', BEFORE_SEND_HOOK);
   script.addEventListener('load', () => {
     window.umami?.track();
   });

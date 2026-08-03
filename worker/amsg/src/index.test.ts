@@ -6,9 +6,9 @@
 //      → 任务指令存在(否则抛) → 挂 scratch + 填槽返回
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
-import {
+import worker, {
   amsgFireSettled, amsgHooks, amsgStaleSkip, attachScheduledTasks, buildWorkerConfig,
-  offloadOversizedPush,
+  inspectWorkerEnv, offloadOversizedPush,
   resolveVapidEmail, runFireScheduleTool, runMcpFireTool,
 } from './index';
 import { MAX_TOOL_ITERATIONS } from './agentic';
@@ -369,6 +369,63 @@ describe('onBeforeFire 四道门', () => {
     await expect(amsgHooks.onBeforeFire(ctx)).rejects.toThrow(/AMSG2_FIRE_STATE_MISSING/);
   });
 
+  it('前端压过的 tool_pack 照常读出来（带几条月度总结就到压缩量级）', async () => {
+    // 空记忆的 tool_pack 一百来字节、压完反而更大，packStateValue 会原样放行；
+    // 攒了几条月度总结的角色轻松过千字节、必然被压——正是活跃用户的常态形状。
+    const months = ['2026-05', '2026-06', '2026-07'];
+    const bulky = JSON.stringify({
+      ...JSON.parse(toolPackValue),
+      activeMemoryMonths: months,
+      memories: months.map((date) => ({
+        date,
+        summary: '这个月聊了很多工作上的压力，也一起看了两场电影，月底约好下次去海边散心。'.repeat(3),
+      })),
+    });
+    const packed = await packStateValue(bulky);
+    expect(packed.startsWith('gz1:'), '这个量级应该压得动').toBe(true);
+    const { ctx, scratch } = makeCtx({
+      charRows: [
+        { key: AMSG_FIRE_PACK_KEY, value: firePackValue() },
+        { key: AMSG_TOOL_PACK_KEY, value: packed },
+      ],
+    });
+    fired(await amsgHooks.onBeforeFire(ctx));
+    // 光不抛错不够：得确认解出来的是真数据（recall 按这些月份找总结全靠它）
+    expect((scratch.fire as any).toolCtx.char.activeMemoryMonths).toEqual(months);
+  });
+
+  it('压过的 tool_pack 坏掉 → 抛错（和 fire_pack 同款语义，不降级成无工具数据）', async () => {
+    const { ctx } = makeCtx({
+      charRows: [
+        { key: AMSG_FIRE_PACK_KEY, value: firePackValue() },
+        { key: AMSG_TOOL_PACK_KEY, value: 'gz1:bm90LWd6aXAtYXQtYWxs' },
+      ],
+    });
+    await expect(amsgHooks.onBeforeFire(ctx)).rejects.toThrow(/AMSG2_FIRE_STATE_MISSING/);
+  });
+
+  it('压过的 tool_config 也照常读出来（今天前端没压它，但读侧不该赌客户端压哪份）', async () => {
+    const bulky = mcpToolConfigValue({
+      mcpServers: [{
+        id: 'srv-memory',
+        name: '记忆库',
+        url: 'https://mcp.example.com/mcp',
+        tools: [{
+          name: 'search_memory',
+          description: '按关键词在长期记忆库里检索过往对话的要点，返回最相关的几条。'.repeat(8),
+          inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+        }],
+      }],
+    });
+    const packed = await packStateValue(bulky);
+    expect(packed.startsWith('gz1:'), '这个量级应该压得动').toBe(true);
+    const { ctx, scratch } = makeCtx({
+      globalRows: [{ key: AMSG_TOOL_CONFIG_KEY, value: packed }],
+    });
+    fired(await amsgHooks.onBeforeFire(ctx));
+    expect((scratch.fire as any).mcpResolve.get('search_memory').toolName).toBe('search_memory');
+  });
+
   it('云端没有 tool_pack → 抛错（和 fire_pack 同批上传，缺了就是状态异常，不给空壳继续）', async () => {
     const { ctx } = makeCtx({ charRows: [{ key: AMSG_FIRE_PACK_KEY, value: firePackValue() }] });
     await expect(amsgHooks.onBeforeFire(ctx)).rejects.toThrow(/tool_pack/);
@@ -637,7 +694,7 @@ describe('executeToolCalls 的工具编排', () => {
       [{ ...call, id: 'c2' }],
       session,
     );
-    expect(second.content).toContain('没有再去查');
+    expect(second.content).toContain('没有再执行');
   });
 
   // 闸只拦「完全一样」的调用。换个月份是正当的多轮使用，拦了就是把能力砍了。
@@ -651,7 +708,7 @@ describe('executeToolCalls 的工具编排', () => {
       [toolCall('c2', 'recall', { year: '2026', month: '07' })],
       session,
     );
-    expect(other.content).not.toContain('没有再去查');
+    expect(other.content).not.toContain('没有再执行');
   });
 
   it('参数字段顺序变了仍算同一次调用', async () => {
@@ -664,7 +721,7 @@ describe('executeToolCalls 的工具编排', () => {
       [toolCall('c2', 'recall', { month: '06', year: '2026' })],
       session,
     );
-    expect(reordered.content).toContain('没有再去查');
+    expect(reordered.content).toContain('没有再执行');
   });
 
   // 轮次快用完了还在请求工具，上游会抛 AGENTIC_LOOP_EXCEEDED：这次攒的旁白全丢、任务
@@ -1570,5 +1627,243 @@ describe('worker 配置接线', () => {
     expect(cfg.serializeBy({ metadata: { charId: 'char-a' } })).toBe('char-a');
     expect(cfg.serializeBy({ metadata: {} })).toBeNull();
     expect(cfg.serializeBy({})).toBeNull();
+  });
+});
+
+// ─── 配置自检 ───
+// 部署这个 worker 最常翻车的两处是「D1 没绑」和「密钥被下一次部署冲掉」。上游遇到
+// 这两种都是抛异常 → 被它的全局 catch 吞成一句「服务器内部错误」，且那个响应不带
+// CORS 头，浏览器于是连这句话都不给前端读，用户只看得到 "Failed to fetch"——既分不清
+// 是哪一样没配，也分不清是不是自己网断了。下面这组把「说清楚缺什么」钉住。
+describe('inspectWorkerEnv — 配置自检', () => {
+  const fullEnv = {
+    AMSG_MASTER_KEY: 'a'.repeat(64),
+    VAPID_EMAIL: 'mailto:a@b.c',
+    VAPID_PUBLIC_KEY: 'pub',
+    VAPID_PRIVATE_KEY: 'priv',
+    AMSG_SERVER_TOKEN: 'shared-secret',
+    DB: { prepare: () => {} },
+  } as any;
+
+  it('配齐了就没有 missing、也没有警告', () => {
+    const report = inspectWorkerEnv(fullEnv);
+    expect(report.ok).toBe(true);
+    expect(report.missing).toEqual([]);
+    expect(report.warnings).toEqual([]);
+  });
+
+  it('D1 没绑时点名 DB，并指向 Bindings（不是 Variables and Secrets，指错地方等于没说）', () => {
+    const report = inspectWorkerEnv({ ...fullEnv, DB: undefined });
+    expect(report.ok).toBe(false);
+    expect(report.missing).toContain('DB');
+    expect(report.message).toContain('Bindings');
+  });
+
+  it('D1 绑成了别的变量名等同于没绑（上游读的固定是 env.DB）', () => {
+    // 绑定存在但不是 D1 实例（比如绑成 KV、或者名字打错导致 env.DB 是 undefined）
+    expect(inspectWorkerEnv({ ...fullEnv, DB: {} }).missing).toContain('DB');
+  });
+
+  it('master key 缺失时点名它，并说明要存成 Secret（存成明文会被下一次部署冲掉）', () => {
+    const report = inspectWorkerEnv({ ...fullEnv, AMSG_MASTER_KEY: '' });
+    expect(report.ok).toBe(false);
+    expect(report.missing).toContain('AMSG_MASTER_KEY');
+    expect(report.message).toContain('Secret');
+  });
+
+  it('master key 只有空白字符也算缺（上游只判空，空白串会一路跑到解密才炸）', () => {
+    expect(inspectWorkerEnv({ ...fullEnv, AMSG_MASTER_KEY: '   ' }).missing).toContain('AMSG_MASTER_KEY');
+  });
+
+  it('master key 格式不对只警告不拦——上游拿它做 SHA-256，长度不对照样能跑，拦了会打挂正常实例', () => {
+    const report = inspectWorkerEnv({ ...fullEnv, AMSG_MASTER_KEY: 'short-but-working' });
+    expect(report.ok).toBe(true);
+    expect(report.missing).toEqual([]);
+    expect(report.warnings.map((w: any) => w.code)).toContain('MASTER_KEY_FORMAT');
+  });
+
+  it('VAPID 缺失只警告不拦：读写任务照常，但到点消息发不出去且界面上毫无异常', () => {
+    const report = inspectWorkerEnv({ ...fullEnv, VAPID_PRIVATE_KEY: '' });
+    expect(report.ok).toBe(true);
+    expect(report.warnings.map((w: any) => w.code)).toContain('VAPID_MISSING');
+  });
+
+  it('没配共享密钥时提醒端点是公开的（这种坏法完全静默，不提醒没人会发现）', () => {
+    const report = inspectWorkerEnv({ ...fullEnv, AMSG_SERVER_TOKEN: undefined });
+    expect(report.ok).toBe(true);
+    expect(report.warnings.map((w: any) => w.code)).toContain('SERVER_TOKEN_MISSING');
+  });
+});
+
+describe('worker 入口 — 配置不全时的响应', () => {
+  const brokenEnv = { AMSG_MASTER_KEY: '', DB: undefined } as any;
+  const fullEnv = {
+    AMSG_MASTER_KEY: 'a'.repeat(64),
+    VAPID_EMAIL: 'mailto:a@b.c',
+    VAPID_PUBLIC_KEY: 'pub',
+    VAPID_PRIVATE_KEY: 'priv',
+    DB: { prepare: () => {} },
+  } as any;
+
+  const call = (url: string, init: RequestInit = {}, env: any = brokenEnv) =>
+    (worker as any).fetch(new Request(url, init), env, { waitUntil: () => {} });
+
+  it('回明确的 WORKER_CONFIG_MISSING，而不是笼统的「服务器内部错误」', async () => {
+    const response = await call('https://w.example/messages');
+    expect(response.status).toBe(503);
+    const body = await response.json();
+    expect(body.error.code).toBe('WORKER_CONFIG_MISSING');
+    expect(body.error.missing).toEqual(['DB', 'AMSG_MASTER_KEY']);
+  });
+
+  it('这个响应必须带 CORS 头，否则浏览器不让前端读，又变回 "Failed to fetch"', async () => {
+    const response = await call('https://w.example/messages');
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+  });
+
+  it('配置不全时预检照样放行——预检被挡住的话正式请求根本发不出去', async () => {
+    const response = await call('https://w.example/messages', { method: 'OPTIONS' });
+    expect(response.status).toBe(204);
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+  });
+
+  it('/config-check 在配置缺一半时也要能答，否则前端没法告诉用户缺的是哪一样', async () => {
+    const response = await call('https://w.example/config-check');
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.data.ok).toBe(false);
+    expect(body.data.missing).toEqual(['DB', 'AMSG_MASTER_KEY']);
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+  });
+
+  it('配置齐全时放行到上游：/vapid-public-key 该由上游回公钥，不能被自检层截胡', async () => {
+    const response = await call('https://w.example/vapid-public-key', {}, fullEnv);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ success: true, publicKey: 'pub' });
+  });
+
+  it('配置齐全时未知路由由上游回 404，不是自检层的 503（否则等于把整个路由表吃掉了）', async () => {
+    const response = await call('https://w.example/', {}, fullEnv);
+    expect(response.status).toBe(404);
+  });
+});
+
+// /debug 是隔着屏幕帮别人看部署时用的：对方只会截图或者把 JSON 贴过来，所以它既要
+// 说得足够多（配置、schema、cron），又不能带出任何一样不该外传的东西——它不设防。
+describe('/debug — 只读诊断', () => {
+  /** 假 D1：按 SQL 关键字给回答，只支持这个端点真正会发的那几条。 */
+  const fakeDb = ({ tables, taskSql, pending = [], pushRows = 0 }: {
+    tables: string[];
+    taskSql: string;
+    pending?: { next_send_at: string }[];
+    pushRows?: number;
+  }) => ({
+    prepare(sql: string) {
+      const answer = async () => {
+        if (sql.includes('sqlite_master')) {
+          return { results: tables.map((name) => ({ name, sql: name === 'scheduled_messages' ? taskSql : '' })) };
+        }
+        if (sql.includes('push_subscriptions')) return { n: pushRows };
+        const nowIso = new Date().toISOString();
+        const overdue = pending.filter((task) => task.next_send_at <= nowIso);
+        return {
+          pending: pending.length,
+          overdue: overdue.length,
+          oldest: overdue.map((t) => t.next_send_at).sort()[0] ?? null,
+        };
+      };
+      return { bind: () => ({ first: answer }), first: answer, all: answer };
+    },
+  });
+
+  const FULL_TASK_SQL = 'CREATE TABLE scheduled_messages (id, lease_until, retry_after, serialize_group)';
+  const ALL_TABLES = ['scheduled_messages', 'client_state', 'push_subscriptions'];
+
+  const envWith = (db: unknown) => ({
+    AMSG_MASTER_KEY: 'a'.repeat(64),
+    VAPID_EMAIL: 'mailto:a@b.c',
+    VAPID_PUBLIC_KEY: 'pub-key',
+    VAPID_PRIVATE_KEY: 'priv-key',
+    AMSG_SERVER_TOKEN: 'shared-secret',
+    DB: db,
+  } as any);
+
+  const debug = async (db: unknown) => {
+    const response = await (worker as any).fetch(new Request('https://w.example/debug'), envWith(db));
+    return (await response.json()).data;
+  };
+
+  const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000).toISOString();
+
+  it('一个字都不能带出密钥、用户标识或任务正文（这个端点不设防）', async () => {
+    const data = await debug(fakeDb({ tables: ALL_TABLES, taskSql: FULL_TASK_SQL }));
+    const dumped = JSON.stringify(data);
+    expect(dumped).not.toContain('a'.repeat(64));   // master key
+    expect(dumped).not.toContain('priv-key');       // VAPID 私钥
+    expect(dumped).not.toContain('shared-secret');  // 共享密钥
+    // 公钥是例外：前端订阅时本来就要用它，另有一个公开端点专门返回它。
+    // 放进来是为了能一眼比对两边配的是不是同一对。
+    expect(data.vapidPublicKey).toBe('pub-key');
+  });
+
+  it('换了 bundle 没跑 init-tenant → 点名缺的那几列（cron 会因此每分钟静默挂）', async () => {
+    const data = await debug(fakeDb({
+      tables: ALL_TABLES,
+      taskSql: 'CREATE TABLE scheduled_messages (id, next_send_at, status)',
+    }));
+    expect(data.storage.schemaReady).toBe(false);
+    expect(data.storage.missingColumns).toEqual(['lease_until', 'retry_after', 'serialize_group']);
+  });
+
+  it('表齐列齐时不报假警', async () => {
+    const data = await debug(fakeDb({ tables: ALL_TABLES, taskSql: FULL_TASK_SQL }));
+    expect(data.storage.schemaReady).toBe(true);
+    expect(data.storage.missingTables).toEqual([]);
+    expect(data.storage.missingColumns).toEqual([]);
+  });
+
+  it('任务到点很久还挂着 pending → cron 那侧有问题', async () => {
+    const data = await debug(fakeDb({
+      tables: ALL_TABLES, taskSql: FULL_TASK_SQL,
+      pending: [{ next_send_at: minutesAgo(47) }],
+    }));
+    expect(data.tick).toBe('stalled');
+    expect(data.storage.oldestOverdueMinutes).toBeGreaterThanOrEqual(47);
+  });
+
+  it('刚到点一两分钟不算挂——cron 一分钟一跳，得留重试余量', async () => {
+    const data = await debug(fakeDb({
+      tables: ALL_TABLES, taskSql: FULL_TASK_SQL,
+      pending: [{ next_send_at: minutesAgo(1) }],
+    }));
+    expect(data.tick).toBe('healthy');
+  });
+
+  it('手上没有待发任务时说 idle，不能拿「没活干」当「挂了」报', async () => {
+    const data = await debug(fakeDb({ tables: ALL_TABLES, taskSql: FULL_TASK_SQL }));
+    expect(data.tick).toBe('idle');
+  });
+
+  it('云端没有推送订阅时看得出来（换 worker 后最常见的「全绿但收不到」）', async () => {
+    const empty = await debug(fakeDb({ tables: ALL_TABLES, taskSql: FULL_TASK_SQL, pushRows: 0 }));
+    expect(empty.storage.pushSubscriptionRegistered).toBe(false);
+    const registered = await debug(fakeDb({ tables: ALL_TABLES, taskSql: FULL_TASK_SQL, pushRows: 1 }));
+    expect(registered.storage.pushSubscriptionRegistered).toBe(true);
+  });
+
+  it('D1 没绑时照样能答（配置全缺的时候正是最需要它的时候）', async () => {
+    const data = await debug(undefined);
+    expect(data.storage.reachable).toBe(false);
+    expect(data.config.ok).toBe(false);
+    expect(data.config.missing).toContain('DB');
+    expect(data.tick).toBe('unknown');
+  });
+
+  it('查库炸了只报错误类型，不把 SQL 片段漏出去', async () => {
+    const data = await debug({
+      prepare() { throw Object.assign(new Error('near "FROM scheduled_messages": syntax error'), { name: 'D1Error' }); },
+    });
+    expect(data.storage).toEqual({ reachable: false, error: 'D1Error' });
+    expect(JSON.stringify(data)).not.toContain('syntax error');
   });
 });

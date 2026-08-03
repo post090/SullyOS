@@ -8,9 +8,9 @@
  *     XHS MCP 配置、代理 worker 地址——即 agenticTools 各工具从 realtimeConfig
  *     里读的那个子集，多一分都不上云。
  *
- * 两份都由前端在 amsgStateSync 冲刷时与 fire_pack 同批 putClientState；worker 在
- * onBeforeFire 读出、parse 失败一律回退成「无工具数据」（工具会以 not_configured /
- * no_logs 的正常路径回给 LLM，不会炸 fire 链）。
+ * 两份都由前端在 amsgStateSync 冲刷时与 fire_pack 同批 putClientState（tool_pack
+ * 上传前过 packStateValue，够大会压成 gz1: 前缀）；worker 在 onBeforeFire 先解压再
+ * 解析，任何一份解不出来都按云端状态异常抛 AMSG2_FIRE_STATE_MISSING 硬失败，不降级。
  *
  * 环境无关叶子模块：不 import 任何带浏览器依赖的东西（会进 worker bundle）。
  */

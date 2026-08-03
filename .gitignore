@@ -17,6 +17,10 @@ dist-ssr
 # committed copy lives at worker/instant-push/worker.bundle.js
 public/instant-worker.bundle.js
 
+# build artifact — `pnpm run build:workers` 原样复制过来的，与源文件逐字节相同；
+# 提交的那份在 worker/amsg/deno-proxy.ts
+public/amsg-deno-proxy.ts
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

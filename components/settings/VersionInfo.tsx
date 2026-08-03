@@ -9,7 +9,7 @@ import { trackEvent } from '../../utils/analytics';
  *
  * 与右下角的 BuildBadge 不同：BuildBadge 只在 dev / fork 构建可见（正式版树摇掉），
  * 这里在**所有**构建（含正式版）里都低调显示，方便用户截图报障时附带版本上下文：
- *   - APP_VERSION：手工维护的产品版本名（之前硬编码的 v2.2）
+ *   - APP_VERSION：手工维护的产品版本名，发版前改 utils/buildInfo.ts
  *   - build：vite.config 注入的 __BUILD_BRANCH__@__BUILD_COMMIT__
  *   - built：vite.config 注入的 UTC+8 构建时间
  *   - sw：运行时向 Service Worker 查询的 SW_VERSION
