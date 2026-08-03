@@ -1781,12 +1781,24 @@ export const DB = {
 
   saveJobPosition: async (position: JobPosition): Promise<void> => {
       const db = await openDB();
-      db.transaction(STORE_JOB_POSITIONS, 'readwrite').objectStore(STORE_JOB_POSITIONS).put(position);
+      return new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE_JOB_POSITIONS, 'readwrite');
+          tx.objectStore(STORE_JOB_POSITIONS).put(position);
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+          tx.onabort = () => reject(tx.error);
+      });
   },
 
   deleteJobPosition: async (id: string): Promise<void> => {
       const db = await openDB();
-      db.transaction(STORE_JOB_POSITIONS, 'readwrite').objectStore(STORE_JOB_POSITIONS).delete(id);
+      return new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE_JOB_POSITIONS, 'readwrite');
+          tx.objectStore(STORE_JOB_POSITIONS).delete(id);
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+          tx.onabort = () => reject(tx.error);
+      });
   },
 
   /** 全部笔记，新的在前 */

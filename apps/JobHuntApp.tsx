@@ -369,6 +369,8 @@ const JobHuntApp: React.FC = () => {
     const scrollRef = useRef<HTMLDivElement>(null);
     const typingTimerRef = useRef<any>(null);
     const chatInputRef = useRef<HTMLTextAreaElement>(null);
+    // 岗位保存防重入锁：async 保存期间双击会重复创建岗位（新建分支每次 genId 新 id）。
+    const posSavingRef = useRef(false);
 
     // 弹窗
     const [showNewSession, setShowNewSession] = useState(false);
@@ -1236,54 +1238,63 @@ const JobHuntApp: React.FC = () => {
 
     // ─── 岗位卡增删改 ───
     const savePosition = useCallback(async () => {
+        if (posSavingRef.current) return; // 防双击：async 保存期间再点会重复建卡
         const code = posCode.trim();
         const title = posTitle.trim();
         if (!code || !title) { addToast('代号和岗位名都要填', 'info'); return; }
-        const now = Date.now();
-        if (editingPosition) {
-            await DB.saveJobPosition({
-                ...editingPosition, code, title,
-                stage: posStage,
-                // 阶段改了才补一条时间线，没改保留原时间线
-                timeline: posStage !== editingPosition.stage ? [...editingPosition.timeline, { ts: now, stage: posStage }] : editingPosition.timeline,
-                companyNameLocal: posCompanyLocal.trim() || undefined,
-                nextStep: posNextStep.trim() || undefined,
-                jd: posJd.trim() || undefined,
-                hrName: posHrName.trim() || undefined,
-                projectName: posProjectName.trim() || undefined,
-                location: posLocation.trim() || undefined,
-                salary: posSalary.trim() || undefined,
-                notes: posNotes.trim() || undefined,
-                interviewAt: localInputToTs(posInterviewAt),
-                // 已在等保留原起点不重置；关掉开关才清空
-                waitingSince: posWaiting ? (editingPosition.waitingSince || now) : undefined,
-                // 手改过代号即锁（已锁的不回退）
-                codeLocked: editingPosition.codeLocked || (posCodeDirty && code !== editingPosition.code) || undefined,
-                updatedAt: now,
-            });
-        } else {
-            await DB.saveJobPosition({
-                id: genId('jpos'), code, title, stage: posStage,
-                nextStep: posNextStep.trim() || undefined,
-                timeline: [{ ts: now, stage: posStage }],
-                companyNameLocal: posCompanyLocal.trim() || undefined,
-                jd: posJd.trim() || undefined,
-                hrName: posHrName.trim() || undefined,
-                projectName: posProjectName.trim() || undefined,
-                location: posLocation.trim() || undefined,
-                salary: posSalary.trim() || undefined,
-                notes: posNotes.trim() || undefined,
-                interviewAt: localInputToTs(posInterviewAt),
-                waitingSince: posWaiting ? now : undefined,
-                codeLocked: posCodeDirty || undefined,
-                charId: selectedChar?.id || '', createdAt: now, updatedAt: now,
-            });
+        posSavingRef.current = true;
+        try {
+            const now = Date.now();
+            if (editingPosition) {
+                await DB.saveJobPosition({
+                    ...editingPosition, code, title,
+                    stage: posStage,
+                    // 阶段改了才补一条时间线，没改保留原时间线
+                    timeline: posStage !== editingPosition.stage ? [...editingPosition.timeline, { ts: now, stage: posStage }] : editingPosition.timeline,
+                    companyNameLocal: posCompanyLocal.trim() || undefined,
+                    nextStep: posNextStep.trim() || undefined,
+                    jd: posJd.trim() || undefined,
+                    hrName: posHrName.trim() || undefined,
+                    projectName: posProjectName.trim() || undefined,
+                    location: posLocation.trim() || undefined,
+                    salary: posSalary.trim() || undefined,
+                    notes: posNotes.trim() || undefined,
+                    interviewAt: localInputToTs(posInterviewAt),
+                    // 已在等保留原起点不重置；关掉开关才清空
+                    waitingSince: posWaiting ? (editingPosition.waitingSince || now) : undefined,
+                    // 手改过代号即锁（已锁的不回退）
+                    codeLocked: editingPosition.codeLocked || (posCodeDirty && code !== editingPosition.code) || undefined,
+                    updatedAt: now,
+                });
+            } else {
+                await DB.saveJobPosition({
+                    id: genId('jpos'), code, title, stage: posStage,
+                    nextStep: posNextStep.trim() || undefined,
+                    timeline: [{ ts: now, stage: posStage }],
+                    companyNameLocal: posCompanyLocal.trim() || undefined,
+                    jd: posJd.trim() || undefined,
+                    hrName: posHrName.trim() || undefined,
+                    projectName: posProjectName.trim() || undefined,
+                    location: posLocation.trim() || undefined,
+                    salary: posSalary.trim() || undefined,
+                    notes: posNotes.trim() || undefined,
+                    interviewAt: localInputToTs(posInterviewAt),
+                    waitingSince: posWaiting ? now : undefined,
+                    codeLocked: posCodeDirty || undefined,
+                    charId: selectedChar?.id || '', createdAt: now, updatedAt: now,
+                });
+            }
+            setShowNewPosition(false); setEditingPosition(null);
+            setPosCode(''); setPosTitle(''); setPosCompanyLocal(''); setPosNextStep('');
+            setPosJd(''); setPosHrName(''); setPosProjectName(''); setPosLocation(''); setPosSalary(''); setPosNotes('');
+            setPosInterviewAt(''); setPosWaiting(false); setPosCodeDirty(false); setPosStage('applied');
+            await reloadAll();
+        } catch (e: any) {
+            console.error('[JobHunt] 岗位保存失败', e);
+            addToast(`岗位保存失败：${e?.message || '未知错误'}`, 'error');
+        } finally {
+            posSavingRef.current = false;
         }
-        setShowNewPosition(false); setEditingPosition(null);
-        setPosCode(''); setPosTitle(''); setPosCompanyLocal(''); setPosNextStep('');
-        setPosJd(''); setPosHrName(''); setPosProjectName(''); setPosLocation(''); setPosSalary(''); setPosNotes('');
-        setPosInterviewAt(''); setPosWaiting(false); setPosCodeDirty(false); setPosStage('applied');
-        await reloadAll();
     }, [posCode, posTitle, posCompanyLocal, posNextStep, posJd, posHrName, posProjectName, posLocation, posSalary, posStage, posNotes, posInterviewAt, posWaiting, posCodeDirty, editingPosition, selectedChar, reloadAll, addToast]);
 
     const advanceStage = useCallback(async (pos: JobPosition, stage: JobStage) => {
@@ -1296,9 +1307,14 @@ const JobHuntApp: React.FC = () => {
 
     const deletePosition = useCallback(async (pos: JobPosition) => {
         if (!window.confirm(`删除岗位卡「${pos.code} · ${pos.title}」？关联笔记会保留。`)) return;
-        await DB.deleteJobPosition(pos.id);
-        await reloadAll();
-    }, [reloadAll]);
+        try {
+            await DB.deleteJobPosition(pos.id);
+            await reloadAll();
+        } catch (e: any) {
+            console.error('[JobHunt] 岗位删除失败', e);
+            addToast(`岗位删除失败：${e?.message || '未知错误'}`, 'error');
+        }
+    }, [reloadAll, addToast]);
 
     // ── 多选批量操作（删除二次确认） ──
     const togglePosSelect = useCallback((id: string) => {
