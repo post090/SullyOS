@@ -10,7 +10,7 @@ import type {
     StoryTheaterPresetPrompt,
     UserProfile,
 } from '../types';
-import nightScreeningV614 from '../assets/presets/night-screening-v6.14.sully.json';
+import nightScreeningV627 from '../assets/presets/night-screening-v6.14.sully.json';
 import {
     formatWorldbookSection,
     resolveWorldbookEntries,
@@ -159,6 +159,7 @@ export const normalizeStoryTheater = (entry: StoryTheaterEntry): StoryTheaterEnt
         archiveStrategy: entry.archiveStrategy === 'vector' ? 'vector' : 'summary',
         archives: Array.isArray(entry.archives) ? entry.archives : [],
         selectedWorldbookIds: Array.isArray(entry.selectedWorldbookIds) ? entry.selectedWorldbookIds.filter(Boolean) : [],
+        presetId: /^builtin-night-screening-v\d/i.test(String(entry.presetId || '')) ? 'builtin-night-screening' : entry.presetId,
         presetOverride: entry.presetOverride?.schema === 'sullyos.story-preset' && Array.isArray(entry.presetOverride.prompts) ? entry.presetOverride : undefined,
         createdAt: Number(entry.createdAt) || Date.now(),
         updatedAt: Number(entry.updatedAt) || Number(entry.createdAt) || Date.now(),
@@ -257,32 +258,42 @@ const normalizeDocument = (value: any, fallbackName: string): StoryTheaterPreset
 };
 
 const NATIVE_MULTI_AFFINITY_PROMPT = [
-    '启用本条时，在每次回复末尾输出一个“多角色 U→C 关系温度”面板。它只记录用户对每一位参与角色的独立关系，不生成 C→U 数值，也不替用户猜测或修改态度。',
+    '启用本条时，在每次回复末尾输出一个“多角色双向关系温度”面板。每位参与角色都拥有彼此隔离的 C→U、U→C 与五维关系混音；禁止把多人压成单一“当前 C”，也不得共享或平均任何数值。',
     '',
-    '【独立记账】',
-    '- 从最近一次 <affinity_panel> 按 character_id 读取每位角色各自的绝对值；首次出现且没有旧记录时从 50 开始。',
-    '- 最新用户消息可能包含 <u_affinity_updates>，其中每个 <u_affinity> 都有 character_id、character_name、delta、reason 与 awareness。只更新匹配的角色，不得串用、共享或平均。',
-    '- 某角色没有本轮更新时保持原值，delta 为 +0，变化原因写“本轮未填写”；模型不得依据正文替用户自行升降。',
-    '- U→C 新值 = 该角色上一轮值 + 对应 delta，并限制在 0—100。reason 只说明用户这一轮的变化，不能覆盖角色卡、世界事实、执笔权与边界。',
-    '- awareness 只决定对应角色是否明确知道用户→自己的准确数值变化与原因；不得让其他角色共享透视。',
+    '【逐角色双向记账】',
+    '- 从最近一次 <affinity_panel> 按 character_id 读取每位角色自己的完整记录；首次出现且没有旧记录时，C→U 与 U→C 均从 50 开始，五个维度依据角色卡与已经发生的共同经历建立。',
+    '- C→U 是该角色对用户侧角色的总体关系温度，只随已经落地且属于这两人的关系事实变化。普通回合约 -3 至 +3，重大事实可至 -8 至 +8；没有新事实时保持原值并记 +0。',
+    '- trust、security、possessive_pull、emotional_pressure、repair_will 都是 0—100 的独立维度，记录力量怎样运作，不直接命令角色采取行为。高占有与真心同时存在时应形成对向拉扯，不把二者相加成更强的控制。',
+    '- 最新用户消息可能包含 <u_affinity_updates>；只按 character_id 更新匹配角色的 U→C。某角色没有本轮更新时保持原值，delta 为 +0，原因写“本轮未填写”；不得依据正文替用户自行升降。',
+    '- awareness 只决定对应角色是否明确知道用户→自己的准确数值变化与原因；其他角色不得共享这份透视。C→U 与五维状态仍由该角色自己的事实、能力、处境与情绪潮线决定。',
+    '- U→C 向下时，把 reason 当作执笔人的阅读体验灯号：回到角色动机与现场因果中寻找符合人物的修复入口，但不把角色写成讨好数值的攻略对象。',
     '',
     '【正文权限】',
-    '- 数值只作为连续性底座，不能反向操纵人物、制造攻略反馈或越过同意与边界；95—100 后仍可通过关系天气和关系碎片表现质地变化。',
-    '- 未察觉时只允许作为低权重叙事氛围；已察觉时由人物在本轮作出符合性格与现场节拍的真实反应，但不照念 XML 或系统数字。',
+    '- 数值只作为连续性底座，不能覆盖角色卡、世界事实、执笔权、同意边界或人物原有目标；95—100 后仍通过关系天气、维度消长、选择代价与关系碎片表现变化。',
+    '- 未察觉的 U→C 更新只作为低权重叙事背景；已察觉时由对应角色在本轮作出符合性格与现场节拍的反应，但不照念 XML 或系统数字。',
     '',
     '【输出】',
-    '用一个 <affinity_panel> 包住全部参与角色，并按角色资料顺序为每人输出：',
+    '用一个 <affinity_panel> 包住全部参与角色，并严格按角色资料顺序为每人输出：',
     '<affinity_person>',
     '<character_id>角色 ID</character_id>',
     '<character_name>角色名</character_name>',
+    '<c_to_u_score>50</c_to_u_score>',
+    '<c_to_u_delta>+0</c_to_u_delta>',
+    '<c_to_u_note>改变该角色 C→U 的本轮事实；没有则写“本轮无新事实”</c_to_u_note>',
     '<u_to_c_score>50</u_to_c_score>',
     '<u_to_c_delta>+0</u_to_c_delta>',
-    '<u_to_c_note>本轮原因或“本轮未填写”</u_to_c_note>',
+    '<u_to_c_note>用户填写的原因；没有则写“本轮未填写”</u_to_c_note>',
     '<awareness_state>已察觉或未察觉</awareness_state>',
+    '<trust>50</trust>',
+    '<security>50</security>',
+    '<possessive_pull>50</possessive_pull>',
+    '<emotional_pressure>50</emotional_pressure>',
+    '<repair_will>50</repair_will>',
+    '<state_note>本轮最明显的内部拉扯、选择代价或修复动作</state_note>',
     '<relation_note>这一段关系当前的具体质地</relation_note>',
     '<relation_fragment>可选的一条短关系碎片</relation_fragment>',
     '</affinity_person>',
-    '按角色继续排列，最后闭合 </affinity_panel>。每位角色必须恰好一段，不输出旧版 c_score / u_score 字段。',
+    '按角色继续排列，最后闭合 </affinity_panel>。每位角色必须恰好一段；不输出旧版根级 c_score / u_score 单槽字段。',
 ].join('\n');
 
 /**
@@ -290,25 +301,37 @@ const NATIVE_MULTI_AFFINITY_PROMPT = [
  * “幕后与余波”模块：提示词在同一位置发送，两个协议块连续输出，界面也只
  * 展示一个折叠区。保留原 id 作为关闭的迁移占位，旧沙盒覆盖仍可被运行时提醒兼容。
  */
+const replacePromptLine = (content: string, startsWith: string, replacement: string): string => content
+    .split('\n')
+    .map(line => line.startsWith(startsWith) ? replacement : line)
+    .join('\n');
+
 const mergeNightScreeningBackstageAndDebts = (document: StoryTheaterPresetDocument): StoryTheaterPresetDocument => {
     const backstage = document.prompts.find(prompt => prompt.id === 'nmj-v48-backstage');
     const debts = document.prompts.find(prompt => prompt.id === 'nmj-v61-shot-debts');
     if (!backstage || !debts) return document;
+    const orderedPrompts = [...document.prompts];
+    const startupStartIndex = orderedPrompts.findIndex(prompt => prompt.id === 'nmj-v64-section-startup-start');
+    const firstStartupPromptIndex = orderedPrompts.findIndex(prompt => prompt.id === 'nmj-v3-user-shell');
+    if (startupStartIndex > firstStartupPromptIndex && firstStartupPromptIndex >= 0) {
+        const [sectionStart] = orderedPrompts.splice(startupStartIndex, 1);
+        orderedPrompts.splice(firstStartupPromptIndex, 0, sectionStart);
+    }
     const debtContent = debts.content.replace(
-        '正文、幕后暗格和世界线之后，记录一至三笔仍在运动的“镜头债”。',
-        '紧接 </backstage> 后记录一至三笔仍在运动的“镜头债”。它与幕后暗格共同组成“幕后与余波”，必须在世界线及其它结尾模块之前完整闭合。',
+        /^在正文、(?:幕后)?暗格和世界线后，/,
+        '紧接 </backstage> 后，',
     );
     return {
         ...document,
-        prompts: document.prompts.map(originalPrompt => {
+        prompts: orderedPrompts.map(originalPrompt => {
             const prompt = {
                 ...originalPrompt,
-                name: originalPrompt.name.replace(/双向好感/g, '多角色 U→C 关系温度'),
-                content: originalPrompt.content.replace(/双向好感/g, '多角色 U→C 关系温度'),
+                name: originalPrompt.name.replace(/双向(?:好感|温度)/g, '多角色双向关系温度'),
+                content: originalPrompt.content.replace(/双向(?:好感|温度)/g, '多角色双向关系温度'),
             };
             if (prompt.id === 'nmj-v65-affinity-control') return {
                 ...prompt,
-                name: '💗多角色 U→C 关系温度｜逐人独立｜默认开启',
+                name: '💗多角色双向关系温度｜逐人五维｜默认开启',
                 content: NATIVE_MULTI_AFFINITY_PROMPT,
             };
             if (prompt.id === backstage.id) return {
@@ -329,22 +352,36 @@ const mergeNightScreeningBackstageAndDebts = (document: StoryTheaterPresetDocume
             };
             if (prompt.id === 'nmj-v3-scene-header') return {
                 ...prompt,
-                content: prompt.content.replace(
-                    '正文结束后，依次输出已启用的幕后暗格、世界线、镜头债、小剧场、回复选项和多角色 U→C 关系温度。',
-                    '正文结束后，依次输出已启用的“幕后与余波”（幕后暗格后紧接镜头债）、世界线、小剧场、回复选项和多角色 U→C 关系温度。',
+                content: replacePromptLine(
+                    prompt.content,
+                    '正文结束后，依次输出',
+                    '正文结束后，依次输出已启用的“幕后与余波”（幕后暗格后紧接镜头债）、世界线、小剧场、回复选项和多角色双向关系温度。',
                 ),
+            };
+            if (prompt.id === 'nmj-v616-silent-preflight') return {
+                ...prompt,
+                name: '🎬开拍前｜静默排片检查｜常驻',
+                content: replacePromptLine(
+                    replacePromptLine(
+                        prompt.content,
+                        '正文前完成一次排片思考。',
+                        '正文前静默完成一次排片检查；只把结论落实到成品，不输出分析、检查过程或隐藏推理。',
+                    ),
+                    '6. 关系侧表：',
+                    '6. 关系侧表：按 character_id 逐人续接 C→U、U→C 与五维关系混音；每位角色只读取自己的事实和用户对自己的更新。高温度与高占有形成选择拉扯，不放大成控制；U→C 向下时为对应角色寻找符合人物的修复入口；',
+                ).replace('导演层理解执笔灯号，角色层只接触故事内信号；', '生成规则读取执笔灯号，故事人物只接触其可知的故事内信号；'),
             };
             if (prompt.id === 'nmj-v3-exit-check') return {
                 ...prompt,
-                content: prompt.content
-                    .replace(
-                        '多角色 U→C 关系温度只读取最近面板之后的最新一次用户评分，U→C 没有评分时保持不变，C→U 没有新的关系事实时保持不变；数值没有反向操纵人物，正文没有攻略游戏化；结尾面板只是显示时序，不是角色认知时序；',
-                        '多角色 U→C 关系温度按 character_id 分别读取最近面板之后的最新更新；某位角色没有更新时保持不变，不生成 C→U 数值，不让角色之间共享数值或察觉状态；数值没有反向操纵人物，正文没有攻略游戏化；',
-                    )
-                    .replace(
-                        '输出顺序为：场景条 → 正文 → 幕后暗格 → 世界线 → 镜头债 → 已启用的小剧场 → 已启用的回复选项 → 已启用的多角色 U→C 关系温度；',
-                        '输出顺序为：场景条 → 正文 → 幕后与余波（幕后暗格 → 镜头债）→ 世界线 → 已启用的小剧场 → 已启用的回复选项 → 已启用的多角色 U→C 关系温度；',
+                content: replacePromptLine(
+                    replacePromptLine(
+                        prompt.content,
+                        '- 人物行动来自生活线、情绪潮线与关系侧表的合力；',
+                        '- 人物行动来自生活线、情绪潮线与逐角色关系侧表的合力；每位角色按 character_id 独立续接 C→U、U→C 与五维状态，角色之间没有共享数值或察觉状态。C→U 只随该角色亲历的关系事实变化，U→C 只读取用户对该角色的最新更新；高真心与高占有形成对向选择代价，不共同放大控制；U→C 向下时，正文已有符合该角色自身动机的修复入口；',
                     ),
+                    '- 正文后的材料已按散场分流',
+                    '- 正文后的材料已按散场分流进入唯一且最贴近的片盒：幕后与余波收人物内层材料及未到账后果，世界线收镜头外实变，小剧场收非正篇折射，多角色双向关系温度逐人记账；各区提供新材料。输出顺序为：场景条 → 正文 → 幕后与余波（幕后暗格 → 镜头债）→ 世界线 → 已启用的小剧场 → 已启用的回复选项 → 已启用的多角色双向关系温度；',
+                ),
             };
             if (prompt.id === 'nmj-v64-section-output-start') return {
                 ...prompt,
@@ -404,10 +441,10 @@ const mergeNightScreeningBackstageAndDebts = (document: StoryTheaterPresetDocume
 };
 
 export const BUILTIN_NIGHT_SCREENING_PRESET: StoryTheaterPreset = {
-    id: 'builtin-night-screening-v6.14',
-    name: '糯米鸡｜夜班放映室 V6.14',
+    id: 'builtin-night-screening',
+    name: '糯米鸡｜夜班放映室 V6.27',
     format: 'sullyos-story-preset',
-    document: mergeNightScreeningBackstageAndDebts(normalizeDocument(nightScreeningV614, '糯米鸡｜夜班放映室 V6.14')),
+    document: mergeNightScreeningBackstageAndDebts(normalizeDocument(nightScreeningV627, '糯米鸡｜夜班放映室 V6.27')),
     builtIn: true,
     createdAt: 0,
     updatedAt: 0,
@@ -415,8 +452,27 @@ export const BUILTIN_NIGHT_SCREENING_PRESET: StoryTheaterPreset = {
 
 export const withBuiltInStoryPresets = (presets: StoryTheaterPreset[]): StoryTheaterPreset[] => [
     BUILTIN_NIGHT_SCREENING_PRESET,
-    ...presets.filter(preset => preset.id !== BUILTIN_NIGHT_SCREENING_PRESET.id),
+    ...presets.filter(preset => !preset.id.startsWith('builtin-night-screening')),
 ];
+
+/**
+ * 快捷设置历史上保存的是整份内置文档。升级内置预设时只继承同 ID 条目的
+ * 开关选择，正文与新增模块始终使用最新版；自建预设仍完整保留用户内容。
+ */
+export const resolveStoryPresetDocument = (
+    preset: StoryTheaterPreset,
+    override?: StoryTheaterPresetDocument,
+): StoryTheaterPresetDocument => {
+    if (!override) return preset.document;
+    if (!preset.builtIn) return override;
+    const enabledById = new Map(override.prompts.map(prompt => [prompt.id, prompt.enabled]));
+    return {
+        ...preset.document,
+        prompts: preset.document.prompts.map(prompt => enabledById.has(prompt.id)
+            ? { ...prompt, enabled: enabledById.get(prompt.id) === true }
+            : prompt),
+    };
+};
 
 export const parseStoryTheaterPreset = (rawText: string, sourceFileName: string, now: number = Date.now()): StoryTheaterPreset => {
     if (rawText.length > 5 * 1024 * 1024) throw new Error('预设超过 5 MB，请先移除内嵌素材或脚本数据');
@@ -634,14 +690,15 @@ export const buildStoryMultiAffinityGuide = (characters: Array<{ id: string; nam
     if (characters.length === 0) return '';
     const cast = characters.map(character => `- ${character.id}：${character.name}`).join('\n');
     return [
-        '### 糯米机多人关系温度（覆盖旧的单一“当前主要角色”槽）',
-        '本剧场的关系温度只记录“用户 U → 每一位角色 C”，每位角色拥有完全独立的绝对值、delta、原因、察觉状态、关系天气与关系碎片。禁止共享数值、串用原因或只输出第一位角色。',
+        '### 糯米机多人双向关系温度（覆盖旧的单一“当前 C”槽）',
+        '本剧场为每一位角色分别记录 C→U、U→C、五维关系混音、察觉状态与关系质地。禁止共享数值、串用事实、平均多人状态或只输出第一位角色。',
         '当前需要逐一维护的角色：',
         cast,
         '',
         '【更新】',
-        '- 从最近一次多人 <affinity_panel> 中按 character_id 读取各自绝对值；没有旧记录时，该角色从 50 开始。旧历史只有单人面板时，仅可迁移给名单中的第一位角色，其余角色仍从 50 开始。',
-        '- 最新 <u_affinity_updates> 里只会出现本轮由用户填写变化的角色。某角色没有对应更新时，其 U→C 绝对值保持不变，delta 记 +0，原因写“本轮未填写”。',
+        '- 从最近一次多人 <affinity_panel> 中按 character_id 读取各自完整状态；没有旧记录时，该角色的 C→U、U→C 从 50 开始，五维依据角色卡与共同经历建立。旧历史只有单人面板时，只能迁移给姓名明确匹配的角色。',
+        '- C→U 与 trust、security、possessive_pull、emotional_pressure、repair_will 只读取对应角色的亲历事实、性格、处境与后果；不得用某个角色的变化影响另一位角色。',
+        '- 最新 <u_affinity_updates> 只出现本轮由用户填写变化的角色。某角色没有对应更新时，其 U→C 绝对值保持不变，delta 记 +0，原因写“本轮未填写”。',
         '- U→C 新值 = 该角色上一轮 U→C + 对应 delta，并限制在 0—100。不得用某个角色的变化影响另一位角色。',
         '- 察觉规则只作用于同一条 u_affinity 指向的角色；其他角色不会因为同伴被选择为“已察觉”而共享透视。',
         '',
@@ -650,11 +707,17 @@ export const buildStoryMultiAffinityGuide = (characters: Array<{ id: string; nam
         '<affinity_person>',
         '<character_id>角色 ID</character_id>',
         '<character_name>角色名</character_name>',
+        '<c_to_u_score>50</c_to_u_score>',
+        '<c_to_u_delta>+0</c_to_u_delta>',
+        '<c_to_u_note>改变角色 C→U 的本轮事实</c_to_u_note>',
         '<u_to_c_score>50</u_to_c_score>',
         '<u_to_c_delta>+0</u_to_c_delta>',
         '<u_to_c_note>用户填写的原因；没有则写“本轮未填写”</u_to_c_note>',
         '<awareness_state>已察觉或未察觉</awareness_state>',
-        '<relation_note>这一段 U→C 关系当前的质地</relation_note>',
+        '<trust>50</trust><security>50</security><possessive_pull>50</possessive_pull>',
+        '<emotional_pressure>50</emotional_pressure><repair_will>50</repair_will>',
+        '<state_note>最明显的内部拉扯、选择代价或修复动作</state_note>',
+        '<relation_note>这一段双向关系当前的质地</relation_note>',
         '<relation_fragment>可选的一条具体关系碎片</relation_fragment>',
         '</affinity_person>',
         '按角色继续排列 affinity_person，最后闭合 </affinity_panel>。不要再输出旧版根级 c_score / u_score 单槽字段。',
@@ -678,6 +741,39 @@ export const buildStoryAffinityAwarenessReminder = (input: StoryAffinityInput | 
         '- 其他角色更不能借此读取不属于自己的关系数值；多人之间不得共享这条变化。',
         '- 这次变化只作为模型维持关系连续性与叙事氛围的低权重背景，不强制制造角色反应。',
         '- 若用户正文另有真实可见的台词或动作，角色仍可只依据那些现场证据正常推断。',
+    ].join('\n');
+};
+
+export type StoryNarrationMode = 'second' | 'third' | 'custom';
+
+export const resolveStoryNarrationMode = (document: StoryTheaterPresetDocument): StoryNarrationMode => {
+    const third = document.prompts.some(prompt => prompt.id === 'nmj-v3-pov-third' && prompt.enabled);
+    if (third) return 'third';
+    const second = document.prompts.some(prompt => prompt.id === 'nmj-v3-pov-second' && prompt.enabled);
+    return second ? 'second' : 'custom';
+};
+
+/** 最后贴近用户输入发送，消除系统指令里的“你”与故事用户侧身份之间的歧义。 */
+export const buildStoryIdentityGuard = (
+    document: StoryTheaterPresetDocument,
+    identityName: string,
+    characterNames: string[],
+): string => {
+    const identity = identityName.trim() && identityName.trim() !== '你' ? identityName.trim() : '当前用户侧角色（未命名）';
+    const cast = characterNames.filter(Boolean).join('、') || '暂无其他角色';
+    const mode = resolveStoryNarrationMode(document);
+    const perspectiveRule = mode === 'third'
+        ? `- 当前启用第三人称有限。<story_text> 的旁白必须用「${identity}」已确立的姓名、称谓、合适代词或自然省略主语；旁白中的“你／你的”必须改掉。角色对白里对「${identity}」说“你”是正常称呼，不要误改。`
+        : mode === 'second'
+            ? `- 当前启用第二人称有限。<story_text> 旁白中的“你／你的”固定指「${identity}」，绝不指生成回复的一方或任一其他角色。`
+            : '- 当前预设使用自定义人称；服从预设明确写出的叙述规则，但仍遵守下面的身份绑定。';
+    return [
+        '### 糯米机运行时身份与人称锚点（覆盖旧楼层的写法，不覆盖角色卡事实）',
+        `- 用户侧剧情身份：${identity}。本轮参与角色：${cast}。关系协议中的 U 只指「${identity}」，C 才指名单中的各个角色。`,
+        '- 生成回复的一方不属于故事人物。系统指令为方便表达而出现的“你”，只是执行语法，不能据此把生成端写进故事，也不能把故事里的“你”解释成生成端自己。',
+        '- 用户最新输入仍按实际句法辨认说话人与受话人；但在最终输出的叙事旁白、场景条和关系面板中，未另行点名的“你／你的”只允许指用户侧剧情身份。',
+        perspectiveRule,
+        '- 历史助手回复只是已经发生的旧剧情：继承事实，不继承它过去使用的第一、第二或第三人称。当前启用的人称模式是本轮唯一标准。',
     ].join('\n');
 };
 
@@ -798,8 +894,8 @@ export const buildStoryActorMemoryEnvelope = (
     const originalUser = originalUserName.trim() || '原本的你';
     const currentIdentity = currentIdentityName.trim() || originalUser;
     const identityReminder = currentIdentity === originalUser
-        ? `- 本剧情当前的“你”仍是「${originalUser}」。`
-        : `- 本剧情当前执笔身份是「${currentIdentity}」，不得因此把记忆里的“你”改指为「${currentIdentity}」。`;
+        ? `- 本剧情当前用户侧身份仍是「${originalUser}」；记忆原文里的“你”继续指这个身份。`
+        : `- 本剧情当前用户侧执笔身份是「${currentIdentity}」，不得因此把旧记忆里的“你”从「${originalUser}」改绑到当前身份。`;
 
     return [
         `### ${owner} 的专属既有记忆`,
@@ -828,12 +924,12 @@ export const buildStoryArchiveMemoryEnvelope = (recalled: string): string => {
 };
 
 export const buildTheaterPersona = (mask: ResolvedStoryTheaterMask): string => [
-    '### 你当前执笔的身份',
+    '### 当前用户侧执笔身份',
     `- 名字：${mask.name || '你'}`,
     `- 身份/外在设定：${mask.description || '无'}`,
     mask.coreInstruction?.trim() ? `- 核心性格与行动边界：\n${mask.coreInstruction.trim()}` : '',
     mask.worldview?.trim() ? `- 所属世界观：\n${mask.worldview.trim()}` : '',
-    '- 这是你本轮亲自执笔的身份。除非预设明确允许代写，续写不得把该身份当作普通角色擅自决定重大选择。',
+    '- 这是用户侧本轮亲自执笔的故事身份，不是生成回复的一方。除非预设明确允许代写，续写不得把该身份当作普通角色擅自决定重大选择。',
 ].join('\n');
 
 export const storyTheaterMemoryRecipientIds = (entry: StoryTheaterEntry): string[] => {
@@ -863,7 +959,10 @@ const DISPLAY_TAG_LABELS: Record<string, string> = {
     trigger: '触发条件', mt_title: '幕间', mt_system: '旁白', mt_ai: '人物', mt_user: '右侧', name: '人物',
     choice: '备选', label: '方向', reply: '推进', relation_note: '关系天气', u_note: '你的说明', c_note: '变化原因',
     c_score: '关系温度', u_score: '你的关系温度', u_affinity: '你的关系备注', u_delta: '你的变化', c_delta: '本轮变化', relation_fragment: '关系碎片',
-    character_id: '角色 ID', character_name: '人物', u_to_c_score: '你的温度', u_to_c_delta: '本轮变化', u_to_c_note: '变化原因', awareness_state: '察觉状态',
+    character_id: '角色 ID', character_name: '人物',
+    c_to_u_score: '角色对你的温度', c_to_u_delta: '角色本轮变化', c_to_u_note: '角色变化依据',
+    u_to_c_score: '你对角色的温度', u_to_c_delta: '你本轮的变化', u_to_c_note: '你的变化原因', awareness_state: '察觉状态',
+    trust: '信任', security: '安全感', possessive_pull: '占有拉力', emotional_pressure: '情绪压强', repair_will: '修复意愿', state_note: '关系合力',
 };
 
 const HIDDEN_STORY_DISPLAY_TAGS = new Set(['u_score', 'u_delta', 'u_note']);

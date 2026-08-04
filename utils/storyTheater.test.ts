@@ -11,6 +11,7 @@ import {
     buildStoryArchiveMemoryEnvelope,
     buildStoryAffinityAwarenessReminder,
     buildStoryBackstageAftermathReminder,
+    buildStoryIdentityGuard,
     buildStoryMultiAffinityGuide,
     compileStoryPreset,
     createStoryTheaterDraft,
@@ -26,6 +27,7 @@ import {
     normalizeStoryTheater,
     REAL_COMPANION_MEMORY_GUARD,
     RELATIONSHIP_TEXTURE_GUIDE,
+    resolveStoryPresetDocument,
     resolveStoryTheaterMask,
     selectStoryArchiveBatch,
     storyTheaterMemoryRecipientIds,
@@ -40,7 +42,7 @@ describe('多人剧情记忆的人称与归属', () => {
         expect(result).toContain('第一人称“我/我的”，默认指「林星」');
         expect(result).toContain('第二人称“你/你的”');
         expect(result).toContain('原互动对象「条条」');
-        expect(result).toContain('不得因此把记忆里的“你”改指为「Noir」');
+        expect(result).toContain('不得因此把旧记忆里的“你”从「条条」改绑到当前身份');
         expect(result).toContain('不得归给、共享给或改写成其他角色的亲历记忆');
     });
 
@@ -68,16 +70,19 @@ describe('多人剧情记忆的人称与归属', () => {
 });
 
 describe('糯米机原生剧情预设边界', () => {
-    it('内置 V6.14 已经是精简的原生文档', () => {
+    it('内置 V6.27 已经是精简的原生文档', () => {
         const document = BUILTIN_NIGHT_SCREENING_PRESET.document;
         expect(document.schema).toBe('sullyos.story-preset');
         expect(document.version).toBe(1);
-        expect(document.prompts).toHaveLength(128);
-        expect(document.prompts.filter(prompt => prompt.enabled)).toHaveLength(51);
+        expect(document.name).toContain('V6.27');
+        expect(document.prompts).toHaveLength(130);
+        expect(document.prompts.filter(prompt => prompt.enabled)).toHaveLength(53);
         const serialized = JSON.stringify(document);
         expect(serialized).not.toContain('prompt_order');
         expect(serialized).not.toContain('extensions');
         expect(serialized).not.toContain('openai_max_context');
+        expect(serialized).not.toContain('{{setvar::');
+        expect(serialized).not.toContain('{{getvar::');
     });
 
     it('默认开启项都有真实发送内容或原生插槽，且关系与组合输出协议没有旧结构冲突', () => {
@@ -88,16 +93,39 @@ describe('糯米机原生剧情预设边界', () => {
         const affinity = document.prompts.find(prompt => prompt.id === 'nmj-v65-affinity-control')!;
         expect(affinity.content).toContain('<affinity_person>');
         expect(affinity.content).toContain('<character_id>');
+        expect(affinity.content).toContain('<c_to_u_score>');
+        expect(affinity.content).toContain('<trust>');
+        expect(affinity.content).toContain('<repair_will>');
         expect(affinity.content).not.toContain('<c_score>');
         expect(affinity.content).not.toContain('<u_score>');
         const scene = document.prompts.find(prompt => prompt.id === 'nmj-v3-scene-header')!;
         expect(scene.content).toContain('幕后与余波”（幕后暗格后紧接镜头债）');
         expect(scene.content).not.toContain('幕后暗格、世界线、镜头债');
         const exit = document.prompts.find(prompt => prompt.id === 'nmj-v3-exit-check')!;
-        expect(exit.content).toContain('按 character_id 分别读取');
+        expect(exit.content).toContain('按 character_id 独立续接 C→U、U→C 与五维状态');
         expect(exit.content).toContain('幕后与余波（幕后暗格 → 镜头债）');
-        expect(exit.content).not.toContain('C→U 没有新的关系事实时保持不变');
+        expect(exit.content).not.toContain('单一“当前 C”');
         expect(exit.content).not.toContain('幕后暗格 → 世界线 → 镜头债');
+        const preflight = document.prompts.find(prompt => prompt.id === 'nmj-v616-silent-preflight')!;
+        expect(preflight.content).toContain('按 character_id 逐人续接 C→U、U→C 与五维关系混音');
+        expect(preflight.content).not.toContain('由酒馆折叠显示');
+    });
+
+    it('旧 V6.14 快捷覆盖只继承开关，正文与新增层升级到 V6.27', () => {
+        const legacyOverride = {
+            ...BUILTIN_NIGHT_SCREENING_PRESET.document,
+            name: '糯米鸡｜夜班放映室 V6.14',
+            prompts: BUILTIN_NIGHT_SCREENING_PRESET.document.prompts
+                .filter(prompt => prompt.id !== 'nmj-v616-silent-preflight')
+                .map(prompt => prompt.id === 'nmj-v3-pov-second' ? { ...prompt, enabled: false, content: '旧第二人称正文' }
+                    : prompt.id === 'nmj-v3-pov-third' ? { ...prompt, enabled: true, content: '旧第三人称正文' }
+                        : prompt),
+        };
+        const resolved = resolveStoryPresetDocument(BUILTIN_NIGHT_SCREENING_PRESET, legacyOverride);
+        expect(resolved.prompts.find(prompt => prompt.id === 'nmj-v3-pov-second')).toMatchObject({ enabled: false });
+        expect(resolved.prompts.find(prompt => prompt.id === 'nmj-v3-pov-third')).toMatchObject({ enabled: true });
+        expect(resolved.prompts.find(prompt => prompt.id === 'nmj-v3-pov-third')?.content).toContain('本条与“第二人称”误同时开启时，本条优先');
+        expect(resolved.prompts.find(prompt => prompt.id === 'nmj-v616-silent-preflight')?.enabled).toBe(true);
     });
 
     it('拒绝其它应用的 prompt/completion JSON', () => {
@@ -187,9 +215,14 @@ describe('剧情预设发送器', () => {
             slots: { actors: '演员', persona: '用户', scenario: '剧情', worldBefore: '', worldAfter: '', history: '' },
         });
         const payload = result.messages.map(message => message.content).join('\n');
-        expect(payload).toContain('true_monologue 是稀有掉落');
-        expect(payload).toContain('紧接 </backstage> 后记录');
-        expect(payload).toContain('预算紧张时直接省略');
+        const preflight = BUILTIN_NIGHT_SCREENING_PRESET.document.prompts.find(prompt => prompt.id === 'nmj-v616-silent-preflight')!;
+        expect(preflight.enabled).toBe(true);
+        expect(payload).toContain('正文前静默完成一次排片检查');
+        expect(payload).toContain('呈现合同：人称、条条 执笔权');
+        expect(payload).toContain('依照当前启用的人称模式书写的故事正文');
+        expect(payload).toContain('true_monologue 只在人物自我解释产生真正裂口时稀有掉落');
+        expect(payload).toContain('紧接 </backstage> 后，收录一至三笔');
+        expect(payload).toContain('本轮没有真实镜头债时，仅保留空标题并闭合');
         expect(buildStoryBackstageAftermathReminder(BUILTIN_NIGHT_SCREENING_PRESET.document)).toContain('界面只显示一个“幕后与余波”折叠区');
     });
 });
@@ -301,7 +334,7 @@ describe('剧场输出展示解析', () => {
         expect(visible).not.toContain('<');
     });
 
-    it('关系温度只展示角色侧记录，不展示用户自报数值与变化', () => {
+    it('旧版关系温度仍只展示原先允许的角色侧记录', () => {
         const visible = parseStoryDisplayBlocks('<affinity_panel><c_score>62</c_score><c_delta>+2</c_delta><c_note>他主动留下</c_note><u_score>77</u_score><u_delta>-3</u_delta><u_note>用户自己的说明</u_note><relation_note>仍有余温</relation_note><relation_fragment>他把门留了一条缝。</relation_fragment></affinity_panel>')
             .map(block => block.text)
             .join('\n');
@@ -313,6 +346,21 @@ describe('剧场输出展示解析', () => {
         expect(visible).not.toContain('-3');
         expect(visible).not.toContain('用户自己的说明');
         expect(visible).not.toContain('面具');
+    });
+
+    it('新版多人关系面板把双向温度与五个维度转换为前端可读字段', () => {
+        const visible = parseStoryDisplayBlocks('<affinity_panel><affinity_person><character_id>lin</character_id><character_name>林星</character_name><c_to_u_score>68</c_to_u_score><c_to_u_delta>+2</c_to_u_delta><c_to_u_note>她留下来听完了</c_to_u_note><u_to_c_score>74</u_to_c_score><u_to_c_delta>-1</u_to_c_delta><u_to_c_note>他仍在回避</u_to_c_note><awareness_state>未察觉</awareness_state><trust>71</trust><security>62</security><possessive_pull>55</possessive_pull><emotional_pressure>66</emotional_pressure><repair_will>80</repair_will><state_note>想靠近，又决定先把话说明白</state_note><relation_note>有余温，也有裂口</relation_note></affinity_person></affinity_panel>')
+            .map(block => block.text)
+            .join('\n');
+        expect(visible).toContain('人物：林星');
+        expect(visible).toContain('角色对你的温度：68');
+        expect(visible).toContain('你对角色的温度：74');
+        expect(visible).toContain('信任：71');
+        expect(visible).toContain('安全感：62');
+        expect(visible).toContain('占有拉力：55');
+        expect(visible).toContain('情绪压强：66');
+        expect(visible).toContain('修复意愿：80');
+        expect(visible).not.toContain('<affinity_person>');
     });
 
     it('把小剧场的嵌套 name/text 合并为连续消息，而不是逐标签拆卡', () => {
@@ -348,7 +396,7 @@ describe('手机端预设分层', () => {
         expect(theater?.ids).toContain('nmj-v6-side-channel-wrong-reel');
     });
 
-    it('把 V6.14 合并为九个大区并锁定角色与世界', () => {
+    it('把 V6.27 合并为九个大区并锁定角色与世界', () => {
         const groups = getStoryPresetPromptGroups(BUILTIN_NIGHT_SCREENING_PRESET.document);
         expect(groups.map(group => group.key)).toEqual(['startup', 'input', 'sources', 'story', 'tone', 'camera', 'output', 'extras', 'exit']);
         expect(groups.find(group => group.key === 'sources')?.protected).toBe(true);
@@ -401,7 +449,7 @@ describe('本轮关系备注', () => {
         expect(appendStoryAffinityInput('推开门。', { delta: 0, reason: '' })).toBe('推开门。');
     });
 
-    it('多人关系备注按角色分别发送并要求逐人输出 U→C 面板', () => {
+    it('多人关系备注按角色分别发送并要求逐人输出双向五维面板', () => {
         const modelInput = appendStoryAffinityInputs('继续。', [
             { characterId: 'lin', characterName: '林星', delta: 2, reason: '他接住了话', awareness: 'noticed' },
             { characterId: 'noir', characterName: 'Noir', delta: -1, reason: '他又在回避', awareness: 'unnoticed' },
@@ -414,7 +462,24 @@ describe('本轮关系备注', () => {
         expect(guide).toContain('禁止共享数值');
         expect(guide).toContain('<affinity_person>');
         expect(guide).toContain('<character_name>角色名</character_name>');
+        expect(guide).toContain('<c_to_u_score>50</c_to_u_score>');
+        expect(guide).toContain('<trust>50</trust>');
+        expect(guide).toContain('<repair_will>50</repair_will>');
         expect(guide).toContain('不得用某个角色的变化影响另一位角色');
+    });
+
+    it('第三人称最终锚点明确“你”属于用户侧，而不是生成回复的一方', () => {
+        const thirdPerson = applyStoryPresetChoice(
+            BUILTIN_NIGHT_SCREENING_PRESET.document,
+            ['nmj-v3-pov-second', 'nmj-v3-pov-third'],
+            'nmj-v3-pov-third',
+        );
+        const guard = buildStoryIdentityGuard(thirdPerson, '条条', ['林星', 'Noir']);
+        expect(guard).toContain('用户侧剧情身份：条条');
+        expect(guard).toContain('关系协议中的 U 只指「条条」');
+        expect(guard).toContain('生成回复的一方不属于故事人物');
+        expect(guard).toContain('旁白中的“你／你的”必须改掉');
+        expect(guard).toContain('角色对白里对「条条」说“你”是正常称呼');
     });
 
     it('已察觉要求角色在当幕自然反应，未察觉只保留氛围', () => {

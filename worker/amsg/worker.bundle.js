@@ -10553,6 +10553,137 @@ function buildScheduledPush(message, build, extraMeta, bannerBody) {
   };
 }
 
+// worker/amsg/src/nativeFcm.ts
+var accessTokenCache = null;
+var utf83 = new TextEncoder();
+var bytesToB64u = (bytes) => {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+};
+var textToB64u = (value) => bytesToB64u(utf83.encode(value));
+var pemToPkcs8 = (raw) => {
+  const base64 = raw.replace(/\\n/g, "\n").replace(/-----BEGIN PRIVATE KEY-----/g, "").replace(/-----END PRIVATE KEY-----/g, "").replace(/\s+/g, "");
+  if (!base64) throw new Error("FCM_SERVICE_ACCOUNT_PRIVATE_KEY \u4E0D\u662F\u6709\u6548\u7684 PKCS#8 PEM");
+  const binary = atob(base64);
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0)).buffer;
+};
+var requireFcmConfig = (env) => {
+  const projectId = env.FCM_PROJECT_ID?.trim();
+  const clientEmail = env.FCM_SERVICE_ACCOUNT_EMAIL?.trim();
+  const privateKey = env.FCM_SERVICE_ACCOUNT_PRIVATE_KEY?.trim();
+  if (!projectId || !clientEmail || !privateKey) {
+    throw new Error("FCM \u914D\u7F6E\u4E0D\u5B8C\u6574\uFF1A\u9700\u8981 FCM_PROJECT_ID / FCM_SERVICE_ACCOUNT_EMAIL / FCM_SERVICE_ACCOUNT_PRIVATE_KEY");
+  }
+  return { projectId, clientEmail, privateKey };
+};
+var fetchFcmAccessToken = async (env) => {
+  const config = requireFcmConfig(env);
+  const cacheKey = `${config.projectId}:${config.clientEmail}`;
+  if (accessTokenCache?.key === cacheKey && accessTokenCache.expiresAt > Date.now() + 6e4) {
+    return accessTokenCache.token;
+  }
+  const now = Math.floor(Date.now() / 1e3);
+  const unsigned = `${textToB64u(JSON.stringify({ alg: "RS256", typ: "JWT" }))}.${textToB64u(JSON.stringify({
+    iss: config.clientEmail,
+    scope: "https://www.googleapis.com/auth/firebase.messaging",
+    aud: "https://oauth2.googleapis.com/token",
+    iat: now,
+    exp: now + 3600
+  }))}`;
+  const key = await crypto.subtle.importKey(
+    "pkcs8",
+    pemToPkcs8(config.privateKey),
+    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, utf83.encode(unsigned));
+  const assertion = `${unsigned}.${bytesToB64u(new Uint8Array(signature))}`;
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion
+    })
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || !body.access_token) {
+    throw new Error(`FCM OAuth \u5931\u8D25 (${response.status})\uFF1A${body.error_description || "\u6CA1\u6709 access_token"}`);
+  }
+  accessTokenCache = {
+    key: cacheKey,
+    token: body.access_token,
+    expiresAt: Date.now() + Math.max(300, Number(body.expires_in) || 3600) * 1e3
+  };
+  return body.access_token;
+};
+var fcmTokenFromEndpoint = (endpoint) => {
+  if (typeof endpoint !== "string" || !endpoint.startsWith("fcm:")) return null;
+  return endpoint.slice(4).trim() || null;
+};
+var buildFcmMessage = (token, rawPayload) => {
+  const payload = JSON.parse(rawPayload);
+  const actualBody = String(payload.message ?? payload.body ?? "");
+  const portable = { ...payload };
+  delete portable.message;
+  delete portable.body;
+  delete portable.notification;
+  const result = {
+    message: {
+      token,
+      notification: {
+        title: String(payload.contactName ?? payload.metadata?.charName ?? "\u4E3B\u52A8\u6D88\u606F"),
+        body: String(payload.notification?.body ?? actualBody).trim() || "\u6709\u4E00\u6761\u65B0\u6D88\u606F"
+      },
+      data: {
+        amsgPayload: JSON.stringify(portable),
+        amsgHasBody: actualBody ? "1" : "0"
+      },
+      android: {
+        priority: "high",
+        notification: {
+          channel_id: "amsg2",
+          tag: typeof payload.messageId === "string" ? payload.messageId : void 0,
+          sound: "default"
+        }
+      }
+    }
+  };
+  const bytes = utf83.encode(JSON.stringify(result)).byteLength;
+  if (bytes > 4e3) throw new Error(`FCM_PAYLOAD_TOO_LARGE: ${bytes} bytes\uFF08\u5B89\u5168\u4E0A\u9650 4000\uFF09`);
+  return result;
+};
+var sendFcmNotification = async (env, token, payload) => {
+  const config = requireFcmConfig(env);
+  const response = await fetch(
+    `https://fcm.googleapis.com/v1/projects/${encodeURIComponent(config.projectId)}/messages:send`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${await fetchFcmAccessToken(env)}`,
+        "Content-Type": "application/json; charset=utf-8"
+      },
+      body: JSON.stringify(buildFcmMessage(token, payload))
+    }
+  );
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(`FCM_SEND_FAILED (${response.status}): ${detail.slice(0, 500)}`);
+  }
+};
+var createHybridPushTransport = (env, webPush) => ({
+  async sendNotification(subscription, payload) {
+    const token = fcmTokenFromEndpoint(subscription?.endpoint);
+    if (token) return sendFcmNotification(env, token, payload);
+    return webPush.sendNotification(subscription, payload);
+  }
+});
+var isFcmConfigured = (env) => Boolean(
+  env.FCM_PROJECT_ID?.trim() && env.FCM_SERVICE_ACCOUNT_EMAIL?.trim() && env.FCM_SERVICE_ACCOUNT_PRIVATE_KEY?.trim()
+);
+
 // worker/amsg/src/index.ts
 var getFireStash = (scratch) => scratch?.fire;
 var laterOf = (a, b) => a == null ? b : b == null ? a : Math.max(a, b);
@@ -11115,12 +11246,14 @@ var buildWorkerConfig = (env) => {
     publicKey: env.VAPID_PUBLIC_KEY,
     privateKey: env.VAPID_PRIVATE_KEY
   };
+  const nativeFcmReady = isFcmConfigured(env);
+  const effectiveVapid = nativeFcmReady && (!vapid.publicKey?.trim() || !vapid.privateKey?.trim()) ? { email: vapid.email, publicKey: "native-fcm", privateKey: "native-fcm" } : vapid;
   return {
     // db 缺省时 factory 自动用 createD1Adapter(env.DB)
     masterKey: env.AMSG_MASTER_KEY,
     serverToken: env.AMSG_SERVER_TOKEN,
-    vapid,
-    webpush: createWebCryptoWebPush(vapid),
+    vapid: effectiveVapid,
+    webpush: createHybridPushTransport(env, createWebCryptoWebPush(effectiveVapid)),
     // 前端和 Worker 不同源，带自定义头的请求会先发 CORS 预检，必须放行。
     // 单用户自用默认全开；想收紧就把 '*' 换成自己的 SullyOS 站点 origin。
     cors: { origin: "*" },
@@ -11165,12 +11298,20 @@ var inspectWorkerEnv = (env) => {
       message: "AMSG_MASTER_KEY \u4E0D\u662F 64 \u4F4D\u5341\u516D\u8FDB\u5236\uFF0C\u53EF\u80FD\u662F\u7C98\u8D34\u65F6\u5C11\u4E86\u51E0\u4F4D\u3002\u5B83\u5FC5\u987B\u548C\u5F53\u521D\u751F\u6210\u7684\u90A3\u4E00\u4E32\u5B8C\u5168\u4E00\u81F4\uFF0C\u6362\u4E00\u4E32\u7684\u8BDD\u5DF2\u5B58\u7684\u4EFB\u52A1\u5C31\u89E3\u4E0D\u5F00\u4E86\u3002"
     });
   }
-  if (!env.VAPID_PUBLIC_KEY?.trim() || !env.VAPID_PRIVATE_KEY?.trim()) {
+  const vapidReady = Boolean(env.VAPID_PUBLIC_KEY?.trim() && env.VAPID_PRIVATE_KEY?.trim());
+  const fcmParts = [env.FCM_PROJECT_ID, env.FCM_SERVICE_ACCOUNT_EMAIL, env.FCM_SERVICE_ACCOUNT_PRIVATE_KEY].map((value) => value?.trim());
+  const fcmReady = fcmParts.every(Boolean);
+  if (!vapidReady) {
     warnings.push({
+      // 保留既有诊断码，避免旧前端/排障脚本因为新增 FCM 通道而失配。
       code: "VAPID_MISSING",
-      message: "VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY \u6CA1\u914D\u9F50\uFF0C\u5230\u70B9\u6D88\u606F\u4E0D\u4F1A\u63A8\u9001\u51FA\u53BB\u3002\u8FD9\u4E24\u4E2A\u8981\u548C\u7AD9\u70B9\u300C\u63A8\u9001\u51ED\u636E (VAPID)\u300D\u9762\u677F\u91CC\u7684\u662F\u540C\u4E00\u5BF9\u3002"
+      message: fcmReady ? "Capacitor FCM \u901A\u9053\u5DF2\u914D\u7F6E\uFF0C\u4F46 VAPID \u6CA1\u914D\u9F50\uFF1A\u539F\u751F App \u53EF\u63A8\u9001\uFF0C\u6D4F\u89C8\u5668/PWA Web Push \u4E0D\u53EF\u7528\u3002" : "VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY \u6CA1\u914D\u9F50\uFF0C\u4E14\u6CA1\u6709\u5B8C\u6574 FCM \u914D\u7F6E\uFF0C\u5230\u70B9\u6D88\u606F\u4E0D\u4F1A\u63A8\u9001\u51FA\u53BB\u3002"
     });
   }
+  if (fcmParts.some(Boolean) && !fcmReady) warnings.push({
+    code: "FCM_INCOMPLETE",
+    message: "FCM \u914D\u7F6E\u53EA\u586B\u4E86\u4E00\u90E8\u5206\uFF1B\u9700\u8981\u540C\u65F6\u8BBE\u7F6E FCM_PROJECT_ID\u3001FCM_SERVICE_ACCOUNT_EMAIL\u3001FCM_SERVICE_ACCOUNT_PRIVATE_KEY\u3002"
+  });
   if (!env.AMSG_SERVER_TOKEN?.trim()) {
     warnings.push({
       code: "SERVER_TOKEN_MISSING",

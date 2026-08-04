@@ -665,6 +665,14 @@ describe('buildFirePack 的时区参照系与模板（①）', () => {
     expect((await pack(baseChar())).template).not.toContain('你身处');
   });
 
+  // 回归守卫：1.0 提示块里「生活在继续」和「别查岗」两行。少了它们，连发几条的
+  // 主动消息容易退化成催回复和喝水早睡式说教刷屏。
+  it('1.0 提示块带「日子也在往前过」与「关心别变成查岗」', async () => {
+    const { template } = await pack(baseChar());
+    expect(template).toContain('日子也在往前过');
+    expect(template).toContain('关心别变成查岗');
+  });
+
   // 回归守卫：timeAwarenessEnabled=false 的架空角色在前台连今天几号都读不到
   // （buildTimeAwarenessBlock 直接返回空串），主动消息这边却精确报出年月日 + 星期。
   // 同一个开关不能有两套行为。

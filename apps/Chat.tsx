@@ -56,7 +56,7 @@ import { useChatAI } from '../hooks/useChatAI';
 import { cleanTextForTts, parseVoiceOutput } from '../utils/minimaxTts';
 import { collectVoiceBatchSubtitle, isPoisonedVoiceSubtitle } from '../utils/voiceSubtitle';
 import { synthesizeSpeechDetailed, characterHasVoice } from '../utils/ttsRouter';
-import { shouldAutoPlayGeneratedVoice } from '../utils/voicePlayback';
+import { shouldAutoGenerateVoice, shouldAutoPlayGeneratedVoice } from '../utils/voicePlayback';
 import { resolveMiniMaxApiKey } from '../utils/minimaxApiKey';
 import { resolveFishAudioApiKey, stripFishMarkupForDisplay, cleanTextForTtsFish } from '../utils/fishAudioTts';
 import { resolveElevenLabsApiKey, stripElevenMarkupForDisplay, cleanTextForTtsEleven } from '../utils/elevenLabsTts';
@@ -732,6 +732,9 @@ const Chat: React.FC = () => {
         // Only trigger when AI just finished typing (wasTyping → !isTyping)
         if (!wasTyping || isTyping) return;
         if (!char.chatVoiceEnabled) return;
+        // 关着「收到就自动播放」就别提前合成（理由见 shouldAutoGenerateVoice）：
+        // 空语音条照常出现，用户点了才合成、合成完直接播。
+        if (!shouldAutoGenerateVoice({ autoPlayEnabled: char.chatVoiceAutoPlay })) return;
         if (!characterHasVoice(char, apiConfig)) return;
         // Scan recent assistant messages for unprocessed <语音> tags
         for (let i = messages.length - 1; i >= 0; i--) {

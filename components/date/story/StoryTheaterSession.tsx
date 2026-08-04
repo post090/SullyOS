@@ -14,6 +14,7 @@ import {
     buildStoryArchiveMemoryEnvelope,
     buildStoryMultiAffinityGuide,
     buildStoryHistory,
+    buildStoryIdentityGuard,
     buildStoryMiniTheaterReminder,
     buildTheaterPersona,
     buildTheaterWorldbookSlots,
@@ -29,6 +30,7 @@ import {
     REAL_COMPANION_MEMORY_GUARD,
     RELATIONSHIP_TEXTURE_GUIDE,
     resolveStoryTheaterMask,
+    resolveStoryPresetDocument,
     selectStoryArchiveBatch,
     storyTheaterMemoryRecipientIds,
     storyTheaterThreadId,
@@ -55,8 +57,8 @@ interface Props {
     onEntryChange: (entry: StoryTheaterEntry) => Promise<void> | void;
 }
 
-const textFromHistory = (messages: Message[]): string => buildStoryHistory(messages).map(message => {
-    const label = message.role === 'user' ? '你给出的推进' : '剧场正文';
+const textFromHistory = (messages: Message[], identityName: string): string => buildStoryHistory(messages).map(message => {
+    const label = message.role === 'user' ? `${identityName}给出的推进（用户侧）` : '上一层剧场正文';
     return `[${label}]\n${message.content}`;
 }).join('\n\n');
 
@@ -112,6 +114,31 @@ const LabeledRows: React.FC<{ lines: DisplayLine[] }> = ({ lines }) => <div clas
         <span className='text-[12px] leading-6 whitespace-pre-wrap text-slate-700'>{line.value || '—'}</span>
     </div>)}
 </div>;
+
+const AFFINITY_DIMENSIONS = ['信任', '安全感', '占有拉力', '情绪压强', '修复意愿'] as const;
+
+const affinityNumber = (lines: DisplayLine[], labels: string[]): number | undefined => {
+    const raw = lines.find(line => line.label && labels.includes(line.label))?.value;
+    const value = Number(String(raw || '').match(/-?\d+/)?.[0]);
+    return Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : undefined;
+};
+
+const StoryAffinityGroup: React.FC<{ group: DisplayGroup }> = ({ group }) => {
+    const cToU = affinityNumber(group.lines, ['角色对你的温度', '关系温度']);
+    const uToC = affinityNumber(group.lines, ['你对角色的温度', '你的关系温度']);
+    const dimensions = AFFINITY_DIMENSIONS.map(label => ({ label, value: affinityNumber(group.lines, [label]) })).filter(item => item.value !== undefined);
+    const compactLabels = new Set<string>(['角色对你的温度', '关系温度', '你对角色的温度', '你的关系温度', ...AFFINITY_DIMENSIONS]);
+    const notes = group.lines.filter(line => !compactLabels.has(line.label || ''));
+    return <section className='py-4 first:pt-0'>
+        <div className='text-[11px] font-bold text-rose-700'>{group.title || '主要角色'}</div>
+        {(cToU !== undefined || uToC !== undefined) && <div className='mt-2 grid grid-cols-2 gap-2'>
+            <div className='rounded-xl bg-rose-50 px-3 py-2'><div className='text-[8px] font-bold text-rose-400'>{group.title || '角色'} → 你</div><div className='mt-0.5 text-lg font-serif font-semibold text-rose-700'>{cToU ?? '—'}<span className='ml-1 text-[8px] font-sans text-rose-300'>/ 100</span></div></div>
+            <div className='rounded-xl bg-violet-50 px-3 py-2'><div className='text-[8px] font-bold text-violet-400'>你 → {group.title || '角色'}</div><div className='mt-0.5 text-lg font-serif font-semibold text-violet-700'>{uToC ?? '—'}<span className='ml-1 text-[8px] font-sans text-violet-300'>/ 100</span></div></div>
+        </div>}
+        {dimensions.length > 0 && <div className='mt-3 grid gap-2'>{dimensions.map(item => <div key={item.label} className='grid grid-cols-[56px_1fr_24px] items-center gap-2'><span className='text-[8px] font-bold text-slate-400'>{item.label}</span><span className='h-1.5 rounded-full bg-slate-200 overflow-hidden'><i className='block h-full rounded-full bg-gradient-to-r from-violet-300 to-rose-400' style={{ width: `${item.value}%` }} /></span><span className='text-[8px] text-right tabular-nums text-slate-400'>{item.value}</span></div>)}</div>}
+        {notes.length > 0 && <div className='mt-3'><LabeledRows lines={notes} /></div>}
+    </section>;
+};
 
 interface DisplayGroup { title: string; lines: DisplayLine[]; }
 
@@ -206,12 +233,13 @@ const StoryOutput: React.FC<{ content: string; onChoose?: (text: string) => void
                 const personGroups = groupDisplayLines(lines, '人物', ['角色 ID']);
                 const groups = personGroups.length > 0 ? personGroups : [{ title: '主要角色', lines: lines.filter(line => line.label !== '角色 ID') }];
                 const preview = groups.slice(0, 3).map(group => {
-                    const score = group.lines.find(line => line.label === '你的温度' || line.label === '关系温度')?.value;
-                    return `你→${group.title}${score ? ` ${score}` : ''}`;
+                    const cToU = affinityNumber(group.lines, ['角色对你的温度', '关系温度']);
+                    const uToC = affinityNumber(group.lines, ['你对角色的温度', '你的关系温度']);
+                    return `${group.title}${cToU !== undefined ? `→你 ${cToU}` : ''}${uToC !== undefined ? ` · 你→${group.title} ${uToC}` : ''}`;
                 }).join(' · ');
                 return <details key={index} className='group border-y border-rose-200'>
-                    <summary className='list-none cursor-pointer py-3.5 flex items-center gap-3'><span className='w-8 h-8 rounded-full bg-rose-50 text-rose-500 grid place-items-center'><HeartStraight size={15} weight='fill' /></span><span className='min-w-0 flex-1'><strong className='block text-xs text-rose-700'>关系温度 · {groups.length} 段 U→C</strong><span className='block mt-0.5 truncate text-[9px] text-slate-400'>{preview || '展开查看每位角色的独立关系'}</span></span><CaretDown size={13} className='text-rose-400 transition-transform group-open:rotate-180' /></summary>
-                    <div className='pb-3 pl-11 divide-y divide-rose-100'>{groups.map((group, groupIndex) => <section key={`${group.title}-${groupIndex}`} className='py-3 first:pt-0'><div className='text-[10px] font-bold text-rose-700'>你 → {group.title}</div><LabeledRows lines={group.lines} /></section>)}</div>
+                    <summary className='list-none cursor-pointer py-3.5 flex items-center gap-3'><span className='w-8 h-8 rounded-full bg-rose-50 text-rose-500 grid place-items-center'><HeartStraight size={15} weight='fill' /></span><span className='min-w-0 flex-1'><strong className='block text-xs text-rose-700'>双向关系 · {groups.length} 位角色</strong><span className='block mt-0.5 truncate text-[9px] text-slate-400'>{preview || '展开查看逐角色温度与关系维度'}</span></span><CaretDown size={13} className='text-rose-400 transition-transform group-open:rotate-180' /></summary>
+                    <div className='pb-3 pl-11 divide-y divide-rose-100'>{groups.map((group, groupIndex) => <StoryAffinityGroup key={`${group.title}-${groupIndex}`} group={group} />)}</div>
                 </details>;
             }
             return <section key={index} className='pl-4 border-l-2 border-slate-300'><div className='text-[10px] font-bold text-slate-500'>{block.title || '附加信息'}</div><div className='mt-2'><LabeledRows lines={lines} /></div></section>;
@@ -229,7 +257,11 @@ const StoryTheaterSession: React.FC<Props> = ({ entry, preset, masks, onBack, on
     }, [characters, entry]);
     const mask = useMemo(() => resolveStoryTheaterMask(entry.mask, userProfile, characters, masks), [characters, entry.mask, masks, userProfile]);
     const youLabel = mask.selection.type === 'user' ? '你' : `你（${mask.name}）`;
-    const effectivePreset = useMemo<StoryTheaterPreset>(() => entry.presetOverride ? { ...preset, document: entry.presetOverride } : preset, [entry.presetOverride, preset]);
+    const promptIdentityName = mask.name.trim() && mask.name.trim() !== '你' ? mask.name.trim() : '当前用户侧角色';
+    const effectivePreset = useMemo<StoryTheaterPreset>(() => ({
+        ...preset,
+        document: resolveStoryPresetDocument(preset, entry.presetOverride),
+    }), [entry.presetOverride, preset]);
     const activeMiniTheater = useMemo(() => getActiveStoryMiniTheaterPrompt(effectivePreset.document), [effectivePreset.document]);
     const affinityEnabled = useMemo(() => effectivePreset.document.prompts.some(prompt => prompt.id === 'nmj-v65-affinity-control' && prompt.enabled), [effectivePreset.document]);
     const selectedBooks = useMemo(() => dedupeTheaterWorldbooks(actors).filter(book => entry.selectedWorldbookIds.includes(book.id)), [actors, entry.selectedWorldbookIds]);
@@ -589,10 +621,10 @@ const StoryTheaterSession: React.FC<Props> = ({ entry, preset, masks, onBack, on
                 summaries ? `### 常驻事件盒\n${summaries}` : '',
                 vectorRecall ? buildStoryArchiveMemoryEnvelope(vectorRecall) : '',
             ].filter(Boolean).join('\n\n');
-            const worldbookSlots = buildTheaterWorldbookSlots(selectedBooks, visibleHistory.slice(-20).map(message => ({ role: message.role, content: message.content })), mask.name, actors.map(actor => actor.name));
+            const worldbookSlots = buildTheaterWorldbookSlots(selectedBooks, visibleHistory.slice(-20).map(message => ({ role: message.role, content: message.content })), promptIdentityName, actors.map(actor => actor.name));
             const compiled = compileStoryPreset({
                 preset: effectivePreset,
-                userName: mask.name,
+                userName: promptIdentityName,
                 characterNames: actors.map(actor => actor.name),
                 slots: {
                     actors: actorContext,
@@ -600,13 +632,14 @@ const StoryTheaterSession: React.FC<Props> = ({ entry, preset, masks, onBack, on
                     scenario,
                     worldBefore: worldbookSlots.worldBefore,
                     worldAfter: worldbookSlots.worldAfter,
-                    history: textFromHistory(visibleHistory),
+                    history: textFromHistory(visibleHistory, promptIdentityName),
                 },
             });
-            const miniTheaterReminder = buildStoryMiniTheaterReminder(effectivePreset.document, mask.name, actors.map(actor => actor.name));
+            const miniTheaterReminder = buildStoryMiniTheaterReminder(effectivePreset.document, promptIdentityName, actors.map(actor => actor.name));
             const backstageAftermathReminder = buildStoryBackstageAftermathReminder(effectivePreset.document);
             const multiAffinityGuide = affinityEnabled ? buildStoryMultiAffinityGuide(actors.map(actor => ({ id: actor.id, name: actor.name }))) : '';
             const affinityAwarenessReminder = affinityInputs.map(item => buildStoryAffinityAwarenessReminder(item, item.characterName || '当前角色')).filter(Boolean).join('\n\n');
+            const identityGuard = buildStoryIdentityGuard(effectivePreset.document, promptIdentityName, actors.map(actor => actor.name));
             const modelInput = appendStoryAffinityInputs(text, affinityInputs);
             const payload = [
                 ...compiled.messages,
@@ -616,6 +649,7 @@ const StoryTheaterSession: React.FC<Props> = ({ entry, preset, masks, onBack, on
                 ...(multiAffinityGuide ? [{ role: 'system' as const, content: multiAffinityGuide }] : []),
                 ...(affinityEnabled ? [{ role: 'system' as const, content: RELATIONSHIP_TEXTURE_GUIDE }] : []),
                 ...(affinityAwarenessReminder ? [{ role: 'system' as const, content: affinityAwarenessReminder }] : []),
+                { role: 'system' as const, content: identityGuard },
                 { role: 'user' as const, content: modelInput },
             ];
             if (compiled.assistantPrefill) payload.push(compiled.assistantPrefill);
@@ -653,7 +687,7 @@ const StoryTheaterSession: React.FC<Props> = ({ entry, preset, masks, onBack, on
             setSending(false);
             setRerollingId(null);
         }
-    }, [actors, addToast, affinityDrafts, affinityEnabled, applyActorMemoryPipeline, archiveIfNeeded, buildActorContexts, buildMaskMemoryContext, callCompletion, effectivePreset, entry, independentRecall, input, loadMessages, mask, saveCentralAndMirrors, selectedBooks, sending, threadId]);
+    }, [actors, addToast, affinityDrafts, affinityEnabled, applyActorMemoryPipeline, archiveIfNeeded, buildActorContexts, buildMaskMemoryContext, callCompletion, effectivePreset, entry, independentRecall, input, loadMessages, mask, promptIdentityName, saveCentralAndMirrors, selectedBooks, sending, threadId]);
 
     const archivedCount = messages.filter(message => mirrorArchived(message, entry)).length;
     const pendingRetryInput = getPendingStoryRetryInput(messages);

@@ -16,7 +16,7 @@ vi.stubGlobal('Deno', {
   serve: (): void => undefined,
 });
 
-const { buildUpstreamRequest, relayResponse, isConfigured } = await import('./deno-proxy');
+const { buildUpstreamRequest, relayResponse, isConfigured, handleRequest } = await import('./deno-proxy');
 
 describe('relayResponse - 响应头清洗', () => {
   /** 造一个「上游回了压缩响应」的场景：fetch 已经替我们解压，但头还留着压缩前的描述。 */
@@ -89,6 +89,22 @@ describe('buildUpstreamRequest - 请求改写', () => {
       .toBeNull();
   });
 
+  /**
+   * 这条钉的是一次真实事故：浏览器要 zstd → 上游用 zstd 压回来 → fetch 不解 zstd →
+   * relayResponse 按「已解开」把 content-encoding 摘了 → 出口拿压缩字节当明文又压一层 →
+   * 浏览器解完外层还是压缩数据，整页乱码。
+   *
+   * curl 测不出来：它默认不要 zstd，上游就退回 gzip，而 gzip 恰好是 fetch 会自动解的。
+   */
+  it('删掉 accept-encoding：透传浏览器那份会让上游用 fetch 解不开的编码，最终双层压缩', () => {
+    const request = incoming('https://proxy.deno.net/capabilities', {
+      headers: { 'Accept-Encoding': 'gzip, deflate, br, zstd' },
+    });
+    expect(
+      buildUpstreamRequest(request, 'https://amsg.example.workers.dev').headers.get('accept-encoding'),
+    ).toBeNull();
+  });
+
   it('鉴权头和自定义头必须原样带过去，否则 amsg 一律 401', () => {
     const request = incoming('https://proxy.deno.net/init-tenant', {
       method: 'POST',
@@ -121,6 +137,42 @@ describe('buildUpstreamRequest - 请求改写', () => {
       'https://amsg.example.workers.dev',
     );
     expect(rewritten.body).toBeNull();
+  });
+});
+
+/**
+ * 这组钉的是另一次真实事故：上游挂掉时代理回了 502，但没带 CORS 头，
+ * 浏览器于是只显示「No 'Access-Control-Allow-Origin' header is present」——
+ * 状态码和错误正文全被挡在外面，排查的人对着一个跟病因无关的 CORS 报错干瞪眼。
+ */
+describe('代理自造的响应必须带 CORS 头', () => {
+  it('自检端点带 Access-Control-Allow-Origin', async () => {
+    const response = await handleRequest(new Request('https://proxy.deno.net/__proxy-health'));
+    expect(response.headers.get('access-control-allow-origin')).toBe('*');
+  });
+
+  it('上游连不上时的 502 也带 CORS —— 不带的话这条错误在浏览器里根本读不到', async () => {
+    // 上游地址得先配上，否则会在 isConfigured 那关就返回 503，走不到 fetch 这一步。
+    vi.stubGlobal('Deno', {
+      env: { get: (name: string) => (name === 'AMSG_UPSTREAM' ? 'https://amsg.example.workers.dev' : undefined) },
+      serve: (): void => undefined,
+    });
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('dns failure')));
+    try {
+      const response = await handleRequest(new Request('https://proxy.deno.net/capabilities'));
+      expect(response.status).toBe(502);
+      expect(response.headers.get('access-control-allow-origin')).toBe('*');
+      expect((await response.json() as { error: string }).error).toContain('连不上');
+    } finally {
+      vi.unstubAllGlobals();
+      vi.stubGlobal('Deno', { env: { get: (): undefined => undefined }, serve: (): void => undefined });
+    }
+  });
+
+  it('上游地址还是占位符时回 503，同样带 CORS', async () => {
+    const response = await handleRequest(new Request('https://proxy.deno.net/capabilities'));
+    expect(response.status).toBe(503);
+    expect(response.headers.get('access-control-allow-origin')).toBe('*');
   });
 });
 

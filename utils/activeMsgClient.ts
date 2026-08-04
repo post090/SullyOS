@@ -70,6 +70,12 @@ import {
   type SubscribeFailureKind,
 } from './pushSubscribeShared';
 
+export const NATIVE_PUSH_TOKEN_STORAGE_KEY = 'amsg2_fcm_token_v1';
+const nativePushBuildEnabled = () => import.meta.env.VITE_AMSG_NATIVE_PUSH === 'true';
+const readNativePushToken = () => nativePushBuildEnabled() && typeof localStorage !== 'undefined'
+  ? localStorage.getItem(NATIVE_PUSH_TOKEN_STORAGE_KEY)?.trim() || ''
+  : '';
+
 export interface ActiveMsg2PushStatus {
   supported: boolean;
   permission: NotificationPermission | 'unsupported';
@@ -355,7 +361,9 @@ const buildLegacyStyleProactiveHint = (targetName: string, includeTime: boolean)
     ...(includeTime ? [`现在是 ${AMSG_SLOT_CURRENT_TIME}。`, AMSG_SLOT_AWAY_HINT] : []),
     `这不是 ${target} 正在和你聊天，而是你突然想起了 ${target}，想主动发条消息给他/她。`,
     `像真人随手发消息一样自然一点，可以是分享刚看到的东西、轻轻吐槽、问一句近况、突然想念，或者单纯想找 ${target} 聊两句。`,
+    `${target} 不在的这段时间，你自己的日子也在往前过：刚发生的小事、注意到的细节、对之前聊过的话冒出来的后续想法，都比干巴巴的问候更像你。`,
     '不要写成汇报近况，不要像在完成任务，也不要解释自己为什么会发这条消息。',
+    `关心别变成查岗：不催问 ${target} 在干嘛、怎么还不回；喝水、早睡这类叮嘱偶尔一句是心意，回回都发就成了说教。`,
     `正文尽量短，通常 1 到 2 句就够；如果 ${target} 很久没来找你，可以轻轻带一点想念、好奇或者小小抱怨。`,
   ].join('\n');
 };
@@ -893,6 +901,15 @@ const decryptPayload = async (client: ReiClient, payload: { iv: string; authTag:
 };
 
 export const ActiveMsgClient = {
+  async registerNativePushToken(token: string): Promise<void> {
+    if (!nativePushBuildEnabled()) throw new Error('当前构建未开启 Capacitor 原生推送');
+    const value = token.trim();
+    if (!value) throw new Error('FCM registration token 为空');
+    const config = await ensureWorkerReady();
+    const client = await initializeClient(config);
+    await client.putPushSubscription({ endpoint: `fcm:${value}` });
+  },
+
   async getGlobalConfig() {
     return ensureGlobalReady();
   },
@@ -1156,6 +1173,8 @@ export const ActiveMsgClient = {
     await initializeClient(config);
     await ActiveMsgStore.saveGlobalConfig({ ...config, initializedAt: Date.now() });
     await this.reconcilePushSubscription();
+    const nativeToken = readNativePushToken();
+    if (nativeToken) await this.registerNativePushToken(nativeToken);
     // warnings 是「连上了，但有一块功能是哑的」——比如 VAPID 没配齐，任务能建、到点
     // 却一条都推不出去。连接本身算成功，交给调用方提示，别拦住流程。
     return { ok: true, userId: config.userId, warnings: report?.warnings ?? [] };
@@ -1302,7 +1321,9 @@ export const ActiveMsgClient = {
     const globalConfig = await ensureWorkerReady();
     const client = await initializeClient(globalConfig);
     // 任务体不带订阅，worker 到点读用户级那一份——所以建任务前先把它登记上去。
-    await this.registerPushSubscription();
+    const nativeToken = readNativePushToken();
+    if (nativeToken) await this.registerNativePushToken(nativeToken);
+    else await this.registerPushSubscription();
 
     // 数量封顶：待触发任务（不含被替换的那个）满 5 个就拒绝，让角色/用户先清。
     const pendingOthers = getPendingTasks(config, Date.now())

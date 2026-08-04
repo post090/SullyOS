@@ -28,9 +28,15 @@ type KvRecord<T = unknown> = {
   value: T;
 };
 
+// Keep the shared web/PWA build unchanged. The private Capacitor build may
+// provide its own Worker URL so the native shell works without manual setup.
+const capacitorDefaultWorkerUrl = import.meta.env.VITE_AMSG_NATIVE_PUSH === 'true'
+  ? String(import.meta.env.VITE_AMSG_DEFAULT_WORKER_URL || '').trim()
+  : '';
+
 const defaultGlobalConfig: ActiveMsg2GlobalConfig = {
   userId: '',
-  workerUrl: '',
+  workerUrl: capacitorDefaultWorkerUrl,
 };
 
 // 单例连接缓存。同 utils/db.ts 的根因: 原本每个 op 都新开一条 ActiveMsg 连接且从不
@@ -183,7 +189,13 @@ const generateUuidV4 = () => {
 export const ActiveMsgStore = {
   async getGlobalConfig(): Promise<ActiveMsg2GlobalConfig> {
     const stored = await getKv<ActiveMsg2GlobalConfig>(GLOBAL_CONFIG_KEY);
-    return { ...defaultGlobalConfig, ...(stored || {}) };
+    const config = { ...defaultGlobalConfig, ...(stored || {}) };
+    // Older App installs may already have persisted an empty URL. Fill only
+    // that empty value in the private build; an explicit non-empty URL wins.
+    if (!config.workerUrl?.trim() && capacitorDefaultWorkerUrl) {
+      config.workerUrl = capacitorDefaultWorkerUrl;
+    }
+    return config;
   },
 
   async saveGlobalConfig(updates: Partial<ActiveMsg2GlobalConfig>): Promise<ActiveMsg2GlobalConfig> {

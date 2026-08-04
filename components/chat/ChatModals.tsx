@@ -576,7 +576,7 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                              </div>
                          </div>
                          <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">
-                             开启后，AI 回复自动生成语音条（需配置 MiniMax 和角色语音）。
+                             开启后，AI 回复里会出现语音条（需配置 MiniMax 和角色语音）。
                          </p>
                          {chatVoiceEnabled && (
                              <div className="mt-3 pt-3 border-t border-slate-100">
@@ -587,7 +587,7 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                                      </div>
                                  </div>
                                  <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">
-                                     关闭时语音条照常出现，点一下才播放（也可以点「转文字」直接看内容）。
+                                     开启后收到消息就合成语音并播放。关闭时语音条照常出现，点一下才合成并播放，不听就不消耗语音额度（也可以点「转文字」直接看内容）。
                                  </p>
                              </div>
                          )}

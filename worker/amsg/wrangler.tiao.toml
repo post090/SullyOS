@@ -1,0 +1,24 @@
+name = "damp-dust-153a"
+main = "worker.bundle.js"
+compatibility_date = "2026-08-03"
+compatibility_flags = ["global_fetch_strictly_public"]
+workers_dev = true
+keep_vars = true
+
+routes = [
+  { pattern = "amsg.noir2.cc.cd", custom_domain = true }
+]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "instant-blob-db"
+database_id = "3e53aafa-53f1-47e9-aab4-ad4eac8d0a48"
+
+[triggers]
+crons = ["* * * * *"]
+
+[observability]
+enabled = true
+
+[observability.logs]
+enabled = true

@@ -474,9 +474,12 @@ const processInboxMessageWithPostProcessing = async (
     // replayDirectives=false = 这是重试、且上次已经把副作用跑完了（见 prepareInboxRetry）。
     directives: replayDirectives && isLastChunk(message) ? extractDirectives(message) : [],
     reasoningContent,
-    // 离线补收时这条 push 拆出的每条气泡都落 sentAt (跟降级存原稿路径同口径),
-    // 在线送达时是 undefined, 各条维持默认的写库当刻。
+    // 这条 push 拆出的每条气泡共用一个时间戳 (跟降级存原稿路径同口径), 见
+    // resolveInboxPersistTimestampForMessage。
     messageTimestamp: persistTimestamp,
+    // 补收的消息跳过拟人打字延迟, 一次性回填: 内容几小时前就在云端生成完了, 再一条条
+    // 慢放只会让用户干等, 期间他插的话还会把时间戳倒挂的口子撑开。实时收到的照旧慢放。
+    instantRender: !isFreshInboxDelivery(message.receivedAt, Date.now()),
   });
 
   // ─── Phase 2 Round 2 (2f): push 尾段 ───
@@ -759,36 +762,61 @@ async function runPushTailPipeline(
 }
 
 /**
- * 「在线送达」与「离线补收」的分界（毫秒）。flush 一条 inbox 消息时，距 worker 发送
- * 时刻（sentAt）不超过这个窗口就当在线送达，落库维持默认的写库当刻（Date.now()）；
- * 超过才当离线补收，落库改用 sentAt。取 10 分钟有两个讲究：
- *   1. 在线/准在线送达的消息显示「刚刚」符合观感——用户就在场，气泡不该平白标成几分钟前；
- *   2. 必须小于 amsg2ExpireGuard.hasDeliveredProactiveNear 的 30 分钟送达判定窗
- *      （[occurrence-90s, occurrence+30min]）：在线路径落的 Date.now() ≤ sentAt+本窗口，
- *      离线路径落的 sentAt ≈ occurrence，两条路的时间戳都稳落在判定窗内——
- *      已送达的消息不会因为落了个假时间戳被误判成「没送到」而生成假作废回执。
+ * 「刚送达」与「补收」的分界（毫秒），只用来决定**要不要慢放拟人打字节奏**。
+ *
+ * 后处理管线每条气泡之间夹 0.5~2 秒 setTimeout，模拟角色正在打字。实时收到时这是对的；
+ * 补收的消息早在几小时前就在云端生成完了，再慢放一遍只会让用户干等着一条条冒，
+ * 而且这段时间里用户来得及插话，把时间戳倒挂的口子撑开（见 resolveBackfillTimestamp）。
+ *
+ * 取 2 分钟：前台连收几条排队处理最多几十秒，仍算刚到；而「看到通知再点进来」通常
+ * 好几分钟起步，会落到补收那一侧。
  */
-export const INBOX_FRESH_DELIVERY_WINDOW_MS = 10 * 60_000;
+export const INBOX_FRESH_DELIVERY_WINDOW_MS = 2 * 60_000;
 
 /**
- * 算一条 inbox 消息落库该用的时间戳。返回 undefined = 不指定，走 DB.saveMessage
- * 默认的写库当刻（Date.now()）。
- *   - 在线/准在线送达（now - sentAt ≤ 窗口）→ undefined，气泡显示「刚刚」；
- *   - 离线补收（now - sentAt > 窗口）→ 用 sentAt。用户离线一晚，昨晚 23:00 推的消息
- *     中午打开时就该显示 23:00，跟正文里角色说的晚上的话对得上。
- * 主路径（applyAssistantPostProcessing 逐条落库）与降级存原稿路径共用这一个口径，
- * 别再各算各的。sentAt 缺失/非法（老 push 可能不带）同样返回 undefined。
- * 纯函数，边界值见 activeMsgRuntime.test.ts。
+ * 这条 inbox 消息是不是刚落到设备上的（true = 保留打字节奏，false = 一次性回填）。
  *
- * 只按时间差算的这一层不够——补收的消息可能落在用户刚说的话后面（见
- * resolveBackfillTimestamp），实际落库口径以 resolveInboxPersistTimestampForMessage 为准。
+ * 判据用 receivedAt（消息落到这台设备的时刻）而不是 sentAt：它剔除了云端到设备之间的
+ * 网络延迟，问的正是「这条在收件箱里躺了多久没人消费」。receivedAt 缺失/非法时按刚到
+ * 处理——宁可多慢放一条补收的，也别把用户正看着的实时消息一次性刷出来。
+ * 纯函数，边界值见 activeMsgRuntime.test.ts。
+ */
+export const isFreshInboxDelivery = (
+  receivedAt: number | undefined,
+  now: number,
+): boolean => {
+  if (typeof receivedAt !== 'number' || !Number.isFinite(receivedAt) || receivedAt <= 0) return true;
+  return now - receivedAt <= INBOX_FRESH_DELIVERY_WINDOW_MS;
+};
+
+/**
+ * 算一条 inbox 消息落库该用的时间戳：一律取 sentAt（云端真正把这句话发出去的那一刻）。
+ * 返回 undefined = 不指定，走 DB.saveMessage 默认的写库当刻（Date.now()）。
+ *
+ * 为什么不按「消息够不够新」二选一：那个判据回答不了「用户在不在场」——到点弹的通知，
+ * 用户隔几分钟才点进来，消息就会被标成他点进来的那一刻。而在线送达时 sentAt 距落库
+ * 只有几秒，标 sentAt 一样显示「刚刚」，观感没有差别。
+ *
+ * 标 sentAt 不会打乱聊天流的顺序：气泡位置只看自增 id（db.ts 按 charId 索引游标读、
+ * Chat.tsx 的 displayMessages 不排序），timestamp 只决定气泡上显示的那个数字。
+ * 唯一要防的是「位置在下、数字往回走」的倒挂，那个交给 resolveBackfillTimestamp
+ * 精确判定，实际落库口径以 resolveInboxPersistTimestampForMessage 为准。
+ *
+ * 为什么不用「用户设定的触发时刻」（occurrenceMs）：云端喂给模型的「现在是几点」用的是
+ * 实际开跑那一刻（worker/amsg/src/index.ts），角色正文里提到的时间跟 sentAt 对齐；
+ * 云端那份自述日志记的也是 sentAt 口径。
+ *
+ * 主路径（applyAssistantPostProcessing 逐条落库）与降级存原稿路径共用这一个口径，
+ * 别再各算各的。sentAt 缺失/非法（老 push 可能不带）返回 undefined。
+ * 纯函数，边界值见 activeMsgRuntime.test.ts。
  */
 export const resolveInboxPersistTimestamp = (
   sentAt: number | undefined,
   now: number,
 ): number | undefined => {
   if (typeof sentAt !== 'number' || !Number.isFinite(sentAt) || sentAt <= 0) return undefined;
-  return now - sentAt > INBOX_FRESH_DELIVERY_WINDOW_MS ? sentAt : undefined;
+  // 时钟偏差导致 sentAt 跑到未来时不采用——别把气泡标到还没到的时间。
+  return sentAt > now ? undefined : sentAt;
 };
 
 /**
@@ -812,9 +840,11 @@ export const resolveBackfillTimestamp = (
 };
 
 /**
- * 一条 inbox 消息最终的落库时间戳：先按送达新鲜度二选一，再看本地有没有更晚的消息。
- * 只有判成离线补收时才去查一次近史——在线送达本来就落写库当刻，没什么可比的。
- * 查不到近史时沿用补收口径（宁可标 sentAt，也别把隔夜的消息标成现在）。
+ * 一条 inbox 消息最终的落库时间戳：先取 sentAt，再看本地有没有更晚的消息（有就退回
+ * 写库当刻，防时间戳倒挂）。
+ *
+ * 每条都要查一次近史——后处理管线随后也会读同一份（contextMsgs），多这一次游标读可忽略。
+ * 查不到近史时沿用 sentAt（宁可标 sentAt，也别把隔夜的消息标成现在）。
  */
 const resolveInboxPersistTimestampForMessage = async (
   message: ActiveMsg2InboxMessage,

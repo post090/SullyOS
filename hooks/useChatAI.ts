@@ -1061,7 +1061,7 @@ export const useChatAI = ({
                 }
             }
             // 主动消息 2.0 本地工具：worker 已配置 + 角色没关掉时注入 schedule/cancel/renew/list，
-            // 并注入「排程现状」背景块（进行中任务 + 作废待处理，角色自行判断怎么接）。
+            // 并注入「排程现状」背景块（常驻能力简介 + 进行中任务 + 作废待处理，角色自行判断怎么接）。
             // 是否注入在上面 thinking 门那里就算好了（amsg2ToolsInjected）。
             // amsg2 和 instant push 互斥，不需要额外判断。
             let amsg2ExpiredIds: string[] = [];
@@ -1072,7 +1072,7 @@ export const useChatAI = ({
                 try {
                     // 回执这半边是「检出 + 落台账」的结果，带副作用，一轮只算一次；
                     // 进行中任务那半边每次发请求现取（见下面的 withAmsg2TaskContext）。
-                    const taskContext = await collectAmsg2TaskContext(char);
+                    const taskContext = await collectAmsg2TaskContext(char, userProfile.name);
                     amsg2ExpiredIds = taskContext.expiredIds;
                     amsg2Notices = taskContext.notices;
                 } catch (e) {
@@ -1099,8 +1099,10 @@ export const useChatAI = ({
                     now,
                     resolveCharTimeZone(char),
                     amsg2CreatedThisTurn,
+                    userProfile.name,
                 );
-                return text ? [...messages, { role: 'system', content: text }] : messages;
+                // 常驻简介让这一块总是非空：没任务时角色也得知道自己随时能排。
+                return [...messages, { role: 'system', content: text }];
             };
 
             // ─── Instant Push 分支 ───

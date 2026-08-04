@@ -107,8 +107,9 @@ import {
   type FireSessionState,
 } from './agentic';
 import type { ActiveMsg2TaskRecord } from '../../../types';
+import { createHybridPushTransport, isFcmConfigured, type NativeFcmEnv } from './nativeFcm';
 
-interface Env {
+interface Env extends NativeFcmEnv {
   AMSG_MASTER_KEY: string;
   VAPID_EMAIL: string;
   VAPID_PUBLIC_KEY: string;
@@ -1254,12 +1255,18 @@ export const buildWorkerConfig = (env: Env) => {
     publicKey: env.VAPID_PUBLIC_KEY,
     privateKey: env.VAPID_PRIVATE_KEY,
   };
+  const nativeFcmReady = isFcmConfigured(env);
+  // 上游在进入发送器前会检查 VAPID 字段非空；纯 FCM 部署用内部占位值通过该检查。
+  // 普通 Web Push endpoint 仍只会走真实 VAPID，没配真实值时配置自检会明确提示。
+  const effectiveVapid = nativeFcmReady && (!vapid.publicKey?.trim() || !vapid.privateKey?.trim())
+    ? { email: vapid.email, publicKey: 'native-fcm', privateKey: 'native-fcm' }
+    : vapid;
   return {
     // db 缺省时 factory 自动用 createD1Adapter(env.DB)
     masterKey: env.AMSG_MASTER_KEY,
     serverToken: env.AMSG_SERVER_TOKEN,
-    vapid,
-    webpush: createWebCryptoWebPush(vapid),
+    vapid: effectiveVapid,
+    webpush: createHybridPushTransport(env, createWebCryptoWebPush(effectiveVapid)),
     // 前端和 Worker 不同源，带自定义头的请求会先发 CORS 预检，必须放行。
     // 单用户自用默认全开；想收紧就把 '*' 换成自己的 SullyOS 站点 origin。
     cors: { origin: '*' },
@@ -1333,12 +1340,23 @@ export const inspectWorkerEnv = (env: Env): WorkerEnvReport => {
   }
   // VAPID 缺了不影响读写任务，但 scheduled() 每分钟会整轮 return，到点消息一条
   // 都发不出来——而界面上一切正常，这是最难自己查出来的一种坏法。
-  if (!env.VAPID_PUBLIC_KEY?.trim() || !env.VAPID_PRIVATE_KEY?.trim()) {
+  const vapidReady = Boolean(env.VAPID_PUBLIC_KEY?.trim() && env.VAPID_PRIVATE_KEY?.trim());
+  const fcmParts = [env.FCM_PROJECT_ID, env.FCM_SERVICE_ACCOUNT_EMAIL, env.FCM_SERVICE_ACCOUNT_PRIVATE_KEY]
+    .map((value) => value?.trim());
+  const fcmReady = fcmParts.every(Boolean);
+  if (!vapidReady) {
     warnings.push({
+      // 保留既有诊断码，避免旧前端/排障脚本因为新增 FCM 通道而失配。
       code: 'VAPID_MISSING',
-      message: 'VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY 没配齐，到点消息不会推送出去。这两个要和站点「推送凭据 (VAPID)」面板里的是同一对。',
+      message: fcmReady
+        ? 'Capacitor FCM 通道已配置，但 VAPID 没配齐：原生 App 可推送，浏览器/PWA Web Push 不可用。'
+        : 'VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY 没配齐，且没有完整 FCM 配置，到点消息不会推送出去。',
     });
   }
+  if (fcmParts.some(Boolean) && !fcmReady) warnings.push({
+    code: 'FCM_INCOMPLETE',
+    message: 'FCM 配置只填了一部分；需要同时设置 FCM_PROJECT_ID、FCM_SERVICE_ACCOUNT_EMAIL、FCM_SERVICE_ACCOUNT_PRIVATE_KEY。',
+  });
   if (!env.AMSG_SERVER_TOKEN?.trim()) {
     warnings.push({
       code: 'SERVER_TOKEN_MISSING',

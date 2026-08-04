@@ -1,5 +1,18 @@
 import { describe, it, expect } from 'vitest';
-import { shouldAutoPlayGeneratedVoice } from './voicePlayback';
+import { shouldAutoGenerateVoice, shouldAutoPlayGeneratedVoice } from './voicePlayback';
+
+// 关着「收到就自动播放」时不该偷偷合成：合出来也不响，白花一次 TTS 调用。
+describe('shouldAutoGenerateVoice', () => {
+  it('没开「收到就自动播放」→ 不自动合成，留空语音条等用户点', () => {
+    expect(shouldAutoGenerateVoice({})).toBe(false);
+    expect(shouldAutoGenerateVoice({ autoPlayEnabled: false })).toBe(false);
+    expect(shouldAutoGenerateVoice({ autoPlayEnabled: undefined })).toBe(false);
+  });
+
+  it('开了「收到就自动播放」→ 收到消息就合成', () => {
+    expect(shouldAutoGenerateVoice({ autoPlayEnabled: true })).toBe(true);
+  });
+});
 
 // 语音条合成完的播放时机。以前是无条件播（收到 AI 语音就直接响），
 // 用户「有时候不想听」没有出口 —— 这里把两条规则钉住：

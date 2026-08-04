@@ -12,6 +12,7 @@ import {
   findMissingChunkIndexes,
   findPersistedChunkIndexes,
   flushInboxToChat,
+  isFreshInboxDelivery,
   purgeInboxArtifacts,
   refreshPushSubscriptionIfMarked,
   resolveBackfillTimestamp,
@@ -249,25 +250,32 @@ describe('purgeInboxArtifacts（走真库）', () => {
   });
 });
 
-// 回归守卫：主动消息落库时间戳的「在线送达 vs 离线补收」决策。
-// 过去后处理路径 15 处 DB.saveMessage 都不传 timestamp，一律落写库当刻——用户离线一晚，
-// 昨晚 23:00 的消息中午打开显示中午，和正文里角色说的晚上的话矛盾；这个假时间戳还会喂给
-// amsg2ExpireGuard.hasDeliveredProactiveNear（判定窗 [occurrence-90s, occurrence+30min]），
-// 把明明送达的消息误判成没送到，生成假作废回执。修后：超过阈值的离线补收改落 sentAt。
+// 回归守卫：主动消息落库时间戳一律取 sentAt（云端真正发出那一刻）。
+//
+// 气泡在聊天流里的位置只看自增 id（db.ts 按 charId 索引游标读、Chat.tsx 的 displayMessages
+// 不排序），跟 timestamp 无关，所以标 sentAt 不会让消息跑到用户正在聊的内容上面。timestamp
+// 只决定气泡上显示的那个数字。唯一要防的是「位置在下、数字往回走」的倒挂，那个由
+// resolveBackfillTimestamp 精确接管（本地真有更晚的消息才退让）。
+//
+// 这里不再按「消息够不够新」二选一：那个判据回答不了「用户在不在场」——到点弹的通知，
+// 用户隔几分钟才点进来，消息就会被标成他点进来的那一刻。而在线送达时 sentAt 距落库
+// 只有几秒，标 sentAt 一样显示「刚刚」，观感没有差别。
+//
+// 落库时间戳还会喂给 amsg2ExpireGuard.hasDeliveredProactiveNear（判定窗
+// [occurrence-90s, occurrence+30min]）：sentAt ≈ occurrence + 云端生成耗时，稳落在窗内，
+// 已送达的消息不会被误判成没送到而生成假作废回执。
 describe('resolveInboxPersistTimestamp（边界值）', () => {
   const NOW = 1_700_000_000_000;
 
-  it('阈值内（在线/准在线送达）→ undefined，落库维持写库当刻', () => {
-    expect(resolveInboxPersistTimestamp(NOW - 60_000, NOW)).toBeUndefined();
-    expect(resolveInboxPersistTimestamp(NOW, NOW)).toBeUndefined();
+  it('刚送达（几秒 / 一分钟前）→ 也落 sentAt，不再改成写库当刻', () => {
+    expect(resolveInboxPersistTimestamp(NOW - 3_000, NOW)).toBe(NOW - 3_000);
+    expect(resolveInboxPersistTimestamp(NOW - 60_000, NOW)).toBe(NOW - 60_000);
+    expect(resolveInboxPersistTimestamp(NOW, NOW)).toBe(NOW);
   });
 
-  it('恰好等于阈值 → 仍算在线（规则是「超过」才离线补收）', () => {
-    expect(resolveInboxPersistTimestamp(NOW - INBOX_FRESH_DELIVERY_WINDOW_MS, NOW)).toBeUndefined();
-  });
-
-  it('超过阈值 1ms → 离线补收，返回 sentAt', () => {
-    const sentAt = NOW - INBOX_FRESH_DELIVERY_WINDOW_MS - 1;
+  // 现场那一例：17:35 到点弹通知，17:43 才点进去，气泡标成了 17:43。
+  it('到点弹通知、隔 8 分钟才点进来 → 落 sentAt（不是点进来的那一刻）', () => {
+    const sentAt = NOW - 8 * 60_000;
     expect(resolveInboxPersistTimestamp(sentAt, NOW)).toBe(sentAt);
   });
 
@@ -276,7 +284,7 @@ describe('resolveInboxPersistTimestamp（边界值）', () => {
     expect(resolveInboxPersistTimestamp(sentAt, NOW)).toBe(sentAt);
   });
 
-  it('sentAt 缺失 / 非法（老 push 可能不带）→ undefined', () => {
+  it('sentAt 缺失 / 非法（老 push 可能不带）→ undefined，交给写库当刻', () => {
     expect(resolveInboxPersistTimestamp(undefined, NOW)).toBeUndefined();
     expect(resolveInboxPersistTimestamp(0, NOW)).toBeUndefined();
     expect(resolveInboxPersistTimestamp(Number.NaN, NOW)).toBeUndefined();
@@ -285,9 +293,49 @@ describe('resolveInboxPersistTimestamp（边界值）', () => {
   it('sentAt 在未来（时钟偏差）→ undefined，别把气泡标到未来', () => {
     expect(resolveInboxPersistTimestamp(NOW + 5 * 60_000, NOW)).toBeUndefined();
   });
+});
 
-  it('阈值必须小于 hasDeliveredProactiveNear 的 30 分钟送达判定窗（两条路径都落窗内的前提）', () => {
-    expect(INBOX_FRESH_DELIVERY_WINDOW_MS).toBeLessThan(30 * 60_000);
+// 回归守卫：补收的消息跳过拟人打字延迟。
+//
+// 气泡是一条条冒出来的——后处理管线每条之间夹 0.5~2 秒 setTimeout，模拟角色在打字。
+// 实时收到时这是对的（角色正在你眼前说话）；但补收的消息早在几小时前就在云端生成完了，
+// 再慢放一遍只会让用户干等，而且这段时间里用户来得及插话，把倒挂的口子撑开
+// （见 resolveBackfillTimestamp）。所以躺过窗口的消息一次性回填。
+//
+// 判据用 receivedAt（消息落到这台设备的时刻）而不是 sentAt：它剔除了云端到设备之间的
+// 网络延迟，问的正是「这条在收件箱里躺了多久没人消费」。
+describe('isFreshInboxDelivery（决定要不要慢放打字节奏）', () => {
+  const NOW = 1_700_000_000_000;
+
+  it('刚落到设备（几秒前）→ 保留打字节奏', () => {
+    expect(isFreshInboxDelivery(NOW - 3_000, NOW)).toBe(true);
+    expect(isFreshInboxDelivery(NOW, NOW)).toBe(true);
+  });
+
+  it('前台连收几条排队处理（一分钟前）→ 仍算刚到，用户就在看着', () => {
+    expect(isFreshInboxDelivery(NOW - 60_000, NOW)).toBe(true);
+  });
+
+  it('恰好等于窗口 → 仍算刚到（规则是「超过」才算补收）', () => {
+    expect(isFreshInboxDelivery(NOW - INBOX_FRESH_DELIVERY_WINDOW_MS, NOW)).toBe(true);
+  });
+
+  it('点通知隔 8 分钟才进来 → 算补收，一次性回填不慢放', () => {
+    expect(isFreshInboxDelivery(NOW - 8 * 60_000, NOW)).toBe(false);
+  });
+
+  it('隔夜补收 → 算补收', () => {
+    expect(isFreshInboxDelivery(NOW - 13 * 3_600_000, NOW)).toBe(false);
+  });
+
+  it('receivedAt 缺失 / 非法 → 当刚到处理（保守：宁可慢放，也别把实时消息秒刷出来）', () => {
+    expect(isFreshInboxDelivery(undefined, NOW)).toBe(true);
+    expect(isFreshInboxDelivery(0, NOW)).toBe(true);
+    expect(isFreshInboxDelivery(Number.NaN, NOW)).toBe(true);
+  });
+
+  it('窗口要明显短于用户「看到通知再点进来」的典型间隔，否则补收照样慢放', () => {
+    expect(INBOX_FRESH_DELIVERY_WINDOW_MS).toBeLessThanOrEqual(2 * 60_000);
   });
 });
 
@@ -424,12 +472,31 @@ describe('flushInboxToChat 落库时间戳（走真库）', () => {
     ).toContain('amsgself-adopt-1');
   }, 20000);
 
-  it('主路径·在线送达：sentAt 在阈值内 → 维持写库当刻，不回写 sentAt', async () => {
+  it('主路径·刚送达：一样落 sentAt（本地没有更晚的消息，不需要退让）', async () => {
     const charId = 'char-ts-main-fresh';
     await DB.saveCharacter({ id: charId, name: '在线角色' } as any);
     const sentAt = Date.now() - 60_000;
     await ActiveMsgStore.saveInboxMessage(inboxMsg({
       messageId: 'msg-ts-main-fresh',
+      charId,
+      messageType: 'text',
+      sentAt,
+    }));
+
+    await flushInboxToChat();
+
+    const msgs = await assistantMsgs(charId);
+    expect(msgs.length).toBeGreaterThan(0);
+    for (const m of msgs) expect(m.timestamp).toBe(sentAt);
+  }, 20000);
+
+  // 到点弹通知、用户隔几分钟才点进来 —— 这一例的旧行为是把气泡标成点进来的那一刻。
+  it('主路径·点通知隔 8 分钟进来：落 sentAt，不是点进来的那一刻', async () => {
+    const charId = 'char-ts-main-notif';
+    await DB.saveCharacter({ id: charId, name: '定时角色' } as any);
+    const sentAt = Date.now() - 8 * 60_000;
+    await ActiveMsgStore.saveInboxMessage(inboxMsg({
+      messageId: 'msg-ts-main-notif',
       charId,
       messageType: 'text',
       sentAt,
@@ -441,8 +508,35 @@ describe('flushInboxToChat 落库时间戳（走真库）', () => {
     const msgs = await assistantMsgs(charId);
     expect(msgs.length).toBeGreaterThan(0);
     for (const m of msgs) {
-      expect(m.timestamp).toBeGreaterThanOrEqual(before); // 写库当刻，而不是一分钟前
+      expect(m.timestamp).toBe(sentAt);
+      expect(m.timestamp, '别再标成点进来的那一刻').toBeLessThan(before);
     }
+  }, 20000);
+
+  // 倒挂守卫仍然在岗：用户先说了话，补收的消息就不能标成比它更早。
+  it('主路径·补收时本地已有更晚的消息 → 退回写库当刻，时间戳不倒挂', async () => {
+    const charId = 'char-ts-main-backfill';
+    await DB.saveCharacter({ id: charId, name: '倒挂守卫角色' } as any);
+    const sentAt = Date.now() - 13 * 3_600_000;   // 昨晚推的
+    // 用户今天打开 App 先说了一句，落库时刻比 sentAt 晚得多。
+    await DB.saveMessage({
+      charId, role: 'user', type: 'text', content: '早',
+      timestamp: Date.now() - 5_000,
+    } as any);
+
+    await ActiveMsgStore.saveInboxMessage(inboxMsg({
+      messageId: 'msg-ts-main-backfill',
+      charId,
+      messageType: 'text',
+      sentAt,
+    }));
+
+    const before = Date.now();
+    await flushInboxToChat();
+
+    const msgs = await assistantMsgs(charId);
+    expect(msgs.length).toBeGreaterThan(0);
+    for (const m of msgs) expect(m.timestamp).toBeGreaterThanOrEqual(before);
   }, 20000);
 
   it('降级存原稿路径·离线补收：与主路径同口径，落 sentAt', async () => {
@@ -463,7 +557,38 @@ describe('flushInboxToChat 落库时间戳（走真库）', () => {
     expect(msgs[0].timestamp).toBe(sentAt);
   }, 20000);
 
-  it('降级存原稿路径·在线送达：不再无条件落 sentAt，与主路径同口径（写库当刻）', async () => {
+  // 接线守卫：判据（isFreshInboxDelivery）算出来的结论要真的传到后处理管线去。
+  //
+  // 阈值锚在真实常量上，不是拍脑袋的容差：拟人打字延迟每条气泡至少 500ms
+  // （applyAssistantPostProcessing 的 `Math.max(chunk.length * 50, 500)`），所以
+  // 「跑没跑那个 setTimeout」在耗时上是 500ms 起 vs 几十毫秒的落库开销，中间隔着
+  // 一整个数量级。取 400ms 当界：慢机器把落库拖慢几倍也够不着，而慢放路径必然超过。
+  // （别改成「补收比实时快」这种相对比较——接线被删掉时两边都慢放、耗时相当，
+  //   谁快谁慢就由噪声决定，测试会时过时挂。）
+  it('补收的消息跳过拟人打字延迟，实时收到的照旧慢放', async () => {
+    const runFlush = async (charId: string, receivedAt: number) => {
+      await DB.saveCharacter({ id: charId, name: '打字节奏角色' } as any);
+      await ActiveMsgStore.saveInboxMessage(inboxMsg({
+        messageId: `msg-pace-${charId}`,
+        charId,
+        messageType: 'text',
+        sentAt: receivedAt,
+        receivedAt,
+      }));
+      const t0 = Date.now();
+      await flushInboxToChat();
+      return Date.now() - t0;
+    };
+
+    const freshMs = await runFlush('char-pace-fresh', Date.now());
+    const staleMs = await runFlush('char-pace-stale', Date.now() - 8 * 60_000);
+
+    // 实时那条确实慢放了，否则下面那条断言就成了空气
+    expect(freshMs, '实时送达该保留打字节奏').toBeGreaterThan(400);
+    expect(staleMs, '补收该跳过打字延迟').toBeLessThan(400);
+  }, 20000);
+
+  it('降级存原稿路径·刚送达：与主路径同口径，落 sentAt', async () => {
     const charId = 'char-ts-raw-fresh';
     const sentAt = Date.now() - 60_000;
     await ActiveMsgStore.saveInboxMessage(inboxMsg({
@@ -473,13 +598,11 @@ describe('flushInboxToChat 落库时间戳（走真库）', () => {
       sentAt,
     }));
 
-    const before = Date.now();
     await flushInboxToChat();
 
     const msgs = await assistantMsgs(charId);
     expect(msgs).toHaveLength(1);
-    // 修复前这里挂：降级路径无条件用 sentAt，落的是一分钟前
-    expect(msgs[0].timestamp).toBeGreaterThanOrEqual(before);
+    expect(msgs[0].timestamp).toBe(sentAt);
   }, 20000);
 });
 

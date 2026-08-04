@@ -354,10 +354,13 @@ export interface PostProcessCtx {
     /** UI / 业务钩子 */
     hooks: PostProcessHooks;
     /**
-     * 流式预览已把气泡实时展示过（hooks/useChatAI 的 streamingBubbles）时置 true：
-     * 落库时跳过"拟人打字延迟"（每条 0.5~2s 的 setTimeout），气泡近乎立即回填。
-     * 否则用户会看到"预览气泡收回去 → 再一条条慢慢重弹"的二次播放。
-     * 未预览的路径（非流式 / 双语 / 工具模式 / instant push）不传，打字节奏不变。
+     * 置 true = 跳过"拟人打字延迟"（每条 0.5~2s 的 setTimeout），气泡近乎立即回填。
+     * 两种情况该置：
+     *   1. 流式预览已把气泡实时展示过（hooks/useChatAI 的 streamingBubbles）——否则用户会
+     *      看到"预览气泡收回去 → 再一条条慢慢重弹"的二次播放；
+     *   2. 主动消息补收（utils/activeMsgRuntime 的 isFreshInboxDelivery 判为否）——内容
+     *      几小时前就在云端生成完了，再慢放一遍只会让用户干等着一条条冒。
+     * 其余路径（非流式 / 双语 / 工具模式 / 实时送达的主动消息）不传，打字节奏不变。
      */
     instantRender?: boolean;
     /**

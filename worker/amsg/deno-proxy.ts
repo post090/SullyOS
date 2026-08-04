@@ -36,8 +36,12 @@ const UPSTREAM = 'https://sullyos-amsg.你的账号.workers.dev';
  */
 const HEALTH_PATH = '/__proxy-health';
 
-/** 改完记得在下面自检端点的输出里核对一眼，确认 Playground 跑的确实是新版。 */
-const PROXY_REVISION = 'amsg-deno-proxy-v1';
+/**
+ * 改完这份脚本请顺手把这里 +1。自检端点会把它报出来，是唯一能确认
+ * 「Playground 里跑的到底是哪一版」的办法 —— 版本号不动的话，
+ * 贴没贴成功、部署有没有生效，全靠猜。
+ */
+const PROXY_REVISION = 'amsg-deno-proxy-v2';
 
 declare const Deno: {
   env: { get(name: string): string | undefined };
@@ -81,6 +85,16 @@ export const buildUpstreamRequest = (request: Request, upstream: string): Reques
   const headers = new Headers(request.headers);
   // host 交给 fetch 按目标地址自己填，否则上游会收到 deno.net 的 host。
   headers.delete('host');
+  // 压缩协商也交给 fetch 自己做，别把浏览器那份原样转过去。
+  //
+  // 浏览器会要 zstd，上游就用 zstd 压着回来；而 fetch 只自动解开它自己协商的那几种
+  // （gzip / deflate / br），zstd 不在内，body 于是还是压缩态。下面 relayResponse 又
+  // 按「已经解开了」把 content-encoding 摘掉，出口便拿这坨压缩字节当明文再压一层，
+  // 浏览器解完外层拿到的还是压缩数据 —— 页面上就是一片乱码。
+  //
+  // 删掉之后 fetch 用自己认得的编码去协商、拿回明文，摘头才名副其实，
+  // 出口再按浏览器的 accept-encoding 重新压一遍，端到端的压缩收益一点不少。
+  headers.delete('accept-encoding');
 
   const hasBody = request.method !== 'GET' && request.method !== 'HEAD';
   const init: RequestInit = {
@@ -108,13 +122,29 @@ export const relayResponse = (upstreamResponse: Response): Response => {
   });
 };
 
+/**
+ * 代理层自己造的响应（自检、错误回执）必须带 CORS 头。
+ *
+ * 不带的话，上游连不上、地址没配这类错误在浏览器里全部显示成
+ * 「No 'Access-Control-Allow-Origin' header is present」—— 真正的原因连同
+ * 状态码一起被挡在外面，排查的人只能看见一个跟病因毫不相干的 CORS 报错。
+ * 转发回来的响应不用管，CF 那边自带 CORS 头。
+ */
+const SELF_RESPONSE_HEADERS = {
+  'Content-Type': 'application/json; charset=utf-8',
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+  'Access-Control-Allow-Headers': '*',
+};
+
 const json = (body: unknown, status: number): Response =>
   new Response(JSON.stringify(body, null, 2), {
     status,
-    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    headers: SELF_RESPONSE_HEADERS,
   });
 
-Deno.serve(async (request: Request): Promise<Response> => {
+/** 抽出来是为了能在测试里直接调，不必真起一个服务。 */
+export const handleRequest = async (request: Request): Promise<Response> => {
   const upstream = resolveUpstream();
   const pathname = new URL(request.url).pathname;
 
@@ -150,4 +180,6 @@ Deno.serve(async (request: Request): Promise<Response> => {
       502,
     );
   }
-});
+};
+
+Deno.serve(handleRequest);
