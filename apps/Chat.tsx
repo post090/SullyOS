@@ -130,6 +130,9 @@ const Chat: React.FC = () => {
     const visibleCountRef = useRef(30);
     const activeCharIdRef = useRef(activeCharacterId);
     const restoreScrollTopRef = useRef<number | null>(null);
+    // 进会话时保存上次离开看到的最后一条消息 ID，用于判断「该会话是否有新消息」：
+    // 有新消息 → 滚到底部；无新消息 → 恢复上次阅读位置。
+    const savedLastMsgIdRef = useRef<number | null>(null);
     const saveScrollTimerRef = useRef<number | null>(null);
     // 流式预览接棒过的正式消息在当前会话内始终跳过入场动画，避免后续 DB 刷新时动画类又被加回来。
     const streamPreviewHandoverIdsRef = useRef<Set<number>>(new Set());
@@ -325,7 +328,7 @@ const Chat: React.FC = () => {
     const draftKey = `chat_draft_${activeCharacterId}`;
     const scrollKey = `chat_scroll_${activeCharacterId}`;
 
-    const loadSavedChatViewport = useCallback((): { top: number; visibleCount?: number } | null => {
+    const loadSavedChatViewport = useCallback((): { top: number; visibleCount?: number; lastId?: number | null } | null => {
         if (!activeCharacterId) return null;
         try {
             const raw = localStorage.getItem(scrollKey);
@@ -339,6 +342,7 @@ const Chat: React.FC = () => {
                 visibleCount: typeof saved.visibleCount === 'number'
                     ? Math.max(LOAD_BATCH_SIZE, Math.min(1000, Math.floor(saved.visibleCount)))
                     : undefined,
+                lastId: typeof saved.lastId === 'number' ? saved.lastId : null,
             };
         } catch {
             return null;
@@ -882,6 +886,7 @@ const Chat: React.FC = () => {
             visibleCountRef.current = initialVisibleCount;
             setVisibleCount(initialVisibleCount);
             restoreScrollTopRef.current = savedViewport?.top ?? null;
+            savedLastMsgIdRef.current = savedViewport?.lastId ?? null;
             reloadMessages(initialVisibleCount);
             loadEmojiData();
             const savedDraft = localStorage.getItem(draftKey);
@@ -1078,12 +1083,19 @@ const Chat: React.FC = () => {
         if (currentLastId !== lastMsgIdRef.current) {
             if (windowedFocusMsgId === null) {
                 const restoreTop = restoreScrollTopRef.current;
-                if (restoreTop != null) {
+                const savedLastId = savedLastMsgIdRef.current;
+                // 只有「上次离开时看到的最后一条消息」和「现在最后一条消息」一致
+                // （即无新消息）才恢复旧阅读位置；否则滚到底部看新消息。
+                const shouldRestore = restoreTop != null
+                    && savedLastId != null
+                    && currentLastId === savedLastId;
+                if (shouldRestore) {
                     scrollRef.current.scrollTop = Math.min(restoreTop, scrollRef.current.scrollHeight);
-                    restoreScrollTopRef.current = null;
                 } else {
                     scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
                 }
+                restoreScrollTopRef.current = null;
+                savedLastMsgIdRef.current = null;
             }
             lastMsgIdRef.current = currentLastId;
         }
